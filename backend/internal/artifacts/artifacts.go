@@ -1,5 +1,7 @@
 // Package artifacts discovers per-cluster debug artifact directories for
-// failed CAPZ E2E test runs stored in GCS.
+// failed E2E test runs stored in GCS. The cluster naming convention
+// (e.g. capz-e2e-{random}-{flavor}) comes from CAPI's e2e framework;
+// the cluster prefix is configurable per project.
 package artifacts
 
 import (
@@ -11,14 +13,8 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-)
-
-const (
-	// GCSWebBaseURL is the base URL for GCSweb HTML listing pages.
-	GCSWebBaseURL = "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/"
-	// GCSBaseURL is the base URL for direct GCS object access.
-	GCSBaseURL = "https://storage.googleapis.com/kubernetes-ci-logs/logs/"
 )
 
 // knownMachineLogs lists the log file names we look for inside each machine directory,
@@ -37,9 +33,10 @@ var knownMachineLogs = []string{
 // DiscoverClusters fetches the GCSweb listing at .../artifacts/clusters/ for
 // the given build, then inspects each cluster subdirectory to build a list of
 // ClusterArtifacts (machines, activity logs, pod log dirs).
-func DiscoverClusters(ctx context.Context, client *http.Client, jobName, buildID string) ([]models.ClusterArtifacts, error) {
-	base := GCSWebBaseURL + jobName + "/" + buildID + "/artifacts/clusters/"
-	gcsBase := GCSBaseURL + jobName + "/" + buildID + "/artifacts/clusters/"
+func DiscoverClusters(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName, buildID string) ([]models.ClusterArtifacts, error) {
+	buildPath := jobName + "/" + buildID + "/artifacts/clusters/"
+	base := bucket.WebURL(buildPath)
+	gcsBase := bucket.ObjectBaseURL(buildPath)
 
 	return discoverClustersFromURL(ctx, client, base, gcsBase)
 }

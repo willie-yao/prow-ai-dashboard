@@ -18,7 +18,7 @@ STEP: Creating namespace "capz-e2e-tqpttw" for hosting the cluster @ 03/20/26 16
 
 func TestParseNamespaceMap(t *testing.T) {
 	t.Run("three test fragments with namespace pairs", func(t *testing.T) {
-		nsMap := ParseNamespaceMap([]byte(sampleBuildLog))
+		nsMap := ParseNamespaceMap([]byte(sampleBuildLog), "capz-e2e")
 
 		expected := map[string]string{
 			"with 3 control-plane nodes and 2 linux and 2 windows worker nodes": "capz-e2e-5vz277",
@@ -42,14 +42,14 @@ unrelated log line 1
 unrelated log line 2
 STEP: Creating namespace "capz-e2e-abc123" for hosting the cluster @ 03/20/26 16:32:57.18
 `
-		nsMap := ParseNamespaceMap([]byte(input))
+		nsMap := ParseNamespaceMap([]byte(input), "capz-e2e")
 		if ns, ok := nsMap["some test name"]; !ok || ns != "capz-e2e-abc123" {
 			t.Errorf("expected capz-e2e-abc123 for 'some test name', got %q (ok=%v)", ns, ok)
 		}
 	})
 
 	t.Run("empty build log", func(t *testing.T) {
-		nsMap := ParseNamespaceMap([]byte(""))
+		nsMap := ParseNamespaceMap([]byte(""), "capz-e2e")
 		if len(nsMap) != 0 {
 			t.Errorf("expected empty map, got %v", nsMap)
 		}
@@ -61,7 +61,7 @@ STEP: no match here either
 INFO: missing quotes started at something
 STEP: Creating namespace "not-capz-prefix" for hosting the cluster
 `
-		nsMap := ParseNamespaceMap([]byte(input))
+		nsMap := ParseNamespaceMap([]byte(input), "capz-e2e")
 		if len(nsMap) != 0 {
 			t.Errorf("expected empty map for malformed input, got %v", nsMap)
 		}

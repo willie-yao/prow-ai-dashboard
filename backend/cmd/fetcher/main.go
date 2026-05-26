@@ -106,7 +106,7 @@ func run() error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, client, bucket, j.Name, *buildsPerJob, cachedJobs[j.Name])
+			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, j.Name, *buildsPerJob, cachedJobs[j.Name])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -171,7 +171,7 @@ func run() error {
 
 	// Step 5: AI failure analysis (optional).
 	if *enableAI {
-		analyzeFailuresWithAI(ctx, details, flakinessReport, aiToken, *outDir)
+		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, *outDir)
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", *outDir, len(dashboard.Jobs))
@@ -179,13 +179,13 @@ func run() error {
 		return fmt.Errorf("writing output: %w", err)
 	}
 
-	// Step 6: Teams notifications for persistent failures (optional).
+	// Step 6: Slack/Teams notifications for persistent failures (optional).
 	slackWebhookURL := os.Getenv("SLACK_WEBHOOK_URL")
 	if slackWebhookURL != "" {
 		notifier := notify.NewNotifier(
 			slackWebhookURL,
 			filepath.Join(*outDir, "notification_state.json"),
-			"https://willie-yao.github.io/capz-prow-dashboard",
+			cfg.Branding.SiteURL,
 			bucket.ProwURL(""),
 		)
 		stats, err := notifier.ProcessFailures(ctx, flakinessReport, details)
@@ -241,7 +241,7 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 }
 
 // fetchJobRunsCached discovers recent builds and uses cached data for completed builds.
-func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
 	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
@@ -257,7 +257,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 			continue
 		}
 
-		result, err := fetchBuildResult(ctx, client, bucket, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, cfg, jobName, bid)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
 			continue
@@ -274,7 +274,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 }
 
 // fetchJobRuns discovers recent builds for a job and fetches their results.
-func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName string, count int) ([]models.BuildResult, error) {
+func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, jobName string, count int) ([]models.BuildResult, error) {
 	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
@@ -282,7 +282,7 @@ func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, 
 
 	var runs []models.BuildResult
 	for _, bid := range buildIDs {
-		result, err := fetchBuildResult(ctx, client, bucket, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, cfg, jobName, bid)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
 			continue
@@ -294,7 +294,7 @@ func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, 
 }
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build.
-func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName, buildID string) (*models.BuildResult, error) {
+func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, jobName, buildID string) (*models.BuildResult, error) {
 	info, err := gcs.FetchBuildInfo(ctx, client, bucket, jobName, buildID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching build info: %w", err)
@@ -333,7 +333,14 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 	// For failed builds, discover per-cluster debug artifacts.
 	// Skip if the build is still pending (no finished.json yet).
 	if result.Result != "PENDING" && !result.Passed && result.TestsFailed > 0 {
-		clusters, err := artifacts.DiscoverClusters(ctx, client, jobName, buildID)
+		// CAPI-style cluster discovery only applies when the project declares
+		// a cluster name prefix. Non-CAPI projects skip this whole block.
+		if cfg.CAPI == nil || cfg.CAPI.ClusterNamePrefix == "" {
+			return result, nil
+		}
+		clusterPrefix := cfg.CAPI.ClusterNamePrefix
+
+		clusters, err := artifacts.DiscoverClusters(ctx, client, bucket, jobName, buildID)
 		if err != nil {
 			// 404 is expected for jobs that don't produce cluster artifacts (e.g., AKS, conformance).
 			// Only log non-404 errors.
@@ -348,11 +355,12 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: failed to fetch build log for namespace mapping: %v", jobName, buildID, err)
 		} else {
-			namespaceMap = artifacts.ParseNamespaceMap(buildLog)
+			namespaceMap = artifacts.ParseNamespaceMap(buildLog, clusterPrefix)
 			log.Printf("    📋 %s/%s: build log %d bytes, %d namespace mappings", jobName, buildID, len(buildLog), len(namespaceMap))
 		}
 
-		nsPrefixRe := regexp.MustCompile(`capz-e2e-[a-z0-9]+`)
+		nsPrefixRe := regexp.MustCompile(regexp.QuoteMeta(clusterPrefix) + `-[a-z0-9]+`)
+		bootstrapPath := jobName + "/" + buildID + "/artifacts/clusters/bootstrap/resources/"
 
 		for i := range result.TestCases {
 			if result.TestCases[i].Status != "failed" {
@@ -363,10 +371,7 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 			if ca != nil {
 				// Add bootstrap resources URL by extracting namespace prefix.
 				if prefix := nsPrefixRe.FindString(ca.ClusterName); prefix != "" {
-					ca.BootstrapResourcesURL = fmt.Sprintf(
-						"https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/%s/%s/artifacts/clusters/bootstrap/resources/%s/",
-						jobName, buildID, prefix,
-					)
+					ca.BootstrapResourcesURL = bucket.WebURL(bootstrapPath + prefix + "/")
 				}
 				result.TestCases[i].ClusterArtifacts = ca
 			} else if namespaceMap != nil {
@@ -374,11 +379,8 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 				ns := artifacts.FindNamespaceForTest(result.TestCases[i].Name, namespaceMap)
 				if ns != "" {
 					result.TestCases[i].ClusterArtifacts = &models.ClusterArtifacts{
-						ClusterName: ns,
-						BootstrapResourcesURL: fmt.Sprintf(
-							"https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/%s/%s/artifacts/clusters/bootstrap/resources/%s/",
-							jobName, buildID, ns,
-						),
+						ClusterName:           ns,
+						BootstrapResourcesURL: bucket.WebURL(bootstrapPath + ns + "/"),
 					}
 				}
 			}
@@ -389,7 +391,7 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 }
 
 // analyzeFailuresWithAI runs AI analysis on failed test cases.
-func analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir string) {
+func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir string) {
 	aiClient := ai.NewClient(token, outDir)
 	defer func() {
 		if err := aiClient.Cache().Save(); err != nil {
@@ -421,7 +423,13 @@ func analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flak
 	log.Printf("🤖 Analyzing %d failures...", totalFailures)
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
-	flavorRe := regexp.MustCompile(`^capz-e2e-(.+?)-\d`)
+
+	// Build the cluster-flavor regex from the project's CAPI cluster prefix.
+	// For non-CAPI projects this is empty and flavor extraction is skipped.
+	var flavorRe *regexp.Regexp
+	if cfg.CAPI != nil && cfg.CAPI.ClusterNamePrefix != "" {
+		flavorRe = regexp.MustCompile(`^` + regexp.QuoteMeta(cfg.CAPI.ClusterNamePrefix) + `-(.+?)-\d`)
+	}
 
 	for i := range details {
 		for ri := range details[i].Runs {
@@ -462,7 +470,7 @@ func analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flak
 
 				// Determine cluster flavor from cluster name.
 				var flavor string
-				if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.ClusterName != "" {
+				if flavorRe != nil && tc.ClusterArtifacts != nil && tc.ClusterArtifacts.ClusterName != "" {
 					if m := flavorRe.FindStringSubmatch(tc.ClusterArtifacts.ClusterName); len(m) > 1 {
 						flavor = m[1]
 					}
