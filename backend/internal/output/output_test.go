@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 func sampleDashboard() models.Dashboard {
@@ -132,6 +133,30 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 }
 
+func sampleConfig() *project.Config {
+	return &project.Config{
+		ID:        "capz",
+		Name:      "Cluster API Provider Azure",
+		ShortName: "CAPZ",
+		Source: project.Source{
+			TestInfraPath: "config/jobs/kubernetes-sigs/cluster-api-provider-azure",
+			FilePrefix:    "cluster-api-provider-azure-",
+		},
+		TestGrid: project.TestGrid{Dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"},
+		GCS:      project.GCS{Bucket: "kubernetes-ci-logs"},
+		Branding: project.Branding{
+			Title:    "CAPZ Prow Dashboard",
+			BasePath: "/capz-prow-dashboard",
+			SiteURL:  "https://example.test/capz-prow-dashboard",
+			SourceRepo: project.SourceRepo{
+				Owner: "kubernetes-sigs",
+				Name:  "cluster-api-provider-azure",
+			},
+		},
+		CAPI: &project.CAPI{ClusterNamePrefix: "capz-e2e"},
+	}
+}
+
 func TestWriteAll(t *testing.T) {
 	dir := t.TempDir()
 	dash := sampleDashboard()
@@ -143,8 +168,21 @@ func TestWriteAll(t *testing.T) {
 		GeneratedAt: "2025-01-15T12:00:00Z",
 	}
 
-	if err := WriteAll(dir, dash, details, flakiness, models.SearchIndex{GeneratedAt: "2025-01-15T12:00:00Z"}); err != nil {
+	if err := WriteAll(dir, sampleConfig(), dash, details, flakiness, models.SearchIndex{GeneratedAt: "2025-01-15T12:00:00Z"}); err != nil {
 		t.Fatalf("WriteAll: %v", err)
+	}
+
+	// manifest.json exists and round-trips the config
+	manifestData, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+	var gotManifest project.Config
+	if err := json.Unmarshal(manifestData, &gotManifest); err != nil {
+		t.Fatalf("unmarshal manifest.json: %v", err)
+	}
+	if gotManifest.ID != "capz" || gotManifest.Branding.Title != "CAPZ Prow Dashboard" {
+		t.Errorf("manifest round-trip mismatch: %+v", gotManifest)
 	}
 
 	// dashboard.json exists
@@ -165,5 +203,29 @@ func TestWriteAll(t *testing.T) {
 	// search-index.json exists
 	if _, err := os.Stat(filepath.Join(dir, "search-index.json")); err != nil {
 		t.Error("search-index.json missing")
+	}
+}
+
+func TestWriteManifest(t *testing.T) {
+	dir := t.TempDir()
+	cfg := sampleConfig()
+
+	if err := WriteManifest(dir, cfg); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+	var got project.Config
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal manifest.json: %v", err)
+	}
+	if got.ID != cfg.ID || got.Name != cfg.Name || got.Branding.SiteURL != cfg.Branding.SiteURL {
+		t.Errorf("manifest mismatch: got %+v want %+v", got, cfg)
+	}
+	if got.CAPI == nil || got.CAPI.ClusterNamePrefix != "capz-e2e" {
+		t.Errorf("CAPI section missing from manifest: %+v", got.CAPI)
 	}
 }

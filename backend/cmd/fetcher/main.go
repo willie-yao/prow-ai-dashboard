@@ -175,7 +175,7 @@ func run() error {
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", *outDir, len(dashboard.Jobs))
-	if err := output.WriteAll(*outDir, dashboard, details, flakinessReport, searchIndex); err != nil {
+	if err := output.WriteAll(*outDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 		return fmt.Errorf("writing output: %w", err)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
@@ -50,9 +51,18 @@ func WriteSearchIndex(dir string, index models.SearchIndex) error {
 	return writeJSON(filepath.Join(dir, "search-index.json"), index)
 }
 
-// WriteAll writes dashboard.json, all job detail files, flakiness.json, and search-index.json.
-// Returns the first error encountered.
-func WriteAll(dir string, dashboard models.Dashboard, details []models.JobDetail, flakiness models.FlakinessReport, searchIndex models.SearchIndex) error {
+// WriteManifest writes manifest.json with the resolved project config so the
+// frontend knows its title, base path, repo links, etc. at runtime.
+func WriteManifest(dir string, cfg *project.Config) error {
+	return writeJSON(filepath.Join(dir, "manifest.json"), cfg)
+}
+
+// WriteAll writes dashboard.json, all job detail files, flakiness.json,
+// search-index.json, and manifest.json. Returns the first error encountered.
+func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, details []models.JobDetail, flakiness models.FlakinessReport, searchIndex models.SearchIndex) error {
+	if err := WriteManifest(dir, cfg); err != nil {
+		return err
+	}
 	if err := WriteDashboard(dir, dashboard); err != nil {
 		return err
 	}
