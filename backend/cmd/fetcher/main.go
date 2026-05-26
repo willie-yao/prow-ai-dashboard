@@ -64,6 +64,7 @@ func run() error {
 	defer cancel()
 
 	client := &http.Client{Timeout: 30 * time.Second}
+	bucket := gcs.NewBucket(cfg.GCS.Bucket)
 
 	// Step 1: Discover jobs from test-infra config YAMLs.
 	log.Println("Fetching job configs from test-infra...")
@@ -105,7 +106,7 @@ func run() error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, client, j.Name, *buildsPerJob, cachedJobs[j.Name])
+			runs, err := fetchJobRunsCached(ctx, client, bucket, j.Name, *buildsPerJob, cachedJobs[j.Name])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -185,6 +186,7 @@ func run() error {
 			slackWebhookURL,
 			filepath.Join(*outDir, "notification_state.json"),
 			"https://willie-yao.github.io/capz-prow-dashboard",
+			bucket.ProwURL(""),
 		)
 		stats, err := notifier.ProcessFailures(ctx, flakinessReport, details)
 		if err != nil {
@@ -239,8 +241,8 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 }
 
 // fetchJobRunsCached discovers recent builds and uses cached data for completed builds.
-func fetchJobRunsCached(ctx context.Context, client *http.Client, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
-	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, jobName, count)
+func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
 	}
@@ -255,7 +257,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, jobName string
 			continue
 		}
 
-		result, err := fetchBuildResult(ctx, client, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, jobName, bid)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
 			continue
@@ -272,15 +274,15 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, jobName string
 }
 
 // fetchJobRuns discovers recent builds for a job and fetches their results.
-func fetchJobRuns(ctx context.Context, client *http.Client, jobName string, count int) ([]models.BuildResult, error) {
-	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, jobName, count)
+func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName string, count int) ([]models.BuildResult, error) {
+	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
 	}
 
 	var runs []models.BuildResult
 	for _, bid := range buildIDs {
-		result, err := fetchBuildResult(ctx, client, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, jobName, bid)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
 			continue
@@ -292,8 +294,8 @@ func fetchJobRuns(ctx context.Context, client *http.Client, jobName string, coun
 }
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build.
-func fetchBuildResult(ctx context.Context, client *http.Client, jobName, buildID string) (*models.BuildResult, error) {
-	info, err := gcs.FetchBuildInfo(ctx, client, jobName, buildID)
+func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName, buildID string) (*models.BuildResult, error) {
+	info, err := gcs.FetchBuildInfo(ctx, client, bucket, jobName, buildID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching build info: %w", err)
 	}

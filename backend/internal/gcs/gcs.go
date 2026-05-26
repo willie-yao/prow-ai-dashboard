@@ -12,13 +12,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-const (
-	// GCSBaseURL is the public GCS URL prefix for Prow build logs.
-	GCSBaseURL = "https://storage.googleapis.com/kubernetes-ci-logs/logs/"
-	// ProwBaseURL is the Prow UI URL prefix for viewing build logs.
-	ProwBaseURL = "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/"
-)
-
 // startedJSON mirrors the JSON schema of started.json in GCS.
 type startedJSON struct {
 	Timestamp  int64             `json:"timestamp"`
@@ -69,13 +62,15 @@ type fetchResult struct {
 // returns a populated BuildInfo. If finished.json is missing (HTTP 404), the
 // build is treated as still running: partial info is returned with Result set
 // to "PENDING" and a zero Finished time.
-func FetchBuildInfo(ctx context.Context, client *http.Client, jobName, buildID string) (*models.BuildInfo, error) {
-	return fetchBuildInfoWithBase(ctx, client, GCSBaseURL, jobName, buildID)
+func FetchBuildInfo(ctx context.Context, client *http.Client, bucket *Bucket, jobName, buildID string) (*models.BuildInfo, error) {
+	gcsBase := bucket.ObjectBaseURL("")
+	prowBase := bucket.ProwURL("")
+	return fetchBuildInfoWithBase(ctx, client, gcsBase, prowBase, jobName, buildID)
 }
 
 // fetchBuildInfoWithBase is the internal implementation that accepts a
 // configurable base URL, making it easy to test against httptest servers.
-func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, gcsBase, jobName, buildID string) (*models.BuildInfo, error) {
+func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, gcsBase, prowBase, jobName, buildID string) (*models.BuildInfo, error) {
 	base := gcsBase + jobName + "/" + buildID + "/"
 	startedURL := base + "started.json"
 	finishedURL := base + "finished.json"
@@ -106,7 +101,7 @@ func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, gcsBase, j
 		return nil, fmt.Errorf("parsing started.json: %w", err)
 	}
 
-	prowURL := ProwBaseURL + jobName + "/" + buildID
+	prowURL := prowBase + jobName + "/" + buildID
 	info := &models.BuildInfo{
 		BuildID:     buildID,
 		JobName:     jobName,

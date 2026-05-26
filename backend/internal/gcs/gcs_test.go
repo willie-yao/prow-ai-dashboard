@@ -62,7 +62,7 @@ func TestFetchBuildInfo_AllFields(t *testing.T) {
 	// We do this by calling the internal helpers directly and constructing
 	// a BuildInfo ourselves—but the cleaner approach is to accept a base URL.
 	// Since the public API uses the constant, we test via a wrapper.
-	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", jobName, buildID)
+	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", jobName, buildID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestFetchBuildInfo_MissingFinished(t *testing.T) {
 	ts := newTestServer(t, jobName, buildID, false)
 	defer ts.Close()
 
-	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", jobName, buildID)
+	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", jobName, buildID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestFetchBuildInfo_MissingStarted(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
 	defer ts.Close()
 
-	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "job", "1")
+	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", "job", "1")
 	if err == nil {
 		t.Fatal("expected error when started.json is missing")
 	}
@@ -149,7 +149,7 @@ func TestFetchBuildInfo_ServerError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "job", "1")
+	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", "job", "1")
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}

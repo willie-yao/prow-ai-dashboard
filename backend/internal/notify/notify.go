@@ -38,6 +38,7 @@ type Notifier struct {
 	state            *NotificationState
 	stateFile        string
 	dashboardBaseURL string
+	prowURLBase      string
 }
 
 // Stats tracks notification counts for logging.
@@ -47,12 +48,15 @@ type Stats struct {
 }
 
 // NewNotifier creates a Notifier and loads existing state from stateFile if it exists.
-func NewNotifier(webhookURL, stateFile, dashboardBaseURL string) *Notifier {
+// prowURLBase is the GCS-bucket-aware Prow view prefix (trailing slash) used to
+// build "view in Prow" links, e.g. "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/".
+func NewNotifier(webhookURL, stateFile, dashboardBaseURL, prowURLBase string) *Notifier {
 	n := &Notifier{
 		webhookURL:       webhookURL,
 		client:           &http.Client{Timeout: 15 * time.Second},
 		stateFile:        stateFile,
 		dashboardBaseURL: strings.TrimRight(dashboardBaseURL, "/"),
+		prowURLBase:      prowURLBase,
 		state: &NotificationState{
 			Notified: make(map[string]NotifiedFailure),
 		},
@@ -221,8 +225,7 @@ func (n *Notifier) sendFailureAlert(ctx context.Context, tf models.TestFlakiness
 	if tf.LastFailure != nil {
 		failureMsg = truncate(tf.LastFailure.FailureMessage, 200)
 		if tf.LastFailure.BuildID != "" {
-			prowURL = fmt.Sprintf("https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/%s/%s",
-				tf.JobName, tf.LastFailure.BuildID)
+			prowURL = n.prowURLBase + tf.JobName + "/" + tf.LastFailure.BuildID
 		}
 	}
 

@@ -17,7 +17,7 @@ func TestStateSaveLoad(t *testing.T) {
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, "state.json")
 
-	n := NewNotifier("http://example.com", stateFile, "https://dash.example.com")
+	n := NewNotifier("http://example.com", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n.state.Notified) != 0 {
 		t.Fatal("expected empty state on first load")
 	}
@@ -34,7 +34,7 @@ func TestStateSaveLoad(t *testing.T) {
 	}
 
 	// Reload from disk.
-	n2 := NewNotifier("http://example.com", stateFile, "https://dash.example.com")
+	n2 := NewNotifier("http://example.com", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n2.state.Notified) != 1 {
 		t.Fatalf("expected 1 notified entry, got %d", len(n2.state.Notified))
 	}
@@ -45,7 +45,7 @@ func TestStateSaveLoad(t *testing.T) {
 }
 
 func TestStateLoadMissingFile(t *testing.T) {
-	n := NewNotifier("http://example.com", "/nonexistent/state.json", "https://dash.example.com")
+	n := NewNotifier("http://example.com", "/nonexistent/state.json", "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n.state.Notified) != 0 {
 		t.Fatal("expected empty state when file doesn't exist")
 	}
@@ -69,7 +69,7 @@ func TestNewPersistentFailureDetection(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 
 	report := makeReport([]models.TestFlakiness{
 		{
@@ -122,7 +122,7 @@ func TestRecoveryDetection(t *testing.T) {
 	stateFile := filepath.Join(dir, "state.json")
 
 	// Pre-populate state with a notified failure.
-	n := NewNotifier(srv.URL, stateFile, "https://dash.example.com")
+	n := NewNotifier(srv.URL, stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	n.state.Notified["my-job::TestRecovered"] = NotifiedFailure{
 		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
 		ConsecutiveCount: 4,
@@ -162,7 +162,7 @@ func TestErrorHashChangeDetection(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 	n.state.Notified["my-job::TestChanged"] = NotifiedFailure{
 		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
 		ConsecutiveCount: 3,
@@ -205,7 +205,7 @@ func TestDeduplication(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 	n.state.Notified["my-job::TestSame"] = NotifiedFailure{
 		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
 		ConsecutiveCount: 3,
@@ -255,7 +255,7 @@ func TestWebhookPOSTFormat(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 
 	report := makeReport([]models.TestFlakiness{
 		{
@@ -301,7 +301,7 @@ func TestWebhookPOSTFormat(t *testing.T) {
 
 func TestGracefulEmptyWebhookURL(t *testing.T) {
 	dir := t.TempDir()
-	n := NewNotifier("", filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier("", filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 
 	report := makeReport([]models.TestFlakiness{
 		{
@@ -333,7 +333,7 @@ func TestBelowThresholdIgnored(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 
 	// ConsecutiveFailures = 2, below threshold of 3.
 	report := makeReport([]models.TestFlakiness{
@@ -368,7 +368,7 @@ func TestAILookup(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 
 	report := makeReport([]models.TestFlakiness{
 		{
@@ -427,7 +427,7 @@ func TestRecoveryCardFormat(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com")
+	n := NewNotifier(srv.URL, filepath.Join(dir, "state.json"), "https://dash.example.com", "https://prow.example.com/view/")
 	n.state.Notified["recovery-job::TestRecoveryCard"] = NotifiedFailure{
 		FirstNotifiedAt:  "2024-01-01T00:00:00Z",
 		ConsecutiveCount: 7,
@@ -474,7 +474,7 @@ func TestStateFileRoundTrip(t *testing.T) {
 	data, _ := json.Marshal(state)
 	os.WriteFile(stateFile, data, 0644)
 
-	n := NewNotifier("", stateFile, "https://dash.example.com")
+	n := NewNotifier("", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n.state.Notified) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(n.state.Notified))
 	}
@@ -490,7 +490,7 @@ func TestStateFileRoundTrip(t *testing.T) {
 	}
 
 	// Reload.
-	n2 := NewNotifier("", stateFile, "https://dash.example.com")
+	n2 := NewNotifier("", stateFile, "https://dash.example.com", "https://prow.example.com/view/")
 	if len(n2.state.Notified) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(n2.state.Notified))
 	}

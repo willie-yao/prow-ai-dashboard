@@ -10,19 +10,11 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 )
 
-const (
-	// GCSWebBaseURL is the base URL for GCSweb HTML listing pages.
-	GCSWebBaseURL = "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/"
-	// GCSBaseURL is the base URL for direct GCS object access.
-	GCSBaseURL = "https://storage.googleapis.com/kubernetes-ci-logs/logs/"
-	// GCSListAPIURL is the GCS JSON API endpoint for listing objects in the bucket.
-	GCSListAPIURL = "https://storage.googleapis.com/storage/v1/b/kubernetes-ci-logs/o"
-
-	gcsBucket = "kubernetes-ci-logs"
-	gcsPrefix = "logs/"
-)
+const gcsPrefix = "logs/"
 
 // gcsListResponse represents the JSON response from the GCS list objects API.
 type gcsListResponse struct {
@@ -33,14 +25,14 @@ type gcsListResponse struct {
 // ListBuildIDs uses the GCS JSON API to list all build IDs for the given job,
 // sorted descending (newest first). For jobs with many builds, prefer
 // ListRecentBuildIDs which is much faster.
-func ListBuildIDs(ctx context.Context, client *http.Client, jobName string) ([]string, error) {
-	return listAllBuildIDs(ctx, client, GCSListAPIURL, jobName)
+func ListBuildIDs(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName string) ([]string, error) {
+	return listAllBuildIDs(ctx, client, bucket.ListAPIURL(), jobName)
 }
 
 // ListRecentBuildIDs returns the most recent count build IDs for the given job,
 // sorted descending (newest first).
-func ListRecentBuildIDs(ctx context.Context, client *http.Client, jobName string, count int) ([]string, error) {
-	return listRecentBuildIDs(ctx, client, GCSListAPIURL, jobName, count)
+func ListRecentBuildIDs(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName string, count int) ([]string, error) {
+	return listRecentBuildIDs(ctx, client, bucket.ListAPIURL(), jobName, count)
 }
 
 func listRecentBuildIDs(ctx context.Context, client *http.Client, apiURL, jobName string, count int) ([]string, error) {
