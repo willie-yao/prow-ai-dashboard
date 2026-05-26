@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 func main() {
@@ -34,6 +35,7 @@ func main() {
 }
 
 func run() error {
+	configPath := flag.String("config", "configs/capz/project.yaml", "path to project.yaml")
 	outDir := flag.String("out", "data", "output directory for JSON files")
 	buildsPerJob := flag.Int("builds", 10, "number of recent builds to fetch per job")
 	workers := flag.Int("workers", 5, "number of concurrent job fetchers")
@@ -41,6 +43,13 @@ func run() error {
 	periodicOnly := flag.Bool("periodic-only", true, "only fetch periodic jobs (skip presubmits)")
 	enableAI := flag.Bool("ai", false, "enable AI-powered failure analysis")
 	flag.Parse()
+
+	cfg, err := project.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("loading project config: %w", err)
+	}
+	log.Printf("Project: %s (%s) dashboard=%s bucket=%s",
+		cfg.Name, cfg.DisplayShortName(), cfg.TestGrid.Dashboard, cfg.GCS.Bucket)
 
 	aiToken := os.Getenv("AI_TOKEN")
 	if *enableAI && aiToken == "" {
