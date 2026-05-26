@@ -1,15 +1,11 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useFlakinessReport } from "../hooks/useData";
-import { shortTestName } from "../lib/utils";
+import { useManifest } from "../hooks/useManifest";
+import { shortJobName, shortTestName } from "../lib/utils";
 import type { TestFlakiness } from "../types/dashboard";
 
-const JOB_PREFIX = "periodic-cluster-api-provider-azure-";
 const MAX_ITEMS = 10;
-
-function shortJobName(name: string): string {
-  return name.startsWith(JOB_PREFIX) ? name.slice(JOB_PREFIX.length) : name;
-}
 
 interface ItemGroup {
   label: string;
@@ -17,6 +13,8 @@ interface ItemGroup {
 }
 
 export function NeedsAttention() {
+  const manifest = useManifest();
+  const filePrefix = manifest.source.file_prefix;
   const { data, loading } = useFlakinessReport();
 
   const groups = useMemo<ItemGroup[]>(() => {
@@ -94,7 +92,7 @@ export function NeedsAttention() {
                   {/* Name block */}
                   <div className="min-w-0 flex-1">
                     <p className="text-xs text-on-surface-variant">
-                      {shortJobName(item.job_name)}
+                      {shortJobName(item.job_name, filePrefix)}
                     </p>
                     <p className="truncate text-sm text-on-surface">
                       {shortTestName(item.test_name)}

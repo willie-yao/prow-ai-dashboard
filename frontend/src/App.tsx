@@ -4,18 +4,24 @@ import { JobDetailPage } from "./pages/JobDetailPage";
 import { TestDetailPage } from "./pages/TestDetailPage";
 import { FlakinessPage } from "./pages/FlakinessPage";
 import { Layout } from "./components/Layout";
+import { ManifestProvider } from "./components/ManifestProvider";
+
+// Vite injects BASE_URL with a trailing slash; BrowserRouter wants none.
+const basename = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export default function App() {
   return (
-    <BrowserRouter basename="/capz-prow-dashboard">
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<DashboardPage />} />
-          <Route path="flaky" element={<FlakinessPage />} />
-          <Route path="job/:jobName" element={<JobDetailPage />} />
-          <Route path="job/:jobName/test/:testName" element={<TestDetailPage />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ManifestProvider>
+      <BrowserRouter basename={basename}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="flaky" element={<FlakinessPage />} />
+            <Route path="job/:jobName" element={<JobDetailPage />} />
+            <Route path="job/:jobName/test/:testName" element={<TestDetailPage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ManifestProvider>
   );
 }

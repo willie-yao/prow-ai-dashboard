@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import type { TestCase } from "../types/dashboard";
 import { formatDuration, fileToUrl, fileSortKey, formatSteps } from "../lib/utils";
+import { useManifest } from "../hooks/useManifest";
 
 interface TestCaseTableProps {
   testCases: TestCase[];
@@ -70,6 +71,7 @@ function highlightStackTrace(body: string): (string | React.ReactElement)[] {
 }
 
 export function TestCaseTable({ testCases, jobName, buildId, buildLogUrl }: TestCaseTableProps) {
+  const sourceRepo = useManifest().branding.source_repo;
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
   const filtered = testCases.filter(
@@ -344,9 +346,9 @@ export function TestCaseTable({ testCases, jobName, buildId, buildLogUrl }: Test
                               <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Files to Check</p>
                               <ul className="list-disc list-inside text-sm text-on-surface space-y-0.5">
                                 {[...tc.ai_analysis.relevant_files]
-                                  .sort((a, b) => fileSortKey(a, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts }) - fileSortKey(b, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts }))
+                                  .sort((a, b) => fileSortKey(a, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo }) - fileSortKey(b, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo }))
                                   .map((f, i) => {
-                                  const url = fileToUrl(f, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts });
+                                  const url = fileToUrl(f, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo });
                                   return (
                                     <li key={i} className="font-mono text-xs">
                                       {url ? (

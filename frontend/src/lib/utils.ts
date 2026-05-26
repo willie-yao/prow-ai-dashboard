@@ -113,12 +113,29 @@ export function shortTestName(name: string): string {
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
-const CAPZ_REPO = "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/";
+export interface SourceRepoRef {
+  owner: string;
+  name: string;
+}
+
+/** Strip the leading "periodic-<file_prefix>" off a job name for compact display. */
+export function shortJobName(name: string, filePrefix: string): string {
+  if (!filePrefix) return name;
+  const prefix = `periodic-${filePrefix}`;
+  return name.startsWith(prefix) ? name.slice(prefix.length) : name;
+}
+
+export interface FileToUrlContext {
+  buildLogUrl?: string;
+  clusterArtifacts?: { machines?: { logs: Record<string, string> }[] };
+  /** Source repo for repo-relative file paths in AI analyses. */
+  sourceRepo?: SourceRepoRef;
+}
 
 /** Turn a file path from AI analysis into a URL if possible. */
 export function fileToUrl(
   filePath: string,
-  context?: { buildLogUrl?: string; clusterArtifacts?: { machines?: { logs: Record<string, string> }[] } }
+  context?: FileToUrlContext
 ): string | null {
   const clean = filePath.replace(/\s*\(.*\)$/, "").trim();
   const lower = clean.toLowerCase();
@@ -160,18 +177,19 @@ export function fileToUrl(
     return null;
   }
 
-  // Only link repo files that look like they belong to the CAPZ repo
-  const capzPrefixes = /^(test|templates|pkg|scripts|api|exp|hack|config|deploy|cloud|cmd|util|feature)\//;
-  if (/\.(go|yaml|yml|sh|json|tpl|md)$/.test(clean) && capzPrefixes.test(clean)) {
-    return CAPZ_REPO + clean;
+  // Link plausible repo-relative source paths to the configured source repo.
+  const repoPathPrefixes = /^(test|templates|pkg|scripts|api|exp|hack|config|deploy|cloud|cmd|util|feature)\//;
+  if (/\.(go|yaml|yml|sh|json|tpl|md)$/.test(clean) && repoPathPrefixes.test(clean) && context?.sourceRepo) {
+    const { owner, name } = context.sourceRepo;
+    return `https://github.com/${owner}/${name}/blob/main/${clean}`;
   }
   return null;
 }
 
-/** Returns sort priority: 0 = GCS artifact, 1 = CAPZ repo, 2 = other/unlinked */
+/** Returns sort priority: 0 = GCS artifact, 1 = source repo, 2 = other/unlinked */
 export function fileSortKey(
   filePath: string,
-  context?: Parameters<typeof fileToUrl>[1]
+  context?: FileToUrlContext
 ): number {
   const url = fileToUrl(filePath, context);
   if (!url) return 2;

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useFlakinessReport } from "../hooks/useData";
-import { formatPercent, timeAgo } from "../lib/utils";
+import { useManifest } from "../hooks/useManifest";
+import { formatPercent, shortJobName, timeAgo } from "../lib/utils";
 import { DurationChart } from "../components/DurationChart";
 import type { TestFlakiness } from "../types/dashboard";
 import { HiFaceSmile, HiChevronRight } from "react-icons/hi2";
@@ -13,12 +14,6 @@ const tabs: { label: string; value: Tab; tooltip: string }[] = [
   { label: "Persistent Failures", value: "persistent", tooltip: "Tests that have failed 3 or more times in a row with the same error. These are consistently broken, not flaky." },
   { label: "Recently Broken", value: "recently_broken", tooltip: "Tests that started a new failure streak within the last 48 hours. These are likely new regressions." },
 ];
-
-const JOB_PREFIX = "periodic-cluster-api-provider-azure-";
-
-function shortJobName(name: string): string {
-  return name.startsWith(JOB_PREFIX) ? name.slice(JOB_PREFIX.length) : name;
-}
 
 function classificationStyle(c: TestFlakiness["classification"]): string {
   switch (c) {
@@ -58,6 +53,8 @@ function metricLabel(tab: Tab): string {
 }
 
 function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
+  const manifest = useManifest();
+  const filePrefix = manifest.source.file_prefix;
   const [expanded, setExpanded] = useState(false);
   const failPct = Math.round(item.fail_rate * 100);
 
@@ -84,7 +81,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
               onClick={(e) => e.stopPropagation()}
               className="font-label text-xs text-on-surface-variant hover:text-primary transition-colors"
             >
-              {shortJobName(item.job_name)}
+              {shortJobName(item.job_name, filePrefix)}
             </Link>
           </div>
 

@@ -1,7 +1,9 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
+import { useManifest } from "../hooks/useManifest";
 
 export function Layout() {
+  const manifest = useManifest();
   return (
     <div className="min-h-screen bg-background text-on-background">
       <header className="glass sticky top-0 z-50 h-16 flex items-center border-b border-outline-variant px-4 sm:px-6">
@@ -20,7 +22,7 @@ export function Layout() {
             <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
           </svg>
           <h1 className="font-headline text-lg font-semibold tracking-tight text-on-surface hidden sm:block">
-            CAPZ Prow Dashboard
+            {manifest.branding.title}
           </h1>
         </Link>
         <div className="ml-auto flex items-center gap-4 sm:ml-8 sm:flex-1">

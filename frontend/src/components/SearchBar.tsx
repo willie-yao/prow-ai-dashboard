@@ -2,17 +2,14 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import Fuse from "fuse.js";
 import { useSearchIndex } from "../hooks/useData";
-import { shortTestName } from "../lib/utils";
+import { useManifest } from "../hooks/useManifest";
+import { shortJobName, shortTestName } from "../lib/utils";
 import { HiMagnifyingGlass } from "react-icons/hi2";
 import type { SearchEntry } from "../types/dashboard";
 
-const JOB_PREFIX = "periodic-cluster-api-provider-azure-";
-
-function shortJobName(name: string): string {
-  return name.startsWith(JOB_PREFIX) ? name.slice(JOB_PREFIX.length) : name;
-}
-
 export function SearchBar() {
+  const manifest = useManifest();
+  const filePrefix = manifest.source.file_prefix;
   const { data } = useSearchIndex();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -158,7 +155,7 @@ export function SearchBar() {
               Array.from(grouped.entries()).map(([jobName, items]) => (
                 <div key={jobName}>
                   <div className="sticky top-0 bg-surface-container px-3 py-1.5 font-label text-xs font-medium text-on-surface-variant border-b border-outline-variant">
-                    {shortJobName(jobName)}
+                    {shortJobName(jobName, filePrefix)}
                   </div>
                   {items.map((r) => (
                     <button
@@ -171,7 +168,7 @@ export function SearchBar() {
                         <>
                           <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-primary" />
                           <span className="min-w-0 flex-1 truncate font-medium">
-                            {r.item.tab_name || shortJobName(r.item.job_name)}
+                            {r.item.tab_name || shortJobName(r.item.job_name, filePrefix)}
                           </span>
                           <span className="shrink-0 font-label text-xs text-on-surface-variant">
                             {r.item.branch}

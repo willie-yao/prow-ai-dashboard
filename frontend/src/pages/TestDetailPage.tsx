@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
+import { useManifest } from "../hooks/useManifest";
 import { formatDuration, timeAgo, fileToUrl, fileSortKey, formatSteps } from "../lib/utils";
 import { DurationChart } from "../components/DurationChart";
 import { RunTimeline } from "../components/RunTimeline";
@@ -63,6 +64,7 @@ interface FailureGroup {
 }
 
 export function TestDetailPage() {
+  const sourceRepo = useManifest().branding.source_repo;
   const { jobName, testName: encodedTestName } = useParams<{
     jobName: string;
     testName: string;
@@ -578,9 +580,9 @@ export function TestDetailPage() {
                   <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Files to Check</p>
                   <ul className="list-disc list-inside text-sm text-on-surface space-y-0.5">
                     {[...selectedTc.ai_analysis.relevant_files]
-                      .sort((a, b) => fileSortKey(a, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts }) - fileSortKey(b, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts }))
+                      .sort((a, b) => fileSortKey(a, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo }) - fileSortKey(b, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo }))
                       .map((f, i) => {
-                      const url = fileToUrl(f, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts });
+                      const url = fileToUrl(f, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo });
                       return (
                         <li key={i} className="font-mono text-xs">
                           {url ? (
