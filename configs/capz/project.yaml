@@ -44,8 +44,13 @@ branding:
     owner: "kubernetes-sigs"
     name: "cluster-api-provider-azure"
 
-# CAPI-specific knobs. Phase A keeps these at the top level; Phase B
-# will move them under a "collector: capi" section as part of the
-# collector interface extraction.
+# CAPI-specific knobs. Used when artifacts.collector is "capi" — the
+# collector groups GCS debug artifacts by cluster names matching this
+# prefix.
 capi:
   cluster_name_prefix: "capz-e2e"
+
+# Per-build artifact collector. "capi" knows the artifacts/clusters/{name}/
+# machines/{vm}/... layout used by Cluster API providers.
+artifacts:
+  collector: "capi"

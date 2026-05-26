@@ -16,7 +16,9 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
+	collectorcapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/capi"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcsweb"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
@@ -66,6 +68,12 @@ func run() error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	bucket := gcs.NewBucket(cfg.GCS.Bucket)
 
+	collector, err := buildCollector(cfg, bucket, client)
+	if err != nil {
+		return fmt.Errorf("building collector: %w", err)
+	}
+	log.Printf("Using artifact collector: %s", collector.Name())
+
 	// Step 1: Discover jobs from test-infra config YAMLs.
 	log.Println("Fetching job configs from test-infra...")
 	jobs, err := jobconfig.FetchJobConfigs(ctx, client, cfg)
@@ -106,7 +114,7 @@ func run() error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, j.Name, *buildsPerJob, cachedJobs[j.Name])
+			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, collector, j.Name, *buildsPerJob, cachedJobs[j.Name])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -240,8 +248,25 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 	return cached
 }
 
+// buildCollector chooses an artifact collector based on cfg.Artifacts.Collector.
+// New collector implementations are wired in here.
+func buildCollector(cfg *project.Config, bucket *gcs.Bucket, client *http.Client) (collectors.Collector, error) {
+	name := cfg.CollectorName()
+	switch name {
+	case "generic":
+		return generic.New(), nil
+	case "capi":
+		if cfg.CAPI == nil {
+			return nil, fmt.Errorf("artifacts.collector=capi requires a capi section in project.yaml")
+		}
+		return collectorcapi.New(bucket, client, cfg.CAPI.ClusterNamePrefix)
+	default:
+		return nil, fmt.Errorf("unknown artifacts.collector %q", name)
+	}
+}
+
 // fetchJobRunsCached discovers recent builds and uses cached data for completed builds.
-func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
 	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
@@ -257,7 +282,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 			continue
 		}
 
-		result, err := fetchBuildResult(ctx, client, bucket, cfg, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, cfg, collector, jobName, bid)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
 			continue
@@ -274,7 +299,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 }
 
 // fetchJobRuns discovers recent builds for a job and fetches their results.
-func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, jobName string, count int) ([]models.BuildResult, error) {
+func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, jobName string, count int) ([]models.BuildResult, error) {
 	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
@@ -282,7 +307,7 @@ func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, 
 
 	var runs []models.BuildResult
 	for _, bid := range buildIDs {
-		result, err := fetchBuildResult(ctx, client, bucket, cfg, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, cfg, collector, jobName, bid)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
 			continue
@@ -293,8 +318,9 @@ func fetchJobRuns(ctx context.Context, client *http.Client, bucket *gcs.Bucket, 
 	return runs, nil
 }
 
-// fetchBuildResult fetches metadata and JUnit XML for a single build.
-func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, jobName, buildID string) (*models.BuildResult, error) {
+// fetchBuildResult fetches metadata and JUnit XML for a single build,
+// then delegates per-test artifact discovery to the configured collector.
+func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, jobName, buildID string) (*models.BuildResult, error) {
 	info, err := gcs.FetchBuildInfo(ctx, client, bucket, jobName, buildID)
 	if err != nil {
 		return nil, fmt.Errorf("fetching build info: %w", err)
@@ -330,61 +356,8 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 		}
 	}
 
-	// For failed builds, discover per-cluster debug artifacts.
-	// Skip if the build is still pending (no finished.json yet).
-	if result.Result != "PENDING" && !result.Passed && result.TestsFailed > 0 {
-		// CAPI-style cluster discovery only applies when the project declares
-		// a cluster name prefix. Non-CAPI projects skip this whole block.
-		if cfg.CAPI == nil || cfg.CAPI.ClusterNamePrefix == "" {
-			return result, nil
-		}
-		clusterPrefix := cfg.CAPI.ClusterNamePrefix
-
-		clusters, err := artifacts.DiscoverClusters(ctx, client, bucket, jobName, buildID)
-		if err != nil {
-			// 404 is expected for jobs that don't produce cluster artifacts (e.g., AKS, conformance).
-			// Only log non-404 errors.
-			if !strings.Contains(err.Error(), "404") {
-				log.Printf("    ⚠ %s/%s: artifact discovery failed: %v", jobName, buildID, err)
-			}
-		}
-
-		// Fetch build log for namespace mapping (best-effort).
-		var namespaceMap map[string]string
-		buildLog, err := gcs.FetchRaw(ctx, client, info.BuildLogURL)
-		if err != nil {
-			log.Printf("    ⚠ %s/%s: failed to fetch build log for namespace mapping: %v", jobName, buildID, err)
-		} else {
-			namespaceMap = artifacts.ParseNamespaceMap(buildLog, clusterPrefix)
-			log.Printf("    📋 %s/%s: build log %d bytes, %d namespace mappings", jobName, buildID, len(buildLog), len(namespaceMap))
-		}
-
-		nsPrefixRe := regexp.MustCompile(regexp.QuoteMeta(clusterPrefix) + `-[a-z0-9]+`)
-		bootstrapPath := jobName + "/" + buildID + "/artifacts/clusters/bootstrap/resources/"
-
-		for i := range result.TestCases {
-			if result.TestCases[i].Status != "failed" {
-				continue
-			}
-
-			ca := artifacts.MapTestToCluster(result.TestCases[i].Name, clusters)
-			if ca != nil {
-				// Add bootstrap resources URL by extracting namespace prefix.
-				if prefix := nsPrefixRe.FindString(ca.ClusterName); prefix != "" {
-					ca.BootstrapResourcesURL = bucket.WebURL(bootstrapPath + prefix + "/")
-				}
-				result.TestCases[i].ClusterArtifacts = ca
-			} else if namespaceMap != nil {
-				// No workload cluster match — try namespace from build log.
-				ns := artifacts.FindNamespaceForTest(result.TestCases[i].Name, namespaceMap)
-				if ns != "" {
-					result.TestCases[i].ClusterArtifacts = &models.ClusterArtifacts{
-						ClusterName:           ns,
-						BootstrapResourcesURL: bucket.WebURL(bootstrapPath + ns + "/"),
-					}
-				}
-			}
-		}
+	if err := collector.CollectArtifacts(ctx, jobName, buildID, result); err != nil {
+		log.Printf("    ⚠ %s/%s: collector %s: %v", jobName, buildID, collector.Name(), err)
 	}
 
 	return result, nil

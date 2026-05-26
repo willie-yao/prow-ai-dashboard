@@ -50,4 +50,13 @@ func TestLoadCAPZGolden(t *testing.T) {
 	if cfg.CAPI.ClusterNamePrefix != "capz-e2e" {
 		t.Errorf("CAPI.ClusterNamePrefix = %q, want capz-e2e", cfg.CAPI.ClusterNamePrefix)
 	}
+	if cfg.Artifacts == nil {
+		t.Fatal("Artifacts section missing")
+	}
+	if cfg.Artifacts.Collector != "capi" {
+		t.Errorf("Artifacts.Collector = %q, want capi", cfg.Artifacts.Collector)
+	}
+	if got := cfg.CollectorName(); got != "capi" {
+		t.Errorf("CollectorName() = %q, want capi", got)
+	}
 }

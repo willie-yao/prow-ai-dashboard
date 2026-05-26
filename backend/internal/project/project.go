@@ -18,14 +18,15 @@ import (
 
 // Config is the in-memory representation of a project.yaml file.
 type Config struct {
-	ID        string   `yaml:"id"         json:"id"`
-	Name      string   `yaml:"name"       json:"name"`
-	ShortName string   `yaml:"short_name" json:"short_name,omitempty"`
-	Source    Source   `yaml:"source"     json:"source"`
-	TestGrid  TestGrid `yaml:"testgrid"   json:"testgrid"`
-	GCS       GCS      `yaml:"gcs"        json:"gcs"`
-	Branding  Branding `yaml:"branding"   json:"branding"`
-	CAPI      *CAPI    `yaml:"capi,omitempty" json:"capi,omitempty"`
+	ID        string     `yaml:"id"         json:"id"`
+	Name      string     `yaml:"name"       json:"name"`
+	ShortName string     `yaml:"short_name" json:"short_name,omitempty"`
+	Source    Source     `yaml:"source"     json:"source"`
+	TestGrid  TestGrid   `yaml:"testgrid"   json:"testgrid"`
+	GCS       GCS        `yaml:"gcs"        json:"gcs"`
+	Branding  Branding   `yaml:"branding"   json:"branding"`
+	Artifacts *Artifacts `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	CAPI      *CAPI      `yaml:"capi,omitempty"      json:"capi,omitempty"`
 }
 
 // Source describes where in kubernetes/test-infra the project's prow
@@ -64,6 +65,27 @@ type SourceRepo struct {
 // level; Phase B will move them under a generic collector config section.
 type CAPI struct {
 	ClusterNamePrefix string `yaml:"cluster_name_prefix" json:"cluster_name_prefix"`
+}
+
+// Artifacts selects the per-build artifact collector used by the fetcher.
+// Implementations live under backend/internal/collectors/.
+type Artifacts struct {
+	// Collector names the registered collector (e.g. "capi", "generic").
+	// When unset or empty, the generic no-op collector is used.
+	Collector string `yaml:"collector" json:"collector,omitempty"`
+}
+
+// SupportedCollectors lists collector names accepted by Validate. Wiring
+// happens in cmd/fetcher/main.go; keep this list in sync with the switch
+// statement there.
+var SupportedCollectors = []string{"generic", "capi"}
+
+// CollectorName returns the configured collector name, defaulting to "generic".
+func (c *Config) CollectorName() string {
+	if c.Artifacts == nil || strings.TrimSpace(c.Artifacts.Collector) == "" {
+		return "generic"
+	}
+	return c.Artifacts.Collector
 }
 
 // Load reads and validates a project.yaml file from disk.
@@ -125,6 +147,20 @@ func (c *Config) Validate() error {
 
 	if len(missing) > 0 {
 		return fmt.Errorf("project config missing required field(s): %s", strings.Join(missing, ", "))
+	}
+
+	if c.Artifacts != nil && c.Artifacts.Collector != "" {
+		valid := false
+		for _, name := range SupportedCollectors {
+			if c.Artifacts.Collector == name {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("artifacts.collector %q is not supported (valid: %s)",
+				c.Artifacts.Collector, strings.Join(SupportedCollectors, ", "))
+		}
 	}
 	return nil
 }

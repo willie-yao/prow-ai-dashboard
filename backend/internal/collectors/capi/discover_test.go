@@ -1,4 +1,4 @@
-package artifacts
+package capi
 
 import (
 	"context"

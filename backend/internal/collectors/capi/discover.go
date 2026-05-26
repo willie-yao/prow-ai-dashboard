@@ -1,8 +1,8 @@
-// Package artifacts discovers per-cluster debug artifact directories for
-// failed E2E test runs stored in GCS. The cluster naming convention
-// (e.g. capz-e2e-{random}-{flavor}) comes from CAPI's e2e framework;
-// the cluster prefix is configurable per project.
-package artifacts
+// Package capi is the Cluster API artifact collector. It discovers per-cluster
+// debug artifact directories for failed E2E test runs stored in GCS. The cluster
+// naming convention (e.g. capz-e2e-{random}-{flavor}) comes from CAPI's e2e
+// framework; the cluster prefix is configurable per project.
+package capi
 
 import (
 	"context"
