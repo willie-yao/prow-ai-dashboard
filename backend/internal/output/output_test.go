@@ -1,0 +1,169 @@
+package output
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+)
+
+func sampleDashboard() models.Dashboard {
+	return models.Dashboard{
+		GeneratedAt: time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC),
+		Jobs: []models.JobSummary{
+			{
+				ProwJob: models.ProwJob{
+					Name:     "periodic-cluster-api-provider-azure-e2e-main",
+					Category: "e2e",
+					Branch:   "main",
+				},
+				OverallStatus: "PASSING",
+				PassRate7d:    0.95,
+				PassRate30d:   0.90,
+				RecentRuns: []models.RunSummary{
+					{BuildID: "100", Passed: true, Timestamp: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)},
+				},
+			},
+		},
+	}
+}
+
+func sampleJobDetail(name string) models.JobDetail {
+	return models.JobDetail{
+		Name: name,
+		Runs: []models.BuildResult{
+			{
+				BuildInfo: models.BuildInfo{
+					BuildID: "100",
+					JobName: name,
+					Started: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
+					Passed:  true,
+					Result:  "SUCCESS",
+				},
+				TestsTotal:  5,
+				TestsPassed: 5,
+			},
+		},
+	}
+}
+
+func TestWriteDashboard(t *testing.T) {
+	dir := t.TempDir()
+	dash := sampleDashboard()
+
+	if err := WriteDashboard(dir, dash); err != nil {
+		t.Fatalf("WriteDashboard: %v", err)
+	}
+
+	path := filepath.Join(dir, "dashboard.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read dashboard.json: %v", err)
+	}
+
+	var got models.Dashboard
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal dashboard.json: %v", err)
+	}
+	if got.GeneratedAt != dash.GeneratedAt {
+		t.Errorf("GeneratedAt = %v, want %v", got.GeneratedAt, dash.GeneratedAt)
+	}
+	if len(got.Jobs) != len(dash.Jobs) {
+		t.Errorf("len(Jobs) = %d, want %d", len(got.Jobs), len(dash.Jobs))
+	}
+}
+
+func TestWriteDashboard_CreatesParentDirs(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a", "b", "c")
+
+	if err := WriteDashboard(dir, sampleDashboard()); err != nil {
+		t.Fatalf("WriteDashboard with nested dirs: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dashboard.json")); err != nil {
+		t.Fatalf("dashboard.json not created in nested dir: %v", err)
+	}
+}
+
+func TestWriteJobDetail(t *testing.T) {
+	dir := t.TempDir()
+	detail := sampleJobDetail("periodic-cluster-api-provider-azure-e2e-main")
+
+	if err := WriteJobDetail(dir, detail); err != nil {
+		t.Fatalf("WriteJobDetail: %v", err)
+	}
+
+	path := filepath.Join(dir, "jobs", "periodic-cluster-api-provider-azure-e2e-main.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read job detail: %v", err)
+	}
+
+	var got models.JobDetail
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal job detail: %v", err)
+	}
+	if got.Name != detail.Name {
+		t.Errorf("Name = %q, want %q", got.Name, detail.Name)
+	}
+	if len(got.Runs) != len(detail.Runs) {
+		t.Errorf("len(Runs) = %d, want %d", len(got.Runs), len(detail.Runs))
+	}
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"periodic-cluster-api-provider-azure-e2e-main", "periodic-cluster-api-provider-azure-e2e-main"},
+		{"job/with:special chars!", "job-with-special-chars-"},
+		{"has spaces here", "has-spaces-here"},
+		{"keep_underscores_too", "keep_underscores_too"},
+		{"dots.are.replaced", "dots-are-replaced"},
+	}
+	for _, tt := range tests {
+		got := SanitizeFilename(tt.input)
+		if got != tt.want {
+			t.Errorf("SanitizeFilename(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestWriteAll(t *testing.T) {
+	dir := t.TempDir()
+	dash := sampleDashboard()
+	details := []models.JobDetail{
+		sampleJobDetail("job-alpha"),
+		sampleJobDetail("job-beta"),
+	}
+	flakiness := models.FlakinessReport{
+		GeneratedAt: "2025-01-15T12:00:00Z",
+	}
+
+	if err := WriteAll(dir, dash, details, flakiness, models.SearchIndex{GeneratedAt: "2025-01-15T12:00:00Z"}); err != nil {
+		t.Fatalf("WriteAll: %v", err)
+	}
+
+	// dashboard.json exists
+	if _, err := os.Stat(filepath.Join(dir, "dashboard.json")); err != nil {
+		t.Error("dashboard.json missing")
+	}
+	// job files exist
+	for _, d := range details {
+		p := filepath.Join(dir, "jobs", SanitizeFilename(d.Name)+".json")
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("job file %s missing", p)
+		}
+	}
+	// flakiness.json exists
+	if _, err := os.Stat(filepath.Join(dir, "flakiness.json")); err != nil {
+		t.Error("flakiness.json missing")
+	}
+	// search-index.json exists
+	if _, err := os.Stat(filepath.Join(dir, "search-index.json")); err != nil {
+		t.Error("search-index.json missing")
+	}
+}
