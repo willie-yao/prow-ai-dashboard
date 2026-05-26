@@ -1,6 +1,6 @@
 // Package config parses Prow job configuration YAML files from the
 // kubernetes/test-infra repository and extracts CAPZ-related job metadata.
-package config
+package jobconfig
 
 import (
 	"strings"

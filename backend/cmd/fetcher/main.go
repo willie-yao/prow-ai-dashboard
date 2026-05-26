@@ -17,7 +17,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/config"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcsweb"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
@@ -25,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 )
 
 func main() {
@@ -67,7 +67,7 @@ func run() error {
 
 	// Step 1: Discover jobs from test-infra config YAMLs.
 	log.Println("Fetching job configs from test-infra...")
-	jobs, err := config.FetchJobConfigs(ctx, client)
+	jobs, err := jobconfig.FetchJobConfigs(ctx, client)
 	if err != nil {
 		return fmt.Errorf("fetching job configs: %w", err)
 	}
