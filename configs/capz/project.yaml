@@ -1,0 +1,51 @@
+# Project config for the Cluster API Provider Azure dashboard.
+#
+# Consumed by the prow-ai-dashboard fetcher at
+#   github.com/willie-yao/prow-ai-dashboard
+# via:
+#   ./fetcher -config=configs/capz/project.yaml ...
+#
+# Every value here replaces a string that used to be hard-coded in the
+# CAPZ-specific dashboard. Treat any change as a behavior change for the
+# deployed site.
+
+id: capz
+name: "Cluster API Provider Azure"
+short_name: "CAPZ"
+
+# Where in kubernetes/test-infra to find the prow job YAMLs.
+source:
+  test_infra_path: "config/jobs/kubernetes-sigs/cluster-api-provider-azure"
+  # Only files whose name starts with this prefix are treated as job
+  # configs. Skips shared presets like "cluster-api-provider-azure-presets.yaml"
+  # is actually included; the filter is broader on purpose. See
+  # backend/internal/prow/jobconfig/fetch.go for the exact rule.
+  file_prefix: "cluster-api-provider-azure-"
+
+# Filter jobs by their testgrid-dashboards annotation. Only jobs that
+# advertise this dashboard show up.
+testgrid:
+  dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"
+
+# GCS bucket holding build artifacts (started.json, finished.json,
+# junit.e2e_suite.1.xml, build-log.txt, machine logs, etc.).
+gcs:
+  bucket: "kubernetes-ci-logs"
+
+# UI-facing branding. Frontend reads these from data/manifest.json at
+# runtime; backend uses site_url for notification deep links.
+branding:
+  title: "CAPZ Prow Dashboard"
+  # Matches the old deployment URL. Will change to /capz-prow-ai-dashboard
+  # in Phase C when the new consumer repo takes over.
+  base_path: "/capz-prow-dashboard"
+  site_url: "https://willie-yao.github.io/capz-prow-dashboard"
+  source_repo:
+    owner: "kubernetes-sigs"
+    name: "cluster-api-provider-azure"
+
+# CAPI-specific knobs. Phase A keeps these at the top level; Phase B
+# will move them under a "collector: capi" section as part of the
+# collector interface extraction.
+capi:
+  cluster_name_prefix: "capz-e2e"
