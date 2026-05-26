@@ -1,5 +1,6 @@
-// Package config parses Prow job configuration YAML files from the
-// kubernetes/test-infra repository and extracts CAPZ-related job metadata.
+// Package jobconfig parses Prow job configuration YAML files from the
+// kubernetes/test-infra repository and extracts job metadata for the
+// configured testgrid dashboard.
 package jobconfig
 
 import (
@@ -8,8 +9,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"gopkg.in/yaml.v3"
 )
-
-const capzDashboard = "sig-cluster-lifecycle-cluster-api-provider-azure"
 
 // rawJob is the intermediate representation used to unmarshal a single job
 // entry from the Prow YAML before converting it to a models.ProwJob.
@@ -39,9 +38,10 @@ type presubmitsFile struct {
 	Presubmits map[string][]rawJob `yaml:"presubmits"`
 }
 
-// ParseJobConfig parses a Prow YAML config file and returns the CAPZ jobs it
-// contains. filename is recorded in each returned ProwJob's ConfigFile field.
-func ParseJobConfig(data []byte, filename string) ([]models.ProwJob, error) {
+// ParseJobConfig parses a Prow YAML config file and returns the jobs whose
+// testgrid-dashboards annotation contains the given dashboard. filename is
+// recorded in each returned ProwJob's ConfigFile field.
+func ParseJobConfig(data []byte, filename, dashboard string) ([]models.ProwJob, error) {
 	// Try periodics first.
 	var pf periodicsFile
 	if err := yaml.Unmarshal(data, &pf); err != nil {
@@ -64,7 +64,7 @@ func ParseJobConfig(data []byte, filename string) ([]models.ProwJob, error) {
 
 	var result []models.ProwJob
 	for _, r := range raw {
-		if !isCAPZJob(r) {
+		if !matchesDashboard(r, dashboard) {
 			continue
 		}
 		result = append(result, convertJob(r, filename))
@@ -72,12 +72,12 @@ func ParseJobConfig(data []byte, filename string) ([]models.ProwJob, error) {
 	return result, nil
 }
 
-// isCAPZJob returns true when the job's testgrid-dashboards annotation
-// contains the CAPZ dashboard name.
-func isCAPZJob(r rawJob) bool {
+// matchesDashboard returns true when the job's testgrid-dashboards annotation
+// contains the given dashboard name.
+func matchesDashboard(r rawJob, dashboard string) bool {
 	dashboards := r.Annotations["testgrid-dashboards"]
 	for _, d := range strings.Split(dashboards, ",") {
-		if strings.TrimSpace(d) == capzDashboard {
+		if strings.TrimSpace(d) == dashboard {
 			return true
 		}
 	}

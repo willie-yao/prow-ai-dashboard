@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+const testDashboard = "sig-cluster-lifecycle-cluster-api-provider-azure"
+
 func loadTestdata(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
@@ -17,7 +19,7 @@ func loadTestdata(t *testing.T, name string) []byte {
 
 func TestParsePeriodics(t *testing.T) {
 	data := loadTestdata(t, "periodics.yaml")
-	jobs, err := ParseJobConfig(data, "periodics.yaml")
+	jobs, err := ParseJobConfig(data, "periodics.yaml", testDashboard)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -49,7 +51,7 @@ func TestParsePeriodics(t *testing.T) {
 
 func TestParsePresubmits(t *testing.T) {
 	data := loadTestdata(t, "presubmits.yaml")
-	jobs, err := ParseJobConfig(data, "presubmits.yaml")
+	jobs, err := ParseJobConfig(data, "presubmits.yaml", testDashboard)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -97,14 +99,14 @@ func TestCategoryInference(t *testing.T) {
 	}
 }
 
-func TestSkipNonCAPZJobs(t *testing.T) {
+func TestSkipJobsForOtherDashboards(t *testing.T) {
 	yaml := []byte(`
 periodics:
 - name: some-other-job
   annotations:
     testgrid-dashboards: sig-other
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml")
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -120,7 +122,7 @@ periodics:
   decoration_config:
     timeout: 1h
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml")
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -138,7 +140,7 @@ periodics:
     testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
     testgrid-tab-name: capz-no-refs
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml")
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -155,7 +157,7 @@ periodics:
 }
 
 func TestEmptyInput(t *testing.T) {
-	jobs, err := ParseJobConfig([]byte("{}"), "empty.yaml")
+	jobs, err := ParseJobConfig([]byte("{}"), "empty.yaml", testDashboard)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}

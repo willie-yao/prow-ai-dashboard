@@ -67,7 +67,7 @@ func run() error {
 
 	// Step 1: Discover jobs from test-infra config YAMLs.
 	log.Println("Fetching job configs from test-infra...")
-	jobs, err := jobconfig.FetchJobConfigs(ctx, client)
+	jobs, err := jobconfig.FetchJobConfigs(ctx, client, cfg)
 	if err != nil {
 		return fmt.Errorf("fetching job configs: %w", err)
 	}
