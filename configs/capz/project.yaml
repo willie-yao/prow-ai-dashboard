@@ -36,10 +36,8 @@ gcs:
 # runtime; backend uses site_url for notification deep links.
 branding:
   title: "CAPZ Prow Dashboard"
-  # Matches the old deployment URL. Will change to /capz-prow-ai-dashboard
-  # in Phase C when the new consumer repo takes over.
-  base_path: "/capz-prow-dashboard"
-  site_url: "https://willie-yao.github.io/capz-prow-dashboard"
+  base_path: "/capz-prow-ai-dashboard"
+  site_url: "https://willie-yao.github.io/capz-prow-ai-dashboard"
   source_repo:
     owner: "kubernetes-sigs"
     name: "cluster-api-provider-azure"

@@ -34,8 +34,8 @@ func TestLoadCAPZGolden(t *testing.T) {
 		{"testgrid.dashboard", cfg.TestGrid.Dashboard, "sig-cluster-lifecycle-cluster-api-provider-azure"},
 		{"gcs.bucket", cfg.GCS.Bucket, "kubernetes-ci-logs"},
 		{"branding.title", cfg.Branding.Title, "CAPZ Prow Dashboard"},
-		{"branding.base_path", cfg.Branding.BasePath, "/capz-prow-dashboard"},
-		{"branding.site_url", cfg.Branding.SiteURL, "https://willie-yao.github.io/capz-prow-dashboard"},
+		{"branding.base_path", cfg.Branding.BasePath, "/capz-prow-ai-dashboard"},
+		{"branding.site_url", cfg.Branding.SiteURL, "https://willie-yao.github.io/capz-prow-ai-dashboard"},
 		{"branding.source_repo.owner", cfg.Branding.SourceRepo.Owner, "kubernetes-sigs"},
 		{"branding.source_repo.name", cfg.Branding.SourceRepo.Name, "cluster-api-provider-azure"},
 	}
