@@ -9,13 +9,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	aicapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/capi"
+	aigeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
 	collectorcapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/capi"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
@@ -378,6 +379,10 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 		consecutiveMap[tf.TestName] = tf.ConsecutiveFailures
 	}
 
+	module := buildAIModule(cfg)
+	service := ai.NewService(aiClient, module, consecutiveMap)
+	log.Printf("Using AI module: %s", module.Name())
+
 	var totalFailures, transientSkipped int
 	for _, d := range details {
 		for _, run := range d.Runs {
@@ -397,13 +402,6 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	// Build the cluster-flavor regex from the project's CAPI cluster prefix.
-	// For non-CAPI projects this is empty and flavor extraction is skipped.
-	var flavorRe *regexp.Regexp
-	if cfg.CAPI != nil && cfg.CAPI.ClusterNamePrefix != "" {
-		flavorRe = regexp.MustCompile(`^` + regexp.QuoteMeta(cfg.CAPI.ClusterNamePrefix) + `-(.+?)-\d`)
-	}
-
 	for i := range details {
 		for ri := range details[i].Runs {
 			run := &details[i].Runs[ri]
@@ -412,72 +410,28 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 				if tc.Status != "failed" {
 					continue
 				}
-
-				// Skip if this test case already has AI analysis (from cached data).
-				if tc.AISummary != nil && tc.AIAnalysis != nil {
-					continue
-				}
-
-				// Check for known transient patterns first.
-				if reason := ai.IsKnownTransient(tc.FailureMessage); reason != "" {
-					tc.AISummary = &models.AISummary{
-						GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-						Summary:     reason,
-						IsTransient: true,
-					}
+				before := tc.AISummary
+				service.Analyze(ctx, httpClient, run, tc)
+				// Count transient short-circuits for the summary log.
+				if before == nil && tc.AISummary != nil && tc.AISummary.IsTransient && tc.AIAnalysis == nil {
 					transientSkipped++
-					log.Printf("  ⏭ Skipping transient: %s: %s", tc.Name, reason)
-					continue
 				}
-
-				// Quick summary for all non-transient failures.
-				summary, err := aiClient.QuickSummary(ctx, tc.Name, tc.FailureMessage, tc.FailureLocation)
-				if err != nil {
-					log.Printf("  ⚠ AI summary failed for %s: %v", tc.Name, err)
-					continue
-				}
-				tc.AISummary = summary
-
-				// Comprehensive analysis for all non-transient failures.
-				log.Printf("  🔍 Deep analyzing: %s", tc.Name)
-
-				// Determine cluster flavor from cluster name.
-				var flavor string
-				if flavorRe != nil && tc.ClusterArtifacts != nil && tc.ClusterArtifacts.ClusterName != "" {
-					if m := flavorRe.FindStringSubmatch(tc.ClusterArtifacts.ClusterName); len(m) > 1 {
-						flavor = m[1]
-					}
-				}
-
-				consec := consecutiveMap[tc.Name]
-				if consec < 1 {
-					consec = 1
-				}
-
-				var bootstrapURL string
-				if tc.ClusterArtifacts != nil {
-					bootstrapURL = tc.ClusterArtifacts.BootstrapResourcesURL
-				}
-
-				evidence := ai.CollectEvidence(ctx, httpClient, ai.EvidenceParams{
-					TestName:              tc.Name,
-					FailureMessage:        tc.FailureMessage,
-					FailureBody:           tc.FailureBody,
-					ClusterFlavor:         flavor,
-					ConsecutiveCount:      consec,
-					BuildLogURL:           run.BuildLogURL,
-					BootstrapResourcesURL: bootstrapURL,
-					ClusterArtifacts:      tc.ClusterArtifacts,
-				})
-
-				analysis, err := aiClient.ComprehensiveAnalysis(ctx, evidence)
-				if err != nil {
-					log.Printf("  ⚠ AI deep analysis failed for %s: %v", tc.Name, err)
-					continue
-				}
-				tc.AIAnalysis = analysis
 			}
 		}
 	}
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped)
+}
+
+// buildAIModule selects the AI module implementation based on project config.
+func buildAIModule(cfg *project.Config) ai.Module {
+	switch cfg.AIModuleName() {
+	case "capi":
+		prefix := ""
+		if cfg.CAPI != nil {
+			prefix = cfg.CAPI.ClusterNamePrefix
+		}
+		return aicapi.New(prefix)
+	default:
+		return aigeneric.New()
+	}
 }

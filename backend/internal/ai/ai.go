@@ -1,17 +1,17 @@
-// Package ai provides AI-powered failure analysis for CAPZ E2E tests using
-// the GitHub Models inference API.
+// Package ai provides a generic chat-completion client with a project-pluggable
+// Module abstraction. Project-specific prompts and evidence collection live in
+// internal/ai/modules/<id>/. Module + Client are composed by Service, which
+// orchestrates a single test failure's analysis.
 package ai
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -52,105 +52,13 @@ func (c *Client) Cache() *Cache {
 	return c.cache
 }
 
-// ---------- Known transient detection ----------
+// ---------- Low-level API calls ----------
 
-// transientPattern defines a local pattern for known transient failures.
-type transientPattern struct {
-	match  func(string) bool
-	reason string
+// quickSummaryResponse is the expected JSON structure from the quick model.
+type quickSummaryResponse struct {
+	Summary     string `json:"summary"`
+	IsTransient bool   `json:"is_transient"`
 }
-
-var knownTransientPatterns = []transientPattern{
-	{
-		match:  func(s string) bool { return strings.Contains(s, "429") || strings.Contains(s, "throttling") || strings.Contains(s, "too many requests") },
-		reason: "Azure API throttling (HTTP 429)",
-	},
-	{
-		match:  func(s string) bool { return strings.Contains(s, "quota") && (strings.Contains(s, "exceeded") || strings.Contains(s, "limit")) },
-		reason: "Azure resource quota exceeded",
-	},
-	{
-		match: func(s string) bool {
-			return strings.Contains(s, "context deadline exceeded") && (strings.Contains(s, "cleanup") || strings.Contains(s, "delete"))
-		},
-		reason: "Context deadline during cleanup",
-	},
-	{
-		match: func(s string) bool {
-			return strings.Contains(s, "dns") && (strings.Contains(s, "resolution") || strings.Contains(s, "lookup")) && strings.Contains(s, "failed")
-		},
-		reason: "DNS resolution failure",
-	},
-	{
-		match:  func(s string) bool { return strings.Contains(s, "imagepullbackoff") },
-		reason: "Image pull backoff (transient)",
-	},
-	{
-		match:  func(s string) bool { return strings.Contains(s, "no space left on device") },
-		reason: "Disk space exhausted",
-	},
-}
-
-// IsKnownTransient checks if a failure message matches a known transient pattern
-// that doesn't need AI analysis. Returns the reason if transient, empty string otherwise.
-func IsKnownTransient(failureMessage string) string {
-	lower := strings.ToLower(failureMessage)
-	for _, p := range knownTransientPatterns {
-		if p.match(lower) {
-			return p.reason
-		}
-	}
-	return ""
-}
-
-// ---------- Quick summary ----------
-
-// QuickSummary generates a brief AI summary of a test failure.
-func (c *Client) QuickSummary(ctx context.Context, testName, failureMessage, failureLocation string) (*models.AISummary, error) {
-	key := cacheKey("summary", testName, failureMessage)
-
-	if raw, ok := c.cache.Get(key); ok {
-		var s models.AISummary
-		if json.Unmarshal(raw, &s) == nil {
-			return &s, nil
-		}
-	}
-
-	userMsg := fmt.Sprintf(
-		"Give a brief 1-2 sentence summary of why this CAPZ E2E test failed.\n\n"+
-			"Test: %s\nError: %s\nLocation: %s\n\n"+
-			"Respond in JSON: {\"summary\": \"...\", \"is_transient\": true/false}",
-		testName, failureMessage, failureLocation,
-	)
-
-	resp, err := c.callAPI(ctx, DefaultModel, systemPrompt, userMsg)
-	if err != nil {
-		return nil, err
-	}
-
-	// Try to parse structured response.
-	type summaryResponse struct {
-		Summary     string `json:"summary"`
-		IsTransient bool   `json:"is_transient"`
-	}
-	var parsed summaryResponse
-	cleaned := extractJSON(resp)
-	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		// Fallback: use raw text, assume not transient.
-		parsed = summaryResponse{Summary: resp, IsTransient: false}
-	}
-
-	summary := &models.AISummary{
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary:     parsed.Summary,
-		IsTransient: parsed.IsTransient,
-	}
-
-	_ = c.cache.Set(key, summary)
-	return summary, nil
-}
-
-// ---------- Deep analysis ----------
 
 // deepAnalysisResponse is the expected JSON structure from the deep model.
 type deepAnalysisResponse struct {
@@ -160,32 +68,49 @@ type deepAnalysisResponse struct {
 	RelevantFiles []string `json:"relevant_files"`
 }
 
-// DeepAnalysis generates a detailed root-cause analysis for persistent failures.
-func (c *Client) DeepAnalysis(ctx context.Context, testName string, consecutiveFailures int, failureMessage, failureBody, buildLogTail, activityLogExcerpt string) (*models.AIAnalysis, error) {
-	key := cacheKey("deep", testName, failureMessage)
+// doQuickSummary runs a quick chat completion, parses the JSON response into an
+// AISummary, and caches the result. Returns the cached value on a hit.
+func (c *Client) doQuickSummary(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AISummary, error) {
+	if raw, ok := c.cache.Get(cacheKey); ok {
+		var s models.AISummary
+		if json.Unmarshal(raw, &s) == nil {
+			return &s, nil
+		}
+	}
 
-	if raw, ok := c.cache.Get(key); ok {
+	resp, err := c.callAPI(ctx, DefaultModel, sysPrompt, userPrompt)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed quickSummaryResponse
+	cleaned := extractJSON(resp)
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		// Fallback: use raw text, assume not transient.
+		parsed = quickSummaryResponse{Summary: resp, IsTransient: false}
+	}
+
+	summary := &models.AISummary{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Summary:     parsed.Summary,
+		IsTransient: parsed.IsTransient,
+	}
+
+	_ = c.cache.Set(cacheKey, summary)
+	return summary, nil
+}
+
+// doDeepAnalysis runs a deep chat completion, parses the JSON response into an
+// AIAnalysis, and caches the result. Returns the cached value on a hit.
+func (c *Client) doDeepAnalysis(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AIAnalysis, error) {
+	if raw, ok := c.cache.Get(cacheKey); ok {
 		var a models.AIAnalysis
 		if json.Unmarshal(raw, &a) == nil {
 			return &a, nil
 		}
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Analyze this persistent CAPZ E2E test failure (failed %d consecutive times).\n\n", consecutiveFailures)
-	fmt.Fprintf(&sb, "Test: %s\nError: %s\n", testName, failureMessage)
-	if failureBody != "" {
-		fmt.Fprintf(&sb, "\nFailure details:\n%s\n", truncate(failureBody, 5000))
-	}
-	if buildLogTail != "" {
-		fmt.Fprintf(&sb, "\nBuild log (last lines):\n%s\n", truncate(buildLogTail, 5000))
-	}
-	if activityLogExcerpt != "" {
-		fmt.Fprintf(&sb, "\nAzure activity log excerpt:\n%s\n", truncate(activityLogExcerpt, 3000))
-	}
-	sb.WriteString("\nRespond in JSON with fields: root_cause, severity, suggested_fix, relevant_files")
-
-	resp, err := c.callAPI(ctx, DeepModel, systemPrompt, sb.String())
+	resp, err := c.callAPI(ctx, DeepModel, sysPrompt, userPrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -210,117 +135,8 @@ func (c *Client) DeepAnalysis(ctx context.Context, testName string, consecutiveF
 		RelevantFiles: parsed.RelevantFiles,
 	}
 
-	_ = c.cache.Set(key, analysis)
+	_ = c.cache.Set(cacheKey, analysis)
 	return analysis, nil
-}
-
-// ---------- Comprehensive analysis ----------
-
-// ComprehensiveAnalysis generates a thorough debugging analysis using all
-// available artifact evidence. This replaces the old AnalysisParams-based version.
-func (c *Client) ComprehensiveAnalysis(ctx context.Context, evidence Evidence) (*models.AIAnalysis, error) {
-	key := comprehensiveCacheKey(evidence)
-
-	if raw, ok := c.cache.Get(key); ok {
-		var a models.AIAnalysis
-		if json.Unmarshal(raw, &a) == nil {
-			return &a, nil
-		}
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Investigate this CAPZ E2E test failure using the artifact data below.\n\n")
-	fmt.Fprintf(&sb, "Test: %s\n", evidence.TestName)
-	if evidence.ClusterFlavor != "" {
-		fmt.Fprintf(&sb, "Flavor: %s\n", evidence.ClusterFlavor)
-	}
-	fmt.Fprintf(&sb, "Failed %d consecutive times\n\n", evidence.ConsecutiveCount)
-	fmt.Fprintf(&sb, "Error: %s\n", evidence.FailureMessage)
-
-	if evidence.FailureBody != "" {
-		fmt.Fprintf(&sb, "\nStack trace:\n%s\n", truncate(evidence.FailureBody, 5000))
-	}
-
-	if evidence.BuildLogErrors != "" {
-		fmt.Fprintf(&sb, "\n=== Build Log Errors ===\n%s\n", evidence.BuildLogErrors)
-	}
-	if evidence.BuildLogTail != "" {
-		fmt.Fprintf(&sb, "\n=== Build Log (last 200 lines) ===\n%s\n", evidence.BuildLogTail)
-	}
-	// Add all resource YAMLs dynamically
-	if len(evidence.ResourceYAMLs) > 0 {
-		// Sort keys for deterministic output
-		var resourceTypes []string
-		for k := range evidence.ResourceYAMLs {
-			resourceTypes = append(resourceTypes, k)
-		}
-		sort.Strings(resourceTypes)
-		for _, rt := range resourceTypes {
-			fmt.Fprintf(&sb, "\n=== %s Status ===\n%s\n", rt, evidence.ResourceYAMLs[rt])
-		}
-	}
-	if evidence.CloudInitLog != "" {
-		fmt.Fprintf(&sb, "\n=== Cloud-Init Log ===\n%s\n", evidence.CloudInitLog)
-	}
-	if evidence.BootLog != "" {
-		fmt.Fprintf(&sb, "\n=== Boot Log ===\n%s\n", evidence.BootLog)
-	}
-	if evidence.KubeletLog != "" {
-		fmt.Fprintf(&sb, "\n=== Kubelet Log ===\n%s\n", evidence.KubeletLog)
-	}
-	if evidence.ContainerdLog != "" {
-		fmt.Fprintf(&sb, "\n=== Containerd Log ===\n%s\n", evidence.ContainerdLog)
-	}
-	if evidence.JournalLog != "" {
-		fmt.Fprintf(&sb, "\n=== Journal Log ===\n%s\n", evidence.JournalLog)
-	}
-	if evidence.AzureActivityLog != "" {
-		fmt.Fprintf(&sb, "\n=== Azure Activity Log ===\n%s\n", evidence.AzureActivityLog)
-	}
-
-	sb.WriteString("\nYou have been given ALL available artifacts for this failure. Perform a complete investigation:\n")
-	sb.WriteString("1. ROOT CAUSE: Find the specific error in the artifacts above. Quote the actual error message, status condition, or log line that reveals the failure. Do NOT speculate — cite what you found.\n")
-	sb.WriteString("2. TRACE THE CHAIN: Follow the dependency chain (VM provisioning → cloud-init → kubeadm → kubelet → CNI → CCM → providerID). Identify which step failed and why.\n")
-	sb.WriteString("3. SUGGESTED FIX: Based on the root cause you identified, give the specific fix. Say exactly what file/config/setting needs to change and how. Do NOT say 'check the logs' — you already have them.\n")
-	sb.WriteString("4. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
-	sb.WriteString(`Respond in JSON: {"root_cause": "the specific error found in evidence with quoted log lines", "severity": "Critical/High/Medium/Low", "suggested_fix": "exact fix with file paths and changes needed", "relevant_files": ["file1.go", "file2.yaml"]}`)
-
-	resp, err := c.callAPI(ctx, DeepModel, systemPrompt, sb.String())
-	if err != nil {
-		return nil, err
-	}
-
-	var parsed deepAnalysisResponse
-	cleaned := extractJSON(resp)
-	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		parsed = deepAnalysisResponse{
-			RootCause:    resp,
-			Severity:     "Medium",
-			SuggestedFix: "Unable to parse structured response",
-		}
-	}
-
-	analysis := &models.AIAnalysis{
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-		Model:         DeepModel,
-		RootCause:     parsed.RootCause,
-		Severity:      parsed.Severity,
-		SuggestedFix:  parsed.SuggestedFix,
-		RelevantFiles: parsed.RelevantFiles,
-	}
-
-	_ = c.cache.Set(key, analysis)
-	return analysis, nil
-}
-
-// comprehensiveCacheKey builds a deterministic cache key from test name and failure message.
-// We intentionally exclude volatile artifact content so cache hits are stable across runs.
-func comprehensiveCacheKey(ev Evidence) string {
-	h := sha256.New()
-	h.Write([]byte(ev.TestName))
-	h.Write([]byte(normalizeError(ev.FailureMessage)))
-	sum := h.Sum(nil)
-	return fmt.Sprintf("comprehensive:%x", sum[:8])
 }
 
 // ---------- API helper ----------
@@ -412,13 +228,6 @@ func (c *Client) callAPI(ctx context.Context, model, sysPrompt, userMessage stri
 }
 
 // ---------- Helpers ----------
-
-// cacheKey builds a deterministic cache key from a prefix and input strings.
-func cacheKey(prefix, testName, failureMessage string) string {
-	normalized := normalizeError(failureMessage)
-	h := sha256.Sum256([]byte(testName + normalized))
-	return fmt.Sprintf("%s:%x", prefix, h[:8])
-}
 
 var whitespaceRe = regexp.MustCompile(`\s+`)
 

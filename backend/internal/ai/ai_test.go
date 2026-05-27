@@ -169,9 +169,9 @@ func TestQuickSummaryWithMock(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	summary, err := client.QuickSummary(ctx, "TestMachineDeployment", "HTTP 429 Too Many Requests", "machine_test.go:42")
+	summary, err := client.doQuickSummary(ctx, "summary:abc123", "system", "user prompt")
 	if err != nil {
-		t.Fatalf("QuickSummary: %v", err)
+		t.Fatalf("doQuickSummary: %v", err)
 	}
 	if summary.Summary == "" {
 		t.Fatal("expected non-empty summary")
@@ -192,9 +192,9 @@ func TestDeepAnalysisWithMock(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	analysis, err := client.DeepAnalysis(ctx, "TestControlPlane", 5, "quota exceeded", "detail body", "log tail", "activity log")
+	analysis, err := client.doDeepAnalysis(ctx, "comprehensive:abc123", "system", "user prompt")
 	if err != nil {
-		t.Fatalf("DeepAnalysis: %v", err)
+		t.Fatalf("doDeepAnalysis: %v", err)
 	}
 	if analysis.RootCause != "Azure quota exceeded" {
 		t.Errorf("unexpected root_cause: %q", analysis.RootCause)
@@ -226,7 +226,7 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 	ctx := context.Background()
 
 	// First call — hits API.
-	s1, err := client.QuickSummary(ctx, "TestCNI", "calico pods crashing", "cni_test.go:10")
+	s1, err := client.doQuickSummary(ctx, "summary:cni", "sys", "user")
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 	}
 
 	// Second call — should use cache.
-	s2, err := client.QuickSummary(ctx, "TestCNI", "calico pods crashing", "cni_test.go:10")
+	s2, err := client.doQuickSummary(ctx, "summary:cni", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -248,79 +248,16 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 	}
 }
 
-func TestIsKnownTransient(t *testing.T) {
-	cases := []struct {
-		msg  string
-		want string
-	}{
-		{"HTTP 429 Too Many Requests", "Azure API throttling (HTTP 429)"},
-		{"Azure throttling on resource group", "Azure API throttling (HTTP 429)"},
-		{"Too many requests from client", "Azure API throttling (HTTP 429)"},
-		{"quota exceeded for StandardDSv3Family", "Azure resource quota exceeded"},
-		{"resource quota limit reached", "Azure resource quota exceeded"},
-		{"context deadline exceeded during cleanup", "Context deadline during cleanup"},
-		{"context deadline exceeded: delete resource group", "Context deadline during cleanup"},
-		{"dns resolution failed for mcr.microsoft.com", "DNS resolution failure"},
-		{"dns lookup failed for storage.googleapis.com", "DNS resolution failure"},
-		{"ImagePullBackOff for calico-node", "Image pull backoff (transient)"},
-		{"no space left on device", "Disk space exhausted"},
-		{"kubelet certificate expired", ""},
-		{"control plane never initialized", ""},
-		{"calico-node CrashLoopBackOff", ""},
-	}
-	for _, tc := range cases {
-		got := IsKnownTransient(tc.msg)
-		if got != tc.want {
-			t.Errorf("IsKnownTransient(%q) = %q, want %q", tc.msg, got, tc.want)
-		}
-	}
-}
-
-func TestComprehensiveAnalysisWithMock(t *testing.T) {
-	jsonResp := `{"root_cause":"cloud-init failed to download kubelet binary","severity":"Critical","suggested_fix":"Fix the binary URL in preKubeadmCommands","relevant_files":["templates/cluster-template-prow-azl3.yaml"]}`
-	srv := newMockServer(t, jsonResp)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	ctx := context.Background()
-
-	analysis, err := client.ComprehensiveAnalysis(ctx, Evidence{
-		TestName:         "TestAzl3ControlPlane",
-		FailureMessage:   "Timed out waiting for control plane",
-		FailureBody:      "timeout after 10m",
-		ConsecutiveCount: 5,
-		BuildLogErrors:   "FATAL: kubeadm init failed",
-		BootLog:          "cloud-init: download failed: 404",
-		ClusterFlavor:    "prow-azl3",
-	})
-	if err != nil {
-		t.Fatalf("ComprehensiveAnalysis: %v", err)
-	}
-	if analysis.RootCause != "cloud-init failed to download kubelet binary" {
-		t.Errorf("unexpected root_cause: %q", analysis.RootCause)
-	}
-	if analysis.Severity != "Critical" {
-		t.Errorf("unexpected severity: %q", analysis.Severity)
-	}
-	if analysis.Model != DeepModel {
-		t.Errorf("unexpected model: %q", analysis.Model)
-	}
-	if len(analysis.RelevantFiles) != 1 {
-		t.Errorf("unexpected relevant_files: %v", analysis.RelevantFiles)
-	}
-}
-
 func TestQuickSummaryReturnsAISummaryType(t *testing.T) {
 	srv := newMockServer(t, `{"summary": "The kubelet failed to start due to certificate expiration. This is a real bug.", "is_transient": false}`)
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	summary, err := client.QuickSummary(context.Background(), "TestKubelet", "cert expired", "kubelet_test.go:1")
+	summary, err := client.doQuickSummary(context.Background(), "summary:kubelet", "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify it's the right type and not transient.
 	var _ *models.AISummary = summary
 	if summary.IsTransient {
 		t.Error("cert expiration should not be transient")

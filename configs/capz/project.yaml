@@ -54,3 +54,9 @@ capi:
 # machines/{vm}/... layout used by Cluster API providers.
 artifacts:
   collector: "capi"
+
+# AI module used to build the failure-analysis prompt and pick which
+# artifacts to send to the model. "capi" carries CAPZ/CAPI vocabulary,
+# machine-log selection rules, and known-transient patterns.
+ai:
+  module: "capi"

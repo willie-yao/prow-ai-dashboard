@@ -26,6 +26,7 @@ type Config struct {
 	GCS       GCS        `yaml:"gcs"        json:"gcs"`
 	Branding  Branding   `yaml:"branding"   json:"branding"`
 	Artifacts *Artifacts `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	AI        *AI        `yaml:"ai,omitempty"        json:"ai,omitempty"`
 	CAPI      *CAPI      `yaml:"capi,omitempty"      json:"capi,omitempty"`
 }
 
@@ -75,10 +76,23 @@ type Artifacts struct {
 	Collector string `yaml:"collector" json:"collector,omitempty"`
 }
 
+// AI selects the AI module used to build prompts and gather evidence for
+// failure analysis. Implementations live under backend/internal/ai/modules/.
+type AI struct {
+	// Module names the registered AI module (e.g. "capi", "generic").
+	// When unset, the module is inferred from artifacts.collector and
+	// falls back to "generic".
+	Module string `yaml:"module" json:"module,omitempty"`
+}
+
 // SupportedCollectors lists collector names accepted by Validate. Wiring
 // happens in cmd/fetcher/main.go; keep this list in sync with the switch
 // statement there.
 var SupportedCollectors = []string{"generic", "capi"}
+
+// SupportedAIModules lists AI module names accepted by Validate. Wiring
+// happens in cmd/fetcher/main.go::buildAIModule; keep in sync.
+var SupportedAIModules = []string{"generic", "capi"}
 
 // CollectorName returns the configured collector name, defaulting to "generic".
 func (c *Config) CollectorName() string {
@@ -86,6 +100,19 @@ func (c *Config) CollectorName() string {
 		return "generic"
 	}
 	return c.Artifacts.Collector
+}
+
+// AIModuleName returns the configured AI module name. When unset, it falls
+// back to the collector name so the AI prompt naturally matches the artifact
+// shape (e.g. capi collector → capi module). Final fallback is "generic".
+func (c *Config) AIModuleName() string {
+	if c.AI != nil && strings.TrimSpace(c.AI.Module) != "" {
+		return c.AI.Module
+	}
+	if c.Artifacts != nil && c.Artifacts.Collector != "" {
+		return c.Artifacts.Collector
+	}
+	return "generic"
 }
 
 // Load reads and validates a project.yaml file from disk.
@@ -160,6 +187,20 @@ func (c *Config) Validate() error {
 		if !valid {
 			return fmt.Errorf("artifacts.collector %q is not supported (valid: %s)",
 				c.Artifacts.Collector, strings.Join(SupportedCollectors, ", "))
+		}
+	}
+
+	if c.AI != nil && c.AI.Module != "" {
+		valid := false
+		for _, name := range SupportedAIModules {
+			if c.AI.Module == name {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("ai.module %q is not supported (valid: %s)",
+				c.AI.Module, strings.Join(SupportedAIModules, ", "))
 		}
 	}
 	return nil

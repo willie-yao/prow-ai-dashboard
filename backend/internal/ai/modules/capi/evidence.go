@@ -1,4 +1,4 @@
-package ai
+package capi
 
 import (
 	"context"
@@ -15,8 +15,9 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// Evidence holds all the artifact content gathered for a single test failure.
-type Evidence struct {
+// evidence holds all the artifact content gathered for a single test failure.
+// Module-private: only used to feed buildDeepPrompt.
+type evidence struct {
 	TestName         string
 	FailureMessage   string
 	FailureBody      string
@@ -33,19 +34,6 @@ type Evidence struct {
 	AzureActivityLog string            // Azure activity log excerpt
 	ContainerdLog    string            // containerd.log excerpt
 	JournalLog       string            // journal.log excerpt
-}
-
-// EvidenceParams provides the URLs and metadata needed to collect evidence.
-type EvidenceParams struct {
-	TestName         string
-	FailureMessage   string
-	FailureBody      string
-	ClusterFlavor    string
-	ConsecutiveCount int
-
-	BuildLogURL           string                  // URL to build-log.txt
-	BootstrapResourcesURL string                  // URL to bootstrap/resources/{namespace}/
-	ClusterArtifacts      *models.ClusterArtifacts // machine logs, activity log, etc.
 }
 
 // Build log error patterns (from CAPZ debugging knowledge).
@@ -69,31 +57,32 @@ var errorRe = regexp.MustCompile(`(?i)error`)
 
 var connectionRefusedRe = regexp.MustCompile(`(?i)connection refused`)
 
-// CollectEvidence gathers all available artifact content for a test failure.
-// Errors fetching individual artifacts are logged but do not fail the overall collection.
-func CollectEvidence(ctx context.Context, client *http.Client, params EvidenceParams) Evidence {
-	ev := Evidence{
-		TestName:         params.TestName,
-		FailureMessage:   params.FailureMessage,
-		FailureBody:      params.FailureBody,
-		ClusterFlavor:    params.ClusterFlavor,
-		ConsecutiveCount: params.ConsecutiveCount,
+// collectEvidence gathers all available artifact content for a test failure.
+// Errors fetching individual artifacts are logged but do not fail the overall
+// collection — the prompt is built from whatever is available.
+func (m *Module) collectEvidence(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) evidence {
+	ev := evidence{
+		TestName:         tc.Name,
+		FailureMessage:   tc.FailureMessage,
+		FailureBody:      tc.FailureBody,
+		ClusterFlavor:    m.flavor(tc),
+		ConsecutiveCount: consecutive,
 	}
 
 	// 1. Build log — extract error patterns AND raw tail
-	if params.BuildLogURL != "" {
-		ev.BuildLogErrors = collectBuildLogErrors(ctx, client, params.BuildLogURL)
-		ev.BuildLogTail = fetchLogTail(ctx, client, params.BuildLogURL, 500, 15000)
+	if run.BuildLogURL != "" {
+		ev.BuildLogErrors = collectBuildLogErrors(ctx, client, run.BuildLogURL)
+		ev.BuildLogTail = fetchLogTail(ctx, client, run.BuildLogURL, 500, 15000)
 	}
 
 	// 2. Bootstrap resource YAMLs — discover ALL resource types and fetch status from each
-	if params.BootstrapResourcesURL != "" {
-		ev.ResourceYAMLs = collectAllResources(ctx, client, params.BootstrapResourcesURL)
+	if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.BootstrapResourcesURL != "" {
+		ev.ResourceYAMLs = collectAllResources(ctx, client, tc.ClusterArtifacts.BootstrapResourcesURL)
 	}
 
 	// 3. Machine logs — fetch from ALL machines (not just the first), with larger limits
-	if params.ClusterArtifacts != nil {
-		for _, machine := range params.ClusterArtifacts.Machines {
+	if tc.ClusterArtifacts != nil {
+		for _, machine := range tc.ClusterArtifacts.Machines {
 			boot, cloudInit := collectBootLogs(ctx, client, machine)
 			if ev.BootLog == "" {
 				ev.BootLog = boot
@@ -122,8 +111,8 @@ func CollectEvidence(ctx context.Context, client *http.Client, params EvidencePa
 	}
 
 	// 4. Azure activity log — larger limit
-	if params.ClusterArtifacts != nil && params.ClusterArtifacts.AzureActivityLog != "" {
-		ev.AzureActivityLog = collectActivityLog(ctx, client, params.ClusterArtifacts.AzureActivityLog)
+	if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.AzureActivityLog != "" {
+		ev.AzureActivityLog = collectActivityLog(ctx, client, tc.ClusterArtifacts.AzureActivityLog)
 	}
 
 	return ev

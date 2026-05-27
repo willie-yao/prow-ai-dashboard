@@ -59,4 +59,13 @@ func TestLoadCAPZGolden(t *testing.T) {
 	if got := cfg.CollectorName(); got != "capi" {
 		t.Errorf("CollectorName() = %q, want capi", got)
 	}
+	if cfg.AI == nil {
+		t.Fatal("AI section missing")
+	}
+	if cfg.AI.Module != "capi" {
+		t.Errorf("AI.Module = %q, want capi", cfg.AI.Module)
+	}
+	if got := cfg.AIModuleName(); got != "capi" {
+		t.Errorf("AIModuleName() = %q, want capi", got)
+	}
 }

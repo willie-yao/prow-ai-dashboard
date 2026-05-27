@@ -1,4 +1,4 @@
-package ai
+package capi
 
 // systemPrompt contains CAPZ domain knowledge for the AI model.
 const systemPrompt = `You are an expert CAPZ (Cluster API Provider Azure) E2E test failure analyst. You diagnose failures by analyzing error messages, build logs, machine logs, and Azure activity logs.
