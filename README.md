@@ -45,7 +45,7 @@ The reusable workflow checks out this repo, builds the fetcher, runs it with `co
 ```
 
 Three extension points:
-- **Layer 1 — `configs/<id>/project.yaml`**: bucket, dashboard, branding, AI endpoint.
+- **Layer 1 — `configs/<id>/project.yaml`**: bucket, dashboard, branding, AI provider (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...). See [docs/ai-providers.md](docs/ai-providers.md).
 - **Layer 2 — Artifact collectors** (`backend/internal/collectors/`): `generic | capi | kubernetes`. Selected by config.
 - **Layer 3 — AI modules** (`backend/internal/ai/modules/`): project-shape-specific prompt + evidence selection.
 

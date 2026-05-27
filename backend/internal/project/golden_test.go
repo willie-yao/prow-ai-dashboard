@@ -68,4 +68,10 @@ func TestLoadCAPZGolden(t *testing.T) {
 	if got := cfg.AIModuleName(); got != "capi" {
 		t.Errorf("AIModuleName() = %q, want capi", got)
 	}
+	if cfg.AI.Endpoint != "https://api.githubcopilot.com/chat/completions" {
+		t.Errorf("AI.Endpoint = %q, want copilot URL", cfg.AI.Endpoint)
+	}
+	if cfg.AI.Model != "claude-opus-4.6" {
+		t.Errorf("AI.Model = %q, want claude-opus-4.6", cfg.AI.Model)
+	}
 }

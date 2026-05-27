@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -27,23 +28,68 @@ const (
 	callDelay = 500 * time.Millisecond
 )
 
-// Client calls the GitHub Models API for AI analysis.
+// Client calls an OpenAI chat-completions compatible API for AI analysis.
 type Client struct {
-	httpClient *http.Client
-	apiURL     string
-	token      string
-	cache      *Cache
+	httpClient   *http.Client
+	apiURL       string
+	token        string
+	model        string
+	extraHeaders map[string]string
+	cache        *Cache
 }
 
-// NewClient creates a new AI client with the given token and cache directory.
+// Options configures a Client. All fields are optional; empty values fall back
+// to the GitHub Copilot defaults (ModelsAPIURL and Model). Token and CacheDir
+// are required for a useful client; the caller is responsible for supplying
+// them from the environment / project config.
+type Options struct {
+	Token    string
+	CacheDir string
+	// Endpoint is the chat-completions URL. Defaults to ModelsAPIURL
+	// (https://api.githubcopilot.com/chat/completions).
+	Endpoint string
+	// Model is the model identifier the provider expects. Defaults to Model
+	// (claude-opus-4.6) which only the Copilot endpoint accepts; override
+	// when pointing at any other provider.
+	Model string
+	// ExtraHeaders are merged into every request after the defaults. Use this
+	// to add provider-specific routing headers (e.g. NIM-Function-Id for
+	// Nvidia Dynamo) or to override the default Authorization scheme.
+	ExtraHeaders map[string]string
+}
+
+// NewClient creates a Client using the Copilot defaults. Kept for callers
+// that don't need the new provider knobs.
 func NewClient(token string, cacheDir string) *Client {
+	return NewClientWithOptions(Options{Token: token, CacheDir: cacheDir})
+}
+
+// NewClientWithOptions creates a Client from explicit options, applying
+// Copilot defaults for any empty fields.
+func NewClientWithOptions(opts Options) *Client {
+	endpoint := opts.Endpoint
+	if endpoint == "" {
+		endpoint = ModelsAPIURL
+	}
+	model := opts.Model
+	if model == "" {
+		model = Model
+	}
 	return &Client{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
-		apiURL:     ModelsAPIURL,
-		token:      token,
-		cache:      NewCache(cacheDir),
+		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		apiURL:       endpoint,
+		token:        opts.Token,
+		model:        model,
+		extraHeaders: opts.ExtraHeaders,
+		cache:        NewCache(opts.CacheDir),
 	}
 }
+
+// Endpoint returns the configured chat-completions URL (mainly for logging).
+func (c *Client) Endpoint() string { return c.apiURL }
+
+// ModelName returns the configured model identifier (mainly for logging).
+func (c *Client) ModelName() string { return c.model }
 
 // Cache returns the underlying cache so callers can persist it.
 func (c *Client) Cache() *Cache {
@@ -71,12 +117,12 @@ func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt 
 	if raw, ok := c.cache.Get(cacheKey); ok {
 		var parsed analysisResponse
 		if json.Unmarshal(raw, &parsed) == nil {
-			summary, analysis := buildOutputs(parsed)
+			summary, analysis := c.buildOutputs(parsed)
 			return summary, analysis, nil
 		}
 	}
 
-	resp, err := c.callAPI(ctx, Model, sysPrompt, userPrompt)
+	resp, err := c.callAPI(ctx, c.model, sysPrompt, userPrompt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -96,14 +142,14 @@ func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt 
 	// Persist the parsed struct so future reads always get a consistent shape.
 	_ = c.cache.Set(cacheKey, parsed)
 
-	summary, analysis := buildOutputs(parsed)
+	summary, analysis := c.buildOutputs(parsed)
 	return summary, analysis, nil
 }
 
 // buildOutputs splits an analysisResponse into the two structs the rest of the
 // pipeline consumes. The same generated_at timestamp is stamped on both so the
 // UI can correlate them.
-func buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
+func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	summaryText := parsed.Summary
@@ -118,7 +164,7 @@ func buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysi
 	}
 	analysis := &models.AIAnalysis{
 		GeneratedAt:   now,
-		Model:         Model,
+		Model:         c.model,
 		RootCause:     parsed.RootCause,
 		Severity:      parsed.Severity,
 		SuggestedFix:  parsed.SuggestedFix,
@@ -168,6 +214,34 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
+// setRequestHeaders applies the standard headers (Content-Type, bearer auth,
+// conditional Copilot routing header) and then merges the user-supplied
+// ExtraHeaders. Extras win on conflict so projects can override the auth
+// scheme (e.g. Azure OpenAI's "api-key") if needed.
+func (c *Client) setRequestHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if isCopilotEndpoint(c.apiURL) {
+		req.Header.Set("Copilot-Integration-Id", "copilot-developer-cli")
+	}
+	for k, v := range c.extraHeaders {
+		req.Header.Set(k, v)
+	}
+}
+
+// isCopilotEndpoint reports whether the URL points at GitHub Copilot's models
+// API. The Copilot-Integration-Id header is only meaningful there; sending it
+// to other providers (Dynamo, OpenAI, Azure) is harmless noise at best.
+func isCopilotEndpoint(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(u.Hostname(), "githubcopilot.com")
+}
+
 func (c *Client) callAPI(ctx context.Context, model, sysPrompt, userMessage string) (string, error) {
 	time.Sleep(callDelay)
 
@@ -187,9 +261,7 @@ func (c *Client) callAPI(ctx context.Context, model, sysPrompt, userMessage stri
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Copilot-Integration-Id", "copilot-developer-cli")
+	c.setRequestHeaders(req)
 
 	var resp *http.Response
 	for attempt := 0; attempt < 3; attempt++ {
@@ -205,11 +277,8 @@ func (c *Client) callAPI(ctx context.Context, model, sysPrompt, userMessage stri
 				return "", ctx.Err()
 			case <-time.After(wait):
 			}
-			// Recreate request with fresh body reader.
 			req, _ = http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+c.token)
-			req.Header.Set("Copilot-Integration-Id", "copilot-developer-cli")
+			c.setRequestHeaders(req)
 			continue
 		}
 		break

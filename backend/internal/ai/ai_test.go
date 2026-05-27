@@ -268,3 +268,135 @@ func TestAnalyzeReturnsAISummaryType(t *testing.T) {
 		t.Error("cert expiration should not be transient")
 	}
 }
+
+// ---------- Pluggable endpoint / header tests ----------
+
+func TestNewClientWithOptionsDefaults(t *testing.T) {
+	c := NewClientWithOptions(Options{Token: "x", CacheDir: t.TempDir()})
+	if c.Endpoint() != ModelsAPIURL {
+		t.Errorf("default endpoint = %q, want %q", c.Endpoint(), ModelsAPIURL)
+	}
+	if c.ModelName() != Model {
+		t.Errorf("default model = %q, want %q", c.ModelName(), Model)
+	}
+}
+
+func TestNewClientWithOptionsOverrides(t *testing.T) {
+	c := NewClientWithOptions(Options{
+		Token:    "x",
+		CacheDir: t.TempDir(),
+		Endpoint: "https://example.com/v1/chat/completions",
+		Model:    "my-model",
+	})
+	if c.Endpoint() != "https://example.com/v1/chat/completions" {
+		t.Errorf("endpoint = %q", c.Endpoint())
+	}
+	if c.ModelName() != "my-model" {
+		t.Errorf("model = %q", c.ModelName())
+	}
+}
+
+func TestIsCopilotEndpoint(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://api.githubcopilot.com/chat/completions", true},
+		{"https://api.githubcopilot.com:443/chat/completions", true},
+		{"https://api.openai.com/v1/chat/completions", false},
+		{"https://integrate.api.nvidia.com/v1/chat/completions", false},
+		{"https://my.openai.azure.com/openai/deployments/gpt4/chat/completions", false},
+		{"http://localhost:11434/v1/chat/completions", false},
+		{"://broken", false},
+	}
+	for _, tt := range tests {
+		if got := isCopilotEndpoint(tt.url); got != tt.want {
+			t.Errorf("isCopilotEndpoint(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+// TestCopilotHeaderSkippedForNonCopilotEndpoint verifies the integration
+// header isn't sent when the configured endpoint isn't api.githubcopilot.com.
+// The positive case (header present for the Copilot endpoint) is covered by
+// TestAnalyzeWithMock, which still asserts a successful round-trip with the
+// default ModelsAPIURL.
+func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Copilot-Integration-Id")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, `{"summary":"s","root_cause":"r","severity":"Low","suggested_fix":"f"}`)
+	}))
+	defer srv.Close()
+
+	c := NewClientWithOptions(Options{Token: "tok", CacheDir: t.TempDir(), Endpoint: srv.URL, Model: "m"})
+	if _, err := c.callAPI(context.Background(), "m", "sys", "user"); err != nil {
+		t.Fatalf("callAPI: %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected no Copilot-Integration-Id header for %q, got %q", srv.URL, got)
+	}
+}
+
+func TestCallAPICustomHeaders(t *testing.T) {
+	var gotAuth, gotNIM, gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotNIM = r.Header.Get("NIM-Function-Id")
+		gotAPIKey = r.Header.Get("api-key")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, `{"summary":"s","root_cause":"r","severity":"Low","suggested_fix":"f"}`)
+	}))
+	defer srv.Close()
+
+	c := NewClientWithOptions(Options{
+		Token:    "secret-bearer",
+		CacheDir: t.TempDir(),
+		Endpoint: srv.URL,
+		Model:    "m",
+		ExtraHeaders: map[string]string{
+			"NIM-Function-Id": "abc-123",
+			"api-key":         "azure-key",
+		},
+	})
+	if _, err := c.callAPI(context.Background(), "m", "sys", "user"); err != nil {
+		t.Fatalf("callAPI: %v", err)
+	}
+
+	if gotAuth != "Bearer secret-bearer" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer secret-bearer")
+	}
+	if gotNIM != "abc-123" {
+		t.Errorf("NIM-Function-Id = %q, want %q", gotNIM, "abc-123")
+	}
+	if gotAPIKey != "azure-key" {
+		t.Errorf("api-key = %q, want %q", gotAPIKey, "azure-key")
+	}
+}
+
+func TestCallAPIExtraHeadersOverrideAuthorization(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, `{"summary":"s","root_cause":"r","severity":"Low","suggested_fix":"f"}`)
+	}))
+	defer srv.Close()
+
+	c := NewClientWithOptions(Options{
+		Token:    "ignored",
+		CacheDir: t.TempDir(),
+		Endpoint: srv.URL,
+		Model:    "m",
+		ExtraHeaders: map[string]string{
+			"Authorization": "Token custom-scheme",
+		},
+	})
+	if _, err := c.callAPI(context.Background(), "m", "sys", "user"); err != nil {
+		t.Fatalf("callAPI: %v", err)
+	}
+	if gotAuth != "Token custom-scheme" {
+		t.Errorf("Authorization = %q, want extras to win", gotAuth)
+	}
+}

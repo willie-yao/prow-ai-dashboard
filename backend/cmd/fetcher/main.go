@@ -366,7 +366,13 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 
 // analyzeFailuresWithAI runs AI analysis on failed test cases.
 func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir string) {
-	aiClient := ai.NewClient(token, outDir)
+	aiClient := ai.NewClientWithOptions(ai.Options{
+		Token:        token,
+		CacheDir:     outDir,
+		Endpoint:     aiEndpoint(cfg),
+		Model:        aiModel(cfg),
+		ExtraHeaders: aiHeaders(cfg),
+	})
 	defer func() {
 		if err := aiClient.Cache().Save(); err != nil {
 			log.Printf("Warning: failed to save AI cache: %v", err)
@@ -381,7 +387,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 
 	module := buildAIModule(cfg)
 	service := ai.NewService(aiClient, module, consecutiveMap)
-	log.Printf("Using AI module: %s", module.Name())
+	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())
 
 	var totalFailures, transientSkipped int
 	for _, d := range details {
@@ -434,4 +440,30 @@ func buildAIModule(cfg *project.Config) ai.Module {
 	default:
 		return aigeneric.New()
 	}
+}
+
+// aiEndpoint returns the configured AI chat-completions URL, or "" to let
+// ai.NewClientWithOptions apply the Copilot default.
+func aiEndpoint(cfg *project.Config) string {
+	if cfg.AI == nil {
+		return ""
+	}
+	return cfg.AI.Endpoint
+}
+
+// aiModel returns the configured AI model identifier, or "" to let
+// ai.NewClientWithOptions apply the Copilot default.
+func aiModel(cfg *project.Config) string {
+	if cfg.AI == nil {
+		return ""
+	}
+	return cfg.AI.Model
+}
+
+// aiHeaders returns the extra HTTP headers to attach to AI provider requests.
+func aiHeaders(cfg *project.Config) map[string]string {
+	if cfg.AI == nil || len(cfg.AI.Headers) == 0 {
+		return nil
+	}
+	return cfg.AI.Headers
 }

@@ -83,6 +83,30 @@ type AI struct {
 	// When unset, the module is inferred from artifacts.collector and
 	// falls back to "generic".
 	Module string `yaml:"module" json:"module,omitempty"`
+
+	// Endpoint is the chat-completions URL for the AI provider. Any
+	// OpenAI-compatible endpoint works (GitHub Copilot, OpenAI, Azure
+	// OpenAI, Nvidia Dynamo, vLLM, Ollama). When unset, defaults to
+	// GitHub Copilot at https://api.githubcopilot.com/chat/completions.
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+
+	// Model is the model identifier the provider expects (e.g.
+	// "claude-opus-4.6" for Copilot, "gpt-4o" for OpenAI,
+	// "meta/llama-3.1-70b-instruct" for an NVIDIA NIM). When unset,
+	// defaults to the engine's built-in model for the GitHub Copilot
+	// endpoint and MUST be set when pointing at any other provider.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+
+	// Headers are extra HTTP headers merged into every request to the AI
+	// provider after the defaults. Use this to add provider-specific
+	// routing headers (e.g. "NIM-Function-Id") or to override the default
+	// "Authorization: Bearer <token>" scheme for providers like Azure
+	// OpenAI that use a custom auth header.
+	//
+	// Values are passed through verbatim; do not put secrets here. The
+	// AI_TOKEN environment variable is the supported channel for the
+	// bearer token.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
 // SupportedCollectors lists collector names accepted by Validate. Wiring

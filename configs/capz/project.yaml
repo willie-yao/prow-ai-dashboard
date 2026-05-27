@@ -56,5 +56,13 @@ artifacts:
 # AI module used to build the failure-analysis prompt and pick which
 # artifacts to send to the model. "capi" carries CAPZ/CAPI vocabulary,
 # machine-log selection rules, and known-transient patterns.
+#
+# Endpoint, model, and headers can target any OpenAI-compatible chat
+# completions API. The example below points at GitHub Copilot, which is
+# the engine default; comment the block out to fall back to those
+# defaults. See docs/ai-providers.md for Nvidia Dynamo / Azure OpenAI /
+# OpenAI / Ollama snippets.
 ai:
   module: "capi"
+  endpoint: "https://api.githubcopilot.com/chat/completions"
+  model: "claude-opus-4.6"
