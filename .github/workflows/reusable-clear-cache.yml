@@ -1,0 +1,41 @@
+name: Reusable Clear Cache
+
+# Reusable workflow that clears the data-cache entries for a given project.
+# Consumer repos call this on demand to force the next deploy to re-fetch all
+# builds and re-run AI analysis.
+#
+# Example consumer workflow:
+#   jobs:
+#     clear:
+#       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-clear-cache.yml@main
+#       with:
+#         config: capz
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: "Project config name. Used to scope which caches to delete."
+        required: true
+        type: string
+
+permissions:
+  actions: write
+
+jobs:
+  clear-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear cache entries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PREFIX: data-cache-${{ inputs.config }}-
+        run: |
+          echo "Listing data cache entries with prefix $PREFIX ..."
+          gh cache list --repo "$REPO" --key "$PREFIX" --json id,key | \
+            jq -r '.[].key' | while read -r key; do
+              echo "Deleting cache: $key"
+              gh cache delete "$key" --repo "$REPO"
+            done
+          echo "Cache cleared. Next deploy will re-fetch all data and re-analyze."
