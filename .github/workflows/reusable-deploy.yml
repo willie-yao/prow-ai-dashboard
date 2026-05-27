@@ -1,15 +1,17 @@
 name: Reusable Deploy
 
 # Reusable workflow that builds and deploys a Prow AI Dashboard for a single
-# project. Consumer repos call this with a config name pointing at one of
-# configs/<id>/project.yaml in the engine repo.
+# project. Consumer repos call this from a workflow in their own repo and
+# point at the directory in their checkout that holds project.yaml plus
+# prompts/system.md. The engine repo is checked out separately for the Go
+# and frontend code.
 #
 # Example consumer workflow:
 #   jobs:
 #     deploy:
 #       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 #       with:
-#         config: capz
+#         project_dir: .
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
 #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -17,10 +19,11 @@ name: Reusable Deploy
 on:
   workflow_call:
     inputs:
-      config:
-        description: "Project config name under configs/<id>/ in the engine repo."
-        required: true
+      project_dir:
+        description: "Directory in the caller repo containing project.yaml and prompts/system.md. Defaults to the repo root."
+        required: false
         type: string
+        default: "."
       engine-ref:
         description: "Git ref of the engine repo to use. Defaults to main."
         required: false
@@ -66,18 +69,24 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v4
+        with:
+          path: consumer
+
       - name: Checkout engine repo
         uses: actions/checkout@v4
         with:
           repository: willie-yao/prow-ai-dashboard
           ref: ${{ inputs.engine-ref }}
+          path: engine
 
-      - name: Resolve base path from project config
+      - name: Resolve project paths and base path
         id: cfg
         run: |
-          CONFIG_PATH="configs/${{ inputs.config }}/project.yaml"
+          CONFIG_PATH="$GITHUB_WORKSPACE/consumer/${{ inputs.project_dir }}/project.yaml"
           if [ ! -f "$CONFIG_PATH" ]; then
-            echo "::error::config not found: $CONFIG_PATH"
+            echo "::error::project.yaml not found at $CONFIG_PATH"
             exit 1
           fi
           # Extract branding.base_path. Strip surrounding quotes.
@@ -100,25 +109,31 @@ jobs:
             *) BASE_PATH="${BASE_PATH}/";;
           esac
           echo "base_path=$BASE_PATH" >> "$GITHUB_OUTPUT"
-          echo "Resolved base_path=$BASE_PATH"
+          PROJECT_DIR_ABS="$GITHUB_WORKSPACE/consumer/${{ inputs.project_dir }}"
+          echo "project_dir_abs=$PROJECT_DIR_ABS" >> "$GITHUB_OUTPUT"
+          # Stable slug used for cache keys (replace slashes/dots with dashes).
+          SLUG="$(echo "${{ inputs.project_dir }}" | tr '/.' '--' | sed 's/^-*//; s/-*$//')"
+          [ -z "$SLUG" ] && SLUG="root"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+          echo "Resolved project_dir=$PROJECT_DIR_ABS base_path=$BASE_PATH slug=$SLUG"
 
       # --- Go data fetcher ---
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: backend/go.sum
+          cache-dependency-path: engine/backend/go.sum
 
       - name: Build data fetcher
-        working-directory: backend
-        run: go build -o ../fetcher ./cmd/fetcher/
+        working-directory: engine/backend
+        run: go build -o "$GITHUB_WORKSPACE/fetcher" ./cmd/fetcher/
 
       # Restore cached data (job JSON + AI cache) so we only fetch new builds.
       - name: Restore data cache
         uses: actions/cache/restore@v4
         with:
-          path: frontend/public/data
-          key: data-cache-${{ inputs.config }}-${{ github.run_id }}
-          restore-keys: data-cache-${{ inputs.config }}-
+          path: engine/frontend/public/data
+          key: data-cache-${{ steps.cfg.outputs.slug }}-${{ github.run_id }}
+          restore-keys: data-cache-${{ steps.cfg.outputs.slug }}-
 
       - name: Fetch test data
         env:
@@ -130,11 +145,11 @@ jobs:
           if [ "${{ inputs.ai }}" = "true" ]; then
             AI_FLAG="-ai"
           fi
-          ./fetcher \
-            -config="configs/${{ inputs.config }}/project.yaml" \
+          "$GITHUB_WORKSPACE/fetcher" \
+            -project-dir="${{ steps.cfg.outputs.project_dir_abs }}" \
             -builds=${{ inputs.builds }} \
             -workers=${{ inputs.workers }} \
-            -out=frontend/public/data \
+            -out="$GITHUB_WORKSPACE/engine/frontend/public/data" \
             -timeout=${{ inputs.fetch-timeout }} \
             $AI_FLAG
 
@@ -142,22 +157,22 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: frontend/public/data
-          key: data-cache-${{ inputs.config }}-${{ github.run_id }}
+          path: engine/frontend/public/data
+          key: data-cache-${{ steps.cfg.outputs.slug }}-${{ github.run_id }}
 
       # --- React frontend ---
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: engine/frontend/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: frontend
+        working-directory: engine/frontend
         run: npm ci
 
       - name: Build frontend
-        working-directory: frontend
+        working-directory: engine/frontend
         env:
           VITE_BASE_PATH: ${{ steps.cfg.outputs.base_path }}
         run: npm run build
@@ -167,7 +182,7 @@ jobs:
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: frontend/dist
+          path: engine/frontend/dist
 
       - name: Deploy to GitHub Pages
         id: deployment

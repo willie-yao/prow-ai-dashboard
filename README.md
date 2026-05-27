@@ -6,7 +6,7 @@ Reusable engine for **AI-powered Prow/TestGrid dashboards**. Provides a project-
 
 ## How it works
 
-Consumer repos pin this engine's reusable workflow and provide only secrets + a config name. All Go code, frontend code, prompts, and per-project configs live here.
+Consumer repos own their `project.yaml` and `prompts/system.md`. They pin this engine's reusable workflow and pass the directory where those files live (default: repo root). The engine repo holds the shared Go + frontend code, the universal Prow base prompt, and the response-format JSON schema. It holds **no** per-project config.
 
 ```yaml
 # In consumer-repo/.github/workflows/deploy.yml
@@ -14,40 +14,43 @@ jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
-      config: capz
+      project_dir: .          # directory containing project.yaml + prompts/system.md
     secrets:
       ai_token: ${{ secrets.AI_TOKEN }}
       slack_webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
 ```
 
-The reusable workflow checks out this repo, builds the fetcher, runs it with `configs/<config>/project.yaml`, builds the frontend with the project's branding, and commits the result to the **consumer repo's** `gh-pages` branch.
+The reusable workflow checks out the consumer repo (which contributes the config + prompt) and this engine repo (which contributes the code), runs the fetcher with `-project-dir=<consumer>/<project_dir>`, builds the frontend with the project's branding, and commits the result to the **consumer repo's** `gh-pages` branch.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ This repo (prow-ai-dashboard)                                    │
+│ This repo (prow-ai-dashboard) — engine                           │
 │                                                                  │
 │   backend/    Go fetcher + collectors + AI modules               │
 │   frontend/   React UI (built per-project at deploy time)        │
-│   configs/    project.yaml + prompts per onboarded project       │
-│   .github/    reusable-deploy.yml                                │
+│   docs/       writing-prompts.md, ai-providers.md, ...           │
+│   configs/    example/ — docs-only sample, no live config        │
+│   .github/    reusable-deploy.yml, reusable-clear-cache.yml      │
 └──────────────────────────────────────────────────────────────────┘
                               │ uses: @main
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ Consumer repo (e.g. capz-prow-ai-dashboard)                      │
 │                                                                  │
-│   .github/workflows/deploy.yml  (~20 lines)                      │
+│   project.yaml                  bucket, branding, AI endpoint    │
+│   prompts/system.md             mandatory project addendum       │
+│   .github/workflows/deploy.yml  ~20 lines                        │
 │   secrets:  AI_TOKEN, SLACK_WEBHOOK_URL                          │
-│   gh-pages branch:  built site + cached data                     │
+│   gh-pages branch:              built site + cached data         │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 Three extension points:
-- **Layer 1 — `configs/<id>/project.yaml`**: bucket, dashboard, branding, AI provider (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...). See [docs/ai-providers.md](docs/ai-providers.md).
-- **Layer 2 — Artifact collectors** (`backend/internal/collectors/`): `generic | capi | kubernetes`. Selected by config.
-- **Layer 3 — AI modules** (`backend/internal/ai/modules/`): project-shape-specific prompt + evidence selection.
+- **Layer 1 — Consumer's `project.yaml`**: bucket, dashboard, branding, AI provider (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...). See [docs/ai-providers.md](docs/ai-providers.md).
+- **Layer 2 — Consumer's `prompts/system.md`**: project-specific AI knowledge. Mandatory — the fetcher hard-errors if missing when `-ai` is enabled. See [docs/writing-prompts.md](docs/writing-prompts.md).
+- **Layer 3 — Engine collectors and AI modules** (`backend/internal/collectors/`, `backend/internal/ai/modules/`): `generic | capi`. Selected by `project.yaml`.
 
 ## Local development
 
@@ -60,20 +63,20 @@ make test
 make fe-install
 make fe-build
 
-# Run fetcher against a config (will exist after Phase A)
-./bin/fetcher -config=configs/capz/project.yaml -out=frontend/public/data
+# Run fetcher against a project directory containing project.yaml + prompts/system.md
+./bin/fetcher -project-dir=configs/example -out=frontend/public/data
 ```
 
 ## Adding a project
 
-Once Phase C lands:
+1. Create a consumer repo (any name).
+2. Add `project.yaml` to its root. See [`configs/example/project.yaml`](configs/example/project.yaml) for every field.
+3. Add `prompts/system.md` to its root. See [docs/writing-prompts.md](docs/writing-prompts.md) for guidance.
+4. Add `.github/workflows/deploy.yml` calling this engine's `reusable-deploy.yml@main` (snippet above).
+5. Add `AI_TOKEN` (and optional notification webhooks) as repo secrets.
+6. Enable GitHub Pages on the consumer repo, set source to `gh-pages` branch.
 
-1. PR this repo adding `configs/yourproject/project.yaml` + `prompts/system.md`.
-2. Create a small consumer repo with the workflow snippet above.
-3. Add `AI_TOKEN` (and optional notification webhooks) as secrets in your consumer repo.
-4. Enable GitHub Pages on the consumer repo.
-
-See `docs/adding-a-project.md` (coming in Phase F).
+No engine PR required.
 
 ## License
 

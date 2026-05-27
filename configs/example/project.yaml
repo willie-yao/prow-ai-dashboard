@@ -1,0 +1,70 @@
+# Example project config for prow-ai-dashboard.
+#
+# This file documents every field a consumer repo can set. Copy it into your
+# consumer repo as project.yaml, drop a prompts/system.md alongside it, and
+# point .github/workflows/deploy.yml at the reusable workflow in this engine
+# repo. See docs/adding-a-project.md and docs/writing-prompts.md for details.
+
+# Stable identifier used in cache keys and log lines. Lowercase, no spaces.
+id: example
+
+# Full display name shown in the site header.
+name: "Example Kubernetes Project"
+
+# Optional short name for compact UIs.
+short_name: "EXAMPLE"
+
+# Where to discover prow job YAMLs in kubernetes/test-infra.
+source:
+  test_infra_path: "config/jobs/kubernetes-sigs/your-project"
+  # Only files whose name starts with this prefix are treated as job
+  # configs. Use the project's own prefix.
+  file_prefix: "your-project-"
+
+# Which testgrid dashboard's jobs to show. Filter is applied to each job's
+# testgrid-dashboards annotation.
+testgrid:
+  dashboard: "sig-foo-your-project"
+
+# GCS bucket holding build artifacts.
+gcs:
+  bucket: "kubernetes-ci-logs"
+
+# UI-facing branding. Frontend reads these from data/manifest.json at
+# runtime; backend uses site_url for notification deep links.
+branding:
+  title: "Example Project Dashboard"
+  # GitHub Pages base path; must match your consumer repo name.
+  base_path: "/your-consumer-repo"
+  site_url: "https://your-org.github.io/your-consumer-repo"
+  source_repo:
+    owner: "kubernetes-sigs"
+    name: "your-project"
+
+# Per-build artifact collector. Pick one of:
+#   - "capi": artifacts/clusters/{name}/machines/{vm}/... (CAPI providers)
+#   - "generic": no project-specific layout; useful for k/k-style jobs
+artifacts:
+  collector: "capi"
+
+# CAPI-specific knobs. Only used when artifacts.collector == "capi".
+# Required if the project uses the CAPI collector; otherwise omit.
+capi:
+  cluster_name_prefix: "your-project-e2e"
+
+# AI configuration. Composed at fetcher startup from:
+#   1. engine's universal Prow base prompt
+#   2. this repo's prompts/system.md (mandatory)
+#   3. engine's JSON response schema footer
+#
+# The fetcher hard-errors at startup if prompts/system.md is missing or
+# empty. See docs/writing-prompts.md.
+#
+# endpoint, model, and headers can target any OpenAI-compatible chat
+# completions API. Defaults point at GitHub Copilot. See
+# docs/ai-providers.md for Nvidia Dynamo / Azure OpenAI / OpenAI / Ollama
+# snippets.
+ai:
+  module: "capi"
+  endpoint: "https://api.githubcopilot.com/chat/completions"
+  model: "claude-opus-4.6"

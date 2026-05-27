@@ -1,7 +1,8 @@
 // Package capi provides the AI module for Cluster API Provider projects
-// (CAPZ, CAPV, CAPO, CAPI core, etc.). It contains the CAPI-specific system
-// prompt, transient-failure patterns, prompt builders, and artifact evidence
-// collection used to produce root-cause analyses for CAPI E2E failures.
+// (CAPZ, CAPV, CAPO, CAPI core, etc.). It contains the CAPI-specific
+// transient-failure patterns and artifact evidence collection used to build
+// per-failure user prompts. The system prompt is owned by the consumer repo
+// and composed at fetcher startup; the module no longer contributes to it.
 package capi
 
 import (
@@ -35,9 +36,6 @@ func New(clusterPrefix string) *Module {
 // Name returns "capi". This is also used as the cache-key namespace.
 func (m *Module) Name() string { return "capi" }
 
-// SystemPrompt returns the CAPI/Azure-aware system prompt.
-func (m *Module) SystemPrompt() string { return systemPrompt }
-
 // AnalysisPrompt collects all available CAPI artifact evidence for the
 // given test case and builds the user message for a combined summary + deep
 // root-cause analysis. Errors fetching individual artifacts are logged but
@@ -62,11 +60,12 @@ func (m *Module) flavor(tc *models.TestCase) string {
 // buildAnalysisPrompt assembles the combined summary + root-cause prompt from
 // collected evidence. The deep-analysis structural body is preserved from the
 // pre-unification ComprehensiveAnalysis so stale "comprehensive:<hash>" cache
-// entries unmarshal cleanly; the response schema gains "summary" and
-// "is_transient" so the list view and detail view come from one model pass.
+// entries unmarshal cleanly. The response JSON schema lives in the engine's
+// shared ResponseFormatFooter (appended to every system prompt), so it is
+// intentionally not repeated here.
 func buildAnalysisPrompt(ev evidence) string {
 	var sb strings.Builder
-	sb.WriteString("Investigate this CAPZ E2E test failure using the artifact data below.\n\n")
+	sb.WriteString("Investigate this CAPI E2E test failure using the artifact data below.\n\n")
 	fmt.Fprintf(&sb, "Test: %s\n", ev.TestName)
 	if ev.ClusterFlavor != "" {
 		fmt.Fprintf(&sb, "Flavor: %s\n", ev.ClusterFlavor)
@@ -110,16 +109,15 @@ func buildAnalysisPrompt(ev evidence) string {
 		fmt.Fprintf(&sb, "\n=== Journal Log ===\n%s\n", ev.JournalLog)
 	}
 	if ev.AzureActivityLog != "" {
-		fmt.Fprintf(&sb, "\n=== Azure Activity Log ===\n%s\n", ev.AzureActivityLog)
+		fmt.Fprintf(&sb, "\n=== Provider Activity Log ===\n%s\n", ev.AzureActivityLog)
 	}
 
 	sb.WriteString("\nYou have been given ALL available artifacts for this failure. Perform a complete investigation:\n")
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the artifacts above. Quote the actual error message, status condition, or log line that reveals the failure. Do NOT speculate — cite what you found.\n")
-	sb.WriteString("2. TRACE THE CHAIN: Follow the dependency chain (VM provisioning → cloud-init → kubeadm → kubelet → CNI → CCM → providerID). Identify which step failed and why.\n")
+	sb.WriteString("2. TRACE THE CHAIN: Follow the CAPI dependency chain (VM provisioning → cloud-init → kubeadm → kubelet → CNI → CCM → providerID). Identify which step failed and why.\n")
 	sb.WriteString("3. SUGGESTED FIX: Based on the root cause you identified, give the specific fix. Say exactly what file/config/setting needs to change and how. Do NOT say 'check the logs' — you already have them.\n")
-	sb.WriteString("4. SUMMARY: After completing the root-cause investigation, write a 1-2 sentence headline summary that reflects your findings. Set is_transient=true only if the root cause is a known transient infra issue (throttling, quota, intermittent DNS) rather than a real bug.\n")
-	sb.WriteString("5. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
-	sb.WriteString(`Respond in JSON: {"summary": "1-2 sentence headline derived from root_cause", "is_transient": true/false, "root_cause": "the specific error found in evidence with quoted log lines", "severity": "Critical/High/Medium/Low", "suggested_fix": "exact fix with file paths and changes needed", "relevant_files": ["file1.go", "file2.yaml"]}`)
+	sb.WriteString("4. SUMMARY: After completing the root-cause investigation, write a 1-2 sentence headline summary that reflects your findings.\n")
+	sb.WriteString("5. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n")
 
 	return sb.String()
 }

@@ -7,9 +7,10 @@ import (
 
 // TestBuildAnalysisPromptByteIdentity pins the structural anchors of the
 // combined summary + root-cause prompt. The body is kept compatible with the
-// pre-unification "comprehensive:<hash>" cache shape; the response schema
-// gained "summary" and "is_transient" so the list view and detail view come
-// from one model pass. Bump this test deliberately if the prompt changes.
+// pre-unification "comprehensive:<hash>" cache shape. The response JSON
+// schema now lives in the engine's shared ResponseFormatFooter, so it is no
+// longer asserted on the user prompt. Bump this test deliberately if the
+// prompt changes.
 func TestBuildAnalysisPromptByteIdentity(t *testing.T) {
 	ev := evidence{
 		TestName:         "TestControlPlane",
@@ -23,7 +24,7 @@ func TestBuildAnalysisPromptByteIdentity(t *testing.T) {
 
 	// Spot-check stable structural anchors rather than the whole blob.
 	anchors := []string{
-		"Investigate this CAPZ E2E test failure using the artifact data below.",
+		"Investigate this CAPI E2E test failure using the artifact data below.",
 		"Test: TestControlPlane\n",
 		"Flavor: prow-azl3\n",
 		"Failed 3 consecutive times\n",
@@ -32,9 +33,6 @@ func TestBuildAnalysisPromptByteIdentity(t *testing.T) {
 		"=== Build Log Errors ===\nFATAL: kubeadm init failed\n",
 		"1. ROOT CAUSE:",
 		"4. SUMMARY:",
-		`"summary":`,
-		`"is_transient":`,
-		`"root_cause":`,
 	}
 	for _, a := range anchors {
 		if !strings.Contains(got, a) {

@@ -38,7 +38,7 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("config", "configs/capz/project.yaml", "path to project.yaml")
+	projectDir := flag.String("project-dir", ".", "directory containing project.yaml and prompts/system.md")
 	outDir := flag.String("out", "data", "output directory for JSON files")
 	buildsPerJob := flag.Int("builds", 10, "number of recent builds to fetch per job")
 	workers := flag.Int("workers", 5, "number of concurrent job fetchers")
@@ -47,12 +47,23 @@ func run() error {
 	enableAI := flag.Bool("ai", false, "enable AI-powered failure analysis")
 	flag.Parse()
 
-	cfg, err := project.Load(*configPath)
+	// project.yaml is always loaded. prompts/system.md is only required when
+	// -ai is set; without AI the dashboard still produces a useful Prow view.
+	cfg, err := project.Load(filepath.Join(*projectDir, "project.yaml"))
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
 	}
 	log.Printf("Project: %s (%s) dashboard=%s bucket=%s",
 		cfg.Name, cfg.DisplayShortName(), cfg.TestGrid.Dashboard, cfg.GCS.Bucket)
+
+	var aiSystemPrompt string
+	if *enableAI {
+		_, prompt, err := project.LoadDir(*projectDir)
+		if err != nil {
+			return fmt.Errorf("loading AI prompt: %w", err)
+		}
+		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
+	}
 
 	aiToken := os.Getenv("AI_TOKEN")
 	if *enableAI && aiToken == "" {
@@ -180,7 +191,7 @@ func run() error {
 
 	// Step 5: AI failure analysis (optional).
 	if *enableAI {
-		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, *outDir)
+		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, *outDir, aiSystemPrompt)
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", *outDir, len(dashboard.Jobs))
@@ -365,7 +376,7 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 }
 
 // analyzeFailuresWithAI runs AI analysis on failed test cases.
-func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir string) {
+func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir, systemPrompt string) {
 	aiClient := ai.NewClientWithOptions(ai.Options{
 		Token:        token,
 		CacheDir:     outDir,
@@ -386,7 +397,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	}
 
 	module := buildAIModule(cfg)
-	service := ai.NewService(aiClient, module, consecutiveMap)
+	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
 	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())
 
 	var totalFailures, transientSkipped int

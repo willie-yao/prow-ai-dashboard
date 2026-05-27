@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -152,6 +153,28 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+// LoadDir reads <dir>/project.yaml and <dir>/prompts/system.md. Both are
+// mandatory: a missing or whitespace-only prompt is a hard error because AI
+// analysis is the main value the dashboard provides. The returned prompt is
+// the raw consumer addendum; the caller is expected to wrap it with
+// ai.ComposeSystemPrompt before handing it to the AI service.
+func LoadDir(dir string) (*Config, string, error) {
+	cfg, err := Load(filepath.Join(dir, "project.yaml"))
+	if err != nil {
+		return nil, "", err
+	}
+	promptPath := filepath.Join(dir, "prompts", "system.md")
+	data, err := os.ReadFile(promptPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("AI analysis requires %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md (%w)", promptPath, err)
+	}
+	prompt := strings.TrimSpace(string(data))
+	if prompt == "" {
+		return nil, "", fmt.Errorf("AI analysis requires non-empty %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md", promptPath)
+	}
+	return cfg, prompt, nil
 }
 
 // parse decodes YAML in strict mode (unknown fields are errors) and

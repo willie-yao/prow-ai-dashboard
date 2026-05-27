@@ -8,11 +8,11 @@ func TestIsKnownTransient(t *testing.T) {
 		msg  string
 		want string
 	}{
-		{"HTTP 429 Too Many Requests", "Azure API throttling (HTTP 429)"},
-		{"Azure throttling on resource group", "Azure API throttling (HTTP 429)"},
-		{"Too many requests from client", "Azure API throttling (HTTP 429)"},
-		{"quota exceeded for StandardDSv3Family", "Azure resource quota exceeded"},
-		{"resource quota limit reached", "Azure resource quota exceeded"},
+		{"HTTP 429 Too Many Requests", "Cloud API throttling (HTTP 429)"},
+		{"Azure throttling on resource group", "Cloud API throttling (HTTP 429)"},
+		{"Too many requests from client", "Cloud API throttling (HTTP 429)"},
+		{"quota exceeded for StandardDSv3Family", "Cloud resource quota exceeded"},
+		{"resource quota limit reached", "Cloud resource quota exceeded"},
 		{"context deadline exceeded during cleanup", "Context deadline during cleanup"},
 		{"context deadline exceeded: delete resource group", "Context deadline during cleanup"},
 		{"dns resolution failed for mcr.microsoft.com", "DNS resolution failure"},

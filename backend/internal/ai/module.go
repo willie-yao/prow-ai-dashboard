@@ -8,15 +8,13 @@ import (
 )
 
 // Module captures the project-specific AI knowledge required to analyze a test
-// failure: system prompt, transient-detection rules, prompt construction, and
-// artifact evidence collection. Each project plugs in its own Module so prompts
-// and evidence selection stay coherent.
+// failure: transient-detection rules, evidence collection, and per-failure
+// prompt construction. The system prompt is owned by the consumer repo and
+// composed by the engine via ComposeSystemPrompt at fetcher startup, so it is
+// not the module's concern.
 type Module interface {
 	// Name uniquely identifies the module. Used for logging and cache keys.
 	Name() string
-
-	// SystemPrompt returns the system message sent with every chat completion.
-	SystemPrompt() string
 
 	// IsKnownTransient returns a non-empty reason if the failure message matches
 	// a pattern the module considers a known transient (e.g. quota exhaustion).

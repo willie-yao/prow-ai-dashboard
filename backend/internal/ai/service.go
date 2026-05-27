@@ -12,23 +12,27 @@ import (
 )
 
 // Service orchestrates AI analysis for a single project. It composes a generic
-// API Client with a project-specific Module and a snapshot of consecutive
-// failure counts.
+// API Client with a project-specific Module, the composed system prompt, and a
+// snapshot of consecutive failure counts.
 type Service struct {
 	client         *Client
 	module         Module
+	systemPrompt   string
 	consecutiveMap map[string]int
 }
 
-// NewService constructs a Service. consecutiveMap is a lookup of test name to
-// consecutive failure count taken from the flakiness report; it may be nil.
-func NewService(client *Client, module Module, consecutiveMap map[string]int) *Service {
+// NewService constructs a Service. systemPrompt is the fully composed prompt
+// (engine base + consumer addendum + response format footer) and must be
+// non-empty. consecutiveMap is a lookup of test name to consecutive failure
+// count taken from the flakiness report; it may be nil.
+func NewService(client *Client, module Module, systemPrompt string, consecutiveMap map[string]int) *Service {
 	if consecutiveMap == nil {
 		consecutiveMap = map[string]int{}
 	}
 	return &Service{
 		client:         client,
 		module:         module,
+		systemPrompt:   systemPrompt,
 		consecutiveMap: consecutiveMap,
 	}
 }
@@ -69,7 +73,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 	summary, analysis, err := s.client.doAnalyze(ctx,
 		s.cacheKey(tc.Name, tc.FailureMessage),
-		s.module.SystemPrompt(),
+		s.systemPrompt,
 		userPrompt,
 	)
 	if err != nil {

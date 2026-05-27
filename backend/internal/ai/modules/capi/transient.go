@@ -2,8 +2,10 @@ package capi
 
 import "strings"
 
-// transientPattern defines a CAPI/Azure-specific pattern for known transient
-// failures that do not need AI analysis.
+// transientPattern marks a failure message as a known transient infrastructure
+// flake that should skip AI analysis. Patterns here are intentionally generic
+// across cloud providers; project-specific patterns belong on the consumer
+// side once that extension point exists.
 type transientPattern struct {
 	match  func(string) bool
 	reason string
@@ -12,11 +14,11 @@ type transientPattern struct {
 var knownTransientPatterns = []transientPattern{
 	{
 		match:  func(s string) bool { return strings.Contains(s, "429") || strings.Contains(s, "throttling") || strings.Contains(s, "too many requests") },
-		reason: "Azure API throttling (HTTP 429)",
+		reason: "Cloud API throttling (HTTP 429)",
 	},
 	{
 		match:  func(s string) bool { return strings.Contains(s, "quota") && (strings.Contains(s, "exceeded") || strings.Contains(s, "limit")) },
-		reason: "Azure resource quota exceeded",
+		reason: "Cloud resource quota exceeded",
 	},
 	{
 		match: func(s string) bool {

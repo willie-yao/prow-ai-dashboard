@@ -25,19 +25,6 @@ func New() *Module { return &Module{} }
 // Name returns "generic".
 func (m *Module) Name() string { return "generic" }
 
-// SystemPrompt returns a project-agnostic system message.
-func (m *Module) SystemPrompt() string {
-	return `You are an expert software test failure analyst. You diagnose failures from prow E2E test runs by analyzing error messages, stack traces, and build logs.
-
-When analyzing failures:
-- Focus on the first fatal error, not cascading symptoms.
-- Distinguish between transient infrastructure issues and real bugs.
-- Cite specific log lines or error messages rather than speculating.
-- If evidence is incomplete, state what remains unknown rather than guessing.
-
-Respond in JSON when asked.`
-}
-
 // IsKnownTransient always returns "" — the generic module relies on the AI to
 // flag transients via the is_transient response field.
 func (m *Module) IsKnownTransient(_ string) string { return "" }
@@ -64,9 +51,8 @@ func (m *Module) AnalysisPrompt(ctx context.Context, client *http.Client, run *m
 	sb.WriteString("\nPerform a complete investigation:\n")
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the data above. Quote the actual error message or log line that reveals the failure. Do NOT speculate.\n")
 	sb.WriteString("2. SUGGESTED FIX: Based on the root cause, give the specific fix.\n")
-	sb.WriteString("3. SUMMARY: After finishing the investigation, write a 1-2 sentence headline summary that reflects your findings. Set is_transient=true only if the root cause is a known transient infra issue.\n")
-	sb.WriteString("4. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
-	sb.WriteString(`Respond in JSON: {"summary": "1-2 sentence headline derived from root_cause", "is_transient": true/false, "root_cause": "...", "severity": "Critical/High/Medium/Low", "suggested_fix": "...", "relevant_files": ["file1", "file2"]}`)
+	sb.WriteString("3. SUMMARY: After finishing the investigation, write a 1-2 sentence headline summary that reflects your findings.\n")
+	sb.WriteString("4. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n")
 
 	return sb.String()
 }
