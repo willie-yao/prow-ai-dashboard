@@ -162,54 +162,58 @@ func newTestClient(t *testing.T, serverURL string) *Client {
 	return c
 }
 
-func TestQuickSummaryWithMock(t *testing.T) {
-	srv := newMockServer(t, `{"summary": "This is a transient throttling error from Azure ARM APIs.", "is_transient": true}`)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	ctx := context.Background()
-
-	summary, err := client.doQuickSummary(ctx, "summary:abc123", "system", "user prompt")
-	if err != nil {
-		t.Fatalf("doQuickSummary: %v", err)
-	}
-	if summary.Summary == "" {
-		t.Fatal("expected non-empty summary")
-	}
-	if !summary.IsTransient {
-		t.Error("expected is_transient=true for throttling")
-	}
-	if summary.GeneratedAt == "" {
-		t.Error("expected generated_at to be set")
-	}
-}
-
-func TestDeepAnalysisWithMock(t *testing.T) {
-	jsonResp := `{"root_cause":"Azure quota exceeded","severity":"High","suggested_fix":"Request quota increase","relevant_files":["azure_machine.go"]}`
+func TestAnalyzeWithMock(t *testing.T) {
+	jsonResp := `{"summary":"Kubelet failed to start due to expired cert.","is_transient":false,"root_cause":"Kubelet client cert expired","severity":"High","suggested_fix":"Rotate cert","relevant_files":["kubelet.conf"]}`
 	srv := newMockServer(t, jsonResp)
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	analysis, err := client.doDeepAnalysis(ctx, "comprehensive:abc123", "system", "user prompt")
+	summary, analysis, err := client.doAnalyze(ctx, "comprehensive:abc123", "system", "user prompt")
 	if err != nil {
-		t.Fatalf("doDeepAnalysis: %v", err)
+		t.Fatalf("doAnalyze: %v", err)
 	}
-	if analysis.RootCause != "Azure quota exceeded" {
+	if summary.Summary != "Kubelet failed to start due to expired cert." {
+		t.Errorf("unexpected summary: %q", summary.Summary)
+	}
+	if summary.IsTransient {
+		t.Error("expected is_transient=false")
+	}
+	if summary.GeneratedAt == "" {
+		t.Error("expected generated_at to be set on summary")
+	}
+	if analysis.RootCause != "Kubelet client cert expired" {
 		t.Errorf("unexpected root_cause: %q", analysis.RootCause)
 	}
 	if analysis.Severity != "High" {
 		t.Errorf("unexpected severity: %q", analysis.Severity)
 	}
-	if analysis.SuggestedFix != "Request quota increase" {
+	if analysis.SuggestedFix != "Rotate cert" {
 		t.Errorf("unexpected suggested_fix: %q", analysis.SuggestedFix)
 	}
-	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "azure_machine.go" {
+	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "kubelet.conf" {
 		t.Errorf("unexpected relevant_files: %v", analysis.RelevantFiles)
 	}
-	if analysis.Model != DeepModel {
+	if analysis.Model != Model {
 		t.Errorf("unexpected model: %q", analysis.Model)
+	}
+}
+
+func TestAnalyzeFallbackSummaryFromRootCause(t *testing.T) {
+	// Model omits the "summary" field — derive it from root_cause.
+	jsonResp := `{"root_cause":"Azure quota exceeded for VM size Standard_D4s_v3. Request quota increase.","severity":"High","suggested_fix":"File quota ticket"}`
+	srv := newMockServer(t, jsonResp)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	summary, _, err := client.doAnalyze(context.Background(), "comprehensive:fallback", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyze: %v", err)
+	}
+	want := "Azure quota exceeded for VM size Standard_D4s_v3."
+	if summary.Summary != want {
+		t.Errorf("expected derived summary %q, got %q", want, summary.Summary)
 	}
 }
 
@@ -218,15 +222,16 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"choices":[{"message":{"content":"A real bug in CNI configuration."}}]}`)
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`,
+			`{"summary":"CNI misconfig.","is_transient":false,"root_cause":"A real bug in CNI configuration.","severity":"High","suggested_fix":"x","relevant_files":[]}`)
 	}))
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	// First call — hits API.
-	s1, err := client.doQuickSummary(ctx, "summary:cni", "sys", "user")
+	// First call hits the API.
+	s1, _, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -234,8 +239,8 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 		t.Fatalf("expected 1 API call, got %d", callCount)
 	}
 
-	// Second call — should use cache.
-	s2, err := client.doQuickSummary(ctx, "summary:cni", "sys", "user")
+	// Second call uses the cache.
+	s2, _, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -248,12 +253,12 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 	}
 }
 
-func TestQuickSummaryReturnsAISummaryType(t *testing.T) {
-	srv := newMockServer(t, `{"summary": "The kubelet failed to start due to certificate expiration. This is a real bug.", "is_transient": false}`)
+func TestAnalyzeReturnsAISummaryType(t *testing.T) {
+	srv := newMockServer(t, `{"summary":"The kubelet failed to start due to certificate expiration. This is a real bug.","is_transient":false,"root_cause":"cert expired","severity":"High","suggested_fix":"rotate","relevant_files":[]}`)
 	defer srv.Close()
 
 	client := newTestClient(t, srv.URL)
-	summary, err := client.doQuickSummary(context.Background(), "summary:kubelet", "sys", "user")
+	summary, _, err := client.doAnalyze(context.Background(), "comprehensive:kubelet", "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}

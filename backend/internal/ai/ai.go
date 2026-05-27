@@ -21,10 +21,8 @@ import (
 const (
 	// ModelsAPIURL is the GitHub Copilot chat completions endpoint.
 	ModelsAPIURL = "https://api.githubcopilot.com/chat/completions"
-	// DefaultModel is fast, used for quick summaries.
-	DefaultModel = "claude-sonnet-4.5"
-	// DeepModel is more capable, used for deep root-cause analysis.
-	DeepModel = "claude-opus-4.6"
+	// Model is used for the combined summary + root-cause analysis.
+	Model = "claude-opus-4.6"
 
 	callDelay = 500 * time.Millisecond
 )
@@ -54,89 +52,100 @@ func (c *Client) Cache() *Cache {
 
 // ---------- Low-level API calls ----------
 
-// quickSummaryResponse is the expected JSON structure from the quick model.
-type quickSummaryResponse struct {
-	Summary     string `json:"summary"`
-	IsTransient bool   `json:"is_transient"`
-}
-
-// deepAnalysisResponse is the expected JSON structure from the deep model.
-type deepAnalysisResponse struct {
+// analysisResponse is the expected JSON structure from the analysis model.
+// Combines the headline summary, transient classification, and deep root-cause
+// fields in a single response so the list view and detail view always agree.
+type analysisResponse struct {
+	Summary       string   `json:"summary"`
+	IsTransient   bool     `json:"is_transient"`
 	RootCause     string   `json:"root_cause"`
 	Severity      string   `json:"severity"`
 	SuggestedFix  string   `json:"suggested_fix"`
 	RelevantFiles []string `json:"relevant_files"`
 }
 
-// doQuickSummary runs a quick chat completion, parses the JSON response into an
-// AISummary, and caches the result. Returns the cached value on a hit.
-func (c *Client) doQuickSummary(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AISummary, error) {
+// doAnalyze runs a single chat completion, parses the JSON response, and caches
+// it. Returns both the brief AISummary (for the list view) and the deep
+// AIAnalysis (for the detail page), derived from the same model output.
+func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
 	if raw, ok := c.cache.Get(cacheKey); ok {
-		var s models.AISummary
-		if json.Unmarshal(raw, &s) == nil {
-			return &s, nil
+		var parsed analysisResponse
+		if json.Unmarshal(raw, &parsed) == nil {
+			summary, analysis := buildOutputs(parsed)
+			return summary, analysis, nil
 		}
 	}
 
-	resp, err := c.callAPI(ctx, DefaultModel, sysPrompt, userPrompt)
+	resp, err := c.callAPI(ctx, Model, sysPrompt, userPrompt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var parsed quickSummaryResponse
+	var parsed analysisResponse
 	cleaned := extractJSON(resp)
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		// Fallback: use raw text, assume not transient.
-		parsed = quickSummaryResponse{Summary: resp, IsTransient: false}
-	}
-
-	summary := &models.AISummary{
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary:     parsed.Summary,
-		IsTransient: parsed.IsTransient,
-	}
-
-	_ = c.cache.Set(cacheKey, summary)
-	return summary, nil
-}
-
-// doDeepAnalysis runs a deep chat completion, parses the JSON response into an
-// AIAnalysis, and caches the result. Returns the cached value on a hit.
-func (c *Client) doDeepAnalysis(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AIAnalysis, error) {
-	if raw, ok := c.cache.Get(cacheKey); ok {
-		var a models.AIAnalysis
-		if json.Unmarshal(raw, &a) == nil {
-			return &a, nil
-		}
-	}
-
-	resp, err := c.callAPI(ctx, DeepModel, sysPrompt, userPrompt)
-	if err != nil {
-		return nil, err
-	}
-
-	var parsed deepAnalysisResponse
-	cleaned := extractJSON(resp)
-	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		// If JSON parse fails, use the raw text as root cause.
-		parsed = deepAnalysisResponse{
+		// Fallback: treat the whole response as the root cause.
+		parsed = analysisResponse{
+			Summary:      truncate(resp, 200),
 			RootCause:    resp,
 			Severity:     "Medium",
 			SuggestedFix: "Unable to parse structured response",
 		}
 	}
 
+	// Persist the parsed struct so future reads always get a consistent shape.
+	_ = c.cache.Set(cacheKey, parsed)
+
+	summary, analysis := buildOutputs(parsed)
+	return summary, analysis, nil
+}
+
+// buildOutputs splits an analysisResponse into the two structs the rest of the
+// pipeline consumes. The same generated_at timestamp is stamped on both so the
+// UI can correlate them.
+func buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	summaryText := parsed.Summary
+	if summaryText == "" {
+		summaryText = firstSentence(parsed.RootCause)
+	}
+
+	summary := &models.AISummary{
+		GeneratedAt: now,
+		Summary:     summaryText,
+		IsTransient: parsed.IsTransient,
+	}
 	analysis := &models.AIAnalysis{
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
-		Model:         DeepModel,
+		GeneratedAt:   now,
+		Model:         Model,
 		RootCause:     parsed.RootCause,
 		Severity:      parsed.Severity,
 		SuggestedFix:  parsed.SuggestedFix,
 		RelevantFiles: parsed.RelevantFiles,
 	}
+	return summary, analysis
+}
 
-	_ = c.cache.Set(cacheKey, analysis)
-	return analysis, nil
+// firstSentence returns the first sentence (or first 200 chars) of s, used to
+// derive a list-view summary when the model omits an explicit "summary" field.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	for i, r := range s {
+		if r == '.' || r == '\n' {
+			return strings.TrimSpace(s[:i+1])
+		}
+		if i >= 200 {
+			break
+		}
+	}
+	if len(s) > 200 {
+		return s[:200] + "..."
+	}
+	return s
 }
 
 // ---------- API helper ----------

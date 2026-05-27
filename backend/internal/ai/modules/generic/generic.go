@@ -42,19 +42,9 @@ Respond in JSON when asked.`
 // flag transients via the is_transient response field.
 func (m *Module) IsKnownTransient(_ string) string { return "" }
 
-// QuickSummaryPrompt builds a generic user message for a brief summary.
-func (m *Module) QuickSummaryPrompt(testName, failureMessage, failureLocation string) string {
-	return fmt.Sprintf(
-		"Give a brief 1-2 sentence summary of why this test failed.\n\n"+
-			"Test: %s\nError: %s\nLocation: %s\n\n"+
-			"Respond in JSON: {\"summary\": \"...\", \"is_transient\": true/false}",
-		testName, failureMessage, failureLocation,
-	)
-}
-
-// DeepAnalysisPrompt builds a generic root-cause prompt using only the test
-// failure body and (best-effort) the build log tail.
-func (m *Module) DeepAnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
+// AnalysisPrompt builds a generic combined-analysis prompt using only the
+// test failure body and (best-effort) the build log tail.
+func (m *Module) AnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
 	var sb strings.Builder
 	sb.WriteString("Investigate this test failure using the data below.\n\n")
 	fmt.Fprintf(&sb, "Test: %s\n", tc.Name)
@@ -74,8 +64,9 @@ func (m *Module) DeepAnalysisPrompt(ctx context.Context, client *http.Client, ru
 	sb.WriteString("\nPerform a complete investigation:\n")
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the data above. Quote the actual error message or log line that reveals the failure. Do NOT speculate.\n")
 	sb.WriteString("2. SUGGESTED FIX: Based on the root cause, give the specific fix.\n")
-	sb.WriteString("3. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
-	sb.WriteString(`Respond in JSON: {"root_cause": "...", "severity": "Critical/High/Medium/Low", "suggested_fix": "...", "relevant_files": ["file1", "file2"]}`)
+	sb.WriteString("3. SUMMARY: After finishing the investigation, write a 1-2 sentence headline summary that reflects your findings. Set is_transient=true only if the root cause is a known transient infra issue.\n")
+	sb.WriteString("4. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
+	sb.WriteString(`Respond in JSON: {"summary": "1-2 sentence headline derived from root_cause", "is_transient": true/false, "root_cause": "...", "severity": "Critical/High/Medium/Low", "suggested_fix": "...", "relevant_files": ["file1", "file2"]}`)
 
 	return sb.String()
 }

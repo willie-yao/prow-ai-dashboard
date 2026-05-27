@@ -38,22 +38,13 @@ func (m *Module) Name() string { return "capi" }
 // SystemPrompt returns the CAPI/Azure-aware system prompt.
 func (m *Module) SystemPrompt() string { return systemPrompt }
 
-// QuickSummaryPrompt builds the user message for a brief 1-2 sentence summary.
-func (m *Module) QuickSummaryPrompt(testName, failureMessage, failureLocation string) string {
-	return fmt.Sprintf(
-		"Give a brief 1-2 sentence summary of why this CAPZ E2E test failed.\n\n"+
-			"Test: %s\nError: %s\nLocation: %s\n\n"+
-			"Respond in JSON: {\"summary\": \"...\", \"is_transient\": true/false}",
-		testName, failureMessage, failureLocation,
-	)
-}
-
-// DeepAnalysisPrompt collects all available CAPI artifact evidence for the
-// given test case and builds the user message for a comprehensive root-cause
-// analysis. Errors fetching individual artifacts are logged but do not abort.
-func (m *Module) DeepAnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
+// AnalysisPrompt collects all available CAPI artifact evidence for the
+// given test case and builds the user message for a combined summary + deep
+// root-cause analysis. Errors fetching individual artifacts are logged but
+// do not abort.
+func (m *Module) AnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
 	ev := m.collectEvidence(ctx, client, run, tc, consecutive)
-	return buildDeepPrompt(ev)
+	return buildAnalysisPrompt(ev)
 }
 
 // flavor extracts the cluster flavor from a cluster name. Returns "" if no
@@ -68,10 +59,12 @@ func (m *Module) flavor(tc *models.TestCase) string {
 	return ""
 }
 
-// buildDeepPrompt assembles the comprehensive analysis prompt from collected
-// evidence. The format string is preserved byte-for-byte from the pre-refactor
-// ComprehensiveAnalysis so cached CAPZ analyses stay valid.
-func buildDeepPrompt(ev evidence) string {
+// buildAnalysisPrompt assembles the combined summary + root-cause prompt from
+// collected evidence. The deep-analysis structural body is preserved from the
+// pre-unification ComprehensiveAnalysis so stale "comprehensive:<hash>" cache
+// entries unmarshal cleanly; the response schema gains "summary" and
+// "is_transient" so the list view and detail view come from one model pass.
+func buildAnalysisPrompt(ev evidence) string {
 	var sb strings.Builder
 	sb.WriteString("Investigate this CAPZ E2E test failure using the artifact data below.\n\n")
 	fmt.Fprintf(&sb, "Test: %s\n", ev.TestName)
@@ -124,8 +117,9 @@ func buildDeepPrompt(ev evidence) string {
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the artifacts above. Quote the actual error message, status condition, or log line that reveals the failure. Do NOT speculate — cite what you found.\n")
 	sb.WriteString("2. TRACE THE CHAIN: Follow the dependency chain (VM provisioning → cloud-init → kubeadm → kubelet → CNI → CCM → providerID). Identify which step failed and why.\n")
 	sb.WriteString("3. SUGGESTED FIX: Based on the root cause you identified, give the specific fix. Say exactly what file/config/setting needs to change and how. Do NOT say 'check the logs' — you already have them.\n")
-	sb.WriteString("4. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
-	sb.WriteString(`Respond in JSON: {"root_cause": "the specific error found in evidence with quoted log lines", "severity": "Critical/High/Medium/Low", "suggested_fix": "exact fix with file paths and changes needed", "relevant_files": ["file1.go", "file2.yaml"]}`)
+	sb.WriteString("4. SUMMARY: After completing the root-cause investigation, write a 1-2 sentence headline summary that reflects your findings. Set is_transient=true only if the root cause is a known transient infra issue (throttling, quota, intermittent DNS) rather than a real bug.\n")
+	sb.WriteString("5. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n\n")
+	sb.WriteString(`Respond in JSON: {"summary": "1-2 sentence headline derived from root_cause", "is_transient": true/false, "root_cause": "the specific error found in evidence with quoted log lines", "severity": "Critical/High/Medium/Low", "suggested_fix": "exact fix with file paths and changes needed", "relevant_files": ["file1.go", "file2.yaml"]}`)
 
 	return sb.String()
 }

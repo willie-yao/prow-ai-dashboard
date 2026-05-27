@@ -84,5 +84,4 @@ If any link breaks, downstream components fail.
 5. Resource YAMLs — verify template expansion
 
 ## Response Format
-For quick summaries: 1-2 sentences. State if transient or real bug.
-For deep analysis: provide root_cause, severity (Critical/High/Medium/Low/Transient-Ignore), suggested_fix with specific actionable steps, and relevant_files (file paths in CAPZ or CAPI repos to investigate).`
+Always respond with a single JSON object containing both the headline summary and the deep root-cause analysis: summary (1-2 sentences derived from your root_cause finding), is_transient (true only for known infra flakes), root_cause, severity (Critical/High/Medium/Low/Transient-Ignore), suggested_fix with specific actionable steps, and relevant_files (file paths in CAPZ or CAPI repos to investigate).`

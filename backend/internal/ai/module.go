@@ -9,8 +9,8 @@ import (
 
 // Module captures the project-specific AI knowledge required to analyze a test
 // failure: system prompt, transient-detection rules, prompt construction, and
-// (for the deep path) artifact evidence collection. Each project plugs in its
-// own Module so prompts and evidence selection stay coherent.
+// artifact evidence collection. Each project plugs in its own Module so prompts
+// and evidence selection stay coherent.
 type Module interface {
 	// Name uniquely identifies the module. Used for logging and cache keys.
 	Name() string
@@ -23,13 +23,11 @@ type Module interface {
 	// Returning "" means "run normal AI analysis."
 	IsKnownTransient(failureMessage string) string
 
-	// QuickSummaryPrompt returns the user message for a brief 1-2 sentence
-	// summary of the failure.
-	QuickSummaryPrompt(testName, failureMessage, failureLocation string) string
-
-	// DeepAnalysisPrompt collects whatever artifact evidence the module needs
-	// and returns the user message for a thorough root-cause analysis.
+	// AnalysisPrompt collects whatever artifact evidence the module needs and
+	// returns the user message for a single combined summary + root-cause pass.
+	// The model is expected to return JSON containing the summary, is_transient
+	// flag, and the full deep-analysis fields.
 	// Errors fetching individual artifacts should be logged but not returned;
 	// the prompt should be built from whatever was available.
-	DeepAnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string
+	AnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string
 }
