@@ -3,7 +3,8 @@
 # This file documents every field a consumer repo can set. Copy it into your
 # consumer repo as project.yaml, drop a prompts/system.md alongside it, and
 # point .github/workflows/deploy.yml at the reusable workflow in this engine
-# repo. See docs/adding-a-project.md and docs/writing-prompts.md for details.
+# repo. See docs/onboarding-a-new-project.md and docs/writing-prompts.md for
+# details.
 
 # Stable identifier used in cache keys and log lines. Lowercase, no spaces.
 id: example
@@ -48,7 +49,15 @@ artifacts:
   collector: "capi"
 
 # CAPI-specific knobs. Only used when artifacts.collector == "capi".
-# Required if the project uses the CAPI collector; otherwise omit.
+#
+# Set cluster_name_prefix when your E2E suite names every workload cluster
+# with a shared prefix (CAPZ uses "capz-e2e"). The CAPI collector matches
+# JUnit test cases to clusters by looking for that prefix.
+#
+# Leave cluster_name_prefix as the empty string when your suite uses
+# per-spec cluster names without a common prefix (CAPI core uses spec
+# names like "quick-start-bxqxxs", "md-rollout-yhse4f"). The collector
+# falls back to a generic substring matcher.
 capi:
   cluster_name_prefix: "your-project-e2e"
 

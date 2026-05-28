@@ -81,13 +81,23 @@ The engine's response schema asks the model for a list of file paths to
 investigate. Tell it which GitHub repos are in scope so the paths it returns
 are actionable links rather than guesses.
 
-## Worked example
+## Worked examples
 
-The CAPZ consumer's `prompts/system.md` is the canonical worked example.
-See [`capz-prow-ai-dashboard/prompts/system.md`][capz-prompt] for ~150 lines
-covering CAPZ architecture, control-plane init flow, 14 documented failure
-patterns, the transient list, and the CAPZ artifact layout.
+Two production consumer prompts are available as reference templates.
+Both are around 100-150 lines and follow the section structure above.
 
+- **VM-based provider (Azure):** [CAPZ `prompts/system.md`][capz-prompt] —
+  ~100 lines covering Azure VM provisioning, kubeadm control-plane init,
+  14 documented failure patterns, Azure-specific transient errors, and
+  the CAPZ artifact layout.
+- **Non-VM provider (CAPD, Docker):** [CAPI core `prompts/system.md`][capi-prompt] —
+  ~150 lines covering provider-agnostic CAPI architecture, the CAPD
+  Docker provider, three job-type families (E2E / unit / conformance),
+  and the per-spec workload-cluster artifact layout. Use this as the
+  starting template for any project where CAPD-style or non-cloud-VM
+  failure patterns dominate.
+
+[capi-prompt]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/prompts/system.md
 [capz-prompt]: https://github.com/willie-yao/capz-prow-ai-dashboard/blob/main/prompts/system.md
 
 A minimal docs-only example also lives in [`configs/example/`][example] in

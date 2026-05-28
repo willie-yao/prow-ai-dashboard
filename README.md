@@ -2,7 +2,14 @@
 
 Reusable engine for **AI-powered Prow/TestGrid dashboards**. Provides a project-agnostic alternative to TestGrid with AI-driven failure analysis, run triage, and notifications. Each consuming project gets its own deployment, secrets, and GitHub Pages site by calling the reusable workflow shipped here.
 
-> ⚠️ **Active development.** Currently being extracted from [capz-prow-dashboard](https://github.com/willie-yao/capz-prow-dashboard). Not yet stable. The first production consumer will be [capz-prow-ai-dashboard](https://github.com/willie-yao/capz-prow-ai-dashboard).
+## Consumers
+
+| Project | Dashboard | Source |
+| --- | --- | --- |
+| [Cluster API Provider Azure (CAPZ)](https://github.com/kubernetes-sigs/cluster-api-provider-azure) | [willie-yao.github.io/capz-prow-ai-dashboard](https://willie-yao.github.io/capz-prow-ai-dashboard/) | [willie-yao/capz-prow-ai-dashboard](https://github.com/willie-yao/capz-prow-ai-dashboard) |
+| [Cluster API (CAPI core)](https://github.com/kubernetes-sigs/cluster-api) | [willie-yao.github.io/capi-prow-ai-dashboard](https://willie-yao.github.io/capi-prow-ai-dashboard/) | [willie-yao/capi-prow-ai-dashboard](https://github.com/willie-yao/capi-prow-ai-dashboard) |
+
+> ⚠️ **Active development.** Engine APIs (project.yaml schema, reusable workflow inputs) may still change. Pin to `@main` or a commit SHA from your consumer until a release is cut.
 
 ## How it works
 
@@ -68,6 +75,9 @@ make fe-build
 ```
 
 ## Adding a project
+
+See [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md) for the
+full worked example. In short:
 
 1. Create a consumer repo (any name).
 2. Add `project.yaml` to its root. See [`configs/example/project.yaml`](configs/example/project.yaml) for every field.
