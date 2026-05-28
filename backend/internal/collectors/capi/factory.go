@@ -1,7 +1,6 @@
 package capi
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
@@ -10,10 +9,13 @@ import (
 )
 
 // Factory wires this collector for fetcher.CollectorRegistry. cmd/fetcher
-// registers it explicitly so tests can compose their own registries.
+// registers it explicitly so tests can compose their own registries. The
+// capi section in project.yaml is optional; without it the collector still
+// works but skips per-test namespace mapping (CAPI core convention).
 func Factory(cfg *project.Config, bucket *gcs.Bucket, client *http.Client) (collectors.Collector, error) {
-	if cfg.CAPI == nil {
-		return nil, fmt.Errorf("artifacts.collector=capi requires a capi section in project.yaml")
+	prefix := ""
+	if cfg.CAPI != nil {
+		prefix = cfg.CAPI.ClusterNamePrefix
 	}
-	return New(bucket, client, cfg.CAPI.ClusterNamePrefix)
+	return New(bucket, client, prefix)
 }

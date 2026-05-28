@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -351,15 +352,20 @@ var clusterFlavorRules = []struct {
 }
 
 // MapTestToCluster attempts to match a test name to a discovered cluster.
-// If only one cluster was discovered, it always matches. Otherwise heuristics
-// based on keywords in the test name are used, referencing the CAPZ prow
-// CI template flavors.
+// If only one cluster was discovered, it always matches. Otherwise it first
+// tries a provider-agnostic substring match on cluster flavor (the cluster
+// dir name minus any trailing CAPI random ID), then falls back to the
+// CAPZ-flavored keyword rules table.
 func MapTestToCluster(testName string, clusters []models.ClusterArtifacts) *models.ClusterArtifacts {
 	if len(clusters) == 0 {
 		return nil
 	}
 	if len(clusters) == 1 {
 		return &clusters[0]
+	}
+
+	if ca := matchByFlavorSubstring(testName, clusters); ca != nil {
+		return ca
 	}
 
 	lower := strings.ToLower(testName)
@@ -422,4 +428,85 @@ func MapTestToCluster(testName string, clusters []models.ClusterArtifacts) *mode
 	}
 	// Most specific rule had no cluster — return nil.
 	return nil
+}
+
+// randomSuffixRe matches a trailing CAPI-style random ID like "-bxqxxs" or
+// "-abc123". Length 4-10 keeps short flavor suffixes like "-ha" or "-aks"
+// out of the strip set so CAPZ cluster names (which end with the flavor)
+// don't lose meaningful trailing segments.
+var randomSuffixRe = regexp.MustCompile(`-[a-z0-9]{4,10}$`)
+
+// normalizeForMatch lowercases the input and replaces every non-alphanumeric
+// run with a single "-", trimming leading/trailing dashes. Used to compare
+// test names against cluster flavor keys regardless of whitespace,
+// punctuation, or Ginkgo-style brackets.
+func normalizeForMatch(s string) string {
+	var b strings.Builder
+	prevDash := true
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
+}
+
+// clusterFlavorKey returns the normalized flavor portion of a cluster dir
+// name. It strips a single trailing random-ID-shaped suffix if present and
+// requires the remainder to be at least 3 characters. Returns "" when the
+// dir name doesn't yield a useful match key.
+func clusterFlavorKey(clusterDir string) string {
+	norm := normalizeForMatch(clusterDir)
+	if m := randomSuffixRe.FindString(norm); m != "" {
+		norm = strings.TrimSuffix(norm, m)
+	}
+	if len(norm) < 3 {
+		return ""
+	}
+	return norm
+}
+
+// matchByFlavorSubstring picks the cluster whose flavor key (cluster dir name
+// minus any trailing random ID) appears as a substring of the normalized test
+// name, preferring the longest match. On length ties, the cluster name's
+// lexicographic order breaks the tie for determinism. Returns nil when no
+// cluster matches; callers should fall back to the rules table.
+//
+// This is the primary matcher for projects whose cluster dirs are
+// "{flavor}-{random}" (CAPI core). For CAPZ-style dirs ("capz-e2e-{random}-
+// {flavor}") the stripped key remains "capz-e2e-{random}", which won't
+// appear in any human-readable test name, so this matcher returns nil and
+// the rules table handles the mapping.
+func matchByFlavorSubstring(testName string, clusters []models.ClusterArtifacts) *models.ClusterArtifacts {
+	normTest := normalizeForMatch(testName)
+	if normTest == "" {
+		return nil
+	}
+
+	var bestIdx = -1
+	var bestKey string
+	for i := range clusters {
+		key := clusterFlavorKey(clusters[i].ClusterName)
+		if key == "" || !strings.Contains(normTest, key) {
+			continue
+		}
+		switch {
+		case bestIdx == -1:
+		case len(key) > len(bestKey):
+		case len(key) == len(bestKey) && clusters[i].ClusterName < clusters[bestIdx].ClusterName:
+		default:
+			continue
+		}
+		bestIdx = i
+		bestKey = key
+	}
+
+	if bestIdx == -1 {
+		return nil
+	}
+	return &clusters[bestIdx]
 }

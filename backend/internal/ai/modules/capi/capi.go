@@ -114,7 +114,7 @@ func buildAnalysisPrompt(ev evidence) string {
 
 	sb.WriteString("\nYou have been given ALL available artifacts for this failure. Perform a complete investigation:\n")
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the artifacts above. Quote the actual error message, status condition, or log line that reveals the failure. Do NOT speculate — cite what you found.\n")
-	sb.WriteString("2. TRACE THE CHAIN: Follow the CAPI dependency chain (VM provisioning → cloud-init → kubeadm → kubelet → CNI → CCM → providerID). Identify which step failed and why.\n")
+	sb.WriteString("2. TRACE THE FAILURE: Use the project-specific knowledge in the system prompt above to identify which component or step failed. Cite the artifact (log file, status condition, etc.) that confirms it.\n")
 	sb.WriteString("3. SUGGESTED FIX: Based on the root cause you identified, give the specific fix. Say exactly what file/config/setting needs to change and how. Do NOT say 'check the logs' — you already have them.\n")
 	sb.WriteString("4. SUMMARY: After completing the root-cause investigation, write a 1-2 sentence headline summary that reflects your findings.\n")
 	sb.WriteString("5. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n")

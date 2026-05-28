@@ -263,3 +263,120 @@ func TestDiscoverClustersHTTPError(t *testing.T) {
 		t.Fatal("expected error for 404 response")
 	}
 }
+
+// TestMapTestToClusterCAPICore exercises the provider-agnostic flavor
+// matcher against CAPI core-style cluster dirs ("{flavor}-{random}") where
+// the rules table is empty for the relevant flavors. This is the path that
+// makes the collector usable for kubernetes-sigs/cluster-api.
+func TestMapTestToClusterCAPICore(t *testing.T) {
+	clusters := []models.ClusterArtifacts{
+		{ClusterName: "quick-start-bxqxxs"},
+		{ClusterName: "kcp-adoption-xyz789"},
+		{ClusterName: "self-hosted-def456"},
+		{ClusterName: "clusterclass-abc012"},
+	}
+
+	tests := []struct {
+		testName string
+		want     string
+	}{
+		{"Workload cluster creation Should successfully create a workload cluster with the quick-start template", "quick-start-bxqxxs"},
+		{"KCP Adoption tests Should successfully adopt control plane", "kcp-adoption-xyz789"},
+		{"Self-hosted Should successfully pivot resources to self-hosted cluster", "self-hosted-def456"},
+		{"ClusterClass changes Should successfully roll out", "clusterclass-abc012"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			result := MapTestToCluster(tt.testName, clusters)
+			if result == nil {
+				t.Fatalf("expected match for %q", tt.testName)
+			}
+			if result.ClusterName != tt.want {
+				t.Errorf("MapTestToCluster(%q) = %s, want %s", tt.testName, result.ClusterName, tt.want)
+			}
+		})
+	}
+}
+
+// TestMapTestToClusterPrefersLongestFlavor pins the longest-match tiebreaker
+// when multiple cluster flavors are substrings of the test name. Without
+// this, "Self-hosted ClusterClass test" could match either "self-hosted" or
+// "clusterclass" depending on map iteration order.
+func TestMapTestToClusterPrefersLongestFlavor(t *testing.T) {
+	clusters := []models.ClusterArtifacts{
+		{ClusterName: "kcp-adoption-xyz789"},
+		{ClusterName: "self-hosted-kcp-adoption-abc012"},
+	}
+	got := MapTestToCluster("Self-hosted KCP adoption Should pivot then adopt", clusters)
+	if got == nil {
+		t.Fatal("expected a match")
+	}
+	if got.ClusterName != "self-hosted-kcp-adoption-abc012" {
+		t.Errorf("expected longest flavor key to win, got %s", got.ClusterName)
+	}
+}
+
+// TestMapTestToClusterCAPZUnaffectedByGenericMatcher is the regression guard:
+// CAPZ cluster dirs have the random ID in the middle ("capz-e2e-{random}-
+// {flavor}"), so the generic matcher's stripped key includes
+// "capz-e2e-{random}" which never appears in test names. CAPZ traffic must
+// continue to flow through the rules table.
+func TestMapTestToClusterCAPZUnaffectedByGenericMatcher(t *testing.T) {
+	clusters := []models.ClusterArtifacts{
+		{ClusterName: "capz-e2e-abc123-ha"},
+		{ClusterName: "capz-e2e-abc123-windows"},
+		{ClusterName: "capz-e2e-abc123-azl3"},
+	}
+	got := MapTestToCluster("[It] Azure Linux 3 node pools", clusters)
+	if got == nil {
+		t.Fatal("expected rules-table match")
+	}
+	if got.ClusterName != "capz-e2e-abc123-azl3" {
+		t.Errorf("expected azl3 rule match, got %s", got.ClusterName)
+	}
+}
+
+func TestNormalizeForMatch(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"Quick-Start", "quick-start"},
+		{"  [It] Foo bar  ", "it-foo-bar"},
+		{"KCP_Adoption!!", "kcp-adoption"},
+		{"capz-e2e-abc123-azl3", "capz-e2e-abc123-azl3"},
+		{"", ""},
+		{"---", ""},
+	}
+	for _, c := range cases {
+		if got := normalizeForMatch(c.in); got != c.want {
+			t.Errorf("normalizeForMatch(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestClusterFlavorKey(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"quick-start-bxqxxs", "quick-start"},
+		{"kcp-adoption-xyz789", "kcp-adoption"},
+		// CAPZ-style: trailing -ha is only 3 chars, not stripped.
+		{"capz-e2e-abc123-ha", "capz-e2e-abc123-ha"},
+		// CAPZ-style: trailing -windows is 8 chars, IS stripped — but the
+		// leftover prefix won't appear in any human-readable test name,
+		// so behaviour is still correct.
+		{"capz-e2e-abc123-windows", "capz-e2e-abc123"},
+		// Too short to be useful.
+		{"ab", ""},
+		// Bare random-looking dir name without a strippable trailing suffix
+		// is returned as-is; the matcher's substring check against test
+		// names handles non-matches naturally.
+		{"bxqxxs", "bxqxxs"},
+	}
+	for _, c := range cases {
+		if got := clusterFlavorKey(c.in); got != c.want {
+			t.Errorf("clusterFlavorKey(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

@@ -5,6 +5,13 @@ import "fmt"
 // Bucket centralizes URL construction for a GCS bucket that holds Prow
 // build logs. Every helper assumes Prow's "logs/" prefix convention so
 // callers can pass paths like "jobname/buildid/build-log.txt".
+//
+// TODO(phase-e-presubmits): the "logs/" prefix is hardcoded here, but
+// presubmit builds live under "pr-logs/pull/<org>_<repo>/<pr#>/<job>/
+// <build>/" in the same bucket. Supporting presubmits will require routing
+// path construction by job type, likely via a method like
+// BuildPath(jobType models.JobType, ...) string. See plan.md Phase E
+// "Presubmit job support" Stage 1.
 type Bucket struct {
 	Name string
 }

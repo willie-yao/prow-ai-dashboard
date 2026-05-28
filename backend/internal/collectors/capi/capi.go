@@ -5,7 +5,6 @@ package capi
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -17,7 +16,8 @@ import (
 
 // Collector implements the CAPI artifact layout: each failed build has zero or
 // more cluster directories under artifacts/clusters/, and tests are mapped to
-// clusters via the clusterFlavorRules keyword table.
+// clusters via the generic prefix matcher with the CAPZ-flavored rules table
+// as a fallback.
 type Collector struct {
 	bucket        *gcs.Bucket
 	client        *http.Client
@@ -25,17 +25,23 @@ type Collector struct {
 	nsPrefixRe    *regexp.Regexp
 }
 
-// New constructs a CAPI collector. clusterPrefix is required (e.g. "capz-e2e").
+// New constructs a CAPI collector. clusterPrefix is optional. When non-empty
+// (e.g. "capz-e2e"), the collector parses the build log for "Creating
+// namespace" lines to map tests to per-test namespaces, and extracts a
+// namespace prefix from each cluster name for the bootstrap-resources URL.
+// When empty, the collector treats each cluster directory name as the
+// namespace directly (the CAPI core convention, where one cluster per test
+// has cluster_name == namespace).
 func New(bucket *gcs.Bucket, client *http.Client, clusterPrefix string) (*Collector, error) {
-	if clusterPrefix == "" {
-		return nil, fmt.Errorf("capi collector requires a non-empty cluster_name_prefix in project.yaml")
-	}
-	return &Collector{
+	c := &Collector{
 		bucket:        bucket,
 		client:        client,
 		clusterPrefix: clusterPrefix,
-		nsPrefixRe:    regexp.MustCompile(regexp.QuoteMeta(clusterPrefix) + `-[a-z0-9]+`),
-	}, nil
+	}
+	if clusterPrefix != "" {
+		c.nsPrefixRe = regexp.MustCompile(regexp.QuoteMeta(clusterPrefix) + `-[a-z0-9]+`)
+	}
+	return c, nil
 }
 
 // Name implements collectors.Collector.
@@ -84,9 +90,8 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 
 		ca := MapTestToCluster(result.TestCases[i].Name, clusters)
 		if ca != nil {
-			// Add bootstrap resources URL by extracting namespace prefix.
-			if prefix := c.nsPrefixRe.FindString(ca.ClusterName); prefix != "" {
-				ca.BootstrapResourcesURL = c.bucket.WebURL(bootstrapPath + prefix + "/")
+			if ns := c.bootstrapNamespace(ca.ClusterName); ns != "" {
+				ca.BootstrapResourcesURL = c.bucket.WebURL(bootstrapPath + ns + "/")
 			}
 			result.TestCases[i].ClusterArtifacts = ca
 		} else if namespaceMap != nil {
@@ -102,4 +107,20 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 	}
 
 	return nil
+}
+
+// bootstrapNamespace returns the path segment under
+// .../artifacts/clusters/bootstrap/resources/ that holds resource YAMLs for
+// the given cluster. With a configured prefix the segment is the extracted
+// namespace prefix (CAPZ: per-test namespace under one cluster); without
+// one the segment is the full cluster name (CAPI core: one dir per cluster
+// whose name is the namespace). Returns "" when no segment can be derived.
+func (c *Collector) bootstrapNamespace(clusterName string) string {
+	if clusterName == "" {
+		return ""
+	}
+	if c.nsPrefixRe != nil {
+		return c.nsPrefixRe.FindString(clusterName)
+	}
+	return clusterName
 }

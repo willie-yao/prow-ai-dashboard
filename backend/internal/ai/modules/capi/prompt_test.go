@@ -32,11 +32,26 @@ func TestBuildAnalysisPromptByteIdentity(t *testing.T) {
 		"Stack trace:\nstack trace here\n",
 		"=== Build Log Errors ===\nFATAL: kubeadm init failed\n",
 		"1. ROOT CAUSE:",
+		"2. TRACE THE FAILURE:",
 		"4. SUMMARY:",
 	}
 	for _, a := range anchors {
 		if !strings.Contains(got, a) {
 			t.Errorf("analysis prompt missing anchor %q\nfull prompt:\n%s", a, got)
+		}
+	}
+
+	// The engine prompt must NOT carry project-specific failure-chain
+	// vocabulary. That knowledge belongs in the consumer's system.md.
+	forbidden := []string{
+		"VM provisioning",
+		"cloud-init → kubeadm",
+		"CCM → providerID",
+		"CAPI dependency chain",
+	}
+	for _, f := range forbidden {
+		if strings.Contains(got, f) {
+			t.Errorf("analysis prompt leaked project-specific phrase %q\nfull prompt:\n%s", f, got)
 		}
 	}
 }
