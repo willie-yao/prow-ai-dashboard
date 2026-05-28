@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,34 @@ func TestWriteAll(t *testing.T) {
 	// search-index.json exists
 	if _, err := os.Stat(filepath.Join(dir, "search-index.json")); err != nil {
 		t.Error("search-index.json missing")
+	}
+}
+
+func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
+	dir := t.TempDir()
+	cfg := sampleConfig()
+	cfg.AI = &project.AI{
+		Module:   "capi",
+		Endpoint: "https://internal.example/v1/chat/completions",
+		Model:    "internal-only-model-name",
+	}
+
+	if err := WriteManifest(dir, cfg); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest.json: %v", err)
+	}
+
+	// Raw-string assertions: the published JSON must not leak the model
+	// identifier or endpoint URL, even when set on the in-memory config.
+	if strings.Contains(string(data), "internal-only-model-name") {
+		t.Errorf("manifest.json leaks AI model identifier: %s", string(data))
+	}
+	if strings.Contains(string(data), "internal.example") {
+		t.Errorf("manifest.json leaks AI endpoint URL: %s", string(data))
 	}
 }
 

@@ -432,21 +432,26 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 }
 
 // aiEndpoint returns the configured AI chat-completions URL, or "" to let
-// ai.NewClientWithOptions apply the Copilot default.
+// ai.NewClientWithOptions apply the Copilot default. The project.yaml
+// `ai.endpoint` field wins; otherwise the AI_ENDPOINT env var is used so
+// consumers can supply the value via a GitHub Actions secret rather than
+// committing it to the repo.
 func aiEndpoint(cfg *project.Config) string {
-	if cfg.AI == nil {
-		return ""
+	if cfg.AI != nil && cfg.AI.Endpoint != "" {
+		return cfg.AI.Endpoint
 	}
-	return cfg.AI.Endpoint
+	return os.Getenv("AI_ENDPOINT")
 }
 
 // aiModel returns the configured AI model identifier, or "" to let
-// ai.NewClientWithOptions apply the Copilot default.
+// ai.NewClientWithOptions apply the Copilot default. The project.yaml
+// `ai.model` field wins; otherwise the AI_MODEL env var is used so
+// consumers can keep internal-only model labels out of the public repo.
 func aiModel(cfg *project.Config) string {
-	if cfg.AI == nil {
-		return ""
+	if cfg.AI != nil && cfg.AI.Model != "" {
+		return cfg.AI.Model
 	}
-	return cfg.AI.Model
+	return os.Getenv("AI_MODEL")
 }
 
 // aiHeaders returns the extra HTTP headers to attach to AI provider requests.

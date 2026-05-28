@@ -73,6 +73,13 @@ capi:
 # completions API. Defaults point at GitHub Copilot. See
 # docs/ai-providers.md for Nvidia Dynamo / Azure OpenAI / OpenAI / Ollama
 # snippets.
+#
+# To keep an internal-only model identifier or a private endpoint URL
+# out of this public file, omit them here and source them from repo
+# variables on the consumer instead (`gh variable set AI_MODEL ...`),
+# passed via the reusable workflow's `ai-model` / `ai-endpoint` inputs.
+# The fetcher reads AI_MODEL / AI_ENDPOINT from the environment when
+# the YAML fields are blank. The yaml field wins if both are set.
 ai:
   module: "capi"
   endpoint: "https://api.githubcopilot.com/chat/completions"

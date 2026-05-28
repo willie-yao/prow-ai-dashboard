@@ -43,8 +43,12 @@ type AISummary struct {
 
 // AIAnalysis is a deep AI-generated root cause analysis for persistent failures.
 type AIAnalysis struct {
-	GeneratedAt   string   `json:"generated_at"`
-	Model         string   `json:"model"`
+	GeneratedAt string `json:"generated_at"`
+	// Model is the provider's model identifier used for the analysis. Kept
+	// in-memory for cache validation and debug logging, but never serialized
+	// to public JSON so internal-only model labels do not leak via the
+	// deployed GitHub Pages data files.
+	Model         string   `json:"-"`
 	RootCause     string   `json:"root_cause"`
 	Severity      string   `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
 	SuggestedFix  string   `json:"suggested_fix"`

@@ -12,6 +12,13 @@ name: Reusable Deploy
 #       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 #       with:
 #         project_dir: .
+#         # Optional: keep internal-only model identifiers and private
+#         # endpoint URLs out of the public project.yaml by sourcing them
+#         # from repo variables (`gh variable set AI_MODEL ...`) instead.
+#         # The project.yaml `ai.model` / `ai.endpoint` fields still win
+#         # if set.
+#         ai-model: ${{ vars.AI_MODEL }}
+#         ai-endpoint: ${{ vars.AI_ENDPOINT }}
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
 #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -49,6 +56,16 @@ on:
         required: false
         type: boolean
         default: true
+      ai-model:
+        description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with `${{ vars.AI_MODEL }}` to keep internal-only model labels out of the public project.yaml. The yaml `ai.model` field wins if set."
+        required: false
+        type: string
+        default: ""
+      ai-endpoint:
+        description: "Optional. AI chat-completions URL passed to the fetcher as AI_ENDPOINT. Use this with `${{ vars.AI_ENDPOINT }}` to keep private endpoint URLs out of the public project.yaml. The yaml `ai.endpoint` field wins if set."
+        required: false
+        type: string
+        default: ""
     secrets:
       AI_TOKEN:
         description: "Token used to call the chat completions endpoint."
@@ -138,6 +155,8 @@ jobs:
       - name: Fetch test data
         env:
           AI_TOKEN: ${{ secrets.AI_TOKEN }}
+          AI_MODEL: ${{ inputs.ai-model }}
+          AI_ENDPOINT: ${{ inputs.ai-endpoint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |

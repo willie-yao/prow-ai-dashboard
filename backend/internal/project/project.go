@@ -134,16 +134,23 @@ type AI struct {
 
 	// Endpoint is the chat-completions URL for the AI provider. Any
 	// OpenAI-compatible endpoint works (GitHub Copilot, OpenAI, Azure
-	// OpenAI, Nvidia Dynamo, vLLM, Ollama). When unset, defaults to
-	// GitHub Copilot at https://api.githubcopilot.com/chat/completions.
-	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	// OpenAI, Nvidia Dynamo, vLLM, Ollama). When unset, the fetcher
+	// reads the AI_ENDPOINT environment variable; if that is also unset,
+	// it defaults to GitHub Copilot at
+	// https://api.githubcopilot.com/chat/completions. Excluded from
+	// manifest.json so it never reaches the deployed Pages site.
+	Endpoint string `yaml:"endpoint,omitempty" json:"-"`
 
 	// Model is the model identifier the provider expects (e.g.
 	// "claude-opus-4.7-xhigh" for Copilot, "gpt-4o" for OpenAI,
-	// "meta/llama-3.1-70b-instruct" for an NVIDIA NIM). When unset,
-	// defaults to the engine's built-in model for the GitHub Copilot
-	// endpoint and MUST be set when pointing at any other provider.
-	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// "meta/llama-3.1-70b-instruct" for an NVIDIA NIM). When unset, the
+	// fetcher reads the AI_MODEL environment variable; if that is also
+	// unset, it defaults to the engine's built-in Copilot model. MUST be
+	// set (via YAML or AI_MODEL) when pointing at any non-Copilot
+	// provider. Excluded from manifest.json so internal-only model
+	// labels never reach the deployed Pages site; use AI_MODEL for
+	// those.
+	Model string `yaml:"model,omitempty" json:"-"`
 
 	// Headers are extra HTTP headers merged into every request to the AI
 	// provider after the defaults. Use this to add provider-specific

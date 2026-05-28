@@ -20,6 +20,63 @@ Set the bearer token via the `AI_TOKEN` secret in the GitHub Actions workflow
 (see the [reusable workflow README](../README.md)). The token is sent as
 `Authorization: Bearer <AI_TOKEN>` unless an entry in `headers:` overrides it.
 
+### Hiding the model identifier and endpoint URL from the public repo
+
+`project.yaml` is committed to a public repo, so any value you put in
+`endpoint:` or `model:` is visible to the world. That's fine for public
+providers and standard model names, but it's a problem when:
+
+- The model identifier is an internal-only label (e.g. an "Internal only"
+  Copilot variant your org has access to that hasn't been broadly
+  announced).
+- The endpoint is a private gateway URL you don't want indexed.
+
+For those cases, leave `endpoint:` and `model:` out of `project.yaml` and
+pass them through repo-scoped GitHub Actions **variables** (not secrets;
+these aren't sensitive enough to need masking). The reusable workflow
+accepts `ai-model` and `ai-endpoint` inputs and forwards them to the
+fetcher as `AI_MODEL` / `AI_ENDPOINT` env vars; the fetcher reads those
+when the yaml fields are blank.
+
+```yaml
+# In the consumer repo's project.yaml
+ai:
+  module: "capi"
+  # endpoint and model intentionally omitted; supplied via repo
+  # variables on the consumer (see the deploy workflow).
+```
+
+```yaml
+# In the consumer's .github/workflows/deploy.yml
+jobs:
+  deploy:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    with:
+      project_dir: .
+      ai-model: ${{ vars.AI_MODEL }}
+      ai-endpoint: ${{ vars.AI_ENDPOINT }}
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+```
+
+Set the variables once per consumer repo:
+
+```sh
+gh variable set AI_MODEL    --repo your-org/your-consumer-repo
+gh variable set AI_ENDPOINT --repo your-org/your-consumer-repo
+```
+
+Resolution order is `project.yaml` field > env var > engine default, so
+yaml entries still win if you ever need to override per-repo. Sourcing
+the inputs from `vars.*` (instead of hardcoding in the workflow file)
+keeps the values out of the public repo source.
+
+The engine also scrubs `ai.endpoint`, `ai.model`, and per-failure
+`ai_analysis.model` from every JSON file written to `frontend/public/data/`
+regardless of where the values came from, so internal model labels never
+reach the deployed GitHub Pages site even if a future change accidentally
+puts them back in yaml.
+
 ## GitHub Copilot (default)
 
 This is what you get if you leave `endpoint` and `model` unset. Token is
