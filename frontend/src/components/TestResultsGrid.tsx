@@ -43,7 +43,7 @@ export function TestResultsGrid({ runs, jobName }: TestResultsGridProps) {
 
     for (let col = 0; col < sortedRuns.length; col++) {
       const run = sortedRuns[col];
-      for (const tc of run.test_cases) {
+      for (const tc of run.test_cases ?? []) {
         if (!testMap.has(tc.name)) {
           testMap.set(tc.name, new Array(sortedRuns.length).fill("skipped"));
         }

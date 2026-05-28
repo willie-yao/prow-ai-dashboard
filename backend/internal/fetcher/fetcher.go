@@ -309,7 +309,7 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 		return nil, fmt.Errorf("fetching build info: %w", err)
 	}
 
-	result := &models.BuildResult{BuildInfo: *info}
+	result := &models.BuildResult{BuildInfo: *info, TestCases: []models.TestCase{}}
 
 	// JUnit XML is best-effort — some builds may not have it.
 	junitData, err := gcs.FetchRaw(ctx, client, info.JUnitURL)
