@@ -57,12 +57,12 @@ on:
         type: boolean
         default: true
       ai-model:
-        description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with `${{ vars.AI_MODEL }}` to keep internal-only model labels out of the public project.yaml. The yaml `ai.model` field wins if set."
+        description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with a repo variable (vars.AI_MODEL) to keep internal-only model labels out of the public project.yaml. The yaml ai.model field wins if set."
         required: false
         type: string
         default: ""
       ai-endpoint:
-        description: "Optional. AI chat-completions URL passed to the fetcher as AI_ENDPOINT. Use this with `${{ vars.AI_ENDPOINT }}` to keep private endpoint URLs out of the public project.yaml. The yaml `ai.endpoint` field wins if set."
+        description: "Optional. AI chat-completions URL passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
         required: false
         type: string
         default: ""
