@@ -98,7 +98,7 @@ func TestDiscoverClusters(t *testing.T) {
 	if ha.ClusterName != "capz-e2e-abc123-ha" {
 		t.Errorf("expected cluster name capz-e2e-abc123-ha, got %s", ha.ClusterName)
 	}
-	if ha.AzureActivityLog == "" {
+	if ha.ProviderActivityLog == "" {
 		t.Error("expected azure activity log URL")
 	}
 	if len(ha.Machines) != 2 {

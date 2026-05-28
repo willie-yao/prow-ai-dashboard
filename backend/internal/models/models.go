@@ -1,7 +1,10 @@
 // Package models defines the shared data types for the CAPZ Prow Dashboard.
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ProwJob represents a prow job definition parsed from test-infra YAML configs.
 type ProwJob struct {
@@ -65,10 +68,28 @@ type TestCase struct {
 // ClusterArtifacts holds links to debug artifacts for a specific cluster.
 type ClusterArtifacts struct {
 	ClusterName           string             `json:"cluster_name"`
-	AzureActivityLog      string             `json:"azure_activity_log,omitempty"`
+	ProviderActivityLog   string             `json:"provider_activity_log,omitempty"`
 	Machines              []MachineArtifacts `json:"machines,omitempty"`
 	PodLogDirs            map[string]string  `json:"pod_log_dirs,omitempty"` // name → GCSweb URL
 	BootstrapResourcesURL string             `json:"bootstrap_resources_url,omitempty"`
+}
+
+// UnmarshalJSON migrates the legacy `azure_activity_log` field from cached
+// job JSON written by older fetcher runs into ProviderActivityLog. Once all
+// cached builds have rolled over this can be deleted.
+func (c *ClusterArtifacts) UnmarshalJSON(data []byte) error {
+	type alias ClusterArtifacts
+	aux := struct {
+		AzureActivityLog string `json:"azure_activity_log,omitempty"`
+		*alias
+	}{alias: (*alias)(c)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if c.ProviderActivityLog == "" && aux.AzureActivityLog != "" {
+		c.ProviderActivityLog = aux.AzureActivityLog
+	}
+	return nil
 }
 
 // MachineArtifacts holds links to per-machine debug logs.

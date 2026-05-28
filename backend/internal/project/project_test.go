@@ -156,3 +156,134 @@ func TestDisplayShortName(t *testing.T) {
 		t.Errorf("DisplayShortName = %q, want %q", got, "X-Project")
 	}
 }
+
+// validConfig returns a minimally-valid Config that Validate accepts. Tests
+// below mutate it to exercise individual category-rule failure paths.
+func validConfig() *Config {
+	return &Config{
+		ID:   "test",
+		Name: "Test",
+		Source: Source{
+			TestInfraPath: "config/jobs/test",
+			FilePrefix:    "test-",
+		},
+		TestGrid: TestGrid{Dashboard: "test-dashboard"},
+		GCS:      GCS{Bucket: "test-bucket"},
+		Branding: Branding{
+			Title:    "Test",
+			BasePath: "/test",
+			SiteURL:  "https://example.com",
+			SourceRepo: SourceRepo{
+				Owner: "owner",
+				Name:  "name",
+			},
+		},
+	}
+}
+
+func TestValidate_BaselinePasses(t *testing.T) {
+	if err := validConfig().Validate(); err != nil {
+		t.Fatalf("baseline config should be valid: %v", err)
+	}
+}
+
+func TestValidate_CategoryRules(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantSub string
+	}{
+		{"missing match", func(c *Config) {
+			c.Categories = []CategoryRule{{ID: "e2e", Label: "E2E"}}
+		}, "categories[0].match is required"},
+		{"missing id", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "e2e", Label: "E2E"}}
+		}, "categories[0].id is required"},
+		{"reserved id lowercase", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "x", ID: "other", Label: "Other"}}
+		}, "is reserved"},
+		{"reserved id mixed case", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "x", ID: "Other", Label: "Other"}}
+		}, "is reserved"},
+		{"id with surrounding whitespace", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "e2e", ID: " e2e ", Label: "E2E"}}
+		}, "surrounding whitespace"},
+		{"valid custom rules", func(c *Config) {
+			c.Categories = []CategoryRule{
+				{Match: "conformance", ID: "conformance", Label: "Conformance"},
+				{Match: "e2e", ID: "custom-e2e", Label: "Custom E2E"},
+			}
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			tc.mutate(c)
+			assertValidate(t, c, tc.wantSub)
+		})
+	}
+}
+
+func TestValidate_CategoryDisplayOrder(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantSub string
+	}{
+		{"unknown id rejected", func(c *Config) {
+			c.CategoryDisplayOrder = []string{"e2e", "made-up"}
+		}, `"made-up" is not a declared category id`},
+		{"empty entry rejected", func(c *Config) {
+			c.CategoryDisplayOrder = []string{"e2e", ""}
+		}, "is empty"},
+		{"other is allowed", func(c *Config) {
+			c.CategoryDisplayOrder = []string{"e2e", "other"}
+		}, ""},
+		{"default category ids are honored", func(c *Config) {
+			c.CategoryDisplayOrder = []string{"conformance", "e2e"}
+		}, ""},
+		{"consumer ids are honored", func(c *Config) {
+			c.Categories = []CategoryRule{
+				{Match: "e2e-aks", ID: "aks-e2e", Label: "AKS E2E"},
+				{Match: "e2e", ID: "capz-e2e", Label: "CAPZ E2E"},
+			}
+			c.CategoryDisplayOrder = []string{"capz-e2e", "aks-e2e"}
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			tc.mutate(c)
+			assertValidate(t, c, tc.wantSub)
+		})
+	}
+}
+
+func TestEffectiveCategories(t *testing.T) {
+	c := validConfig()
+	if got := c.EffectiveCategories(); len(got) != len(DefaultCategories) {
+		t.Errorf("expected %d default rules, got %d", len(DefaultCategories), len(got))
+	}
+	c.Categories = []CategoryRule{{Match: "x", ID: "x", Label: "X"}}
+	got := c.EffectiveCategories()
+	if len(got) != 1 || got[0].ID != "x" {
+		t.Errorf("expected consumer rules to be returned, got %+v", got)
+	}
+}
+
+func assertValidate(t *testing.T, c *Config, wantSub string) {
+	t.Helper()
+	err := c.Validate()
+	if wantSub == "" {
+		if err != nil {
+			t.Fatalf("expected nil error, got: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("expected error containing %q, got nil", wantSub)
+	}
+	if !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("error %q does not contain %q", err.Error(), wantSub)
+	}
+}

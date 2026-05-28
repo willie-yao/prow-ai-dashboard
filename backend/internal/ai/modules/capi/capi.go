@@ -108,8 +108,8 @@ func buildAnalysisPrompt(ev evidence) string {
 	if ev.JournalLog != "" {
 		fmt.Fprintf(&sb, "\n=== Journal Log ===\n%s\n", ev.JournalLog)
 	}
-	if ev.AzureActivityLog != "" {
-		fmt.Fprintf(&sb, "\n=== Provider Activity Log ===\n%s\n", ev.AzureActivityLog)
+	if ev.ProviderActivityLog != "" {
+		fmt.Fprintf(&sb, "\n=== Provider Activity Log ===\n%s\n", ev.ProviderActivityLog)
 	}
 
 	sb.WriteString("\nYou have been given ALL available artifacts for this failure. Perform a complete investigation:\n")

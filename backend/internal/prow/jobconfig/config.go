@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,8 +41,10 @@ type presubmitsFile struct {
 
 // ParseJobConfig parses a Prow YAML config file and returns the jobs whose
 // testgrid-dashboards annotation contains the given dashboard. filename is
-// recorded in each returned ProwJob's ConfigFile field.
-func ParseJobConfig(data []byte, filename, dashboard string) ([]models.ProwJob, error) {
+// recorded in each returned ProwJob's ConfigFile field. categories controls
+// the substring-to-category mapping applied to each job's name; pass
+// project.DefaultCategories for the engine default set.
+func ParseJobConfig(data []byte, filename, dashboard string, categories []project.CategoryRule) ([]models.ProwJob, error) {
 	// Try periodics first.
 	var pf periodicsFile
 	if err := yaml.Unmarshal(data, &pf); err != nil {
@@ -67,7 +70,7 @@ func ParseJobConfig(data []byte, filename, dashboard string) ([]models.ProwJob, 
 		if !matchesDashboard(r, dashboard) {
 			continue
 		}
-		result = append(result, convertJob(r, filename))
+		result = append(result, convertJob(r, filename, categories))
 	}
 	return result, nil
 }
@@ -84,14 +87,14 @@ func matchesDashboard(r rawJob, dashboard string) bool {
 	return false
 }
 
-func convertJob(r rawJob, filename string) models.ProwJob {
+func convertJob(r rawJob, filename string, categories []project.CategoryRule) models.ProwJob {
 	j := models.ProwJob{
 		Name:            r.Name,
 		TabName:         r.Annotations["testgrid-tab-name"],
 		Description:     r.Annotations["description"],
 		MinimumInterval: r.MinimumInterval,
 		ConfigFile:      filename,
-		Category:        inferCategory(r.Name),
+		Category:        categorize(r.Name, categories),
 	}
 	if r.DecorationConfig != nil {
 		j.Timeout = r.DecorationConfig.Timeout
@@ -102,25 +105,17 @@ func convertJob(r rawJob, filename string) models.ProwJob {
 	return j
 }
 
-// inferCategory maps well-known substrings in a job name to a category.
-func inferCategory(name string) string {
+// categorize returns the ID of the first CategoryRule whose Match substring
+// appears in the lowercased job name. Returns "other" when nothing matches.
+func categorize(name string, rules []project.CategoryRule) string {
 	lower := strings.ToLower(name)
-	switch {
-	case strings.Contains(lower, "conformance"):
-		return "conformance"
-	case strings.Contains(lower, "capi-e2e"):
-		return "capi-e2e"
-	case strings.Contains(lower, "e2e-aks") || strings.Contains(lower, "[managed kubernetes]"):
-		return "aks-e2e"
-	case strings.Contains(lower, "upgrade"):
-		return "upgrade"
-	case strings.Contains(lower, "coverage"):
-		return "coverage"
-	case strings.Contains(lower, "scalability"):
-		return "scalability"
-	case strings.Contains(lower, "e2e"):
-		return "capz-e2e"
-	default:
-		return "other"
+	for _, r := range rules {
+		if r.Match == "" || r.ID == "" {
+			continue
+		}
+		if strings.Contains(lower, strings.ToLower(r.Match)) {
+			return r.ID
+		}
 	}
+	return "other"
 }

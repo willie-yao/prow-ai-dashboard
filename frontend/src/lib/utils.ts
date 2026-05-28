@@ -1,4 +1,5 @@
 import type { JobSummary } from "../types/dashboard";
+import type { CategoryRule } from "../types/manifest";
 
 export function statusColor(status: string): string {
   switch (status) {
@@ -75,16 +76,82 @@ export function groupByBranch(
   return groups;
 }
 
-export const categoryLabels: Record<string, string> = {
-  "capz-e2e": "CAPZ E2E",
-  "aks-e2e": "AKS E2E",
-  upgrade: "Upgrade",
-  "capi-e2e": "CAPI E2E",
-  conformance: "Conformance",
-  coverage: "Coverage",
-  scalability: "Scalability",
-  other: "Other",
-};
+/**
+ * Default category rules used when the manifest does not declare any.
+ * Mirrors backend project.DefaultCategories so the frontend renders the
+ * same generic labels and order the backend assigned.
+ */
+const defaultCategoryRules: CategoryRule[] = [
+  { match: "conformance", id: "conformance", label: "Conformance" },
+  { match: "capi-e2e", id: "capi-e2e", label: "CAPI E2E" },
+  { match: "upgrade", id: "upgrade", label: "Upgrade" },
+  { match: "coverage", id: "coverage", label: "Coverage" },
+  { match: "scalability", id: "scalability", label: "Scalability" },
+  { match: "e2e", id: "e2e", label: "E2E" },
+];
+
+/** Returns the rules from the manifest, falling back to engine defaults. */
+export function effectiveCategoryRules(
+  rules: CategoryRule[] | undefined
+): CategoryRule[] {
+  return rules && rules.length > 0 ? rules : defaultCategoryRules;
+}
+
+/** Build a category-id -> label map, deduplicating by id. */
+export function categoryLabelsFromRules(
+  rules: CategoryRule[] | undefined
+): Record<string, string> {
+  const out: Record<string, string> = { other: "Other" };
+  for (const r of effectiveCategoryRules(rules)) {
+    if (r.id && !(r.id in out)) out[r.id] = r.label || r.id;
+  }
+  return out;
+}
+
+/** Build an ordered list of category ids matching the manifest's rule order. */
+export function categoryOrderFromRules(
+  rules: CategoryRule[] | undefined
+): string[] {
+  const seen = new Set<string>();
+  const order: string[] = [];
+  for (const r of effectiveCategoryRules(rules)) {
+    if (r.id && !seen.has(r.id)) {
+      seen.add(r.id);
+      order.push(r.id);
+    }
+  }
+  order.push("other");
+  return order;
+}
+
+/**
+ * Build an ordered list of category ids for display. When the manifest
+ * declares `category_display_order`, those ids come first (in their declared
+ * order), followed by any remaining ids in rule-declaration order, with
+ * "other" implicitly last.
+ */
+export function categoryDisplayOrder(
+  rules: CategoryRule[] | undefined,
+  explicit: string[] | undefined
+): string[] {
+  const ruleOrder = categoryOrderFromRules(rules);
+  if (!explicit || explicit.length === 0) return ruleOrder;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of explicit) {
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  for (const id of ruleOrder) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
 
 /** Split text with inline numbered/bulleted steps into separate lines. */
 export function formatSteps(text: string): string {

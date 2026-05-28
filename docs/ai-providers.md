@@ -5,7 +5,7 @@ OpenAI chat-completions over HTTPS, so anything that exposes a
 `POST /chat/completions` endpoint will work: GitHub Copilot, OpenAI, Azure
 OpenAI, Nvidia Dynamo / NIMs, vLLM, Ollama, or a self-hosted proxy.
 
-Configure your provider in `configs/<project-id>/project.yaml` under `ai:`:
+Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 
 ```yaml
 ai:

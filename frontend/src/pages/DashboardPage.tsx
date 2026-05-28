@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { useDashboard } from "../hooks/useData";
+import { useManifest } from "../hooks/useManifest";
 import {
   timeAgo,
   groupByCategory,
-  categoryLabels,
+  categoryLabelsFromRules,
+  categoryDisplayOrder,
 } from "../lib/utils";
 import type { JobSummary } from "../types/dashboard";
 import { SummaryBar } from "../components/SummaryBar";
@@ -21,6 +23,15 @@ const statusFilters: { label: string; value: StatusFilter }[] = [
 
 export function DashboardPage() {
   const { data, loading, error } = useDashboard();
+  const manifest = useManifest();
+  const categoryLabels = useMemo(
+    () => categoryLabelsFromRules(manifest.categories),
+    [manifest.categories]
+  );
+  const categoryOrder = useMemo(
+    () => categoryDisplayOrder(manifest.categories, manifest.category_display_order),
+    [manifest.categories, manifest.category_display_order]
+  );
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [branchFilter, setBranchFilter] = useState("ALL");
 
@@ -101,7 +112,6 @@ export function DashboardPage() {
 
   if (!data) return null;
 
-  const categoryOrder = Object.keys(categoryLabels);
   const sortedCategories = Object.keys(grouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);
     const bi = categoryOrder.indexOf(b);

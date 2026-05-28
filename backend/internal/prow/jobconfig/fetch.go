@@ -55,7 +55,7 @@ func FetchJobConfigs(ctx context.Context, client *http.Client, cfg *project.Conf
 			return nil, fmt.Errorf("fetching %s: HTTP %d", file, resp.StatusCode)
 		}
 
-		jobs, err := ParseJobConfig(body, file, cfg.TestGrid.Dashboard)
+		jobs, err := ParseJobConfig(body, file, cfg.TestGrid.Dashboard, cfg.EffectiveCategories())
 		if err != nil {
 			return nil, fmt.Errorf("parsing %s: %w", file, err)
 		}

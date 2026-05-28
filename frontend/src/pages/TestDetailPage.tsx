@@ -64,7 +64,8 @@ interface FailureGroup {
 }
 
 export function TestDetailPage() {
-  const sourceRepo = useManifest().branding.source_repo;
+  const manifest = useManifest();
+  const sourceRepo = manifest.branding.source_repo;
   const { jobName, testName: encodedTestName } = useParams<{
     jobName: string;
     testName: string;
@@ -467,14 +468,14 @@ export function TestDetailPage() {
               </p>
 
               <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
-                {selectedTc.cluster_artifacts.azure_activity_log && (
+                {selectedTc.cluster_artifacts.provider_activity_log && (
                   <a
-                    href={selectedTc.cluster_artifacts.azure_activity_log}
+                    href={selectedTc.cluster_artifacts.provider_activity_log}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-primary hover:underline"
                   >
-                    <HiCloud className="h-3.5 w-3.5 shrink-0" /> Azure Activity Log
+                    <HiCloud className="h-3.5 w-3.5 shrink-0" /> Provider Activity Log
                   </a>
                 )}
                 {selectedTc.cluster_artifacts.bootstrap_resources_url && (
@@ -500,7 +501,7 @@ export function TestDetailPage() {
                 ))}
                 {selectedRun && (
                   <a
-                    href={`https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/${selectedRun.job_name}/${selectedRun.build_id}/artifacts/clusters/bootstrap/logs/`}
+                    href={`https://gcsweb.k8s.io/gcs/${manifest.gcs.bucket}/logs/${selectedRun.job_name}/${selectedRun.build_id}/artifacts/clusters/bootstrap/logs/`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-primary hover:underline"

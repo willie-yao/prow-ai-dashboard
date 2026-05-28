@@ -16,11 +16,11 @@ jobs:
     with:
       project_dir: .          # directory containing project.yaml + prompts/system.md
     secrets:
-      ai_token: ${{ secrets.AI_TOKEN }}
-      slack_webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 ```
 
-The reusable workflow checks out the consumer repo (which contributes the config + prompt) and this engine repo (which contributes the code), runs the fetcher with `-project-dir=<consumer>/<project_dir>`, builds the frontend with the project's branding, and commits the result to the **consumer repo's** `gh-pages` branch.
+The reusable workflow checks out the consumer repo (which contributes the config + prompt) and this engine repo (which contributes the code), runs the fetcher with `-project-dir=<consumer>/<project_dir>`, builds the frontend with the project's branding, and publishes the result to the **consumer repo's** GitHub Pages site via the official `actions/deploy-pages` pipeline (no `gh-pages` branch involved).
 
 ## Architecture
 
@@ -43,7 +43,7 @@ The reusable workflow checks out the consumer repo (which contributes the config
 │   prompts/system.md             mandatory project addendum       │
 │   .github/workflows/deploy.yml  ~20 lines                        │
 │   secrets:  AI_TOKEN, SLACK_WEBHOOK_URL                          │
-│   gh-pages branch:              built site + cached data         │
+│   GitHub Pages:                 built site + cached data         │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,7 +74,7 @@ make fe-build
 3. Add `prompts/system.md` to its root. See [docs/writing-prompts.md](docs/writing-prompts.md) for guidance.
 4. Add `.github/workflows/deploy.yml` calling this engine's `reusable-deploy.yml@main` (snippet above).
 5. Add `AI_TOKEN` (and optional notification webhooks) as repo secrets.
-6. Enable GitHub Pages on the consumer repo, set source to `gh-pages` branch.
+6. Enable GitHub Pages on the consumer repo, set **Source: GitHub Actions**.
 
 No engine PR required.
 

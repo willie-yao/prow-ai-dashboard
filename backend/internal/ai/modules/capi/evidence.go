@@ -30,10 +30,10 @@ type evidence struct {
 	ResourceYAMLs    map[string]string // All CAPI resource status YAMLs keyed by resource type
 	CloudInitLog     string            // cloud-init-output.log content
 	BootLog          string            // boot.log content
-	KubeletLog       string            // kubelet.log excerpt
-	AzureActivityLog string            // Azure activity log excerpt
-	ContainerdLog    string            // containerd.log excerpt
-	JournalLog       string            // journal.log excerpt
+	KubeletLog          string            // kubelet.log excerpt
+	ProviderActivityLog string            // Provider activity log excerpt (e.g. Azure activity log)
+	ContainerdLog       string            // containerd.log excerpt
+	JournalLog          string            // journal.log excerpt
 }
 
 // Build log error patterns (from CAPZ debugging knowledge).
@@ -111,8 +111,8 @@ func (m *Module) collectEvidence(ctx context.Context, client *http.Client, run *
 	}
 
 	// 4. Azure activity log — larger limit
-	if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.AzureActivityLog != "" {
-		ev.AzureActivityLog = collectActivityLog(ctx, client, tc.ClusterArtifacts.AzureActivityLog)
+	if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.ProviderActivityLog != "" {
+		ev.ProviderActivityLog = collectActivityLog(ctx, client, tc.ClusterArtifacts.ProviderActivityLog)
 	}
 
 	return ev

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 const testDashboard = "sig-cluster-lifecycle-cluster-api-provider-azure"
@@ -19,7 +21,7 @@ func loadTestdata(t *testing.T, name string) []byte {
 
 func TestParsePeriodics(t *testing.T) {
 	data := loadTestdata(t, "periodics.yaml")
-	jobs, err := ParseJobConfig(data, "periodics.yaml", testDashboard)
+	jobs, err := ParseJobConfig(data, "periodics.yaml", testDashboard, project.DefaultCategories)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -40,8 +42,8 @@ func TestParsePeriodics(t *testing.T) {
 	assertEqual(t, "Timeout", j.Timeout, "4h")
 	assertEqual(t, "ConfigFile", j.ConfigFile, "periodics.yaml")
 
-	// Second job — e2e → capz-e2e category.
-	assertEqual(t, "jobs[1].Category", jobs[1].Category, "capz-e2e")
+	// Second job — e2e → generic "e2e" category (no project-specific override).
+	assertEqual(t, "jobs[1].Category", jobs[1].Category, "e2e")
 	assertEqual(t, "jobs[1].MinimumInterval", jobs[1].MinimumInterval, "24h")
 	assertEqual(t, "jobs[1].Timeout", jobs[1].Timeout, "3h")
 
@@ -51,7 +53,7 @@ func TestParsePeriodics(t *testing.T) {
 
 func TestParsePresubmits(t *testing.T) {
 	data := loadTestdata(t, "presubmits.yaml")
-	jobs, err := ParseJobConfig(data, "presubmits.yaml", testDashboard)
+	jobs, err := ParseJobConfig(data, "presubmits.yaml", testDashboard, project.DefaultCategories)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -64,7 +66,7 @@ func TestParsePresubmits(t *testing.T) {
 	j := jobs[0]
 	assertEqual(t, "Name", j.Name, "pull-cluster-api-provider-azure-e2e")
 	assertEqual(t, "TabName", j.TabName, "capz-pr-e2e")
-	assertEqual(t, "Category", j.Category, "capz-e2e")
+	assertEqual(t, "Category", j.Category, "e2e")
 	assertEqual(t, "Branch", j.Branch, "main")
 	assertEqual(t, "Timeout", j.Timeout, "3h")
 	assertEqual(t, "ConfigFile", j.ConfigFile, "presubmits.yaml")
@@ -74,16 +76,15 @@ func TestParsePresubmits(t *testing.T) {
 	assertEqual(t, "jobs[1].Branch", jobs[1].Branch, "release-1.21")
 }
 
-func TestCategoryInference(t *testing.T) {
+func TestCategorize(t *testing.T) {
+	// Default rules with no project-specific overrides.
 	cases := []struct {
 		name     string
 		expected string
 	}{
 		{"periodic-capz-conformance-main", "conformance"},
 		{"pull-capz-capi-e2e-main", "capi-e2e"},
-		{"periodic-capz-e2e-aks-main", "aks-e2e"},
-		{"pull-capz-[Managed Kubernetes]-e2e", "aks-e2e"},
-		{"periodic-capz-e2e-main", "capz-e2e"},
+		{"periodic-capz-e2e-main", "e2e"},
 		{"periodic-capz-upgrade-main", "upgrade"},
 		{"periodic-capz-coverage", "coverage"},
 		{"periodic-capz-scalability", "scalability"},
@@ -91,9 +92,36 @@ func TestCategoryInference(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := inferCategory(tc.name)
+			got := categorize(tc.name, project.DefaultCategories)
 			if got != tc.expected {
-				t.Errorf("inferCategory(%q) = %q, want %q", tc.name, got, tc.expected)
+				t.Errorf("categorize(%q) = %q, want %q", tc.name, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCategorizeRespectsRuleOrder(t *testing.T) {
+	// Consumer-supplied rules take precedence and are evaluated in order.
+	rules := []project.CategoryRule{
+		{Match: "managed kubernetes", ID: "aks-e2e", Label: "AKS E2E"},
+		{Match: "e2e-aks", ID: "aks-e2e", Label: "AKS E2E"},
+		{Match: "conformance", ID: "conformance", Label: "Conformance"},
+		{Match: "e2e", ID: "capz-e2e", Label: "CAPZ E2E"},
+	}
+	cases := []struct {
+		name, want string
+	}{
+		// AKS-specific rules win over the generic "e2e" rule.
+		{"periodic-capz-e2e-aks-main", "aks-e2e"},
+		{"pull-capz-[Managed Kubernetes]-e2e", "aks-e2e"},
+		{"periodic-capz-e2e-main", "capz-e2e"},
+		{"periodic-capz-conformance-main", "conformance"},
+		{"periodic-capz-lint", "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := categorize(tc.name, rules); got != tc.want {
+				t.Errorf("categorize(%q) = %q, want %q", tc.name, got, tc.want)
 			}
 		})
 	}
@@ -106,7 +134,7 @@ periodics:
   annotations:
     testgrid-dashboards: sig-other
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, project.DefaultCategories)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -122,7 +150,7 @@ periodics:
   decoration_config:
     timeout: 1h
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, project.DefaultCategories)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -140,7 +168,7 @@ periodics:
     testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
     testgrid-tab-name: capz-no-refs
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, project.DefaultCategories)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -157,7 +185,7 @@ periodics:
 }
 
 func TestEmptyInput(t *testing.T) {
-	jobs, err := ParseJobConfig([]byte("{}"), "empty.yaml", testDashboard)
+	jobs, err := ParseJobConfig([]byte("{}"), "empty.yaml", testDashboard, project.DefaultCategories)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}

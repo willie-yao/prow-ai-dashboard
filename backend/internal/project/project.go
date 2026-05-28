@@ -19,16 +19,61 @@ import (
 
 // Config is the in-memory representation of a project.yaml file.
 type Config struct {
-	ID        string     `yaml:"id"         json:"id"`
-	Name      string     `yaml:"name"       json:"name"`
-	ShortName string     `yaml:"short_name" json:"short_name,omitempty"`
-	Source    Source     `yaml:"source"     json:"source"`
-	TestGrid  TestGrid   `yaml:"testgrid"   json:"testgrid"`
-	GCS       GCS        `yaml:"gcs"        json:"gcs"`
-	Branding  Branding   `yaml:"branding"   json:"branding"`
-	Artifacts *Artifacts `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
-	AI        *AI        `yaml:"ai,omitempty"        json:"ai,omitempty"`
-	CAPI      *CAPI      `yaml:"capi,omitempty"      json:"capi,omitempty"`
+	ID                   string         `yaml:"id"         json:"id"`
+	Name                 string         `yaml:"name"       json:"name"`
+	ShortName            string         `yaml:"short_name" json:"short_name,omitempty"`
+	Source               Source         `yaml:"source"     json:"source"`
+	TestGrid             TestGrid       `yaml:"testgrid"   json:"testgrid"`
+	GCS                  GCS            `yaml:"gcs"        json:"gcs"`
+	Branding             Branding       `yaml:"branding"   json:"branding"`
+	Categories           []CategoryRule `yaml:"categories,omitempty"            json:"categories,omitempty"`
+	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
+	Artifacts            *Artifacts     `yaml:"artifacts,omitempty"  json:"artifacts,omitempty"`
+	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
+	CAPI                 *CAPI          `yaml:"capi,omitempty"       json:"capi,omitempty"`
+}
+
+// CategoryRule maps a substring in a job name to a category id and display
+// label. Rules are evaluated in order; the first match wins. When no rule
+// matches, the job is categorized as "other".
+//
+// Rule order controls backend categorization precedence, not necessarily
+// frontend display order — declare `category_display_order` separately
+// when the two need to diverge (e.g. a broad rule must come after a
+// specific one for matching, but should appear first in the UI).
+//
+// The engine ships a small generic default (see DefaultCategories) covering
+// conformance, capi-e2e, upgrade, coverage, scalability, e2e. Consumers
+// override or extend by listing their own rules in project.yaml.
+type CategoryRule struct {
+	// Match is the substring to look for in the job name. Comparison is
+	// case-insensitive on both sides.
+	Match string `yaml:"match" json:"match"`
+	// ID is the category identifier used in JobSummary.Category and as the
+	// key in dashboard grouping.
+	ID string `yaml:"id" json:"id"`
+	// Label is the human-readable section header rendered by the frontend.
+	Label string `yaml:"label" json:"label"`
+}
+
+// DefaultCategories is the project-neutral category set used when a consumer
+// project.yaml does not declare its own categories.
+var DefaultCategories = []CategoryRule{
+	{Match: "conformance", ID: "conformance", Label: "Conformance"},
+	{Match: "capi-e2e", ID: "capi-e2e", Label: "CAPI E2E"},
+	{Match: "upgrade", ID: "upgrade", Label: "Upgrade"},
+	{Match: "coverage", ID: "coverage", Label: "Coverage"},
+	{Match: "scalability", ID: "scalability", Label: "Scalability"},
+	{Match: "e2e", ID: "e2e", Label: "E2E"},
+}
+
+// EffectiveCategories returns the consumer's rules when present, otherwise
+// the engine defaults.
+func (c *Config) EffectiveCategories() []CategoryRule {
+	if len(c.Categories) > 0 {
+		return c.Categories
+	}
+	return DefaultCategories
 }
 
 // Source describes where in kubernetes/test-infra the project's prow
@@ -248,6 +293,41 @@ func (c *Config) Validate() error {
 		if !valid {
 			return fmt.Errorf("ai.module %q is not supported (valid: %s)",
 				c.AI.Module, strings.Join(SupportedAIModules, ", "))
+		}
+	}
+
+	for i, r := range c.Categories {
+		match := strings.TrimSpace(r.Match)
+		id := strings.TrimSpace(r.ID)
+		if match == "" {
+			return fmt.Errorf("categories[%d].match is required", i)
+		}
+		if id == "" {
+			return fmt.Errorf("categories[%d].id is required", i)
+		}
+		if id != r.ID {
+			return fmt.Errorf("categories[%d].id %q must not have surrounding whitespace", i, r.ID)
+		}
+		if strings.EqualFold(id, "other") {
+			return fmt.Errorf("categories[%d].id %q is reserved for the implicit fallback bucket", i, r.ID)
+		}
+	}
+
+	if len(c.CategoryDisplayOrder) > 0 {
+		known := map[string]struct{}{"other": {}}
+		for _, r := range c.Categories {
+			known[r.ID] = struct{}{}
+		}
+		for _, r := range DefaultCategories {
+			known[r.ID] = struct{}{}
+		}
+		for i, id := range c.CategoryDisplayOrder {
+			if strings.TrimSpace(id) == "" {
+				return fmt.Errorf("category_display_order[%d] is empty", i)
+			}
+			if _, ok := known[id]; !ok {
+				return fmt.Errorf("category_display_order[%d] %q is not a declared category id", i, id)
+			}
 		}
 	}
 	return nil

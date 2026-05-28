@@ -57,12 +57,12 @@ func discoverClustersFromURL(ctx context.Context, client *http.Client, listingBa
 
 		ca := models.ClusterArtifacts{ClusterName: dir}
 
-		// Check for azure activity log by listing the azure-activity-logs dir.
+		// Check for provider activity log by listing the azure-activity-logs dir.
 		actLogDirs, err := fetchDirs(ctx, client, listingBaseURL+dir+"/azure-activity-logs/")
 		if err == nil {
 			// Activity logs are files, not dirs. Instead construct URL and leave it —
 			// but only if the directory exists (fetchDirs succeeded).
-			ca.AzureActivityLog = gcsBaseURL + dir + "/azure-activity-logs/" + dir + ".log"
+			ca.ProviderActivityLog = gcsBaseURL + dir + "/azure-activity-logs/" + dir + ".log"
 		}
 		_ = actLogDirs
 

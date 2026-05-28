@@ -31,6 +31,12 @@ export interface CAPI {
   cluster_name_prefix: string;
 }
 
+export interface CategoryRule {
+  match: string;
+  id: string;
+  label: string;
+}
+
 export interface Manifest {
   id: string;
   name: string;
@@ -39,5 +45,7 @@ export interface Manifest {
   testgrid: TestGrid;
   gcs: GCS;
   branding: Branding;
+  categories?: CategoryRule[];
+  category_display_order?: string[];
   capi?: CAPI;
 }
