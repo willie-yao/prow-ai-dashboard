@@ -135,12 +135,26 @@ resource YAMLs); the generic module just passes the JUnit failure
 message + build-log tail. Use `capi` whenever your project uses the
 CAPI collector.
 
-### `ai.evidence` (optional)
+### `ai.evidence` (optional, `ai.module: capi` only)
 
 Controls which extra artifacts the CAPI module fetches alongside the
 build log and stack trace before each AI call. Every field is optional
-and falls back to an engine default when omitted. The schema is a
-single `evidence:` block under `ai:` with three independent lists:
+and falls back to an engine default when omitted.
+
+**Scope.** The entire `evidence:` block is interpreted only when
+`ai.module: capi`, because the field meanings reference paths that are
+specific to the Cluster API artifact layout
+(`artifacts/clusters/<name>/machines/<vm>/` for `machine_logs` and
+`artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/` for
+`controller_logs`). The `generic` module ignores the block and logs a
+warning at fetcher startup if it is non-empty, so a misconfiguration
+("I switched to generic and forgot evidence does nothing now") surfaces
+loudly. A non-CAPI project that wants its own per-failure evidence
+shape should add a new AI module rather than reuse these fields with a
+different meaning.
+
+The schema is a single `evidence:` block under `ai:` with three
+independent lists:
 
 - **`machine_logs`** — filenames under
   `artifacts/clusters/<name>/machines/<vm>/` to fetch the tail of.
@@ -167,6 +181,11 @@ single `evidence:` block under `ai:` with three independent lists:
   Engine default: `FAIL|\[FAIL\]`, `timed?\s*out|timeout`,
   `ImagePullBackOff|ErrImagePull`, `CrashLoopBackOff`,
   `NotFound|not found`.
+
+Of the three, only `build_log_patterns` is conceptually module-agnostic
+(every prow job has a `build-log.txt`). It lives next to the
+CAPI-specific fields today; if a second non-CAPI module ever wants
+build-log filtering, this field will be split out.
 
 Override semantics are nil-vs-empty:
 

@@ -83,9 +83,13 @@ ai:
   # is optional; omitting a field falls back to the engine default. To
   # explicitly disable a default, set the field to an empty list ([]).
   #
-  # All fields apply to the capi module today. The generic module ignores
-  # them but the schema is accepted so projects can switch modules without
-  # editing this block.
+  # SCOPE: this whole block is interpreted only when ai.module == "capi",
+  # because the field meanings reference the Cluster API artifact layout
+  # (clusters/<name>/machines/<vm>/ and clusters/bootstrap/logs/<ns>/...).
+  # Other modules (currently only "generic") ignore the block and log a
+  # warning at fetcher startup if it is non-empty. A non-CAPI project that
+  # wants its own evidence shape should add a new AI module rather than
+  # reuse these fields with a different meaning.
   evidence:
     # Filenames under artifacts/clusters/<name>/machines/<vm>/ to fetch
     # the tail of and include as "=== Machine log: <name> ===" sections

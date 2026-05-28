@@ -163,3 +163,10 @@ patterns). See the "Evidence sources" section in
 this for non-VM providers where the engine's default machine-log list
 doesn't match what your CI publishes, or for cloud-specific build-log
 patterns that should land in the prompt as `=== Build Log Errors ===`.
+
+Note that `ai.evidence` only applies to `ai.module: capi` today: the
+field paths are Cluster API-shaped (`clusters/<name>/machines/<vm>/`
+and `clusters/bootstrap/logs/<ns>/<deployment>/<pod>/`). The generic
+module ignores the block and warns about it at startup. A non-CAPI
+project that wants its own evidence shape should add a new AI module
+rather than reuse these fields.

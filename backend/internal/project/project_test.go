@@ -515,3 +515,28 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestEvidence_IsZero(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   *Evidence
+		want bool
+	}{
+		{"nil receiver", nil, true},
+		{"empty struct", &Evidence{}, true},
+		{"machine_logs set", &Evidence{MachineLogs: []string{"foo.log"}}, false},
+		{"machine_logs explicit empty slice counts as set",
+			&Evidence{MachineLogs: []string{}}, false},
+		{"controller_logs set",
+			&Evidence{ControllerLogs: []ControllerLogSelector{{Namespace: "x"}}}, false},
+		{"build_log_patterns set",
+			&Evidence{BuildLogPatterns: []string{"err"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.ev.IsZero(); got != tc.want {
+				t.Errorf("IsZero() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -158,21 +158,31 @@ type AI struct {
 	// Evidence overrides the per-failure artifact sources the AI module
 	// fetches. Fields left nil fall back to engine defaults. A non-nil
 	// empty slice (e.g. `machine_logs: []`) disables that source entirely.
-	// Currently interpreted only by the "capi" module; "generic" ignores it.
+	// Currently interpreted only by the "capi" module; other modules
+	// ignore it and log a warning at startup to surface misconfigurations.
 	Evidence *Evidence `yaml:"evidence,omitempty" json:"evidence,omitempty"`
 }
 
 // Evidence configures which artifacts the AI module fetches for each failure.
 // All three fields are optional and independently fall back to engine defaults
 // (see DefaultMachineLogs, DefaultControllerLogs, DefaultBuildLogPatterns).
+//
+// Scope: every field is interpreted only by the "capi" AI module, because the
+// paths they refer to (clusters/<name>/machines/<vm>/ and
+// clusters/bootstrap/logs/<ns>/<deployment>/<pod>/) are specific to the
+// Cluster API artifact layout. Other modules (currently only "generic") ignore
+// the entire block and log a warning at startup so misconfigurations don't
+// silently slip through. A non-CAPI project that wants its own evidence shape
+// should add a new AI module, not reuse these fields with a different meaning.
 type Evidence struct {
 	// MachineLogs lists filenames looked up under each cluster's
-	// machines/<machine>/<file> path. The AI module fetches the tail of
-	// the first machine that has a non-empty URL for each filename.
+	// artifacts/clusters/<name>/machines/<vm>/<file> path. The AI module
+	// fetches the tail of the first machine that has a non-empty URL for
+	// each filename.
 	MachineLogs []string `yaml:"machine_logs,omitempty" json:"machine_logs,omitempty"`
 
 	// ControllerLogs lists management-cluster controller pod logs to fetch
-	// from artifacts/clusters/bootstrap/logs/<namespace>/<pod>/<container_log>.
+	// from artifacts/clusters/bootstrap/logs/<namespace>/<deployment>/<pod>/<container_log>.
 	// In YAML each entry may be a bare namespace string (shorthand for
 	// {namespace: <string>}) or a full object with pod_name_regex and
 	// container_log overrides.
@@ -185,8 +195,18 @@ type Evidence struct {
 	BuildLogPatterns []string `yaml:"build_log_patterns,omitempty" json:"build_log_patterns,omitempty"`
 }
 
+// IsZero reports whether every field of Evidence is unset (nil slice). An
+// explicit `[]` counts as set so consumers can disable a default without
+// triggering "ignored config" warnings.
+func (e *Evidence) IsZero() bool {
+	if e == nil {
+		return true
+	}
+	return e.MachineLogs == nil && e.ControllerLogs == nil && e.BuildLogPatterns == nil
+}
+
 // ControllerLogSelector picks a controller pod log from the management
-// cluster's artifacts/clusters/bootstrap/logs/<namespace>/<pod>/<container_log>
+// cluster's artifacts/clusters/bootstrap/logs/<namespace>/<deployment>/<pod>/<container_log>
 // layout. In project.yaml a bare string is shorthand for {namespace: <string>}
 // with default pod_name_regex (".*") and container_log ("manager.log").
 type ControllerLogSelector struct {
