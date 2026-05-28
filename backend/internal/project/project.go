@@ -155,15 +155,6 @@ type AI struct {
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 }
 
-// SupportedCollectors lists collector names accepted by Validate. Wiring
-// happens in cmd/fetcher/main.go; keep this list in sync with the switch
-// statement there.
-var SupportedCollectors = []string{"generic", "capi"}
-
-// SupportedAIModules lists AI module names accepted by Validate. Wiring
-// happens in cmd/fetcher/main.go::buildAIModule; keep in sync.
-var SupportedAIModules = []string{"generic", "capi"}
-
 // CollectorName returns the configured collector name, defaulting to "generic".
 func (c *Config) CollectorName() string {
 	if c.Artifacts == nil || strings.TrimSpace(c.Artifacts.Collector) == "" {
@@ -266,34 +257,6 @@ func (c *Config) Validate() error {
 
 	if len(missing) > 0 {
 		return fmt.Errorf("project config missing required field(s): %s", strings.Join(missing, ", "))
-	}
-
-	if c.Artifacts != nil && c.Artifacts.Collector != "" {
-		valid := false
-		for _, name := range SupportedCollectors {
-			if c.Artifacts.Collector == name {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("artifacts.collector %q is not supported (valid: %s)",
-				c.Artifacts.Collector, strings.Join(SupportedCollectors, ", "))
-		}
-	}
-
-	if c.AI != nil && c.AI.Module != "" {
-		valid := false
-		for _, name := range SupportedAIModules {
-			if c.AI.Module == name {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("ai.module %q is not supported (valid: %s)",
-				c.AI.Module, strings.Join(SupportedAIModules, ", "))
-		}
 	}
 
 	for i, r := range c.Categories {
