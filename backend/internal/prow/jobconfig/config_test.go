@@ -194,6 +194,37 @@ func TestEmptyInput(t *testing.T) {
 	}
 }
 
+// CAPI-core-style periodics use interval: instead of minimum_interval:.
+// Both forms must produce a non-empty interval so the periodic-only
+// filter doesn't drop them. minimum_interval: wins when both are set.
+func TestIntervalFallback(t *testing.T) {
+	yaml := []byte(`
+periodics:
+- name: periodic-cluster-api-test-main
+  interval: 3h
+  annotations:
+    testgrid-dashboards: cluster-api-core-main
+- name: periodic-mixed-job
+  minimum_interval: 24h
+  interval: 3h
+  annotations:
+    testgrid-dashboards: cluster-api-core-main
+- name: periodic-cron-only
+  annotations:
+    testgrid-dashboards: cluster-api-core-main
+`)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", "cluster-api-core-main", project.DefaultCategories)
+	if err != nil {
+		t.Fatalf("ParseJobConfig: %v", err)
+	}
+	if len(jobs) != 3 {
+		t.Fatalf("expected 3 jobs, got %d", len(jobs))
+	}
+	assertEqual(t, "interval-only", jobs[0].MinimumInterval, "3h")
+	assertEqual(t, "minimum_interval-wins", jobs[1].MinimumInterval, "24h")
+	assertEqual(t, "neither-set", jobs[2].MinimumInterval, "")
+}
+
 func assertEqual(t *testing.T, field, got, want string) {
 	t.Helper()
 	if got != want {

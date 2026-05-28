@@ -16,6 +16,7 @@ import (
 type rawJob struct {
 	Name             string            `yaml:"name"`
 	MinimumInterval  string            `yaml:"minimum_interval"`
+	Interval         string            `yaml:"interval"`
 	DecorationConfig *decorationConfig `yaml:"decoration_config"`
 	ExtraRefs        []extraRef        `yaml:"extra_refs"`
 	Annotations      map[string]string `yaml:"annotations"`
@@ -88,11 +89,20 @@ func matchesDashboard(r rawJob, dashboard string) bool {
 }
 
 func convertJob(r rawJob, filename string, categories []project.CategoryRule) models.ProwJob {
+	// Prow periodics may schedule with either minimum_interval, interval,
+	// or cron. The engine only models a single interval string, so prefer
+	// the explicit minimum_interval when present, otherwise fall back to
+	// interval. Cron-scheduled periodics fall through with an empty
+	// interval and are filtered out by PeriodicOnly.
+	interval := r.MinimumInterval
+	if interval == "" {
+		interval = r.Interval
+	}
 	j := models.ProwJob{
 		Name:            r.Name,
 		TabName:         r.Annotations["testgrid-tab-name"],
 		Description:     r.Annotations["description"],
-		MinimumInterval: r.MinimumInterval,
+		MinimumInterval: interval,
 		ConfigFile:      filename,
 		Category:        categorize(r.Name, categories),
 	}
