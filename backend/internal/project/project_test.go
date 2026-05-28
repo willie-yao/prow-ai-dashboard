@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const validYAML = `
@@ -539,4 +540,48 @@ func TestEvidence_IsZero(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentic_Effective(t *testing.T) {
+	t.Run("nil receiver returns defaults with Enabled=false", func(t *testing.T) {
+		got := (*Agentic)(nil).EffectiveAgentic()
+		if got != DefaultAgentic {
+			t.Errorf("got %+v, want defaults %+v", got, DefaultAgentic)
+		}
+	})
+	t.Run("zero struct returns defaults", func(t *testing.T) {
+		got := (&Agentic{}).EffectiveAgentic()
+		if got != DefaultAgentic {
+			t.Errorf("got %+v, want defaults %+v", got, DefaultAgentic)
+		}
+	})
+	t.Run("Enabled flips through", func(t *testing.T) {
+		got := (&Agentic{Enabled: true}).EffectiveAgentic()
+		if !got.Enabled {
+			t.Error("Enabled = false, want true")
+		}
+		if got.MaxIters != DefaultAgentic.MaxIters {
+			t.Errorf("MaxIters = %d, want default %d", got.MaxIters, DefaultAgentic.MaxIters)
+		}
+	})
+	t.Run("explicit limits override defaults", func(t *testing.T) {
+		got := (&Agentic{
+			Enabled:         true,
+			MaxIters:        7,
+			ModelByteBudget: 50_000,
+			WallClock:       30 * time.Second,
+		}).EffectiveAgentic()
+		if got.MaxIters != 7 {
+			t.Errorf("MaxIters = %d, want 7", got.MaxIters)
+		}
+		if got.ModelByteBudget != 50_000 {
+			t.Errorf("ModelByteBudget = %d, want 50000", got.ModelByteBudget)
+		}
+		if got.WallClock != 30*time.Second {
+			t.Errorf("WallClock = %v, want 30s", got.WallClock)
+		}
+		if got.GCSByteBudget != DefaultAgentic.GCSByteBudget {
+			t.Errorf("GCSByteBudget = %d, want default %d", got.GCSByteBudget, DefaultAgentic.GCSByteBudget)
+		}
+	})
 }

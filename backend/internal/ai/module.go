@@ -29,3 +29,15 @@ type Module interface {
 	// the prompt should be built from whatever was available.
 	AnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string
 }
+
+// AgenticPreferrer is an optional capability a Module may implement to opt
+// specific failures into agentic (tool-calling) mode. Modules that do not
+// implement it are treated as never preferring agentic mode; whether agentic
+// runs in that case depends on the project's Agentic.Always config.
+//
+// The returned reason is logged when the module returns true so operators can
+// understand why a particular failure went through the more expensive
+// pipeline. An empty reason is replaced with "module preference" in logs.
+type AgenticPreferrer interface {
+	PrefersAgentic(run *models.BuildResult, tc *models.TestCase) (bool, string)
+}

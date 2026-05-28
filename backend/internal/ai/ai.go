@@ -28,9 +28,12 @@ const (
 	// accepted by api.githubcopilot.com; treat availability as best-effort
 	// and override via project.yaml or AI_MODEL when a token lacks access.
 	Model = "claude-opus-4.7-xhigh"
-
-	callDelay = 500 * time.Millisecond
 )
+
+// callDelay throttles consecutive API calls to be polite to upstream rate
+// limits. var (not const) so tests can shrink it; production callers should
+// not touch this.
+var callDelay = 500 * time.Millisecond
 
 // Client calls an OpenAI chat-completions compatible API for AI analysis.
 type Client struct {

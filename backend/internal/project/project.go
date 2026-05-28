@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -161,6 +162,84 @@ type AI struct {
 	// Currently interpreted only by the "capi" module; other modules
 	// ignore it and log a warning at startup to surface misconfigurations.
 	Evidence *Evidence `yaml:"evidence,omitempty" json:"evidence,omitempty"`
+
+	// Agentic enables tool-calling-based artifact browsing. When enabled,
+	// the AI module skips its curator-driven evidence collection (the
+	// Evidence block) for failures the module opts into via the
+	// AgenticPreferrer interface and instead lets the model browse the
+	// build's artifact tree itself. Requires an AI endpoint that
+	// supports OpenAI-style function calling.
+	Agentic *Agentic `yaml:"agentic,omitempty" json:"agentic,omitempty"`
+}
+
+// Agentic configures the tool-calling AI loop. All fields are optional; zero
+// values fall back to engine defaults defined in DefaultAgentic.
+type Agentic struct {
+	// Enabled turns the agentic pipeline on. When false (the default),
+	// every failure is analyzed by the existing curator-driven pipeline
+	// regardless of any other field.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// Always forces agentic mode for every failure the module analyzes.
+	// When false, the module decides per-failure via its AgenticPreferrer
+	// implementation (modules that don't implement it never go agentic).
+	Always bool `yaml:"always,omitempty" json:"always,omitempty"`
+
+	// MaxIters caps the number of tool-call rounds per failure. Defaults
+	// to DefaultAgentic.MaxIters.
+	MaxIters int `yaml:"max_iters,omitempty" json:"max_iters,omitempty"`
+
+	// ModelByteBudget caps the total bytes returned to the model from
+	// tool calls (across all rounds) per failure. Defaults to
+	// DefaultAgentic.ModelByteBudget.
+	ModelByteBudget int `yaml:"model_byte_budget,omitempty" json:"model_byte_budget,omitempty"`
+
+	// GCSByteBudget caps the total bytes fetched from GCS (across all
+	// tool calls) per failure. Defaults to DefaultAgentic.GCSByteBudget.
+	GCSByteBudget int `yaml:"gcs_byte_budget,omitempty" json:"gcs_byte_budget,omitempty"`
+
+	// WallClock caps the total time spent in the agentic loop per
+	// failure. Defaults to DefaultAgentic.WallClock.
+	WallClock time.Duration `yaml:"wall_clock,omitempty" json:"wall_clock,omitempty"`
+}
+
+// DefaultAgentic is the zero-config fallback applied when a consumer enables
+// Agentic without overriding any limits. Tuned to match the validated spike:
+// 15 iterations is enough for deep exploration without runaway loops, 300KB
+// of model bytes keeps prompts well under context limits, 1GB of GCS bytes
+// covers even very large build logs, and 5 minutes is the wall-clock cap.
+var DefaultAgentic = Agentic{
+	Enabled:         false,
+	Always:          false,
+	MaxIters:        15,
+	ModelByteBudget: 300_000,
+	GCSByteBudget:   1_000_000_000,
+	WallClock:       5 * time.Minute,
+}
+
+// EffectiveAgentic returns the resolved Agentic config with defaults applied
+// for any zero-valued limits. Safe to call on a nil receiver (returns
+// DefaultAgentic with Enabled=false).
+func (a *Agentic) EffectiveAgentic() Agentic {
+	out := DefaultAgentic
+	if a == nil {
+		return out
+	}
+	out.Enabled = a.Enabled
+	out.Always = a.Always
+	if a.MaxIters > 0 {
+		out.MaxIters = a.MaxIters
+	}
+	if a.ModelByteBudget > 0 {
+		out.ModelByteBudget = a.ModelByteBudget
+	}
+	if a.GCSByteBudget > 0 {
+		out.GCSByteBudget = a.GCSByteBudget
+	}
+	if a.WallClock > 0 {
+		out.WallClock = a.WallClock
+	}
+	return out
 }
 
 // Evidence configures which artifacts the AI module fetches for each failure.

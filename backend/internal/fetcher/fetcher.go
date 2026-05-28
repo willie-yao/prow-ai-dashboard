@@ -18,6 +18,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcsweb"
@@ -372,6 +373,24 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 		return
 	}
 	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
+	if cfg != nil && cfg.AI.Agentic != nil {
+		eff := cfg.AI.Agentic.EffectiveAgentic()
+		if eff.Enabled {
+			factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
+			service.EnableAgentic(ai.AgenticOptions{
+				MaxIters:        eff.MaxIters,
+				ModelByteBudget: eff.ModelByteBudget,
+				GCSByteBudget:   eff.GCSByteBudget,
+				WallClock:       eff.WallClock,
+			}, factory, eff.Always)
+			mode := "module-opt-in"
+			if eff.Always {
+				mode = "always"
+			}
+			log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall)",
+				mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock)
+		}
+	}
 	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())
 
 	var totalFailures, transientSkipped int

@@ -3,11 +3,14 @@ package ai
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -19,6 +22,23 @@ type Service struct {
 	module         Module
 	systemPrompt   string
 	consecutiveMap map[string]int
+
+	// agenticOpts is the resolved agentic config. When Enabled is false
+	// (the default), Analyze never goes agentic regardless of any other
+	// signal.
+	agenticOpts AgenticOptions
+	agenticOn   bool
+	agenticAll  bool // when true, every failure goes agentic; else module decides
+
+	// browserFactory provides per-build Browser instances. nil when
+	// agentic mode is off, in which case Analyze ignores it.
+	browserFactory artifacts.Factory
+
+	// toolsUnsupported is set after the first agentic call that returns
+	// ErrToolsUnsupported, so subsequent failures fall straight back to
+	// the curator pipeline without retrying tools against a provider that
+	// will reject them.
+	toolsUnsupported atomic.Bool
 }
 
 // NewService constructs a Service. systemPrompt is the fully composed prompt
@@ -37,20 +57,38 @@ func NewService(client *Client, module Module, systemPrompt string, consecutiveM
 	}
 }
 
+// EnableAgentic switches the Service into mixed curator + agentic mode. opts
+// is the resolved AgenticOptions (typically project.Agentic.EffectiveAgentic()
+// translated to the engine struct). factory provides per-build artifact
+// Browsers. always=true forces every failure through agentic mode; always=false
+// defers the choice to the Module's AgenticPreferrer (modules that don't
+// implement it stay on curator).
+//
+// Safe to call once at Service construction; not safe for concurrent use.
+func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, always bool) {
+	s.agenticOn = true
+	s.agenticAll = always
+	s.agenticOpts = opts
+	s.browserFactory = factory
+}
+
 // Module returns the underlying Module (mainly for logging).
 func (s *Service) Module() Module { return s.module }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case.
 // Behavior:
-//   - skip entirely if both AISummary and AIAnalysis are already populated
+//   - skip entirely if both AISummary and AIAnalysis are already populated AND
+//     the cached analysis's Mode matches the currently desired mode
 //   - if the module flags the failure as a known transient, set AISummary with
 //     the reason (IsTransient=true) and return without running the API
-//   - otherwise run a single combined chat completion that produces both the
-//     headline summary and the deep root-cause fields from the same evidence
+//   - run the agentic pipeline when enabled AND (always-on OR the module's
+//     AgenticPreferrer opts in), otherwise run the single-shot curator pipeline
 //   - on API failure, leave an "AI analysis unavailable" summary so the UI
 //     still has something to render
 func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase) {
-	if tc.AISummary != nil && tc.AIAnalysis != nil {
+	desiredMode := s.desiredMode(run, tc)
+
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc, desiredMode) {
 		return
 	}
 
@@ -64,13 +102,32 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 		return
 	}
 
-	log.Printf("  🔍 Analyzing: %s", tc.Name)
+	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, desiredMode)
 	consec := s.consecutiveMap[tc.Name]
 	if consec < 1 {
 		consec = 1
 	}
 
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
+
+	if desiredMode == AgenticMode {
+		summary, analysis, err := s.runAgentic(ctx, run, tc, userPrompt)
+		if err == nil {
+			tc.AISummary = summary
+			tc.AIAnalysis = analysis
+			return
+		}
+		if errors.Is(err, ErrToolsUnsupported) {
+			s.toolsUnsupported.Store(true)
+			log.Printf("  ⚠ AI endpoint rejected tools; falling back to curator for this run: %v", err)
+			// Fall through to curator path below.
+		} else {
+			log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
+			s.setUnavailable(tc, err)
+			return
+		}
+	}
+
 	summary, analysis, err := s.client.doAnalyze(ctx,
 		s.cacheKey(tc.Name, tc.FailureMessage),
 		s.systemPrompt,
@@ -78,17 +135,75 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 	)
 	if err != nil {
 		log.Printf("  ⚠ AI analysis failed for %s: %v", tc.Name, err)
-		if tc.AISummary == nil {
-			tc.AISummary = &models.AISummary{
-				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-				Summary:     "AI analysis unavailable: " + err.Error(),
-				IsTransient: false,
-			}
-		}
+		s.setUnavailable(tc, err)
 		return
+	}
+	if analysis != nil {
+		analysis.Mode = curatorMode
 	}
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
+}
+
+// runAgentic does the per-failure agentic call setup (browser construction +
+// cache key + call). Kept separate so Analyze stays readable.
+func (s *Service) runAgentic(ctx context.Context, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+	if s.browserFactory == nil {
+		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
+	}
+	browser := s.browserFactory.ForBuild(run.JobName, run.BuildID)
+	cacheKey := s.agenticCacheKey(run.JobName, run.BuildID, tc.Name, tc.FailureMessage)
+	return s.client.doAnalyzeAgentic(ctx, browser, s.agenticOpts, cacheKey, s.systemPrompt, userPrompt)
+}
+
+func (s *Service) setUnavailable(tc *models.TestCase, err error) {
+	if tc.AISummary == nil {
+		tc.AISummary = &models.AISummary{
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			Summary:     "AI analysis unavailable: " + err.Error(),
+			IsTransient: false,
+		}
+	}
+}
+
+// curatorMode is the value stored in models.AIAnalysis.Mode for results from
+// the single-shot curator pipeline. Both "" (legacy) and this string are
+// accepted as "curator" by shouldReanalyze.
+const curatorMode = "curator"
+
+// desiredMode picks the pipeline to use for this failure. Returns AgenticMode
+// when agentic is enabled AND (always-on OR the module opts in via
+// AgenticPreferrer), else curatorMode. Honors the run-scoped tools-unsupported
+// flag so a 400 on one failure doesn't keep retrying for the rest of the run.
+func (s *Service) desiredMode(run *models.BuildResult, tc *models.TestCase) string {
+	if !s.agenticOn || s.toolsUnsupported.Load() {
+		return curatorMode
+	}
+	if s.agenticAll {
+		return AgenticMode
+	}
+	if p, ok := s.module.(AgenticPreferrer); ok {
+		prefer, reason := p.PrefersAgentic(run, tc)
+		if prefer {
+			if reason == "" {
+				reason = "module preference"
+			}
+			log.Printf("  ↻ %s opted into agentic mode: %s", tc.Name, reason)
+			return AgenticMode
+		}
+	}
+	return curatorMode
+}
+
+// shouldReanalyze returns true when a cached analysis must be discarded
+// because the mode changed (e.g. agentic flipped on). Treats legacy unset Mode
+// as "curator" so existing CAPZ caches keep hitting on curator runs.
+func (s *Service) shouldReanalyze(tc *models.TestCase, desiredMode string) bool {
+	cached := tc.AIAnalysis.Mode
+	if cached == "" {
+		cached = curatorMode
+	}
+	return cached != desiredMode
 }
 
 // cacheKey returns the cache key for the combined analysis call. For the
@@ -102,6 +217,15 @@ func (s *Service) cacheKey(testName, failureMessage string) string {
 		return fmt.Sprintf("comprehensive:%x", hash)
 	}
 	return fmt.Sprintf("analyze:%s:%x", s.module.Name(), hash)
+}
+
+// agenticCacheKey scopes agentic results by job+build because the model's
+// answer cites build-specific artifact paths and line numbers. Sharing the
+// curator key would mean different builds of the same test serve each other
+// the wrong line numbers.
+func (s *Service) agenticCacheKey(jobName, buildID, testName, failureMessage string) string {
+	hash := failureHash(testName, failureMessage)
+	return fmt.Sprintf("agentic:%s:%s:%s:%x", s.module.Name(), jobName, buildID, hash)
 }
 
 // failureHash builds the deterministic hash used by both cache key flavors.

@@ -49,6 +49,11 @@ type AIAnalysis struct {
 	Severity      string   `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
 	SuggestedFix  string   `json:"suggested_fix"`
 	RelevantFiles []string `json:"relevant_files,omitempty"`
+	// Mode records which analysis pipeline produced this result, so that
+	// switching modes (e.g. flipping agentic on) forces a re-analysis even
+	// when the failure message is unchanged. Empty for legacy entries (read
+	// as "curator").
+	Mode string `json:"mode,omitempty"`
 }
 
 // TestCase represents a single test case from JUnit XML.
