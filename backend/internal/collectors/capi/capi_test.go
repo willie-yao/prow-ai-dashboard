@@ -10,7 +10,7 @@ import (
 // successfully without a cluster_name_prefix, which is the CAPI core
 // configuration (one dir per cluster, cluster name == namespace).
 func TestNewAcceptsEmptyPrefix(t *testing.T) {
-	c, err := New(gcs.NewBucket("kubernetes-ci-logs"), nil, "")
+	c, err := New(gcs.NewBucket("kubernetes-ci-logs"), nil, "", nil, nil)
 	if err != nil {
 		t.Fatalf("New(empty prefix) errored: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestBootstrapNamespace(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := New(gcs.NewBucket("kubernetes-ci-logs"), nil, tc.prefix)
+			c, err := New(gcs.NewBucket("kubernetes-ci-logs"), nil, tc.prefix, nil, nil)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}

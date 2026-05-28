@@ -10,23 +10,29 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 // Module implements ai.Module for CAPI projects.
 type Module struct {
 	clusterPrefix string         // e.g. "capz-e2e"
 	flavorRe      *regexp.Regexp // matches cluster names to extract the flavor
+	evidence      project.EffectiveEvidence
 }
 
 // New constructs a CAPI AI module. clusterPrefix is the project's cluster name
 // prefix (CAPZ uses "capz-e2e"); it is used to extract a flavor string from
-// cluster names like "capz-e2e-prow-azl3-12345" -> "prow-azl3".
-func New(clusterPrefix string) *Module {
-	m := &Module{clusterPrefix: clusterPrefix}
+// cluster names like "capz-e2e-prow-azl3-12345" -> "prow-azl3". evidence
+// carries the consumer-declared (or default-filled) per-failure artifact
+// sources to fetch.
+func New(clusterPrefix string, evidence project.EffectiveEvidence) *Module {
+	m := &Module{
+		clusterPrefix: clusterPrefix,
+		evidence:      evidence,
+	}
 	if clusterPrefix != "" {
 		m.flavorRe = regexp.MustCompile(`^` + regexp.QuoteMeta(clusterPrefix) + `-(.+?)-\d`)
 	}
@@ -36,7 +42,7 @@ func New(clusterPrefix string) *Module {
 // Name returns "capi". This is also used as the cache-key namespace.
 func (m *Module) Name() string { return "capi" }
 
-// AnalysisPrompt collects all available CAPI artifact evidence for the
+// AnalysisPrompt collects all configured CAPI artifact evidence for the
 // given test case and builds the user message for a combined summary + deep
 // root-cause analysis. Errors fetching individual artifacts are logged but
 // do not abort.
@@ -83,36 +89,28 @@ func buildAnalysisPrompt(ev evidence) string {
 	if ev.BuildLogTail != "" {
 		fmt.Fprintf(&sb, "\n=== Build Log (last 200 lines) ===\n%s\n", ev.BuildLogTail)
 	}
-	if len(ev.ResourceYAMLs) > 0 {
-		var resourceTypes []string
-		for k := range ev.ResourceYAMLs {
-			resourceTypes = append(resourceTypes, k)
-		}
-		sort.Strings(resourceTypes)
-		for _, rt := range resourceTypes {
-			fmt.Fprintf(&sb, "\n=== %s Status ===\n%s\n", rt, ev.ResourceYAMLs[rt])
-		}
+	for _, rt := range sortedKeys(ev.ResourceYAMLs) {
+		fmt.Fprintf(&sb, "\n=== %s Status ===\n%s\n", rt, ev.ResourceYAMLs[rt])
 	}
-	if ev.CloudInitLog != "" {
-		fmt.Fprintf(&sb, "\n=== Cloud-Init Log ===\n%s\n", ev.CloudInitLog)
+	for _, name := range sortedKeys(ev.MachineLogs) {
+		fmt.Fprintf(&sb, "\n=== Machine log: %s ===\n%s\n", name, ev.MachineLogs[name])
 	}
-	if ev.BootLog != "" {
-		fmt.Fprintf(&sb, "\n=== Boot Log ===\n%s\n", ev.BootLog)
-	}
-	if ev.KubeletLog != "" {
-		fmt.Fprintf(&sb, "\n=== Kubelet Log ===\n%s\n", ev.KubeletLog)
-	}
-	if ev.ContainerdLog != "" {
-		fmt.Fprintf(&sb, "\n=== Containerd Log ===\n%s\n", ev.ContainerdLog)
-	}
-	if ev.JournalLog != "" {
-		fmt.Fprintf(&sb, "\n=== Journal Log ===\n%s\n", ev.JournalLog)
+	for _, ns := range sortedKeys(ev.ControllerLogs) {
+		fmt.Fprintf(&sb, "\n=== Controller log: %s ===\n%s\n", ns, ev.ControllerLogs[ns])
 	}
 	if ev.ProviderActivityLog != "" {
 		fmt.Fprintf(&sb, "\n=== Provider Activity Log ===\n%s\n", ev.ProviderActivityLog)
 	}
 
-	sb.WriteString("\nYou have been given ALL available artifacts for this failure. Perform a complete investigation:\n")
+	if len(ev.RequestedButMissing) > 0 {
+		sb.WriteString("\n=== Configured but missing ===\n")
+		sb.WriteString("The project requested these evidence sources but they were unavailable for this build. Do not infer a root cause from their absence:\n")
+		for _, m := range ev.RequestedButMissing {
+			fmt.Fprintf(&sb, "- %s\n", m)
+		}
+	}
+
+	sb.WriteString("\nYou have the configured evidence sources available for this failure. Perform a complete investigation:\n")
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the artifacts above. Quote the actual error message, status condition, or log line that reveals the failure. Do NOT speculate — cite what you found.\n")
 	sb.WriteString("2. TRACE THE FAILURE: Use the project-specific knowledge in the system prompt above to identify which component or step failed. Cite the artifact (log file, status condition, etc.) that confirms it.\n")
 	sb.WriteString("3. SUGGESTED FIX: Based on the root cause you identified, give the specific fix. Say exactly what file/config/setting needs to change and how. Do NOT say 'check the logs' — you already have them.\n")

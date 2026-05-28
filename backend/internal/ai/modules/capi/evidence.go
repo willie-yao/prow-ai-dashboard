@@ -7,16 +7,22 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-// evidence holds all the artifact content gathered for a single test failure.
-// Module-private: only used to feed buildDeepPrompt.
+// evidence holds all artifact content gathered for a single test failure.
+// Module-private: only used to feed buildAnalysisPrompt.
+//
+// MachineLogs and ControllerLogs are keyed by the consumer-declared identifier
+// (filename for machine logs, namespace for controller logs) so the prompt
+// renders one section per request and stays in sync with the project config.
 type evidence struct {
 	TestName         string
 	FailureMessage   string
@@ -24,38 +30,45 @@ type evidence struct {
 	ClusterFlavor    string
 	ConsecutiveCount int
 
-	// Artifact content (fetched from GCS)
-	BuildLogErrors   string            // Filtered error/failure lines from build log
-	BuildLogTail     string            // Last 200 lines of build log (raw, unfiltered)
-	ResourceYAMLs    map[string]string // All CAPI resource status YAMLs keyed by resource type
-	CloudInitLog     string            // cloud-init-output.log content
-	BootLog          string            // boot.log content
-	KubeletLog          string            // kubelet.log excerpt
-	ProviderActivityLog string            // Provider activity log excerpt (e.g. Azure activity log)
-	ContainerdLog       string            // containerd.log excerpt
-	JournalLog          string            // journal.log excerpt
+	BuildLogErrors string
+	BuildLogTail   string
+	ResourceYAMLs  map[string]string
+
+	// MachineLogs maps a declared filename (e.g. "kubelet.log") to the tail
+	// of that log fetched from the first machine that had a non-empty URL
+	// for the file.
+	MachineLogs map[string]string
+
+	// ControllerLogs maps a declared namespace (e.g. "capi-system") to the
+	// tail of the matched controller pod's container_log.
+	ControllerLogs map[string]string
+
+	// ProviderActivityLog is the cloud-provider audit log (e.g. Azure
+	// activity log) sourced from the cluster artifacts directly, not from
+	// the evidence config.
+	ProviderActivityLog string
+
+	// RequestedButMissing lists evidence sources the project config asked
+	// for that produced no content (e.g. boot.log on a CAPD build with no
+	// VMs, or capz-system controller logs on a CAPI core build). Surfaced
+	// in the prompt footer so the AI doesn't speculate based on absence.
+	RequestedButMissing []string
 }
 
-// Build log error patterns (from CAPZ debugging knowledge).
-var buildLogPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)FAIL|FAILED|\[FAIL\]`),
-	regexp.MustCompile(`(?i)timed?\s*out|timeout`),
-	regexp.MustCompile(`(?i)ImagePullBackOff|ErrImagePull`),
-	regexp.MustCompile(`(?i)CrashLoopBackOff`),
-	regexp.MustCompile(`(?i)unknown flag`),
-	regexp.MustCompile(`(?i)quota|OperationNotAllowed`),
-	regexp.MustCompile(`(?i)SkuNotAvailable`),
-	regexp.MustCompile(`(?i)not found|no image|NotFound`),
-	regexp.MustCompile(`(?i)FailureMessage|FailureReason`),
-	regexp.MustCompile(`(?i)GalleryImage|CommunityGaller`),
-	regexp.MustCompile(`(?i)version.*not.*available|not.*replicated`),
-	regexp.MustCompile(`(?i)provisioningState.*Failed`),
-}
-
-// errorRe matches "error" but we skip lines containing "no error" in the matching logic.
+// errorRe matches "error" lines; "no error" lines are filtered out via noErrorRe.
 var errorRe = regexp.MustCompile(`(?i)error`)
 
+// connectionRefusedRe is included only when ≥5 occurrences in the build log
+// indicate a persistent issue worth surfacing to the AI.
 var connectionRefusedRe = regexp.MustCompile(`(?i)connection refused`)
+
+// Budget for controller logs: each entry caps at perControllerLogCap bytes
+// and the aggregate across all controller logs caps at totalControllerLogCap.
+// Keeps the prompt size bounded when a build has many CAPI namespaces.
+const (
+	perControllerLogCap   = 8000
+	totalControllerLogCap = 50000
+)
 
 // collectEvidence gathers all available artifact content for a test failure.
 // Errors fetching individual artifacts are logged but do not fail the overall
@@ -67,50 +80,34 @@ func (m *Module) collectEvidence(ctx context.Context, client *http.Client, run *
 		FailureBody:      tc.FailureBody,
 		ClusterFlavor:    m.flavor(tc),
 		ConsecutiveCount: consecutive,
+		MachineLogs:      map[string]string{},
+		ControllerLogs:   map[string]string{},
 	}
 
-	// 1. Build log — extract error patterns AND raw tail
+	// 1. Build log: pattern-matched error lines + raw tail.
 	if run.BuildLogURL != "" {
-		ev.BuildLogErrors = collectBuildLogErrors(ctx, client, run.BuildLogURL)
+		ev.BuildLogErrors = collectBuildLogErrors(ctx, client, run.BuildLogURL, m.evidence.BuildLogPatterns)
 		ev.BuildLogTail = fetchLogTail(ctx, client, run.BuildLogURL, 500, 15000)
 	}
 
-	// 2. Bootstrap resource YAMLs — discover ALL resource types and fetch status from each
+	// 2. Bootstrap resource YAMLs (status: blocks from every resource type).
 	if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.BootstrapResourcesURL != "" {
 		ev.ResourceYAMLs = collectAllResources(ctx, client, tc.ClusterArtifacts.BootstrapResourcesURL)
 	}
 
-	// 3. Machine logs — fetch from ALL machines (not just the first), with larger limits
-	if tc.ClusterArtifacts != nil {
-		for _, machine := range tc.ClusterArtifacts.Machines {
-			boot, cloudInit := collectBootLogs(ctx, client, machine)
-			if ev.BootLog == "" {
-				ev.BootLog = boot
-			}
-			if ev.CloudInitLog == "" {
-				ev.CloudInitLog = cloudInit
-			}
-			if ev.KubeletLog == "" {
-				ev.KubeletLog = collectKubeletLog(ctx, client, machine)
-			}
-			if ev.ContainerdLog == "" {
-				if url, ok := machine.Logs["containerd.log"]; ok && url != "" {
-					ev.ContainerdLog = fetchLogTail(ctx, client, url, 300, 8000)
-				}
-			}
-			if ev.JournalLog == "" {
-				if url, ok := machine.Logs["journal.log"]; ok && url != "" {
-					ev.JournalLog = fetchLogTail(ctx, client, url, 400, 10000)
-				}
-			}
-			// Stop after finding content from any machine
-			if ev.BootLog != "" || ev.CloudInitLog != "" || ev.KubeletLog != "" {
-				break
-			}
-		}
-	}
+	// 3. Per-machine logs declared by the consumer. For each filename, pick
+	// the first machine that has a non-empty URL for it. Filenames the
+	// consumer asked for but no machine has are recorded as missing so the
+	// AI doesn't reach a conclusion from absence.
+	collectMachineLogs(ctx, client, tc.ClusterArtifacts, m.evidence.MachineLogs, &ev)
 
-	// 4. Azure activity log — larger limit
+	// 4. Controller logs declared by the consumer. Iterate selectors, fetch
+	// the matching pod's container_log URL from BuildResult.ControllerLogURLs
+	// (populated by the collector), respect the total budget.
+	collectControllerLogs(ctx, client, run, m.evidence.ControllerLogs, &ev)
+
+	// 5. Provider activity log (cloud audit log; CAPZ-only today). Comes
+	// from cluster_artifacts, not the evidence config.
 	if tc.ClusterArtifacts != nil && tc.ClusterArtifacts.ProviderActivityLog != "" {
 		ev.ProviderActivityLog = collectActivityLog(ctx, client, tc.ClusterArtifacts.ProviderActivityLog)
 	}
@@ -118,9 +115,90 @@ func (m *Module) collectEvidence(ctx context.Context, client *http.Client, run *
 	return ev
 }
 
-// collectBuildLogErrors fetches the build log and extracts lines matching error patterns
-// with 2 lines of context around each match.
-func collectBuildLogErrors(ctx context.Context, client *http.Client, url string) string {
+// collectMachineLogs walks the declared machine_logs and populates ev.MachineLogs
+// for each filename it could fetch. Filenames that produced no content are
+// appended to ev.RequestedButMissing.
+func collectMachineLogs(ctx context.Context, client *http.Client, ca *models.ClusterArtifacts, declared []string, ev *evidence) {
+	if len(declared) == 0 {
+		return
+	}
+	for _, filename := range declared {
+		if ca == nil || len(ca.Machines) == 0 {
+			ev.RequestedButMissing = append(ev.RequestedButMissing, "machine log "+filename)
+			continue
+		}
+		var content string
+		for _, machine := range ca.Machines {
+			url, ok := machine.Logs[filename]
+			if !ok || url == "" {
+				continue
+			}
+			content = fetchLogTail(ctx, client, url, 500, 15000)
+			if content != "" {
+				break
+			}
+		}
+		if content == "" {
+			ev.RequestedButMissing = append(ev.RequestedButMissing, "machine log "+filename)
+			continue
+		}
+		ev.MachineLogs[filename] = content
+	}
+}
+
+// collectControllerLogs walks the declared controller_logs selectors and
+// fetches the matching controller pod's container_log tail from the URLs the
+// collector recorded on BuildResult.ControllerLogURLs. The collector keys
+// URLs by "<namespace>/<deployment>" (a single namespace can host multiple
+// controller deployments — e.g. capz-system runs both ASO and the CAPZ
+// controller — and we want all of them in the prompt). Aggregate size capped
+// at totalControllerLogCap; each fetch capped at perControllerLogCap.
+func collectControllerLogs(ctx context.Context, client *http.Client, run *models.BuildResult, declared []project.ControllerLogSelector, ev *evidence) {
+	if len(declared) == 0 {
+		return
+	}
+	var totalBytes int
+	for _, sel := range declared {
+		// Find every URL whose namespace prefix matches this selector.
+		// Sort for determinism across runs.
+		var keys []string
+		for k := range run.ControllerLogURLs {
+			ns, _, _ := strings.Cut(k, "/")
+			if ns == sel.Namespace {
+				keys = append(keys, k)
+			}
+		}
+		if len(keys) == 0 {
+			ev.RequestedButMissing = append(ev.RequestedButMissing, "controller log "+sel.Namespace)
+			continue
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			if totalBytes >= totalControllerLogCap {
+				ev.RequestedButMissing = append(ev.RequestedButMissing, "controller log "+key+" (budget exhausted)")
+				continue
+			}
+			url := run.ControllerLogURLs[key]
+			remaining := totalControllerLogCap - totalBytes
+			cap := perControllerLogCap
+			if remaining < cap {
+				cap = remaining
+			}
+			content := fetchLogTail(ctx, client, url, 500, cap)
+			if content == "" {
+				ev.RequestedButMissing = append(ev.RequestedButMissing, "controller log "+key)
+				continue
+			}
+			ev.ControllerLogs[key] = content
+			totalBytes += len(content)
+		}
+	}
+}
+
+// collectBuildLogErrors fetches the build log and returns matching lines from
+// the configured patterns plus 2 lines of context around each match.
+func collectBuildLogErrors(ctx context.Context, client *http.Client, url string, patterns []*regexp.Regexp) string {
 	data, err := gcs.FetchRaw(ctx, client, url)
 	if err != nil {
 		log.Printf("  ⚠ Evidence: failed to fetch build log: %v", err)
@@ -138,17 +216,18 @@ func collectBuildLogErrors(ctx context.Context, client *http.Client, url string)
 	}
 	includeConnRefused := connRefusedCount >= 5
 
-	// Find matching line indices.
 	matchSet := make(map[int]bool)
 	noErrorRe := regexp.MustCompile(`(?i)no error`)
 	for i, line := range lines {
-		for _, pat := range buildLogPatterns {
+		for _, pat := range patterns {
 			if pat.MatchString(line) {
 				matchSet[i] = true
 				break
 			}
 		}
-		// Match "error" lines but exclude "no error" lines.
+		// Always include bare "error" (but not "no error") because the raw
+		// build-log tail is also in the prompt for context — this gives the
+		// AI both error-grep and trailing-context views.
 		if !matchSet[i] && errorRe.MatchString(line) && !noErrorRe.MatchString(line) {
 			matchSet[i] = true
 		}
@@ -157,7 +236,6 @@ func collectBuildLogErrors(ctx context.Context, client *http.Client, url string)
 		}
 	}
 
-	// Expand with 2 lines of context and collect unique lines.
 	contextSet := make(map[int]bool)
 	for idx := range matchSet {
 		for c := idx - 2; c <= idx+2; c++ {
@@ -167,7 +245,6 @@ func collectBuildLogErrors(ctx context.Context, client *http.Client, url string)
 		}
 	}
 
-	// Build output in order, inserting separators between non-contiguous blocks.
 	var sb strings.Builder
 	prevIdx := -10
 	for i := 0; i < len(lines); i++ {
@@ -196,7 +273,6 @@ func collectBuildLogErrors(ctx context.Context, client *http.Client, url string)
 // collectAllResources discovers all resource type directories in the bootstrap
 // resources namespace and fetches status YAMLs from each.
 func collectAllResources(ctx context.Context, client *http.Client, baseURL string) map[string]string {
-	// List resource type directories (Machine/, AzureMachine/, MachinePool/, AzureMachinePool/, etc.)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
 	if err != nil {
 		return nil
@@ -218,7 +294,7 @@ func collectAllResources(ctx context.Context, client *http.Client, baseURL strin
 
 	results := make(map[string]string)
 	totalChars := 0
-	const maxTotalChars = 60000 // total budget across all resource types
+	const maxTotalChars = 60000
 
 	for _, dir := range dirs {
 		if totalChars > maxTotalChars {
@@ -298,7 +374,6 @@ func collectResourceStatus(ctx context.Context, client *http.Client, listingURL 
 			continue
 		}
 
-		// Extract resource name from URL for labeling.
 		name := url
 		if idx := strings.LastIndex(url, "/"); idx >= 0 {
 			name = url[idx+1:]
@@ -380,8 +455,6 @@ func extractYAMLStatus(yamlContent string) string {
 			}
 			continue
 		}
-		// Still in status block: any line starting with a space/tab is indented under status.
-		// A non-empty line that doesn't start with whitespace ends the block.
 		if line == "" {
 			sb.WriteByte('\n')
 			continue
@@ -397,32 +470,7 @@ func extractYAMLStatus(yamlContent string) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// collectBootLogs fetches boot.log and/or cloud-init-output.log from a machine.
-// Returns (bootLog, cloudInitLog). Takes last 300 lines, capped at 6000 chars.
-func collectBootLogs(ctx context.Context, client *http.Client, machine models.MachineArtifacts) (string, string) {
-	var bootLog, cloudInitLog string
-
-	if url, ok := machine.Logs["boot.log"]; ok && url != "" {
-		bootLog = fetchLogTail(ctx, client, url, 500, 15000)
-	}
-
-	if url, ok := machine.Logs["cloud-init-output.log"]; ok && url != "" {
-		cloudInitLog = fetchLogTail(ctx, client, url, 500, 15000)
-	}
-
-	return bootLog, cloudInitLog
-}
-
-// collectKubeletLog fetches kubelet.log from a machine. Takes last 200 lines, capped at 4000 chars.
-func collectKubeletLog(ctx context.Context, client *http.Client, machine models.MachineArtifacts) string {
-	url, ok := machine.Logs["kubelet.log"]
-	if !ok || url == "" {
-		return ""
-	}
-	return fetchLogTail(ctx, client, url, 400, 10000)
-}
-
-// collectActivityLog fetches the Azure activity log. Takes last 200 lines, capped at 4000 chars.
+// collectActivityLog fetches the provider (Azure) activity log tail.
 func collectActivityLog(ctx context.Context, client *http.Client, url string) string {
 	return fetchLogTail(ctx, client, url, 400, 10000)
 }
@@ -445,4 +493,15 @@ func fetchLogTail(ctx context.Context, client *http.Client, url string, lastN in
 		result = result[:maxChars] + "..."
 	}
 	return result
+}
+
+// sortedKeys returns map keys sorted alphabetically. Used to render
+// MachineLogs/ControllerLogs/ResourceYAMLs deterministically in the prompt.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

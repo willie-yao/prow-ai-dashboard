@@ -12,17 +12,22 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 // Collector implements the CAPI artifact layout: each failed build has zero or
 // more cluster directories under artifacts/clusters/, and tests are mapped to
 // clusters via the generic prefix matcher with the CAPZ-flavored rules table
-// as a fallback.
+// as a fallback. Controller logs from the management cluster (the kind
+// "bootstrap" cluster) are discovered for each namespace declared in
+// project.yaml's ai.evidence.controller_logs.
 type Collector struct {
-	bucket        *gcs.Bucket
-	client        *http.Client
-	clusterPrefix string
-	nsPrefixRe    *regexp.Regexp
+	bucket             *gcs.Bucket
+	client             *http.Client
+	clusterPrefix      string
+	nsPrefixRe         *regexp.Regexp
+	controllerLogs     []project.ControllerLogSelector
+	controllerPodRegex []*regexp.Regexp
 }
 
 // New constructs a CAPI collector. clusterPrefix is optional. When non-empty
@@ -32,11 +37,18 @@ type Collector struct {
 // When empty, the collector treats each cluster directory name as the
 // namespace directly (the CAPI core convention, where one cluster per test
 // has cluster_name == namespace).
-func New(bucket *gcs.Bucket, client *http.Client, clusterPrefix string) (*Collector, error) {
+//
+// controllerLogs and controllerPodRegex are the parallel slices produced by
+// project.Config.EffectiveEvidence (selectors + their compiled pod-name
+// regexes). They drive controller log discovery from the management cluster.
+// Pass nil/nil to disable controller log discovery.
+func New(bucket *gcs.Bucket, client *http.Client, clusterPrefix string, controllerLogs []project.ControllerLogSelector, controllerPodRegex []*regexp.Regexp) (*Collector, error) {
 	c := &Collector{
-		bucket:        bucket,
-		client:        client,
-		clusterPrefix: clusterPrefix,
+		bucket:             bucket,
+		client:             client,
+		clusterPrefix:      clusterPrefix,
+		controllerLogs:     controllerLogs,
+		controllerPodRegex: controllerPodRegex,
 	}
 	if clusterPrefix != "" {
 		c.nsPrefixRe = regexp.MustCompile(regexp.QuoteMeta(clusterPrefix) + `-[a-z0-9]+`)
@@ -82,6 +94,19 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 	}
 
 	bootstrapPath := jobName + "/" + buildID + "/artifacts/clusters/bootstrap/resources/"
+
+	// Discover management-cluster controller logs as declared by
+	// project.yaml. Errors are logged but non-fatal; missing entries are
+	// surfaced by the AI module via its "Configured but missing" footer.
+	if len(c.controllerLogs) > 0 {
+		urls, err := DiscoverControllerLogs(ctx, c.client, c.bucket, jobName, buildID, c.controllerLogs, c.controllerPodRegex)
+		if err != nil {
+			log.Printf("    ⚠ %s/%s: controller log discovery failed: %v", jobName, buildID, err)
+		}
+		if len(urls) > 0 {
+			result.ControllerLogURLs = urls
+		}
+	}
 
 	for i := range result.TestCases {
 		if result.TestCases[i].Status != "failed" {

@@ -209,3 +209,55 @@ func assertEqual(t *testing.T, field, got, want string) {
 		t.Errorf("%s = %q, want %q", field, got, want)
 	}
 }
+
+// TestListObjects_Pagination drives ListObjects through two response pages
+// and verifies every object name is returned across pages, with the
+// prefix correctly forwarded to the server on each call.
+func TestListObjects_Pagination(t *testing.T) {
+	calls := 0
+	prefix := "logs/job/1/artifacts/clusters/bootstrap/logs/capi-system/"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		calls++
+		if got := r.URL.Query().Get("prefix"); got != prefix {
+			t.Errorf("call %d: prefix = %q, want %q", calls, got, prefix)
+		}
+		if r.URL.Query().Get("pageToken") == "" {
+			w.Write([]byte(`{"items":[{"name":"a/manager.log"},{"name":"b/manager.log"}],"nextPageToken":"tok1"}`))
+		} else {
+			w.Write([]byte(`{"items":[{"name":"c/manager.log"}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	got, err := ListObjects(context.Background(), srv.Client(), srv.URL, prefix)
+	if err != nil {
+		t.Fatalf("ListObjects: %v", err)
+	}
+	want := []string{"a/manager.log", "b/manager.log", "c/manager.log"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", calls)
+	}
+}
+
+// TestListObjects_EmptyResult verifies that an empty items array
+// (the common case for missing artifact trees) returns an empty
+// slice and no error.
+func TestListObjects_EmptyResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	got, err := ListObjects(context.Background(), srv.Client(), srv.URL, "anything/")
+	if err != nil {
+		t.Fatalf("ListObjects: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want empty", got)
+	}
+}

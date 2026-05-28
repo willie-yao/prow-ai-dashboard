@@ -135,6 +135,54 @@ resource YAMLs); the generic module just passes the JUnit failure
 message + build-log tail. Use `capi` whenever your project uses the
 CAPI collector.
 
+### `ai.evidence` (optional)
+
+Controls which extra artifacts the CAPI module fetches alongside the
+build log and stack trace before each AI call. Every field is optional
+and falls back to an engine default when omitted. The schema is a
+single `evidence:` block under `ai:` with three independent lists:
+
+- **`machine_logs`** — filenames under
+  `artifacts/clusters/<name>/machines/<vm>/` to fetch the tail of.
+  Engine default: `kubelet.log`, `containerd.log`, `journal.log`.
+  Add what your project actually publishes (CAPZ extends with
+  `boot.log` + `cloud-init-output.log`; CAPI core adds `kern.log`).
+
+- **`controller_logs`** — namespaces under
+  `artifacts/clusters/bootstrap/logs/` to walk for controller
+  `manager.log` files. The collector picks one log per deployment in
+  each namespace, so a single namespace hosting multiple controllers
+  (e.g. CAPZ's `capz-system` runs ASO and the CAPZ controller side by
+  side) yields multiple sections in the prompt. Each entry can be a
+  bare namespace string or `{namespace, pod_name_regex, container_log}`.
+  Engine default: `capi-system`, `capi-kubeadm-bootstrap-system`,
+  `capi-kubeadm-control-plane-system`.
+
+- **`build_log_patterns`** — regex patterns matched against each line
+  of `build-log.txt`. Matches plus 2 lines of context are inserted as
+  `=== Build Log Errors ===` in the prompt. The raw tail of the build
+  log is included separately, so generic `"error"` patterns are
+  redundant; reserve this list for high-signal, provider-specific
+  failures (CAPZ uses Azure error codes like `SkuNotAvailable`).
+  Engine default: `FAIL|\[FAIL\]`, `timed?\s*out|timeout`,
+  `ImagePullBackOff|ErrImagePull`, `CrashLoopBackOff`,
+  `NotFound|not found`.
+
+Override semantics are nil-vs-empty:
+
+- Omit a field → engine default applies.
+- Set to `[]` → the engine default is suppressed and no values are
+  collected for that source.
+- Provide a list → that list replaces the engine default in full
+  (lists are not merged).
+
+Regex patterns are validated at fetcher startup, so a typo fails fast
+instead of silently dropping evidence on the next failure.
+
+Sources the consumer asks for that aren't present in the build's
+artifacts surface as a `Configured but missing` footer in the prompt,
+so the model knows not to infer absence as signal.
+
 ## Step 2: `prompts/system.md`
 
 Mandatory. The fetcher hard-errors at startup if the file is missing or

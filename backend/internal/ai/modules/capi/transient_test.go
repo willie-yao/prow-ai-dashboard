@@ -1,9 +1,17 @@
 package capi
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+)
 
 func TestIsKnownTransient(t *testing.T) {
-	m := New("capz-e2e")
+	ev, err := (&project.Config{}).EffectiveEvidence()
+	if err != nil {
+		t.Fatalf("EffectiveEvidence: %v", err)
+	}
+	m := New("capz-e2e", ev)
 	cases := []struct {
 		msg  string
 		want string

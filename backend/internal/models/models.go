@@ -106,6 +106,19 @@ type BuildResult struct {
 	TestsPassed  int        `json:"tests_passed"`
 	TestsFailed  int        `json:"tests_failed"`
 	TestsSkipped int        `json:"tests_skipped"`
+
+	// ControllerLogURLs maps a "<namespace>/<deployment>" key (e.g.
+	// "capz-system/capz-controller-manager") to the URL of one pod's
+	// manager log, discovered under
+	// artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/<log>.
+	// The deployment level is included in the key because a single
+	// namespace can host multiple controller deployments (e.g.
+	// capz-system contains both ASO and the CAPZ controller). Populated
+	// by collectors when consumer project.yaml declares
+	// ai.evidence.controller_logs; empty otherwise. URLs only (not the
+	// content) are kept here so dashboard.json stays small; the AI module
+	// fetches the content on demand at prompt build time.
+	ControllerLogURLs map[string]string `json:"controller_log_urls,omitempty"`
 }
 
 // JobSummary represents aggregated data for a job on the landing page.

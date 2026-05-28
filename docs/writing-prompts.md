@@ -154,3 +154,12 @@ project-specific opinion. That includes:
 
 If you want the model to know any of that, it must be in your
 `prompts/system.md`.
+
+One adjacent knob you may also want, **outside** the system prompt: the
+list of artifacts attached to each AI call. Configured in `project.yaml`
+under `ai.evidence` (machine logs, controller logs, build-log regex
+patterns). See the "Evidence sources" section in
+[docs/onboarding-a-new-project.md](onboarding-a-new-project.md). Use
+this for non-VM providers where the engine's default machine-log list
+doesn't match what your CI publishes, or for cloud-specific build-log
+patterns that should land in the prompt as `=== Build Log Errors ===`.

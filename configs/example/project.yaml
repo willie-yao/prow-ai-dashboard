@@ -77,3 +77,59 @@ ai:
   module: "capi"
   endpoint: "https://api.githubcopilot.com/chat/completions"
   model: "claude-opus-4.6"
+
+  # Per-failure evidence sent to the AI. The capi module gathers these
+  # alongside the build log and stack trace before each call. Every field
+  # is optional; omitting a field falls back to the engine default. To
+  # explicitly disable a default, set the field to an empty list ([]).
+  #
+  # All fields apply to the capi module today. The generic module ignores
+  # them but the schema is accepted so projects can switch modules without
+  # editing this block.
+  evidence:
+    # Filenames under artifacts/clusters/<name>/machines/<vm>/ to fetch
+    # the tail of and include as "=== Machine log: <name> ===" sections
+    # in the prompt.
+    #
+    # Engine default: kubelet.log, containerd.log, journal.log.
+    #
+    # Add the logs your project actually publishes. For example, CAPZ
+    # extends this with boot.log + cloud-init-output.log; CAPI core adds
+    # kern.log (CAPD jobs collect it).
+    # machine_logs:
+    #   - kubelet.log
+    #   - containerd.log
+    #   - journal.log
+    #   - boot.log
+    #   - cloud-init-output.log
+
+    # Management-cluster ("bootstrap" kind cluster) namespaces to walk
+    # under artifacts/clusters/bootstrap/logs/. For each entry the
+    # collector picks one manager.log per deployment in that namespace.
+    # A single namespace can host multiple deployments (e.g. CAPZ's
+    # capz-system runs both ASO and the CAPZ controller); each gets its
+    # own "=== Controller log: <ns>/<deployment> ===" section.
+    #
+    # Engine default: capi-system, capi-kubeadm-bootstrap-system,
+    # capi-kubeadm-control-plane-system.
+    #
+    # Each entry can be a bare namespace string or an object with custom
+    # pod-name filter and container-log filename:
+    # controller_logs:
+    #   - capi-system                               # short form
+    #   - namespace: your-project-system           # full form
+    #     pod_name_regex: "your-controller-.*"    # default: ".*"
+    #     container_log: "manager.log"            # default: "manager.log"
+
+    # Regex patterns matched against each line of build-log.txt during
+    # evidence collection. Matches plus 2 lines of context are inserted
+    # as "=== Build Log Errors ===" in the prompt. The raw tail of the
+    # build log is also included separately, so generic "error" patterns
+    # are redundant here; reserve this list for high-signal,
+    # provider-specific failures.
+    #
+    # Engine default: FAIL|\[FAIL\], timed?\s*out|timeout,
+    # ImagePullBackOff|ErrImagePull, CrashLoopBackOff, NotFound|not found.
+    # build_log_patterns:
+    #   - "FAIL|\\[FAIL\\]"
+    #   - "your-provider-specific-error"
