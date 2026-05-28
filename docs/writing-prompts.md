@@ -38,6 +38,12 @@ chat completions API as:
   `severity`, `suggested_fix`, `relevant_files`). Do NOT redeclare it in your
   addendum; if you do, you risk the model returning a shape the engine cannot
   parse.
+- **Agentic mode addendum.** When the engine analyzes a failure under
+  [agentic mode](agentic.md), it also appends an engine-owned tool-docs
+  section to the assembled prompt that documents the `list_artifacts` /
+  `read_artifact` / `tail_artifact` / `grep_artifact` tools and the
+  per-failure byte budgets. Your `prompts/system.md` never sees this
+  section; do not document the tools yourself.
 
 [baseprompt]: ../backend/internal/ai/baseprompt.go
 [footer]: ../backend/internal/ai/responseformat.go
@@ -170,3 +176,10 @@ and `clusters/bootstrap/logs/<ns>/<deployment>/<pod>/`). The generic
 module ignores the block and warns about it at startup. A non-CAPI
 project that wants its own evidence shape should add a new AI module
 rather than reuse these fields.
+
+For projects whose artifacts don't fit the curator schema at all (no
+per-cluster `Machines` collection, pre-cluster failures, layouts
+inherited from k/k or sig-storage), the alternative is to enable
+[agentic mode](agentic.md) and let the model browse the artifact tree
+on demand. Agentic mode also lives under `ai.` in `project.yaml` and
+is independent of `ai.evidence`.

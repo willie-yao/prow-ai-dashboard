@@ -141,3 +141,31 @@ ai:
     # build_log_patterns:
     #   - "FAIL|\\[FAIL\\]"
     #   - "your-provider-specific-error"
+
+  # Agentic mode is an alternative to the curator-driven evidence pipeline
+  # above. Instead of the engine pre-fetching a fixed set of artifacts based
+  # on the evidence: block, the model decides what to read by calling four
+  # function-calling tools (list/read/tail/grep) that browse the build's
+  # GCS artifact tree directly.
+  #
+  # Opt-in and off by default. Curator mode is cheaper (~1/10 the tokens,
+  # ~1/7 the wall clock) and adequate for failures with well-structured
+  # per-cluster artifacts. Enable agentic for failures the curator can't
+  # cover (pre-cluster failures, unusual artifact layouts).
+  #
+  # Requires an endpoint that supports OpenAI-style function calling
+  # (GitHub Copilot, OpenAI, Azure OpenAI, and tool-capable Ollama/NIM
+  # models do; the engine falls back to curator on endpoints that don't).
+  #
+  # See docs/agentic.md for the full reference.
+  # agentic:
+  #   enabled: true                 # turn agentic on
+  #   always: false                 # if true, run agentic on every failure;
+  #                                 # if false, the AI module's PrefersAgentic
+  #                                 # heuristic decides per-failure (the capi
+  #                                 # module triggers on missing or empty
+  #                                 # ClusterArtifacts)
+  #   max_iters: 15                 # tool-call rounds per failure
+  #   model_byte_budget: 300000     # total bytes of tool output sent to the model
+  #   gcs_byte_budget: 1000000000   # total bytes fetched from GCS
+  #   wall_clock: 5m                # per-failure agentic wall-clock cap

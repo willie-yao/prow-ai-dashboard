@@ -116,12 +116,35 @@ return stale cached responses from the previous model until the cache is
 cleared. Run the project's `clear-cache.yml` workflow after changing
 `endpoint` or `model` if you want fresh analyses.
 
+Switching `ai.agentic.enabled` on or off does NOT need a cache clear:
+the engine records the analysis mode (`curator` or `agentic`) on each
+cached entry and re-analyzes the failure when the cached mode no longer
+matches the desired mode. Switching mode therefore self-heals over one
+fetcher run.
+
+## Function-calling support (required for agentic mode)
+
+Agentic mode (see [agentic.md](agentic.md)) sends an OpenAI-style
+`tools` field on every request and expects `tool_calls` back from the
+model. The engine probes lazily: the first agentic call to an endpoint
+that returns HTTP 400/422 with a tools-related error is treated as a
+capability miss; the fetcher falls back to the curator pipeline for
+the rest of that run and logs `AI endpoint rejected tools`. Verified
+endpoints: GitHub Copilot, OpenAI, Azure OpenAI, and tool-calling
+Ollama / NIM models (per-model). Curator mode has no function-calling
+requirement.
+
 ## Cost and latency notes
 
-Each non-transient failure triggers one chat-completion call. The regex
-transient-failure triage in each module runs first and is free, so flaky
-runs (Azure throttling, image-pull retries, etc.) skip the model entirely.
+Each non-transient failure triggers one chat-completion call in
+curator mode (the default). The regex transient-failure triage in each
+module runs first and is free, so flaky runs (Azure throttling,
+image-pull retries, etc.) skip the model entirely.
 
-Token use per call: roughly 3-15k input tokens (depending on how much
-debug-log evidence the module ships) and 200-800 output tokens. Most
-providers price the input dominant.
+Token use per call (curator mode): roughly 3-15k input tokens
+(depending on how much debug-log evidence the module ships) and
+200-800 output tokens. Most providers price the input dominant.
+
+Agentic mode uses roughly 50-150k input tokens and 30-90 seconds of
+wall clock per failure (vs 5-15s for curator). Enable it selectively;
+see [agentic.md](agentic.md) for cost-control knobs.

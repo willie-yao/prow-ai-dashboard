@@ -202,6 +202,23 @@ Sources the consumer asks for that aren't present in the build's
 artifacts surface as a `Configured but missing` footer in the prompt,
 so the model knows not to infer absence as signal.
 
+### `ai.agentic` (optional)
+
+An alternative to the curator-driven evidence pipeline. Instead of
+the engine pre-fetching the artifacts listed under `ai.evidence`, the
+model browses the build's GCS artifact tree itself via four function-
+calling tools (`list_artifacts`, `read_artifact`, `tail_artifact`,
+`grep_artifact`). Useful for projects whose artifacts don't fit the
+CAPI layout, or for failures that happen before any cluster is
+created.
+
+Opt-in and off by default. See [docs/agentic.md](agentic.md) for the
+full reference (config schema, endpoint requirements, cost notes,
+fallback semantics). The `enabled: true` / `always: false` shape is
+the common case: the engine's `capi` module then routes only the
+failures with missing or empty `ClusterArtifacts` through agentic
+mode and leaves the rest on the curator path.
+
 ## Step 2: `prompts/system.md`
 
 Mandatory. The fetcher hard-errors at startup if the file is missing or
