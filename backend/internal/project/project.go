@@ -138,7 +138,7 @@ type AI struct {
 	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
 
 	// Model is the model identifier the provider expects (e.g.
-	// "claude-opus-4.6" for Copilot, "gpt-4o" for OpenAI,
+	// "claude-opus-4.7-xhigh" for Copilot, "gpt-4o" for OpenAI,
 	// "meta/llama-3.1-70b-instruct" for an NVIDIA NIM). When unset,
 	// defaults to the engine's built-in model for the GitHub Copilot
 	// endpoint and MUST be set when pointing at any other provider.

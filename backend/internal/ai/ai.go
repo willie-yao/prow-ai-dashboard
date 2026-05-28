@@ -23,7 +23,11 @@ const (
 	// ModelsAPIURL is the GitHub Copilot chat completions endpoint.
 	ModelsAPIURL = "https://api.githubcopilot.com/chat/completions"
 	// Model is used for the combined summary + root-cause analysis.
-	Model = "claude-opus-4.6"
+	// claude-opus-4.7-xhigh: extra-high reasoning effort, 200K context.
+	// Marked "(Internal only)" in the Copilot agent model list but currently
+	// accepted by api.githubcopilot.com; treat availability as best-effort
+	// and override via project.yaml or AI_MODEL when a token lacks access.
+	Model = "claude-opus-4.7-xhigh"
 
 	callDelay = 500 * time.Millisecond
 )
@@ -49,8 +53,8 @@ type Options struct {
 	// (https://api.githubcopilot.com/chat/completions).
 	Endpoint string
 	// Model is the model identifier the provider expects. Defaults to Model
-	// (claude-opus-4.6) which only the Copilot endpoint accepts; override
-	// when pointing at any other provider.
+	// (claude-opus-4.7-xhigh) which only the Copilot endpoint accepts;
+	// override when pointing at any other provider.
 	Model string
 	// ExtraHeaders are merged into every request after the defaults. Use this
 	// to add provider-specific routing headers (e.g. NIM-Function-Id for

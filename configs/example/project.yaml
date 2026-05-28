@@ -76,7 +76,11 @@ capi:
 ai:
   module: "capi"
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-opus-4.6"
+  # claude-opus-4.7-xhigh: extra-high reasoning effort, 200K context.
+  # Marked "(Internal only)" in the Copilot model list but currently
+  # accepted by api.githubcopilot.com. Downgrade to claude-opus-4.6 if
+  # your AI_TOKEN doesn't have access.
+  model: "claude-opus-4.7-xhigh"
 
   # Per-failure evidence sent to the AI. The capi module gathers these
   # alongside the build log and stack trace before each call. Every field

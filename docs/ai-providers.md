@@ -29,8 +29,23 @@ your fine-grained PAT with the `copilot_chat` user permission.
 ai:
   module: "capi"
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-opus-4.6"
+  model: "claude-opus-4.7-xhigh"
 ```
+
+Models verified against the Copilot endpoint:
+
+- `claude-opus-4.7-xhigh` — extra-high reasoning effort, 200K context.
+  Best quality for debugging analysis. Engine default. Marked
+  "(Internal only)" in the agent model list but currently accepted by
+  the public endpoint; treat availability as best-effort.
+- `claude-opus-4.7` — newer model, standard reasoning, 200K context.
+  Use as the fallback if xhigh access is revoked.
+- `claude-opus-4.6` — stable, broadly available. Safe baseline if you
+  hit access issues with the 4.7 line.
+- `claude-opus-4.7-1m-internal` — 1M context, standard reasoning. Only
+  useful if prompts exceed ~150K tokens; standard prompts don't need it.
+
+There is no combined "1M + xhigh" variant.
 
 The fetcher automatically sends `Copilot-Integration-Id: copilot-developer-cli`
 when (and only when) the endpoint's host is `*.githubcopilot.com`.
