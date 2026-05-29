@@ -307,6 +307,53 @@ needs more specifics. Iterate on the prompt, clear the AI cache via
 the `Clear AI Cache` workflow, and redeploy. Two or three iteration
 cycles is normal.
 
+## Optional: AI endpoint unreachable from GitHub-hosted runners
+
+If your AI endpoint lives behind a private network (Azure Private
+Endpoint, K8s ClusterIP service, on-prem inference, etc.) the
+GitHub-hosted runner cannot reach it. Two supported escape hatches:
+
+**Run the fetcher locally and publish pre-fetched data.** Useful for
+testing or low-frequency manual refreshes. Operator runs the fetcher
+on a machine with network access (VPN, `kubectl port-forward`, etc.),
+commits the `data/` directory, then triggers a deploy with
+`skip-fetch: true`:
+
+```bash
+cd <engine-checkout>/backend
+go build -o /tmp/fetcher ./cmd/fetcher/
+AI_ENDPOINT="http://localhost:8000/v1/chat/completions" \
+AI_TOKEN="<key or empty>" \
+AI_MODEL="<model id>" \
+/tmp/fetcher -project-dir=<your-consumer-repo> \
+  -out=<your-consumer-repo>/data -ai
+
+cd <your-consumer-repo>
+git add data/ && git commit -m "Refresh prefetched data" && git push
+gh workflow run deploy.yml -f skip-fetch=true   # consumer workflow forwards this
+```
+
+The deploy workflow's `skip-fetch: true` input bypasses the fetcher
+and publishes `<project_dir>/data/` directly. Cache restore/save
+steps are also skipped.
+
+**Use a self-hosted runner with cluster-internal access.** For
+sustained automated runs, deploy `actions-runner-controller` (ARC)
+in the cluster that hosts your endpoint, then forward
+`runs-on:` through the consumer workflow:
+
+```yaml
+uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+with:
+  project_dir: .
+  runs-on: '["self-hosted", "arc-your-runner"]'   # JSON array for multi-label
+  ai-endpoint: http://your-svc.ns.svc.cluster.local:8000/v1/chat/completions
+```
+
+`runs-on:` accepts a bare label (e.g. `ubuntu-latest`) or a
+JSON-encoded array. No engine changes needed beyond these workflow
+inputs.
+
 ## Worked-example artifacts
 
 The complete file set produced by following this guide is visible in

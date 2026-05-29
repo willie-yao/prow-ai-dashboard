@@ -71,6 +71,16 @@ on:
         required: false
         type: boolean
         default: false
+      skip-fetch:
+        description: "Skip the data fetcher and publish pre-fetched data from <project_dir>/data/ in the consumer repo. Useful when the AI endpoint is unreachable from GitHub-hosted runners (e.g. a private cluster service) — run the fetcher locally, commit data/, set this true."
+        required: false
+        type: boolean
+        default: false
+      runs-on:
+        description: "Runner label for the deploy job. Accepts a single label (e.g. 'ubuntu-latest') or a JSON-encoded array (e.g. '[\"self-hosted\", \"qwen-cluster\"]') for multi-label self-hosted runners with cluster-internal connectivity."
+        required: false
+        type: string
+        default: ubuntu-latest
     secrets:
       AI_TOKEN:
         description: "Token used to call the chat completions endpoint."
@@ -86,7 +96,7 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -139,18 +149,21 @@ jobs:
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
           echo "Resolved project_dir=$PROJECT_DIR_ABS base_path=$BASE_PATH slug=$SLUG"
 
-      # --- Go data fetcher ---
+      # --- Go data fetcher (skipped when skip-fetch=true) ---
       - uses: actions/setup-go@v5
+        if: ${{ !inputs.skip-fetch }}
         with:
           go-version-file: engine/backend/go.mod
           cache-dependency-path: engine/backend/go.sum
 
       - name: Build data fetcher
+        if: ${{ !inputs.skip-fetch }}
         working-directory: engine/backend
         run: go build -o "$GITHUB_WORKSPACE/fetcher" ./cmd/fetcher/
 
       # Restore cached data (job JSON + AI cache) so we only fetch new builds.
       - name: Restore data cache
+        if: ${{ !inputs.skip-fetch }}
         uses: actions/cache/restore@v4
         with:
           path: engine/frontend/public/data
@@ -158,6 +171,7 @@ jobs:
           restore-keys: data-cache-${{ steps.cfg.outputs.slug }}-
 
       - name: Fetch test data
+        if: ${{ !inputs.skip-fetch }}
         env:
           AI_TOKEN: ${{ secrets.AI_TOKEN }}
           AI_MODEL: ${{ inputs.ai-model }}
@@ -183,11 +197,25 @@ jobs:
             $PRESUBMITS_FLAG
 
       - name: Save data cache
-        if: always()
+        if: ${{ !inputs.skip-fetch && always() }}
         uses: actions/cache/save@v4
         with:
           path: engine/frontend/public/data
           key: data-cache-${{ steps.cfg.outputs.slug }}-${{ github.run_id }}
+
+      # --- Pre-fetched data path (skip-fetch=true) ---
+      - name: Copy pre-fetched data
+        if: ${{ inputs.skip-fetch }}
+        run: |
+          DATA_SRC="${{ steps.cfg.outputs.project_dir_abs }}/data"
+          if [ ! -d "$DATA_SRC" ]; then
+            echo "::error::skip-fetch=true but no data/ directory found at $DATA_SRC. Run the fetcher locally and commit the output to <project_dir>/data/ in the consumer repo."
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/engine/frontend/public/data"
+          cp -r "$DATA_SRC/." "$GITHUB_WORKSPACE/engine/frontend/public/data/"
+          echo "Copied pre-fetched data from $DATA_SRC"
+          ls -la "$GITHUB_WORKSPACE/engine/frontend/public/data"
 
       # --- React frontend ---
       - uses: actions/setup-node@v4
