@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// JobType identifies how a Prow job is triggered, which also determines
+// where its build artifacts live in the GCS bucket.
+const (
+	JobTypePeriodic  = "periodic"
+	JobTypePresubmit = "presubmit"
+)
+
 // ProwJob represents a prow job definition parsed from test-infra YAML configs.
 type ProwJob struct {
 	Name            string `json:"name" yaml:"name"`
@@ -16,22 +23,43 @@ type ProwJob struct {
 	MinimumInterval string `json:"minimum_interval" yaml:"minimum_interval"`
 	Timeout         string `json:"timeout"`
 	ConfigFile      string `json:"config_file"`
+	// JobType is "periodic" or "presubmit". Empty in legacy cache entries
+	// written before Phase E; EffectiveJobType treats empty as periodic.
+	JobType string `json:"job_type,omitempty"`
+	// Repo is the "org/repo" the job runs against. Populated for presubmits
+	// from the YAML map key; empty for periodics.
+	Repo string `json:"repo,omitempty"`
+}
+
+// EffectiveJobType returns the job type, defaulting to periodic when unset.
+// All consumers that branch on job type should go through this helper so
+// legacy cache entries written before JobType was introduced behave as
+// periodics (which is what they were).
+func (j ProwJob) EffectiveJobType() string {
+	if j.JobType == "" {
+		return JobTypePeriodic
+	}
+	return j.JobType
 }
 
 // BuildInfo represents metadata for a single prow build.
 type BuildInfo struct {
-	BuildID          string    `json:"build_id"`
-	JobName          string    `json:"job_name"`
-	Started          time.Time `json:"started"`
-	Finished         time.Time `json:"finished"`
-	Passed           bool      `json:"passed"`
-	Result           string    `json:"result"`
-	DurationSeconds  float64   `json:"duration_seconds"`
-	Commit           string    `json:"commit"`
-	RepoVersion      string    `json:"repo_version,omitempty"`
-	ProwURL          string    `json:"prow_url"`
-	BuildLogURL      string    `json:"build_log_url"`
-	JUnitURL         string    `json:"junit_url,omitempty"`
+	BuildID         string    `json:"build_id"`
+	JobName         string    `json:"job_name"`
+	Started         time.Time `json:"started"`
+	Finished        time.Time `json:"finished"`
+	Passed          bool      `json:"passed"`
+	Result          string    `json:"result"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	Commit          string    `json:"commit"`
+	RepoVersion     string    `json:"repo_version,omitempty"`
+	ProwURL         string    `json:"prow_url"`
+	BuildLogURL     string    `json:"build_log_url"`
+	JUnitURL        string    `json:"junit_url,omitempty"`
+	// PullNumber is the PR number that triggered this build for presubmits.
+	// Empty for periodics. Required for reconstructing presubmit GCS paths
+	// from cached BuildResults without reparsing the job config.
+	PullNumber string `json:"pull_number,omitempty"`
 }
 
 // AISummary is a brief AI-generated explanation of a test failure.

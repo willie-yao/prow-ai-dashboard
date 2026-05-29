@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
@@ -41,6 +42,8 @@ func TestParsePeriodics(t *testing.T) {
 	assertEqual(t, "MinimumInterval", j.MinimumInterval, "48h")
 	assertEqual(t, "Timeout", j.Timeout, "4h")
 	assertEqual(t, "ConfigFile", j.ConfigFile, "periodics.yaml")
+	assertEqual(t, "JobType", j.JobType, models.JobTypePeriodic)
+	assertEqual(t, "Repo", j.Repo, "")
 
 	// Second job — e2e → generic "e2e" category (no project-specific override).
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "e2e")
@@ -70,10 +73,14 @@ func TestParsePresubmits(t *testing.T) {
 	assertEqual(t, "Branch", j.Branch, "main")
 	assertEqual(t, "Timeout", j.Timeout, "3h")
 	assertEqual(t, "ConfigFile", j.ConfigFile, "presubmits.yaml")
+	assertEqual(t, "JobType", j.JobType, models.JobTypePresubmit)
+	assertEqual(t, "Repo", j.Repo, "kubernetes-sigs/cluster-api-provider-azure")
 
 	// Second presubmit — capi-e2e category.
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "capi-e2e")
 	assertEqual(t, "jobs[1].Branch", jobs[1].Branch, "release-1.21")
+	assertEqual(t, "jobs[1].JobType", jobs[1].JobType, models.JobTypePresubmit)
+	assertEqual(t, "jobs[1].Repo", jobs[1].Repo, "kubernetes-sigs/cluster-api-provider-azure")
 }
 
 func TestCategorize(t *testing.T) {
@@ -229,5 +236,89 @@ func assertEqual(t *testing.T, field, got, want string) {
 	t.Helper()
 	if got != want {
 		t.Errorf("%s = %q, want %q", field, got, want)
+	}
+}
+
+// A single file may declare both periodics: and presubmits: sections;
+// both should be parsed and each job stamped with the correct JobType.
+// Repo is taken from the presubmits map key for presubmits and is empty
+// for periodics.
+func TestParseMixedPeriodicsAndPresubmits(t *testing.T) {
+	yaml := []byte(`
+periodics:
+- name: periodic-mixed-job
+  interval: 24h
+  annotations:
+    testgrid-dashboards: mixed-dashboard
+presubmits:
+  kubernetes-sigs/cluster-api:
+  - name: pull-mixed-job
+    annotations:
+      testgrid-dashboards: mixed-dashboard
+`)
+	jobs, err := ParseJobConfig(yaml, "mixed.yaml", "mixed-dashboard", project.DefaultCategories)
+	if err != nil {
+		t.Fatalf("ParseJobConfig: %v", err)
+	}
+	if got := len(jobs); got != 2 {
+		t.Fatalf("expected 2 jobs, got %d", got)
+	}
+	assertEqual(t, "jobs[0].Name", jobs[0].Name, "periodic-mixed-job")
+	assertEqual(t, "jobs[0].JobType", jobs[0].JobType, models.JobTypePeriodic)
+	assertEqual(t, "jobs[0].Repo", jobs[0].Repo, "")
+	assertEqual(t, "jobs[1].Name", jobs[1].Name, "pull-mixed-job")
+	assertEqual(t, "jobs[1].JobType", jobs[1].JobType, models.JobTypePresubmit)
+	assertEqual(t, "jobs[1].Repo", jobs[1].Repo, "kubernetes-sigs/cluster-api")
+}
+
+// Multiple repos under the same presubmits: section iterate in sorted
+// order so the output is deterministic regardless of map ordering.
+func TestParsePresubmits_SortedByRepo(t *testing.T) {
+	yaml := []byte(`
+presubmits:
+  z-org/z-repo:
+  - name: pull-z
+    annotations:
+      testgrid-dashboards: multi-repo-dashboard
+  a-org/a-repo:
+  - name: pull-a
+    annotations:
+      testgrid-dashboards: multi-repo-dashboard
+  m-org/m-repo:
+  - name: pull-m
+    annotations:
+      testgrid-dashboards: multi-repo-dashboard
+`)
+	jobs, err := ParseJobConfig(yaml, "multi.yaml", "multi-repo-dashboard", project.DefaultCategories)
+	if err != nil {
+		t.Fatalf("ParseJobConfig: %v", err)
+	}
+	if got := len(jobs); got != 3 {
+		t.Fatalf("expected 3 jobs, got %d", got)
+	}
+	wantRepos := []string{"a-org/a-repo", "m-org/m-repo", "z-org/z-repo"}
+	for i, w := range wantRepos {
+		if jobs[i].Repo != w {
+			t.Errorf("jobs[%d].Repo = %q, want %q", i, jobs[i].Repo, w)
+		}
+	}
+}
+
+// EffectiveJobType keeps legacy cache entries (written before JobType was
+// introduced) behaving as periodics so the periodic-only filter doesn't
+// silently drop them after the schema bump.
+func TestEffectiveJobType(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", models.JobTypePeriodic},
+		{models.JobTypePeriodic, models.JobTypePeriodic},
+		{models.JobTypePresubmit, models.JobTypePresubmit},
+	}
+	for _, c := range cases {
+		got := (models.ProwJob{JobType: c.in}).EffectiveJobType()
+		if got != c.want {
+			t.Errorf("EffectiveJobType(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

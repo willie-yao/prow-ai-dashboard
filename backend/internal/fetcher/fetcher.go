@@ -117,7 +117,7 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.PeriodicOnly {
 		var periodic []models.ProwJob
 		for _, j := range jobs {
-			if j.MinimumInterval != "" {
+			if j.EffectiveJobType() == models.JobTypePeriodic {
 				periodic = append(periodic, j)
 			}
 		}

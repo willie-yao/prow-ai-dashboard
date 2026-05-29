@@ -4,6 +4,7 @@
 package jobconfig
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -45,33 +46,44 @@ type presubmitsFile struct {
 // recorded in each returned ProwJob's ConfigFile field. categories controls
 // the substring-to-category mapping applied to each job's name; pass
 // project.DefaultCategories for the engine default set.
+//
+// Both `periodics:` and `presubmits:` top-level sections are recognized.
+// Files containing only one of the two are the common case; files that
+// declare both are also supported and emit both shapes. Returned jobs carry
+// JobType ("periodic" or "presubmit") and, for presubmits, Repo ("org/repo"
+// taken from the presubmits map key).
 func ParseJobConfig(data []byte, filename, dashboard string, categories []project.CategoryRule) ([]models.ProwJob, error) {
-	// Try periodics first.
 	var pf periodicsFile
 	if err := yaml.Unmarshal(data, &pf); err != nil {
 		return nil, err
 	}
-
-	var raw []rawJob
-	if len(pf.Periodics) > 0 {
-		raw = pf.Periodics
-	} else {
-		// Try presubmits.
-		var psf presubmitsFile
-		if err := yaml.Unmarshal(data, &psf); err != nil {
-			return nil, err
-		}
-		for _, jobs := range psf.Presubmits {
-			raw = append(raw, jobs...)
-		}
+	var psf presubmitsFile
+	if err := yaml.Unmarshal(data, &psf); err != nil {
+		return nil, err
 	}
 
 	var result []models.ProwJob
-	for _, r := range raw {
+	for _, r := range pf.Periodics {
 		if !matchesDashboard(r, dashboard) {
 			continue
 		}
-		result = append(result, convertJob(r, filename, categories))
+		result = append(result, convertJob(r, filename, models.JobTypePeriodic, "", categories))
+	}
+
+	// Presubmits are keyed by "org/repo"; sort the keys so the output is
+	// deterministic regardless of map iteration order.
+	repos := make([]string, 0, len(psf.Presubmits))
+	for k := range psf.Presubmits {
+		repos = append(repos, k)
+	}
+	sort.Strings(repos)
+	for _, repo := range repos {
+		for _, r := range psf.Presubmits[repo] {
+			if !matchesDashboard(r, dashboard) {
+				continue
+			}
+			result = append(result, convertJob(r, filename, models.JobTypePresubmit, repo, categories))
+		}
 	}
 	return result, nil
 }
@@ -88,12 +100,13 @@ func matchesDashboard(r rawJob, dashboard string) bool {
 	return false
 }
 
-func convertJob(r rawJob, filename string, categories []project.CategoryRule) models.ProwJob {
+func convertJob(r rawJob, filename, jobType, repo string, categories []project.CategoryRule) models.ProwJob {
 	// Prow periodics may schedule with either minimum_interval, interval,
 	// or cron. The engine only models a single interval string, so prefer
 	// the explicit minimum_interval when present, otherwise fall back to
 	// interval. Cron-scheduled periodics fall through with an empty
-	// interval and are filtered out by PeriodicOnly.
+	// interval; they are kept (filtered correctly by JobType, not by
+	// interval).
 	interval := r.MinimumInterval
 	if interval == "" {
 		interval = r.Interval
@@ -105,6 +118,8 @@ func convertJob(r rawJob, filename string, categories []project.CategoryRule) mo
 		MinimumInterval: interval,
 		ConfigFile:      filename,
 		Category:        categorize(r.Name, categories),
+		JobType:         jobType,
+		Repo:            repo,
 	}
 	if r.DecorationConfig != nil {
 		j.Timeout = r.DecorationConfig.Timeout
