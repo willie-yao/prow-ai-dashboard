@@ -78,6 +78,10 @@ func (s *Service) Module() Module { return s.module }
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case.
 // jobID is the stable per-job identifier used to scope the consecutive map
 // and agentic cache key so same-named jobs across repos do not share state.
+// buildPrefix is the bucket-relative path to the build root (e.g.
+// "logs/<job>/<id>/" for periodics or
+// "pr-logs/pull/<org_repo>/<pr#>/<job>/<id>/" for presubmits); the agentic
+// pipeline scopes its file browser to this prefix.
 //
 // Behavior:
 //   - skip entirely if both AISummary and AIAnalysis are already populated AND
@@ -88,7 +92,7 @@ func (s *Service) Module() Module { return s.module }
 //     AgenticPreferrer opts in), otherwise run the single-shot curator pipeline
 //   - on API failure, leave an "AI analysis unavailable" summary so the UI
 //     still has something to render
-func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID string, run *models.BuildResult, tc *models.TestCase) {
+func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase) {
 	desiredMode := s.desiredMode(run, tc)
 
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc, desiredMode) {
@@ -120,7 +124,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID st
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 
 	if desiredMode == AgenticMode {
-		summary, analysis, err := s.runAgentic(ctx, jobID, run, tc, userPrompt)
+		summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt)
 		if err == nil {
 			tc.AISummary = summary
 			tc.AIAnalysis = analysis
@@ -153,11 +157,11 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID st
 
 // runAgentic does the per-failure agentic call setup (browser construction +
 // cache key + call). Kept separate so Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, jobID string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
-	browser := s.browserFactory.ForBuild(run.JobName, run.BuildID)
+	browser := s.browserFactory.ForBuild(buildPrefix, run.JobName+"/"+run.BuildID)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
 	return s.client.doAnalyzeAgentic(ctx, browser, s.agenticOpts, cacheKey, s.systemPrompt, userPrompt)
 }

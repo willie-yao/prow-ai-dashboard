@@ -34,10 +34,9 @@ var knownMachineLogs = []string{
 // DiscoverClusters fetches the GCSweb listing at .../artifacts/clusters/ for
 // the given build, then inspects each cluster subdirectory to build a list of
 // ClusterArtifacts (machines, activity logs, pod log dirs).
-func DiscoverClusters(ctx context.Context, client *http.Client, bucket *gcs.Bucket, jobName, buildID string) ([]models.ClusterArtifacts, error) {
-	buildPath := jobName + "/" + buildID + "/artifacts/clusters/"
-	base := bucket.WebURL(buildPath)
-	gcsBase := bucket.ObjectBaseURL(buildPath)
+func DiscoverClusters(ctx context.Context, client *http.Client, bucket *gcs.Bucket, loc gcs.BuildLocation) ([]models.ClusterArtifacts, error) {
+	base := bucket.BuildWebURL(loc) + "artifacts/clusters/"
+	gcsBase := bucket.BuildBaseURL(loc) + "artifacts/clusters/"
 
 	return discoverClustersFromURL(ctx, client, base, gcsBase)
 }

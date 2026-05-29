@@ -17,7 +17,7 @@ export function JobCard({ job }: JobCardProps) {
 
   return (
     <Link
-      to={`/job/${encodeURIComponent(job.name)}`}
+      to={`/job/${encodeURIComponent(job.job_id)}`}
       className="glass group flex flex-col gap-3 rounded-2xl border border-outline-variant p-4 transition-all hover:brightness-125"
     >
       <div className="flex items-start justify-between gap-2">
@@ -33,7 +33,7 @@ export function JobCard({ job }: JobCardProps) {
         </p>
       )}
 
-      <Sparkline runs={job.recent_runs} jobName={job.name} />
+      <Sparkline runs={job.recent_runs} jobID={job.job_id} />
 
       <div className="mt-auto flex items-center gap-4 border-t border-outline-variant pt-3 font-label text-[11px] tracking-wide text-on-surface-variant">
         <span>

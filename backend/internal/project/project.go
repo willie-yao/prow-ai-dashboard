@@ -81,8 +81,9 @@ func (c *Config) EffectiveCategories() []CategoryRule {
 // Source describes where in kubernetes/test-infra the project's prow
 // job YAMLs live and how to filter them.
 type Source struct {
-	TestInfraPath string `yaml:"test_infra_path" json:"test_infra_path"`
-	FilePrefix    string `yaml:"file_prefix"     json:"file_prefix"`
+	TestInfraPath     string `yaml:"test_infra_path"    json:"test_infra_path"`
+	FilePrefix        string `yaml:"file_prefix"        json:"file_prefix"`
+	IncludePresubmits bool   `yaml:"include_presubmits" json:"include_presubmits,omitempty"`
 }
 
 // TestGrid identifies the testgrid dashboard that owns the project's jobs.

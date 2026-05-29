@@ -65,7 +65,7 @@ func TestService_AgenticDisabled_UsesCuratorMode(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
 	tc := newFailedTC("Test A", "failure msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if tc.AIAnalysis == nil {
 		t.Fatal("AIAnalysis nil")
@@ -86,7 +86,7 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true /* always */)
 
 	tc := newFailedTC("Test A", "failure msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if tc.AIAnalysis == nil {
 		t.Fatal("AIAnalysis nil")
@@ -110,7 +110,7 @@ func TestService_ModuleOptIn_PreferAgentic(t *testing.T) {
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, false /* not always */)
 
 	tc := newFailedTC("Test A", "msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 	if tc.AIAnalysis == nil || tc.AIAnalysis.Mode != AgenticMode {
 		t.Fatalf("expected agentic mode, got %+v", tc.AIAnalysis)
 	}
@@ -131,9 +131,9 @@ func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true)
 
 	tc1 := newFailedTC("Test A", "msg-a")
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc1)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
 	tc2 := newFailedTC("Test B", "msg-b")
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc2)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc2)
 
 	if tc1.AIAnalysis == nil || tc1.AIAnalysis.Mode != curatorMode {
 		t.Errorf("first analysis: expected curator fallback after ErrToolsUnsupported, got %+v", tc1.AIAnalysis)
@@ -157,7 +157,7 @@ func TestService_TransientShortCircuit(t *testing.T) {
 	s := NewService(client, mod, "sys", nil)
 
 	tc := newFailedTC("Test A", "rate limit")
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if tc.AISummary == nil || !tc.AISummary.IsTransient {
 		t.Fatal("expected transient summary")
@@ -186,7 +186,7 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	tc.AISummary = &models.AISummary{Summary: "stale curator summary"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale curator root cause", Mode: curatorMode}
 
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if tc.AIAnalysis.Mode != AgenticMode {
 		t.Errorf("Mode = %q, want %q (stale curator entry should be re-analyzed under agentic)", tc.AIAnalysis.Mode, AgenticMode)
@@ -208,7 +208,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	tc.AISummary = &models.AISummary{Summary: "cached"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: curatorMode}
 
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if got := atomic.LoadInt32(&srv.calls); got != 0 {
 		t.Errorf("server calls = %d, want 0 (existing curator analysis should be kept)", got)
@@ -234,7 +234,7 @@ func TestService_NormalizesEmptyModeOnLegacyCache(t *testing.T) {
 	tc.AISummary = &models.AISummary{Summary: "cached"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached"}
 
-	s.Analyze(context.Background(), &http.Client{}, "j", newRun("j", "1"), tc)
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if got := atomic.LoadInt32(&srv.calls); got != 0 {
 		t.Errorf("server calls = %d, want 0 (legacy curator cache should be kept, not re-analyzed)", got)

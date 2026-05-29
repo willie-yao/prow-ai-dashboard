@@ -76,8 +76,8 @@ export function NeedsAttention() {
             <div className="space-y-0.5">
               {group.items.map((item) => (
                 <Link
-                  key={`${item.job_name}/${item.test_name}`}
-                  to={`/job/${encodeURIComponent(item.job_name)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
+                  key={`${item.job_id}/${item.test_name}`}
+                  to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
                   className="flex items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-surface-container-high"
                 >
                   {/* Status dot */}

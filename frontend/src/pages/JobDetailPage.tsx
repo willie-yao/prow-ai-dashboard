@@ -14,12 +14,13 @@ import { TestCaseTable } from "../components/TestCaseTable";
 import { HiChevronRight } from "react-icons/hi2";
 
 export function JobDetailPage() {
-  const { jobName } = useParams<{ jobName: string }>();
+  const { jobName: jobID } = useParams<{ jobName: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [gridOpen, setGridOpen] = useState(false);
-  const { data, loading, error } = useJobDetail(jobName);
+  const { data, loading, error } = useJobDetail(jobID);
 
   const runs = data?.runs ?? [];
+  const displayName = data?.name ?? jobID ?? "";
 
   const selectedBuildId =
     searchParams.get("run") ?? runs[0]?.build_id ?? undefined;
@@ -99,13 +100,13 @@ export function JobDetailPage() {
           Dashboard
         </Link>
         <span>›</span>
-        <span className="text-on-surface">{jobName}</span>
+        <span className="text-on-surface">{displayName}</span>
       </nav>
 
       {/* Job header */}
       <div>
         <h1 className="font-headline text-xl sm:text-2xl font-bold text-on-surface">
-          {jobName}
+          {displayName}
         </h1>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           {passRate7d !== null && (
@@ -165,7 +166,7 @@ export function JobDetailPage() {
             >
               <div className="overflow-hidden">
                 <div className="pt-3">
-                  <TestResultsGrid runs={runs} jobName={jobName!} />
+                  <TestResultsGrid runs={runs} jobID={jobID!} />
                 </div>
               </div>
             </div>
@@ -266,7 +267,7 @@ export function JobDetailPage() {
               <h2 className="font-headline mb-3 text-lg font-semibold text-on-surface">
                 Test Cases
               </h2>
-              <TestCaseTable testCases={testCases} jobName={jobName} buildId={selectedRun?.build_id} buildLogUrl={selectedRun?.build_log_url} />
+              <TestCaseTable testCases={testCases} jobID={jobID} buildId={selectedRun?.build_id} buildLogUrl={selectedRun?.build_log_url} webUrl={selectedRun?.web_url} />
             </section>
           )}
 

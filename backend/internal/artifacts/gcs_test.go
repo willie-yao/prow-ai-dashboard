@@ -165,8 +165,7 @@ func newBrowserWithFake(t *testing.T, files map[string][]byte) (*GCSBrowser, *fa
 	t.Cleanup(srv.Close)
 	b := &GCSBrowser{
 		bucket:    "test-bucket",
-		jobName:   "job1",
-		buildID:   "b1",
+		display:   "job1/b1",
 		client:    srv.Client(),
 		prefix:    "logs/job1/b1/",
 		objectURL: srv.URL + "/test-bucket/",

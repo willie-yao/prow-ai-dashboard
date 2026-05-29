@@ -65,6 +65,12 @@ type BuildInfo struct {
 	// Empty for periodics. Required for reconstructing presubmit GCS paths
 	// from cached BuildResults without reparsing the job config.
 	PullNumber string `json:"pull_number,omitempty"`
+	// WebURL is the human-clickable gcsweb directory for this build (e.g.
+	// https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<build>/ for periodics,
+	// or .../pr-logs/pull/<org_repo>/<pr>/<job>/<build>/ for presubmits).
+	// Populated by gcs.FetchBuildInfo so the frontend can link to artifact
+	// directories without recomposing GCS paths from job identity.
+	WebURL string `json:"web_url,omitempty"`
 }
 
 // AISummary is a brief AI-generated explanation of a test failure.

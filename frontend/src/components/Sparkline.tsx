@@ -5,10 +5,10 @@ import { dotColor } from "../lib/utils";
 
 interface SparklineProps {
   runs: RunSummary[];
-  jobName: string;
+  jobID: string;
 }
 
-export function Sparkline({ runs, jobName }: SparklineProps) {
+export function Sparkline({ runs, jobID }: SparklineProps) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   // Show newest on the right: recent_runs is newest-first, so take first 8 and reverse
   const recent = runs.slice(0, 8).reverse();
@@ -18,7 +18,7 @@ export function Sparkline({ runs, jobName }: SparklineProps) {
       {recent.map((run, i) => (
         <Link
           key={run.build_id}
-          to={`/job/${encodeURIComponent(jobName)}?run=${run.build_id}`}
+          to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
           className="group relative"
           onMouseEnter={() => setHoveredIdx(i)}
           onMouseLeave={() => setHoveredIdx(null)}

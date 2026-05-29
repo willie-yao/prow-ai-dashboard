@@ -137,19 +137,25 @@ type fetchResult struct {
 }
 
 // FetchBuildInfo fetches started.json and finished.json for a Prow build and
-// returns a populated BuildInfo. If finished.json is missing (HTTP 404), the
-// build is treated as still running: partial info is returned with Result set
-// to "PENDING" and a zero Finished time.
-func FetchBuildInfo(ctx context.Context, client *http.Client, bucket *Bucket, jobName, buildID string) (*models.BuildInfo, error) {
-	gcsBase := bucket.ObjectBaseURL("")
-	prowBase := bucket.ProwURL("")
-	return fetchBuildInfoWithBase(ctx, client, gcsBase, prowBase, jobName, buildID)
+// FetchBuildInfo fetches started.json and finished.json for a Prow build
+// addressed by loc, and returns a populated BuildInfo. If finished.json
+// is missing (HTTP 404), the build is treated as still running: partial
+// info is returned with Result="PENDING" and zero Finished time.
+//
+// loc carries the JobType + (optional) Repo + PullNumber needed to route
+// between the periodic logs/ and presubmit pr-logs/pull/ layouts via
+// bucket's URL helpers.
+func FetchBuildInfo(ctx context.Context, client *http.Client, bucket *Bucket, loc BuildLocation) (*models.BuildInfo, error) {
+	base := bucket.BuildBaseURL(loc)
+	prowURL := bucket.BuildProwURL(loc)
+	webURL := bucket.BuildWebURL(loc)
+	return fetchBuildInfoWithBase(ctx, client, base, prowURL, webURL, loc.JobName, loc.BuildID, loc.PullNumber)
 }
 
 // fetchBuildInfoWithBase is the internal implementation that accepts a
-// configurable base URL, making it easy to test against httptest servers.
-func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, gcsBase, prowBase, jobName, buildID string) (*models.BuildInfo, error) {
-	base := gcsBase + jobName + "/" + buildID + "/"
+// fully-formed base URL (trailing-slashed prefix down to the build
+// directory), making it easy to test against httptest servers.
+func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, base, prowURL, webURL, jobName, buildID, pullNumber string) (*models.BuildInfo, error) {
 	startedURL := base + "started.json"
 	finishedURL := base + "finished.json"
 
@@ -179,10 +185,11 @@ func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, gcsBase, p
 		return nil, fmt.Errorf("parsing started.json: %w", err)
 	}
 
-	prowURL := prowBase + jobName + "/" + buildID
 	info := &models.BuildInfo{
 		BuildID:     buildID,
 		JobName:     jobName,
+		PullNumber:  pullNumber,
+		WebURL:      webURL,
 		Started:     time.Unix(s.Timestamp, 0).UTC(),
 		Commit:      s.RepoCommit,
 		RepoVersion: s.RepoVer,

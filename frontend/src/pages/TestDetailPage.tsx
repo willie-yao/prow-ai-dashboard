@@ -66,12 +66,13 @@ interface FailureGroup {
 export function TestDetailPage() {
   const manifest = useManifest();
   const sourceRepo = manifest.branding.source_repo;
-  const { jobName, testName: encodedTestName } = useParams<{
+  const { jobName: jobID, testName: encodedTestName } = useParams<{
     jobName: string;
     testName: string;
   }>();
   const testName = encodedTestName ? decodeURIComponent(encodedTestName) : "";
-  const { data, loading, error } = useJobDetail(jobName);
+  const { data, loading, error } = useJobDetail(jobID);
+  const displayName = data?.name ?? jobID ?? "";
   const [searchParams] = useSearchParams();
   const [selectedBuildId, setSelectedBuildId] = useState<string | null>(
     searchParams.get("run")
@@ -220,10 +221,10 @@ export function TestDetailPage() {
           </Link>
           <span>›</span>
           <Link
-            to={`/job/${encodeURIComponent(jobName ?? "")}`}
+            to={`/job/${encodeURIComponent(jobID ?? "")}`}
             className="transition-colors hover:text-primary"
           >
-            {jobName}
+            {displayName}
           </Link>
           <span>›</span>
           <span className="text-on-surface truncate">{testName}</span>
@@ -250,10 +251,10 @@ export function TestDetailPage() {
         </Link>
         <span>›</span>
         <Link
-          to={`/job/${encodeURIComponent(jobName ?? "")}${effectiveSelectedId ? `?run=${effectiveSelectedId}` : ""}`}
+          to={`/job/${encodeURIComponent(jobID ?? "")}${effectiveSelectedId ? `?run=${effectiveSelectedId}` : ""}`}
           className="transition-colors hover:text-primary"
         >
-          {jobName}
+          {displayName}
         </Link>
         <span>›</span>
         <span className="text-on-surface truncate max-w-md" title={testName}>
@@ -499,9 +500,9 @@ export function TestDetailPage() {
                     <HiArchiveBox className="h-3.5 w-3.5 shrink-0" /> {dir}
                   </a>
                 ))}
-                {selectedRun && (
+                {selectedRun?.web_url && (
                   <a
-                    href={`https://gcsweb.k8s.io/gcs/${manifest.gcs.bucket}/logs/${selectedRun.job_name}/${selectedRun.build_id}/artifacts/clusters/bootstrap/logs/`}
+                    href={`${selectedRun.web_url}artifacts/clusters/bootstrap/logs/`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-primary hover:underline"

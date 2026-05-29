@@ -58,11 +58,12 @@ func TestFetchBuildInfo_AllFields(t *testing.T) {
 	ts := newTestServer(t, jobName, buildID, true)
 	defer ts.Close()
 
-	// Override GCS base URL so FetchBuildInfo hits our test server.
-	// We do this by calling the internal helpers directly and constructing
-	// a BuildInfo ourselves—but the cleaner approach is to accept a base URL.
-	// Since the public API uses the constant, we test via a wrapper.
-	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", jobName, buildID)
+	// Construct a base URL (trailing slash) and the prow/web URLs that
+	// FetchBuildInfo would otherwise derive from a *Bucket.
+	base := ts.URL + "/" + jobName + "/" + buildID + "/"
+	prowURL := "https://prow.example/view/" + jobName + "/" + buildID
+	webURL := "https://gcsweb.example/gcs/bucket/" + jobName + "/" + buildID + "/"
+	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), base, prowURL, webURL, jobName, buildID, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,6 +71,8 @@ func TestFetchBuildInfo_AllFields(t *testing.T) {
 	// Verify identity fields.
 	assertEqual(t, "BuildID", info.BuildID, buildID)
 	assertEqual(t, "JobName", info.JobName, jobName)
+	assertEqual(t, "WebURL", info.WebURL, webURL)
+	assertEqual(t, "PullNumber", info.PullNumber, "")
 
 	// Verify timestamp parsing (Unix seconds → time.Time).
 	wantStarted := time.Unix(1773843080, 0).UTC()
@@ -116,7 +119,8 @@ func TestFetchBuildInfo_MissingFinished(t *testing.T) {
 	ts := newTestServer(t, jobName, buildID, false)
 	defer ts.Close()
 
-	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", jobName, buildID)
+	base := ts.URL + "/" + jobName + "/" + buildID + "/"
+	info, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), base, "https://prow.example/view/"+jobName+"/"+buildID, "", jobName, buildID, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +141,7 @@ func TestFetchBuildInfo_MissingStarted(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler())
 	defer ts.Close()
 
-	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", "job", "1")
+	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/job/1/", "https://prow.example/view/job/1", "", "job", "1", "")
 	if err == nil {
 		t.Fatal("expected error when started.json is missing")
 	}
@@ -149,7 +153,7 @@ func TestFetchBuildInfo_ServerError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/", "https://prow.example/view/", "job", "1")
+	_, err := fetchBuildInfoWithBase(context.Background(), ts.Client(), ts.URL+"/job/1/", "https://prow.example/view/job/1", "", "job", "1", "")
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}

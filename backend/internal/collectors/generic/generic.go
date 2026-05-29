@@ -7,6 +7,7 @@ package generic
 import (
 	"context"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -20,6 +21,6 @@ func New() *Collector { return &Collector{} }
 func (*Collector) Name() string { return "generic" }
 
 // CollectArtifacts implements collectors.Collector. It does nothing.
-func (*Collector) CollectArtifacts(_ context.Context, _, _ string, _ *models.BuildResult) error {
+func (*Collector) CollectArtifacts(_ context.Context, _ gcs.BuildLocation, _ *models.BuildResult) error {
 	return nil
 }

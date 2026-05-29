@@ -63,9 +63,9 @@ func (*Collector) Name() string { return "capi" }
 // under artifacts/clusters/, parses the build log for namespace mappings, and
 // maps each failed test case to a cluster (or a namespace as fallback).
 //
-// This is a 1:1 port of the inline block that previously lived in
-// cmd/fetcher/main.go.
-func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID string, result *models.BuildResult) error {
+// loc carries the JobType + Repo + PullNumber needed to route between the
+// periodic logs/ and presubmit pr-logs/pull/ layouts via bucket helpers.
+func (c *Collector) CollectArtifacts(ctx context.Context, loc gcs.BuildLocation, result *models.BuildResult) error {
 	if result == nil {
 		return nil
 	}
@@ -74,12 +74,12 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 		return nil
 	}
 
-	clusters, err := DiscoverClusters(ctx, c.client, c.bucket, jobName, buildID)
+	clusters, err := DiscoverClusters(ctx, c.client, c.bucket, loc)
 	if err != nil {
 		// 404 is expected for jobs that don't produce cluster artifacts (e.g., AKS, conformance).
 		// Only log non-404 errors.
 		if !strings.Contains(err.Error(), "404") {
-			log.Printf("    ⚠ %s/%s: artifact discovery failed: %v", jobName, buildID, err)
+			log.Printf("    ⚠ %s/%s: artifact discovery failed: %v", loc.JobName, loc.BuildID, err)
 		}
 	}
 
@@ -87,21 +87,21 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 	var namespaceMap map[string]string
 	buildLog, err := gcs.FetchRaw(ctx, c.client, result.BuildLogURL)
 	if err != nil {
-		log.Printf("    ⚠ %s/%s: failed to fetch build log for namespace mapping: %v", jobName, buildID, err)
+		log.Printf("    ⚠ %s/%s: failed to fetch build log for namespace mapping: %v", loc.JobName, loc.BuildID, err)
 	} else {
 		namespaceMap = ParseNamespaceMap(buildLog, c.clusterPrefix)
-		log.Printf("    📋 %s/%s: build log %d bytes, %d namespace mappings", jobName, buildID, len(buildLog), len(namespaceMap))
+		log.Printf("    📋 %s/%s: build log %d bytes, %d namespace mappings", loc.JobName, loc.BuildID, len(buildLog), len(namespaceMap))
 	}
 
-	bootstrapPath := jobName + "/" + buildID + "/artifacts/clusters/bootstrap/resources/"
+	bootstrapBase := c.bucket.BuildWebURL(loc) + "artifacts/clusters/bootstrap/resources/"
 
 	// Discover management-cluster controller logs as declared by
 	// project.yaml. Errors are logged but non-fatal; missing entries are
 	// surfaced by the AI module via its "Configured but missing" footer.
 	if len(c.controllerLogs) > 0 {
-		urls, err := DiscoverControllerLogs(ctx, c.client, c.bucket, jobName, buildID, c.controllerLogs, c.controllerPodRegex)
+		urls, err := DiscoverControllerLogs(ctx, c.client, c.bucket, loc, c.controllerLogs, c.controllerPodRegex)
 		if err != nil {
-			log.Printf("    ⚠ %s/%s: controller log discovery failed: %v", jobName, buildID, err)
+			log.Printf("    ⚠ %s/%s: controller log discovery failed: %v", loc.JobName, loc.BuildID, err)
 		}
 		if len(urls) > 0 {
 			result.ControllerLogURLs = urls
@@ -116,7 +116,7 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 		ca := MapTestToCluster(result.TestCases[i].Name, clusters)
 		if ca != nil {
 			if ns := c.bootstrapNamespace(ca.ClusterName); ns != "" {
-				ca.BootstrapResourcesURL = c.bucket.WebURL(bootstrapPath + ns + "/")
+				ca.BootstrapResourcesURL = bootstrapBase + ns + "/"
 			}
 			result.TestCases[i].ClusterArtifacts = ca
 		} else if namespaceMap != nil {
@@ -125,7 +125,7 @@ func (c *Collector) CollectArtifacts(ctx context.Context, jobName, buildID strin
 			if ns != "" {
 				result.TestCases[i].ClusterArtifacts = &models.ClusterArtifacts{
 					ClusterName:           ns,
-					BootstrapResourcesURL: c.bucket.WebURL(bootstrapPath + ns + "/"),
+					BootstrapResourcesURL: bootstrapBase + ns + "/",
 				}
 			}
 		}

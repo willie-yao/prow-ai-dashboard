@@ -27,7 +27,7 @@ func main() {
 	flag.IntVar(&opts.BuildsPerJob, "builds", 10, "number of recent builds to fetch per job")
 	flag.IntVar(&opts.Workers, "workers", 5, "number of concurrent job fetchers")
 	flag.DurationVar(&opts.Timeout, "timeout", 10*time.Minute, "overall fetch timeout")
-	flag.BoolVar(&opts.PeriodicOnly, "periodic-only", true, "only fetch periodic jobs (skip presubmits)")
+	flag.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to periodics (ORed with project.yaml source.include_presubmits)")
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	flag.Parse()
 

@@ -16,7 +16,7 @@ import (
 type stubCollector struct{ name string }
 
 func (s *stubCollector) Name() string { return s.name }
-func (s *stubCollector) CollectArtifacts(_ context.Context, _, _ string, _ *models.BuildResult) error {
+func (s *stubCollector) CollectArtifacts(_ context.Context, _ gcs.BuildLocation, _ *models.BuildResult) error {
 	return nil
 }
 

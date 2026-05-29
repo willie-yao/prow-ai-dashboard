@@ -37,7 +37,7 @@ func DiscoverControllerLogs(
 	ctx context.Context,
 	client *http.Client,
 	bucket *gcs.Bucket,
-	jobName, buildID string,
+	loc gcs.BuildLocation,
 	selectors []project.ControllerLogSelector,
 	podRegexes []*regexp.Regexp,
 ) (map[string]string, error) {
@@ -45,6 +45,7 @@ func DiscoverControllerLogs(
 		return nil, nil
 	}
 
+	buildPrefix := loc.BuildPath()
 	result := make(map[string]string)
 	for i, sel := range selectors {
 		if sel.Namespace == "" {
@@ -65,8 +66,7 @@ func DiscoverControllerLogs(
 		// Object prefix to list. The trailing slash is critical so a
 		// "capi-system" selector doesn't accidentally match
 		// "capi-system-extras" later if such a namespace ever appears.
-		prefix := "logs/" + jobName + "/" + buildID +
-			"/artifacts/clusters/bootstrap/logs/" + sel.Namespace + "/"
+		prefix := buildPrefix + "artifacts/clusters/bootstrap/logs/" + sel.Namespace + "/"
 
 		names, err := gcs.ListObjects(ctx, client, bucket.ListAPIURL(), prefix)
 		if err != nil {
@@ -85,11 +85,11 @@ func DiscoverControllerLogs(
 			if _, exists := result[key]; exists {
 				continue
 			}
-			// ListObjects returns the bucket-relative path including
-			// "logs/" prefix; strip it because Bucket.ObjectURL re-adds
-			// "logs/" for us.
-			withoutLogsPrefix := strings.TrimPrefix(m.objectName, "logs/")
-			result[key] = bucket.ObjectURL(withoutLogsPrefix)
+			// ListObjects returns the bucket-relative path; convert to a
+			// BuildLocation-relative suffix and route through the bucket
+			// helper so both periodic and presubmit layouts work.
+			suffix := strings.TrimPrefix(m.objectName, buildPrefix)
+			result[key] = bucket.BuildObjectURL(loc, suffix)
 		}
 	}
 

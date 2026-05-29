@@ -28,14 +28,20 @@ func NewGCSFactory(bucket string, client *http.Client) *GCSFactory {
 	return &GCSFactory{bucket: bucket, client: client}
 }
 
-// ForBuild returns a Browser bound to a single Prow build.
-func (f *GCSFactory) ForBuild(jobName, buildID string) Browser {
+// ForBuild returns a Browser bound to a single Prow build. buildPrefix is
+// the bucket-relative directory of the build (always trailing-slashed),
+// e.g. "logs/<job>/<build>/" for periodics or
+// "pr-logs/pull/<org_repo>/<pr#>/<job>/<build>/" for presubmits.
+// displayName is the human-readable label surfaced via BuildRoot().
+func (f *GCSFactory) ForBuild(buildPrefix, displayName string) Browser {
+	if !strings.HasSuffix(buildPrefix, "/") {
+		buildPrefix += "/"
+	}
 	return &GCSBrowser{
 		bucket:    f.bucket,
-		jobName:   jobName,
-		buildID:   buildID,
+		display:   displayName,
 		client:    f.client,
-		prefix:    fmt.Sprintf("logs/%s/%s/", jobName, buildID),
+		prefix:    buildPrefix,
 		objectURL: fmt.Sprintf("https://storage.googleapis.com/%s/", f.bucket),
 		listURL:   fmt.Sprintf("https://storage.googleapis.com/storage/v1/b/%s/o", f.bucket),
 		cache:     map[string][]byte{},
@@ -45,10 +51,9 @@ func (f *GCSFactory) ForBuild(jobName, buildID string) Browser {
 // GCSBrowser implements Browser against GCS for one Prow build.
 type GCSBrowser struct {
 	bucket    string
-	jobName   string
-	buildID   string
+	display   string // "<job>/<build>" or any caller-supplied label
 	client    *http.Client
-	prefix    string // "logs/<job>/<build>/"
+	prefix    string // bucket-relative build directory, trailing-slashed
 	objectURL string // "https://storage.googleapis.com/<bucket>/"
 	listURL   string // "https://storage.googleapis.com/storage/v1/b/<bucket>/o"
 
@@ -69,7 +74,7 @@ const smallFileCacheCap = 1 * 1024 * 1024 // 1 MB
 const perCallGCSCap = 64 * 1024 * 1024 // 64 MB
 
 func (b *GCSBrowser) BuildRoot() string {
-	return fmt.Sprintf("%s/%s/%s", b.bucket, b.jobName, b.buildID)
+	return fmt.Sprintf("%s/%s", b.bucket, b.display)
 }
 
 // ---------- List ----------

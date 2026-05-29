@@ -10,15 +10,13 @@ import (
 // Bucket centralizes URL construction for a GCS bucket that holds Prow
 // build logs. Two Prow conventions live in the same bucket:
 //
-//   periodic   logs/<job>/<build>/...
-//   presubmit  pr-logs/pull/<org>_<repo>/<pr#>/<job>/<build>/...
+//	periodic   logs/<job>/<build>/...
+//	presubmit  pr-logs/pull/<org>_<repo>/<pr#>/<job>/<build>/...
 //
-// The legacy single-string helpers (ObjectURL, ObjectBaseURL, WebURL,
-// ProwURL) interpret their path argument under the periodic "logs/"
-// prefix and remain in use by the existing fetcher/collector pipeline.
-// New code that needs presubmit support builds a BuildLocation and uses
-// BuildObjectURL / BuildBaseURL / BuildWebURL / BuildProwURL. See Phase
-// E Stage 2/3 for the path that wires presubmit fetching end-to-end.
+// Callers construct a BuildLocation and use BuildObjectURL / BuildBaseURL
+// / BuildWebURL / BuildProwURL so the same code path serves both
+// conventions. JobIndexPrefix returns the right listing prefix for
+// "list builds of this job" (logs/<job>/ vs pr-logs/directory/<job>/).
 type Bucket struct {
 	Name string
 }
@@ -79,9 +77,9 @@ func (l JobLocation) jobPath(jobName, pullNumber string) string {
 	return l.jobTypePrefix(pullNumber) + jobName + "/"
 }
 
-// buildPath returns the bucket-relative path down to a specific build,
+// BuildPath returns the bucket-relative path down to a specific build,
 // with a trailing slash. Built from BuildLocation.
-func (l BuildLocation) buildPath() string {
+func (l BuildLocation) BuildPath() string {
 	return l.JobLocation.jobPath(l.JobName, l.PullNumber) + l.BuildID + "/"
 }
 
@@ -89,58 +87,51 @@ func (l BuildLocation) buildPath() string {
 // under the build's artifact directory. Routes between periodic and
 // presubmit layouts based on loc.JobType.
 func (b *Bucket) BuildObjectURL(loc BuildLocation, suffix string) string {
-	return fmt.Sprintf("https://storage.googleapis.com/%s/%s%s", b.Name, loc.buildPath(), suffix)
+	return fmt.Sprintf("https://storage.googleapis.com/%s/%s%s", b.Name, loc.BuildPath(), suffix)
 }
 
 // BuildBaseURL returns the raw GCS prefix for the build's artifact
 // directory, always trailing-slashed.
 func (b *Bucket) BuildBaseURL(loc BuildLocation) string {
-	return fmt.Sprintf("https://storage.googleapis.com/%s/%s", b.Name, loc.buildPath())
+	return fmt.Sprintf("https://storage.googleapis.com/%s/%s", b.Name, loc.BuildPath())
 }
 
 // BuildWebURL returns the human-browsable GCSweb URL for the build.
 func (b *Bucket) BuildWebURL(loc BuildLocation) string {
-	return fmt.Sprintf("https://gcsweb.k8s.io/gcs/%s/%s", b.Name, loc.buildPath())
+	return fmt.Sprintf("https://gcsweb.k8s.io/gcs/%s/%s", b.Name, loc.BuildPath())
 }
 
 // BuildProwURL returns the Prow UI URL for the build.
 func (b *Bucket) BuildProwURL(loc BuildLocation) string {
-	return fmt.Sprintf("https://prow.k8s.io/view/gs/%s/%s", b.Name, loc.buildPath())
+	return fmt.Sprintf("https://prow.k8s.io/view/gs/%s/%s", b.Name, loc.BuildPath())
 }
 
-// JobListPrefix returns the bucket-relative prefix for listing all build
-// IDs of a specific job. For periodics that's "logs/<job>/". For
-// presubmits it's "pr-logs/pull/<org_repo>/<pull>/<job>/", which lists
-// builds for one PR. Listing across all PRs is a Stage 2/3 concern and
-// requires a different prefix.
-func (b *Bucket) JobListPrefix(loc JobLocation, jobName, pullNumber string) string {
-	return loc.jobPath(jobName, pullNumber)
-}
-
-// ObjectURL returns the raw GCS object URL for the given path under the
-// periodic "logs/" prefix. Periodic-only; for presubmits use
-// BuildObjectURL with a presubmit BuildLocation.
-//
-//	NewBucket("kubernetes-ci-logs").ObjectURL("foo/1/build-log.txt") ->
-//	  https://storage.googleapis.com/kubernetes-ci-logs/logs/foo/1/build-log.txt
-func (b *Bucket) ObjectURL(path string) string {
-	return fmt.Sprintf("https://storage.googleapis.com/%s/logs/%s", b.Name, path)
-}
-
-// ObjectBaseURL returns the raw GCS prefix for the given path under the
-// periodic "logs/" prefix, always trailing-slashed. Periodic-only.
-func (b *Bucket) ObjectBaseURL(path string) string {
-	return fmt.Sprintf("https://storage.googleapis.com/%s/logs/%s", b.Name, ensureSlash(path))
-}
-
-// WebURL returns the human-browsable GCSweb URL for the given path under
-// the periodic "logs/" prefix. Periodic-only.
-func (b *Bucket) WebURL(path string) string {
-	return fmt.Sprintf("https://gcsweb.k8s.io/gcs/%s/logs/%s", b.Name, path)
+// JobIndexPrefix returns the bucket-relative prefix for listing builds
+// of a job WITHOUT a known pull number. For periodics this is
+// "logs/<job>/" (the canonical location for all build IDs of the job).
+// For presubmits this is "pr-logs/directory/<job>/", a Prow-maintained
+// index containing one "<buildID>.txt" entry per build of the job
+// across every pull request. The .txt body holds the actual
+// "pr-logs/pull/<org_repo>/<pr#>/<job>/<buildID>" path.
+func (b *Bucket) JobIndexPrefix(loc JobLocation, jobName string) string {
+	switch loc.JobType {
+	case models.JobTypePeriodic:
+		return "logs/" + jobName + "/"
+	case models.JobTypePresubmit:
+		return "pr-logs/directory/" + jobName + "/"
+	default:
+		panic(fmt.Sprintf("gcs: unknown JobType %q", loc.JobType))
+	}
 }
 
 // ProwURL returns the Prow UI URL for the given path under the periodic
-// "logs/" prefix. Periodic-only.
+// "logs/" prefix. Periodic-only; used by the notifier for deep links in
+// failure alerts (presubmit notifications would require a refactor to
+// pass full BuildLocation through the notification state — see Phase E
+// Stage 3 in the plan).
+//
+//	NewBucket("kubernetes-ci-logs").ProwURL("") ->
+//	  https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/
 func (b *Bucket) ProwURL(path string) string {
 	return fmt.Sprintf("https://prow.k8s.io/view/gs/%s/logs/%s", b.Name, path)
 }
@@ -148,14 +139,4 @@ func (b *Bucket) ProwURL(path string) string {
 // ListAPIURL returns the GCS JSON API endpoint for listing objects in this bucket.
 func (b *Bucket) ListAPIURL() string {
 	return fmt.Sprintf("https://storage.googleapis.com/storage/v1/b/%s/o", b.Name)
-}
-
-func ensureSlash(s string) string {
-	if s == "" {
-		return ""
-	}
-	if s[len(s)-1] == '/' {
-		return s
-	}
-	return s + "/"
 }

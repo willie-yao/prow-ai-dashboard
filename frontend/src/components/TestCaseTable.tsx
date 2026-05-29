@@ -6,9 +6,10 @@ import { useManifest } from "../hooks/useManifest";
 
 interface TestCaseTableProps {
   testCases: TestCase[];
-  jobName?: string;
+  jobID?: string;
   buildId?: string;
   buildLogUrl?: string;
+  webUrl?: string;
 }
 
 const statusOrder: Record<string, number> = {
@@ -70,7 +71,7 @@ function highlightStackTrace(body: string): (string | React.ReactElement)[] {
   return parts;
 }
 
-export function TestCaseTable({ testCases, jobName, buildId, buildLogUrl }: TestCaseTableProps) {
+export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }: TestCaseTableProps) {
   const manifest = useManifest();
   const sourceRepo = manifest.branding.source_repo;
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
@@ -136,9 +137,9 @@ export function TestCaseTable({ testCases, jobName, buildId, buildLogUrl }: Test
                       {statusIcon(tc.status)}
                     </span>
                     <span className="min-w-0 flex-1 break-words px-2 sm:px-3 py-2 text-on-surface">
-                      {jobName && tc.status === "failed" ? (
+                      {jobID && tc.status === "failed" ? (
                         <Link
-                          to={`/job/${encodeURIComponent(jobName)}/test/${encodeURIComponent(tc.name)}${buildId ? `?run=${buildId}` : ""}`}
+                          to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(tc.name)}${buildId ? `?run=${buildId}` : ""}`}
                           className="hover:text-primary transition-colors"
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -269,9 +270,9 @@ export function TestCaseTable({ testCases, jobName, buildId, buildLogUrl }: Test
                                 <HiArchiveBox className="h-3.5 w-3.5 shrink-0" /> {dir}
                               </a>
                             ))}
-                            {jobName && buildId && (
+                            {webUrl && (
                               <a
-                                href={`https://gcsweb.k8s.io/gcs/${manifest.gcs.bucket}/logs/${jobName}/${buildId}/artifacts/clusters/bootstrap/logs/`}
+                                href={`${webUrl}artifacts/clusters/bootstrap/logs/`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1 text-primary hover:underline"

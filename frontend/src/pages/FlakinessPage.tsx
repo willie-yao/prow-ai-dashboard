@@ -69,7 +69,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
           {/* Test Name */}
           <div className="min-w-0 flex-1">
             <Link
-              to={`/job/${encodeURIComponent(item.job_name)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
+              to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
               onClick={(e) => e.stopPropagation()}
               className="block truncate text-sm font-medium text-on-surface hover:text-primary transition-colors"
               title={item.test_name}
@@ -77,7 +77,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
               {item.test_name}
             </Link>
             <Link
-              to={`/job/${encodeURIComponent(item.job_name)}`}
+              to={`/job/${encodeURIComponent(item.job_id)}`}
               onClick={(e) => e.stopPropagation()}
               className="font-label text-xs text-on-surface-variant hover:text-primary transition-colors"
             >
@@ -284,7 +284,7 @@ export function FlakinessPage() {
         <div className="space-y-3">
           {items.map((item) => (
             <TestRow
-              key={`${item.job_name}/${item.test_name}`}
+              key={`${item.job_id}/${item.test_name}`}
               item={item}
               tab={activeTab}
             />

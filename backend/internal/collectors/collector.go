@@ -11,6 +11,7 @@ package collectors
 import (
 	"context"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -22,8 +23,10 @@ type Collector interface {
 	Name() string
 
 	// CollectArtifacts attaches debug artifacts (e.g. ClusterArtifacts) to
-	// failed test cases in result. Called once per failed build. Errors are
-	// logged by the caller; implementations should not abort the run on
+	// failed test cases in result. Called once per failed build. loc carries
+	// the JobType + Repo + PullNumber needed to address build artifacts via
+	// gcs.Bucket helpers across both periodic and presubmit layouts. Errors
+	// are logged by the caller; implementations should not abort the run on
 	// transient I/O failures.
-	CollectArtifacts(ctx context.Context, jobName, buildID string, result *models.BuildResult) error
+	CollectArtifacts(ctx context.Context, loc gcs.BuildLocation, result *models.BuildResult) error
 }

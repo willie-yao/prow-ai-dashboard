@@ -32,14 +32,14 @@ export function SearchBar() {
     return fuse.search(query, { limit: 20 });
   }, [fuse, query]);
 
-  // Group results by job
+  // Group results by JobID so a same-named presubmit + periodic don't collide.
   const grouped = useMemo(() => {
-    const groups = new Map<string, { item: SearchEntry; score?: number }[]>();
+    const groups = new Map<string, { jobName: string; items: { item: SearchEntry; score?: number }[] }>();
     for (const r of results) {
-      const job = r.item.job_name;
-      const list = groups.get(job);
-      if (list) list.push(r);
-      else groups.set(job, [r]);
+      const key = r.item.job_id;
+      const existing = groups.get(key);
+      if (existing) existing.items.push(r);
+      else groups.set(key, { jobName: r.item.job_name, items: [r] });
     }
     return groups;
   }, [results]);
@@ -84,9 +84,9 @@ export function SearchBar() {
 
   function handleSelect(entry: SearchEntry) {
     if (entry.kind === "job") {
-      navigate(`/job/${encodeURIComponent(entry.job_name)}`);
+      navigate(`/job/${encodeURIComponent(entry.job_id)}`);
     } else {
-      navigate(`/job/${encodeURIComponent(entry.job_name)}/test/${encodeURIComponent(entry.test_name)}`);
+      navigate(`/job/${encodeURIComponent(entry.job_id)}/test/${encodeURIComponent(entry.test_name)}`);
     }
     setOpen(false);
     setQuery("");
@@ -152,14 +152,14 @@ export function SearchBar() {
                 No results
               </div>
             ) : (
-              Array.from(grouped.entries()).map(([jobName, items]) => (
-                <div key={jobName}>
+              Array.from(grouped.entries()).map(([jobID, group]) => (
+                <div key={jobID}>
                   <div className="sticky top-0 bg-surface-container px-3 py-1.5 font-label text-xs font-medium text-on-surface-variant border-b border-outline-variant">
-                    {shortJobName(jobName, filePrefix)}
+                    {shortJobName(group.jobName, filePrefix)}
                   </div>
-                  {items.map((r) => (
+                  {group.items.map((r) => (
                     <button
-                      key={`${r.item.kind}:${r.item.job_name}/${r.item.test_name}`}
+                      key={`${r.item.kind}:${r.item.job_id}/${r.item.test_name}`}
                       type="button"
                       onClick={() => handleSelect(r.item)}
                       className="flex w-full items-center gap-3 px-3 py-2 text-sm text-on-surface hover:bg-surface-container-high transition-colors text-left"

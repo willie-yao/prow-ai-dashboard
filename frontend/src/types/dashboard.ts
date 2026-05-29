@@ -13,6 +13,9 @@ export interface RunSummary {
 
 export interface JobSummary {
   name: string;
+  job_id: string;
+  job_type: "periodic" | "presubmit";
+  repo: string;
   tab_name: string;
   category: string;
   branch: string;
@@ -76,6 +79,7 @@ export interface MachineArtifacts {
 export interface BuildResult {
   build_id: string;
   job_name: string;
+  pull_number?: string;
   started: string;
   finished: string;
   passed: boolean;
@@ -84,6 +88,7 @@ export interface BuildResult {
   commit: string;
   repo_version?: string;
   prow_url: string;
+  web_url: string;
   build_log_url: string;
   junit_url?: string;
   test_cases: TestCase[];
@@ -91,11 +96,13 @@ export interface BuildResult {
   tests_passed: number;
   tests_failed: number;
   tests_skipped: number;
+  controller_log_urls?: Record<string, string>;
 }
 
 export interface TestFlakiness {
   test_name: string;
   job_name: string;
+  job_id: string;
   total_runs: number;
   failures: number;
   passes: number;
@@ -133,6 +140,9 @@ export interface FlakinessReport {
 
 export interface JobDetail {
   name: string;
+  job_id: string;
+  job_type: "periodic" | "presubmit";
+  repo: string;
   runs: BuildResult[];
 }
 
@@ -140,6 +150,9 @@ export interface SearchEntry {
   kind: "job" | "test";
   test_name: string;
   job_name: string;
+  job_id: string;
+  job_type: "periodic" | "presubmit";
+  repo: string;
   tab_name: string;
   branch: string;
   category: string;

@@ -5,7 +5,7 @@ import { shortTestName } from "../lib/utils";
 
 interface TestResultsGridProps {
   runs: BuildResult[];
-  jobName: string;
+  jobID: string;
 }
 
 type CellStatus = "passed" | "failed" | "skipped" | "absent";
@@ -24,7 +24,7 @@ function shortDate(dateStr: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-export function TestResultsGrid({ runs, jobName }: TestResultsGridProps) {
+export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
   // Sort runs oldest→newest (left to right)
   const sortedRuns = useMemo(
     () =>
@@ -113,7 +113,7 @@ export function TestResultsGrid({ runs, jobName }: TestResultsGridProps) {
                 <tr key={row.testName} className="h-7 group hover:brightness-110">
                   <td className="bg-surface group-hover:brightness-110">
                     <Link
-                      to={`/job/${encodeURIComponent(jobName)}/test/${encodeURIComponent(row.testName)}`}
+                      to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(row.testName)}`}
                       className="block whitespace-nowrap px-3 text-xs text-on-surface transition-colors hover:text-primary"
                       title={row.testName}
                     >
@@ -164,7 +164,7 @@ export function TestResultsGrid({ runs, jobName }: TestResultsGridProps) {
                       <td key={run.build_id} className="px-1 py-0.5">
                         {status !== "absent" ? (
                           <Link
-                            to={`/job/${encodeURIComponent(jobName)}?run=${run.build_id}`}
+                            to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
                           >
                             {cell}
                           </Link>

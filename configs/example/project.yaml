@@ -21,6 +21,9 @@ source:
   # Only files whose name starts with this prefix are treated as job
   # configs. Use the project's own prefix.
   file_prefix: "your-project-"
+  # Include presubmit jobs in addition to periodics. ORed with the
+  # workflow's include-presubmits input. Default false (periodics only).
+  include_presubmits: false
 
 # Which testgrid dashboard's jobs to show. Filter is applied to each job's
 # testgrid-dashboards annotation.

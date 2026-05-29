@@ -53,8 +53,15 @@ type Browser interface {
 // Factory creates per-build Browser instances. The factory is constructed
 // once per fetcher run; individual Browsers are short-lived (one per build
 // analyzed) so the underlying file cache stays bounded.
+//
+// buildPrefix is the bucket-relative directory of the build, always
+// trailing-slashed (e.g. "logs/<job>/<build>/" for periodics or
+// "pr-logs/pull/<org_repo>/<pr#>/<job>/<build>/" for presubmits). Callers
+// typically build it with gcs.Bucket helpers (loc.BuildPath()).
+// displayName is a human-readable label used for logging and seeded into
+// the agentic AI system prompt (e.g. "<job>/<build>"); it is not a URL.
 type Factory interface {
-	ForBuild(jobName, buildID string) Browser
+	ForBuild(buildPrefix, displayName string) Browser
 }
 
 // Listing is the result of Browser.List.

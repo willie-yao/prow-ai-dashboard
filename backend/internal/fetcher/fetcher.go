@@ -39,10 +39,14 @@ type Options struct {
 	BuildsPerJob int
 	Workers      int
 	Timeout      time.Duration
-	PeriodicOnly bool
-	EnableAI     bool
-	Collectors   *CollectorRegistry
-	AIModules    *AIModuleRegistry
+	// IncludePresubmits, when true, fetches presubmit jobs in addition
+	// to periodics. ORed with cfg.Source.IncludePresubmits: either source
+	// turning it on enables presubmits. The workflow input cannot
+	// override the consumer's yaml choice to OFF.
+	IncludePresubmits bool
+	EnableAI          bool
+	Collectors        *CollectorRegistry
+	AIModules         *AIModuleRegistry
 }
 
 // Run executes the full pipeline: load → discover → fetch → aggregate →
@@ -114,7 +118,8 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("fetching job configs: %w", err)
 	}
 
-	if opts.PeriodicOnly {
+	includePresubmits := opts.IncludePresubmits || cfg.Source.IncludePresubmits
+	if !includePresubmits {
 		var periodic []models.ProwJob
 		for _, j := range jobs {
 			if j.JobType == models.JobTypePeriodic {
@@ -123,7 +128,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		jobs = periodic
 	}
-	log.Printf("Discovered %d jobs", len(jobs))
+	log.Printf("Discovered %d jobs (presubmits=%v)", len(jobs), includePresubmits)
 
 	// Step 2: For each job, discover builds and fetch results. Cached data
 	// is reused for completed builds; only PENDING runs are re-fetched.
@@ -147,7 +152,7 @@ func Run(ctx context.Context, opts Options) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, collector, j.Name, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, collector, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -279,23 +284,23 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 
 // fetchJobRunsCached discovers recent builds and reuses cached data for
 // completed builds. Per-build fetch errors are logged but do not abort.
-func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, jobName string, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
-	buildIDs, err := gcsweb.ListRecentBuildIDs(ctx, client, bucket, jobName, count)
+func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+	builds, err := gcsweb.ListRecentBuilds(ctx, client, bucket, job, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
 	}
 
 	var runs []models.BuildResult
 	fetched, reused := 0, 0
-	for _, bid := range buildIDs {
-		if cached, ok := cachedBuilds[bid]; ok {
+	for _, b := range builds {
+		if cached, ok := cachedBuilds[b.ID]; ok {
 			runs = append(runs, cached)
 			reused++
 			continue
 		}
-		result, err := fetchBuildResult(ctx, client, bucket, cfg, collector, jobName, bid)
+		result, err := fetchBuildResult(ctx, client, bucket, cfg, collector, job, b)
 		if err != nil {
-			log.Printf("    ⚠ %s/%s: %v", jobName, bid, err)
+			log.Printf("    ⚠ %s/%s: %v", job.Name, b.ID, err)
 			continue
 		}
 		runs = append(runs, *result)
@@ -303,7 +308,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 	}
 
 	if reused > 0 {
-		log.Printf("    💾 %s: %d cached, %d fetched", jobName, reused, fetched)
+		log.Printf("    💾 %s: %d cached, %d fetched", job.Name, reused, fetched)
 	}
 
 	return runs, nil
@@ -311,8 +316,15 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build, then
 // delegates per-test artifact discovery to the configured collector.
-func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, _ *project.Config, collector collectors.Collector, jobName, buildID string) (*models.BuildResult, error) {
-	info, err := gcs.FetchBuildInfo(ctx, client, bucket, jobName, buildID)
+func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, _ *project.Config, collector collectors.Collector, job *models.ProwJob, build gcsweb.Build) (*models.BuildResult, error) {
+	loc := gcs.BuildLocation{
+		JobLocation: gcs.JobLocation{JobType: job.JobType, Repo: job.Repo},
+		JobName:     job.Name,
+		BuildID:     build.ID,
+		PullNumber:  build.PullNumber,
+	}
+
+	info, err := gcs.FetchBuildInfo(ctx, client, bucket, loc)
 	if err != nil {
 		return nil, fmt.Errorf("fetching build info: %w", err)
 	}
@@ -327,7 +339,7 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 
 	testCases, err := junit.Parse(junitData)
 	if err != nil {
-		log.Printf("    ⚠ %s/%s: failed to parse JUnit: %v", jobName, buildID, err)
+		log.Printf("    ⚠ %s/%s: failed to parse JUnit: %v", job.Name, build.ID, err)
 		return result, nil
 	}
 
@@ -344,8 +356,8 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 		}
 	}
 
-	if err := collector.CollectArtifacts(ctx, jobName, buildID, result); err != nil {
-		log.Printf("    ⚠ %s/%s: collector %s: %v", jobName, buildID, collector.Name(), err)
+	if err := collector.CollectArtifacts(ctx, loc, result); err != nil {
+		log.Printf("    ⚠ %s/%s: collector %s: %v", job.Name, build.ID, collector.Name(), err)
 	}
 
 	return result, nil
@@ -420,15 +432,24 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	for i := range details {
-		for ri := range details[i].Runs {
-			run := &details[i].Runs[ri]
+		d := &details[i]
+		jobLoc := gcs.JobLocation{JobType: d.JobType, Repo: d.Repo}
+		for ri := range d.Runs {
+			run := &d.Runs[ri]
+			loc := gcs.BuildLocation{
+				JobLocation: jobLoc,
+				JobName:     d.Name,
+				BuildID:     run.BuildID,
+				PullNumber:  run.PullNumber,
+			}
+			buildPrefix := loc.BuildPath()
 			for j := range run.TestCases {
 				tc := &run.TestCases[j]
 				if tc.Status != "failed" {
 					continue
 				}
 				before := tc.AISummary
-				service.Analyze(ctx, httpClient, details[i].JobID, run, tc)
+				service.Analyze(ctx, httpClient, d.JobID, buildPrefix, run, tc)
 				if before == nil && tc.AISummary != nil && tc.AISummary.IsTransient && tc.AIAnalysis == nil {
 					transientSkipped++
 				}
