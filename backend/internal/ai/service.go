@@ -89,6 +89,12 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 	desiredMode := s.desiredMode(run, tc)
 
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc, desiredMode) {
+		// Stamp a non-empty Mode on legacy cached analyses so the published
+		// JSON is uniform. shouldReanalyze treated empty as curator above, so
+		// curator is the only value that can land here.
+		if tc.AIAnalysis.Mode == "" {
+			tc.AIAnalysis.Mode = curatorMode
+		}
 		return
 	}
 
@@ -137,9 +143,6 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 		log.Printf("  ⚠ AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		return
-	}
-	if analysis != nil {
-		analysis.Mode = curatorMode
 	}
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis

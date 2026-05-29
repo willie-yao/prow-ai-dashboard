@@ -172,6 +172,7 @@ func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *mode
 	analysis := &models.AIAnalysis{
 		GeneratedAt:   now,
 		Model:         c.model,
+		Mode:          curatorMode,
 		RootCause:     parsed.RootCause,
 		Severity:      parsed.Severity,
 		SuggestedFix:  parsed.SuggestedFix,
