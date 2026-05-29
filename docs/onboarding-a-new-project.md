@@ -1,6 +1,7 @@
 # Onboarding a new project
 
-This is the worked example for shipping a new prow-ai-dashboard consumer.
+This is the worked example for adding a new prow-ai-dashboard project, in
+either a dedicated repo or a subdirectory of an existing one.
 It uses [`willie-yao/capi-prow-ai-dashboard`][capi] (the Cluster API core
 dashboard) as the reference because CAPI core hits the largest number of
 edge cases: empty `cluster_name_prefix`, mixed unit + E2E + conformance
@@ -16,38 +17,43 @@ diverges.
 
 ## What you ship
 
-A consumer repo owns exactly six files. Everything else is reused from
-this engine repo at deploy time.
+A dashboard is six small files. They can live in a **dedicated repo** (e.g.
+`<org>/<project>-prow-ai-dashboard`) or in an **existing repo** that doesn't
+already publish a GitHub Pages site (a project repo, a tools repo, anywhere
+the maintainers want PRs reviewed). Everything else is reused from this
+engine repo at deploy time.
 
 ```
-your-prow-ai-dashboard/
-├── project.yaml                       # bucket, branding, AI endpoint
-├── prompts/system.md                  # mandatory AI prompt addendum
-├── README.md                          # one-pager linking back to engine
+<your-host-repo>/
+├── <project_dir>/                     # repo root, or a subdir of your choice
+│   ├── project.yaml                   # bucket, branding, AI endpoint
+│   └── prompts/system.md              # mandatory AI prompt addendum
+├── README.md                          # optional, useful in a dedicated repo
 ├── LICENSE                            # Apache 2.0 recommended
 └── .github/workflows/
     ├── deploy.yml                     # ~20 lines, calls reusable workflow
     └── clear-cache.yml                # ~10 lines, calls reusable workflow
 ```
 
+The `project_dir:` input on `reusable-deploy.yml` points at wherever
+`project.yaml` lives. For a dedicated dashboard repo, the root (`.`) is
+cleanest; for an existing repo, a subdirectory like `.prow-dashboard/`
+or `dashboard/` keeps the configs out of the way of the rest of the
+codebase.
+
 No Go code, no React code, no engine fork. If you find yourself adding
-either, file an issue against the engine instead.
+any of those, file an issue against the engine instead.
 
 ## Job type coverage
 
-The engine ingests **periodic jobs only** today. Two coupled defaults
-enforce this:
+The engine ingests both **periodic** and **presubmit** jobs. Periodics are
+enabled by default; opt into presubmits per project via either
+`source.include_presubmits: true` in `project.yaml` or `include-presubmits:
+true` on the reusable workflow (either toggle enables them).
 
-1. `fetcher` ships with `-periodic-only=true`, which keeps only jobs that
-   carry one of `minimum_interval:`, `interval:`, or `cron:` in their
-   Prow YAML.
-2. `internal/gcs/bucket.go` hardcodes the `logs/` prefix. Presubmit
-   builds live under `pr-logs/pull/<org>_<repo>/<pr#>/<job>/<build>/`
-   in the same bucket and would 404 if discovered.
-
-Presubmit support is tracked as Phase E in the engine plan. Until then,
-treat any presubmit-only job as out of scope and rely on the periodic
-that exercises the same suite.
+Presubmit builds live under `pr-logs/pull/<org>_<repo>/<pr#>/<job>/...`;
+the engine generalized its bucket URL helpers in Phase E to route between
+periodic and presubmit GCS paths automatically.
 
 ## Step 0: sweep the jobs first
 
@@ -253,7 +259,12 @@ adjusting is the deploy cron (CAPI + CAPZ both use `*/30 * * * *`).
 [capi-deploy]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/.github/workflows/deploy.yml
 [capi-clear]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/.github/workflows/clear-cache.yml
 
-## Step 4: repo bootstrap
+## Step 4: pick a host repo
+
+You have two options. The engine doesn't care which you pick — both end
+up at `https://<org>.github.io/<repo>/`.
+
+**Option A — dedicated dashboard repo** (used by CAPI + CAPZ today):
 
 ```
 gh repo create your-org/your-prow-ai-dashboard --public \
@@ -261,31 +272,65 @@ gh repo create your-org/your-prow-ai-dashboard --public \
 
 git clone https://github.com/your-org/your-prow-ai-dashboard
 cd your-prow-ai-dashboard
-# copy the six files
-git add -A && git commit -m "Bootstrap prow-ai-dashboard consumer"
+# Copy the six files into the root; use project_dir: . in the workflow.
+git add -A && git commit -m "Bootstrap prow-ai-dashboard"
 git push -u origin main
 ```
+
+Best when the dashboard is a standalone effort or you want a separate
+PR review surface for dashboard config changes.
+
+**Option B — existing repo** (e.g. the project's own source repo, a
+tools repo, or a sandbox):
+
+Add the configs to any subdirectory that doesn't conflict with the
+existing layout, plus the two workflows under `.github/workflows/`:
+
+```
+cd path/to/your-existing-repo
+mkdir -p .prow-dashboard/prompts .github/workflows
+cp /tmp/project.yaml .prow-dashboard/project.yaml
+cp /tmp/system.md   .prow-dashboard/prompts/system.md
+cp /tmp/deploy.yml .github/workflows/dashboard-deploy.yml
+cp /tmp/clear-cache.yml .github/workflows/dashboard-clear-cache.yml
+# In each workflow, set: project_dir: .prow-dashboard
+git add .prow-dashboard .github/workflows && git commit -m "Add prow-ai-dashboard"
+git push
+```
+
+Best when you want dashboard config PRs reviewed by the project's
+existing maintainers, or want to avoid creating another repo.
+
+**Caveat — GitHub Pages capacity.** A repo can only have one Pages
+source. If your existing repo already publishes to Pages (a project
+website, an mdBook, etc.), enabling the dashboard's `actions/deploy-pages`
+flow will replace it. Use Option A in that case, or skip ahead to
+[Optional: AI endpoint unreachable from GitHub-hosted runners](#optional-ai-endpoint-unreachable-from-github-hosted-runners)
+for the `skip-fetch` and self-hosted-runner patterns. Pluggable non-Pages
+deploy targets (Netlify, gh-pages branch in a different repo, etc.) are
+tracked as Phase J in the engine plan.
 
 ## Step 5: manual GitHub config
 
 These two steps cannot be scripted from the engine and must be done by
-the repo owner.
+the host repo owner. Replace `your-org/your-repo` with whichever repo
+you picked in Step 4.
 
 ```
 # Enable GitHub Pages with the workflow source
-gh api repos/your-org/your-prow-ai-dashboard/pages -X POST -F build_type=workflow
+gh api repos/your-org/your-repo/pages -X POST -F build_type=workflow
 
 # Set the AI token secret (the gh CLI will prompt for the value)
-gh secret set AI_TOKEN --repo your-org/your-prow-ai-dashboard
+gh secret set AI_TOKEN --repo your-org/your-repo
 # Optional notification secret
-gh secret set SLACK_WEBHOOK_URL --repo your-org/your-prow-ai-dashboard
+gh secret set SLACK_WEBHOOK_URL --repo your-org/your-repo
 ```
 
 ## Step 6: first deploy + validation
 
 ```
-gh workflow run deploy.yml --repo your-org/your-prow-ai-dashboard
-gh run watch --repo your-org/your-prow-ai-dashboard --exit-status
+gh workflow run deploy.yml --repo your-org/your-repo
+gh run watch --repo your-org/your-repo --exit-status
 ```
 
 After the run goes green, check the deployed site:
