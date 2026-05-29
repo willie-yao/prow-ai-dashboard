@@ -62,6 +62,16 @@ export interface AIAnalysis {
   severity: string;
   suggested_fix: string;
   relevant_files?: string[];
+  mode?: string;
+  // Per-analysis telemetry (Phase L.0). Curator path leaves
+  // tool_calls / gcs_bytes at 0; agentic path stamps all five from
+  // the per-call agentState.
+  tool_calls?: number;
+  model_bytes?: number;
+  gcs_bytes?: number;
+  elapsed_ms?: number;
+  cache_hit?: boolean;
+  budget_exhausted?: boolean;
 }
 
 export interface ClusterArtifacts {

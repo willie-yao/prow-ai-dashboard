@@ -212,6 +212,25 @@ type agentState struct {
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
 func (s *agentState) gcsRemaining() int   { return s.opts.GCSByteBudget - s.gcsBytes }
 
+// stampTelemetry copies the per-call counters onto the returned AIAnalysis so
+// the published JSON exposes per-failure cost. Called at every successful
+// agentic exit point (cache hit, normal finish, finalize-round finish,
+// synthesized fallback). Mode is set here too so we can't accidentally
+// publish an agentic-produced analysis tagged with the curator mode.
+func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, cacheHit bool, start time.Time) {
+	if analysis == nil {
+		return
+	}
+	analysis.Mode = AgenticMode
+	analysis.CacheHit = cacheHit
+	analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
+	if state != nil {
+		analysis.ToolCalls = state.calls
+		analysis.ModelBytes = state.modelBytes
+		analysis.GCSBytes = state.gcsBytes
+	}
+}
+
 // ---------- Public entry point ----------
 
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
@@ -232,13 +251,12 @@ func (c *Client) doAnalyzeAgentic(
 	opts AgenticOptions,
 	cacheKey, sysPrompt, userPrompt string,
 ) (*models.AISummary, *models.AIAnalysis, error) {
+	start := time.Now()
 	if raw, ok := c.cache.Get(cacheKey); ok {
 		var parsed analysisResponse
 		if json.Unmarshal(raw, &parsed) == nil {
 			summary, analysis := c.buildOutputs(parsed)
-			if analysis != nil {
-				analysis.Mode = AgenticMode
-			}
+			stampAgenticTelemetry(analysis, nil, true, start)
 			return summary, analysis, nil
 		}
 	}
@@ -320,17 +338,13 @@ func (c *Client) doAnalyzeAgentic(
 			SuggestedFix: "Unable to parse structured response",
 		}
 		summary, analysis := c.buildOutputs(parsed)
-		if analysis != nil {
-			analysis.Mode = AgenticMode
-		}
+		stampAgenticTelemetry(analysis, state, false, start)
 		return summary, analysis, nil
 	}
 
 	_ = c.cache.Set(cacheKey, parsed)
 	summary, analysis := c.buildOutputs(parsed)
-	if analysis != nil {
-		analysis.Mode = AgenticMode
-	}
+	stampAgenticTelemetry(analysis, state, false, start)
 	return summary, analysis, nil
 }
 

@@ -7,12 +7,10 @@ package generic
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidence"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -30,23 +28,13 @@ func (m *Module) Name() string { return "generic" }
 func (m *Module) IsKnownTransient(_ string) string { return "" }
 
 // AnalysisPrompt builds a generic combined-analysis prompt using only the
-// test failure body and (best-effort) the build log tail.
+// test failure body and (best-effort) the build log tail. Delegates the
+// universal prelude (header + failure body + build log tail) to
+// ai/evidence so every module that uses the curator path renders the same
+// shape for cache stability.
 func (m *Module) AnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
 	var sb strings.Builder
-	sb.WriteString("Investigate this test failure using the data below.\n\n")
-	fmt.Fprintf(&sb, "Test: %s\n", tc.Name)
-	fmt.Fprintf(&sb, "Failed %d consecutive times\n\n", consecutive)
-	fmt.Fprintf(&sb, "Error: %s\n", tc.FailureMessage)
-
-	if tc.FailureBody != "" {
-		fmt.Fprintf(&sb, "\nStack trace:\n%s\n", truncate(tc.FailureBody, 5000))
-	}
-
-	if run.BuildLogURL != "" {
-		if tail := fetchBuildLogTail(ctx, client, run.BuildLogURL); tail != "" {
-			fmt.Fprintf(&sb, "\n=== Build Log (last 200 lines) ===\n%s\n", tail)
-		}
-	}
+	sb.WriteString(evidence.BuildPrelude(ctx, client, run, tc, consecutive, evidence.Options{}))
 
 	sb.WriteString("\nPerform a complete investigation:\n")
 	sb.WriteString("1. ROOT CAUSE: Find the specific error in the data above. Quote the actual error message or log line that reveals the failure. Do NOT speculate.\n")
@@ -55,28 +43,4 @@ func (m *Module) AnalysisPrompt(ctx context.Context, client *http.Client, run *m
 	sb.WriteString("4. If artifacts show the cause clearly, state it with confidence. If evidence is incomplete, say what you determined and what remains unknown.\n")
 
 	return sb.String()
-}
-
-func fetchBuildLogTail(ctx context.Context, client *http.Client, url string) string {
-	data, err := gcs.FetchRaw(ctx, client, url)
-	if err != nil {
-		log.Printf("  ⚠ generic evidence: failed to fetch build log: %v", err)
-		return ""
-	}
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > 200 {
-		lines = lines[len(lines)-200:]
-	}
-	out := strings.Join(lines, "\n")
-	if len(out) > 10000 {
-		out = out[:10000] + "..."
-	}
-	return out
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }

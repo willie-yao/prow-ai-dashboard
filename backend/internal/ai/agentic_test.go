@@ -225,6 +225,20 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	if atomic.LoadInt32(&srv.calls) != 2 {
 		t.Errorf("call count = %d, want 2", srv.calls)
 	}
+	// Telemetry: one tool call (list_artifacts), non-zero modelBytes
+	// (tool result echoed back to the model), elapsed > 0, cache_hit false.
+	if analysis.ToolCalls != 1 {
+		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
+	}
+	if analysis.ModelBytes <= 0 {
+		t.Errorf("expected positive model_bytes, got %d", analysis.ModelBytes)
+	}
+	if analysis.CacheHit {
+		t.Error("expected cache_hit=false on first call")
+	}
+	if analysis.ElapsedMs < 0 {
+		t.Errorf("expected non-negative elapsed_ms, got %d", analysis.ElapsedMs)
+	}
 }
 
 func TestAgentic_CacheHit(t *testing.T) {
@@ -241,11 +255,22 @@ func TestAgentic_CacheHit(t *testing.T) {
 		t.Fatalf("first call: %v", err)
 	}
 	// Second call should hit the cache and NOT increment server calls.
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), browser, opts, "agentic:test:cached", "sys", "user"); err != nil {
+	_, a2, err := client.doAnalyzeAgentic(context.Background(), browser, opts, "agentic:test:cached", "sys", "user")
+	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 1 {
 		t.Errorf("expected 1 server call (second was cache hit), got %d", got)
+	}
+	if !a2.CacheHit {
+		t.Error("expected cache_hit=true on second (cached) call")
+	}
+	if a2.ToolCalls != 0 || a2.ModelBytes != 0 || a2.GCSBytes != 0 {
+		t.Errorf("expected zero counters on cache hit (no state), got tool_calls=%d model_bytes=%d gcs_bytes=%d",
+			a2.ToolCalls, a2.ModelBytes, a2.GCSBytes)
+	}
+	if a2.Mode != AgenticMode {
+		t.Errorf("cache-hit mode = %q, want %q", a2.Mode, AgenticMode)
 	}
 }
 

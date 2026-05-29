@@ -348,9 +348,9 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                               <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Files to Check</p>
                               <ul className="list-disc list-inside text-sm text-on-surface space-y-0.5">
                                 {[...tc.ai_analysis.relevant_files]
-                                  .sort((a, b) => fileSortKey(a, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo }) - fileSortKey(b, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo }))
+                                  .sort((a, b) => fileSortKey(a, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo, webUrl }) - fileSortKey(b, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo, webUrl }))
                                   .map((f, i) => {
-                                  const url = fileToUrl(f, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo });
+                                  const url = fileToUrl(f, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo, webUrl });
                                   return (
                                     <li key={i} className="font-mono text-xs">
                                       {url ? (
