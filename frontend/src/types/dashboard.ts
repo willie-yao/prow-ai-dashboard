@@ -43,6 +43,7 @@ export interface TestCase {
   failure_body?: string;
   failure_location?: string;
   failure_location_url?: string;
+  junit_file?: string;
   cluster_artifacts?: ClusterArtifacts;
   ai_summary?: AISummary;
   ai_analysis?: AIAnalysis;
@@ -90,7 +91,7 @@ export interface BuildResult {
   prow_url: string;
   web_url: string;
   build_log_url: string;
-  junit_url?: string;
+  junit_urls?: string[];
   test_cases: TestCase[];
   tests_total: number;
   tests_passed: number;

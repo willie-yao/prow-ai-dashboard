@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -331,20 +332,31 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 
 	result := &models.BuildResult{BuildInfo: *info, TestCases: []models.TestCase{}}
 
-	// JUnit XML is best-effort — some builds may not have it.
-	junitData, err := gcs.FetchRaw(ctx, client, info.JUnitURL)
+	junitURLs, err := gcs.DiscoverJUnitURLs(ctx, client, bucket, loc)
 	if err != nil {
+		log.Printf("    ⚠ %s/%s: discovering junit files: %v", job.Name, build.ID, err)
+		return result, nil
+	}
+	result.JUnitURLs = junitURLs
+	if len(junitURLs) == 0 {
 		return result, nil
 	}
 
-	testCases, err := junit.Parse(junitData)
-	if err != nil {
-		log.Printf("    ⚠ %s/%s: failed to parse JUnit: %v", job.Name, build.ID, err)
-		return result, nil
+	for _, junitURL := range junitURLs {
+		junitData, err := gcs.FetchRaw(ctx, client, junitURL)
+		if err != nil {
+			log.Printf("    ⚠ %s/%s: fetching %s: %v", job.Name, build.ID, path.Base(junitURL), err)
+			continue
+		}
+		testCases, err := junit.ParseFile(junitData, path.Base(junitURL))
+		if err != nil {
+			log.Printf("    ⚠ %s/%s: parsing %s: %v", job.Name, build.ID, path.Base(junitURL), err)
+			continue
+		}
+		result.TestCases = append(result.TestCases, testCases...)
 	}
 
-	result.TestCases = testCases
-	for _, tc := range testCases {
+	for _, tc := range result.TestCases {
 		result.TestsTotal++
 		switch tc.Status {
 		case "passed":

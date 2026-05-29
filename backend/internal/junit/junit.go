@@ -60,7 +60,10 @@ var knownRepos = map[string]string{
 	"sigs.k8s.io/cluster-api-provider-azure": "kubernetes-sigs/cluster-api-provider-azure",
 }
 
-// Parse parses JUnit XML data and returns a slice of TestCase models.
+// Parse parses JUnit XML data and returns a slice of TestCase models. The
+// resulting TestCases have JUnitFile unset; use ParseFile when the caller
+// knows which file the data came from (multi-junit builds rely on
+// JUnitFile to disambiguate same-named cases across shards/suites).
 func Parse(data []byte) ([]models.TestCase, error) {
 	// Try parsing as <testsuites> first.
 	var suites xmlTestSuites
@@ -75,6 +78,20 @@ func Parse(data []byte) ([]models.TestCase, error) {
 	}
 
 	return nil, fmt.Errorf("junit: failed to parse XML as <testsuites> or <testsuite>")
+}
+
+// ParseFile parses JUnit XML data and stamps junitFile on every TestCase.
+// junitFile should be the basename within the build's artifacts/ dir
+// (e.g. "junit_runner.xml"), not a full URL.
+func ParseFile(data []byte, junitFile string) ([]models.TestCase, error) {
+	cases, err := Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cases {
+		cases[i].JUnitFile = junitFile
+	}
+	return cases, nil
 }
 
 func convertSuites(suites []xmlTestSuite) []models.TestCase {

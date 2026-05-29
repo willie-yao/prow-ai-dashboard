@@ -107,8 +107,8 @@ func TestFetchBuildInfo_AllFields(t *testing.T) {
 	if !strings.HasSuffix(info.BuildLogURL, "/"+jobName+"/"+buildID+"/build-log.txt") {
 		t.Errorf("BuildLogURL = %s, want suffix /%s/%s/build-log.txt", info.BuildLogURL, jobName, buildID)
 	}
-	if !strings.HasSuffix(info.JUnitURL, "/"+jobName+"/"+buildID+"/artifacts/junit.e2e_suite.1.xml") {
-		t.Errorf("JUnitURL = %s, want suffix /%s/%s/artifacts/junit.e2e_suite.1.xml", info.JUnitURL, jobName, buildID)
+	if len(info.JUnitURLs) != 0 {
+		t.Errorf("JUnitURLs = %v, want empty (discovery now happens via DiscoverJUnitURLs, not FetchBuildInfo)", info.JUnitURLs)
 	}
 }
 
@@ -263,5 +263,120 @@ func TestListObjects_EmptyResult(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %v, want empty", got)
+	}
+}
+
+// TestDiscoverJUnitURLs_FiltersJUnitFiles drives discoverJUnitURLsAt
+// against a recorded mix of artifact files and verifies that only JUnit
+// XML files (by basename pattern) are returned, with stable sort order.
+func TestDiscoverJUnitURLs_FiltersJUnitFiles(t *testing.T) {
+	const listPrefix = "logs/ci-foo/42/artifacts/"
+	const base = "https://storage.example/bucket/logs/ci-foo/42/"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if got := r.URL.Query().Get("prefix"); got != listPrefix {
+			t.Errorf("prefix = %q, want %q", got, listPrefix)
+		}
+		if got := r.URL.Query().Get("delimiter"); got != "/" {
+			t.Errorf("delimiter = %q, want %q", got, "/")
+		}
+		// Simulate node-e2e + kubeadm-kinder layout in one build: three
+		// junit files plus a build log, started.json, and a non-junit
+		// xml that must NOT match.
+		w.Write([]byte(`{"items":[
+			{"name":"logs/ci-foo/42/artifacts/junit_runner.xml"},
+			{"name":"logs/ci-foo/42/artifacts/junit_e2e01.xml"},
+			{"name":"logs/ci-foo/42/artifacts/junit.e2e_suite.1.xml"},
+			{"name":"logs/ci-foo/42/artifacts/build-log.txt"},
+			{"name":"logs/ci-foo/42/artifacts/junitlike.xml"},
+			{"name":"logs/ci-foo/42/artifacts/started.json"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	got, err := discoverJUnitURLsAt(context.Background(), srv.Client(), srv.URL, base, listPrefix)
+	if err != nil {
+		t.Fatalf("discoverJUnitURLsAt: %v", err)
+	}
+	want := []string{
+		base + "artifacts/junit.e2e_suite.1.xml",
+		base + "artifacts/junit_e2e01.xml",
+		base + "artifacts/junit_runner.xml",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverJUnitURLs_EmptyArtifactsDir is the "build still running"
+// or "no junit produced" case: list returns 200 with no matching items.
+// Expect (nil, nil) so callers can cache an empty TestCases set without
+// retrying.
+func TestDiscoverJUnitURLs_EmptyArtifactsDir(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"items":[{"name":"logs/x/1/artifacts/build-log.txt"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := discoverJUnitURLsAt(context.Background(), srv.Client(), srv.URL,
+		"https://storage.example/bucket/logs/x/1/", "logs/x/1/artifacts/")
+	if err != nil {
+		t.Fatalf("discoverJUnitURLsAt: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %v, want empty", got)
+	}
+}
+
+// TestDiscoverJUnitURLs_Pagination verifies nextPageToken is followed
+// and junit files from every page are merged + sorted.
+func TestDiscoverJUnitURLs_Pagination(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		calls++
+		if r.URL.Query().Get("pageToken") == "" {
+			w.Write([]byte(`{"items":[{"name":"logs/x/1/artifacts/junit_z.xml"}],"nextPageToken":"page2"}`))
+		} else {
+			w.Write([]byte(`{"items":[{"name":"logs/x/1/artifacts/junit_a.xml"}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	got, err := discoverJUnitURLsAt(context.Background(), srv.Client(), srv.URL,
+		"https://storage.example/bucket/logs/x/1/", "logs/x/1/artifacts/")
+	if err != nil {
+		t.Fatalf("discoverJUnitURLsAt: %v", err)
+	}
+	want := []string{
+		"https://storage.example/bucket/logs/x/1/artifacts/junit_a.xml",
+		"https://storage.example/bucket/logs/x/1/artifacts/junit_z.xml",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", calls)
+	}
+}
+
+// TestDiscoverJUnitURLs_ServerError returns an error to the caller so
+// fetchBuildResult can log it and fall back to caching an empty
+// TestCases slice without misinterpreting the failure as "no junit".
+func TestDiscoverJUnitURLs_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := discoverJUnitURLsAt(context.Background(), srv.Client(), srv.URL,
+		"https://storage.example/bucket/logs/x/1/", "logs/x/1/artifacts/")
+	if err == nil {
+		t.Fatal("expected error on 500 response")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error should mention status 500, got: %v", err)
 	}
 }

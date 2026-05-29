@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"regexp"
+	"sort"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -111,6 +114,89 @@ func ListObjects(ctx context.Context, client *http.Client, apiURL, prefix string
 	return all, nil
 }
 
+// junitFileRe matches JUnit XML filenames produced by the test frameworks
+// we've seen: ginkgo (junit.e2e_suite.1.xml, junit.foo.42.xml), ginkgo's
+// "runner" report (junit_runner.xml), and gotest/k8s e2e_node sharded
+// outputs (junit_ubuntu01.xml, junit_e2e-kubeadm01.xml, junit_01.xml).
+// Anchored against the basename, applied after listing the build's
+// artifacts/ dir non-recursively.
+var junitFileRe = regexp.MustCompile(`^junit[._-].*\.xml$|^junit\.xml$`)
+
+// DiscoverJUnitURLs lists the build's artifacts/ directory and returns
+// every JUnit XML file's full storage URL. Uses delimiter listing so we
+// only see direct children (sub-trees like artifacts/clusters/ are not
+// walked). Paginates through nextPageToken for buckets with >1000
+// artifacts at depth 1.
+//
+// Returns ([], nil) when the directory exists but contains no JUnit
+// files. Returns ([], err) on transport / non-2xx / decode errors;
+// callers treat both empty and error as "no test data for this build"
+// today, matching the legacy hardcoded-URL fetch's best-effort
+// semantics. Distinguishing the two (so a transient list failure
+// doesn't cache an empty build) is a Stage 2 follow-up.
+func DiscoverJUnitURLs(ctx context.Context, client *http.Client, bucket *Bucket, loc BuildLocation) ([]string, error) {
+	return discoverJUnitURLsAt(ctx, client,
+		bucket.ListAPIURL(),
+		bucket.BuildBaseURL(loc),
+		loc.BuildPath()+"artifacts/",
+	)
+}
+
+// discoverJUnitURLsAt is the internal implementation that accepts raw
+// URLs so tests can point at an httptest server.
+//
+//   - apiURL is the GCS JSON list endpoint (e.g.
+//     "https://storage.googleapis.com/storage/v1/b/<bucket>/o").
+//   - base is the trailing-slashed storage URL down to the build root.
+//   - listPrefix is the bucket-relative prefix to list (must end with /).
+//
+// Returned URLs are sorted (deterministic for cache stability).
+func discoverJUnitURLsAt(ctx context.Context, client *http.Client, apiURL, base, listPrefix string) ([]string, error) {
+	var urls []string
+	pageToken := ""
+	for {
+		params := url.Values{
+			"prefix":     {listPrefix},
+			"delimiter":  {"/"},
+			"maxResults": {"1000"},
+		}
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		}
+		u := apiURL + "?" + params.Encode()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("listing %s: %w", listPrefix, err)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("listing %s: HTTP %d", listPrefix, resp.StatusCode)
+		}
+		var r listObjectsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decoding list response for %s: %w", listPrefix, err)
+		}
+		resp.Body.Close()
+		for _, it := range r.Items {
+			name := path.Base(it.Name)
+			if junitFileRe.MatchString(name) {
+				urls = append(urls, base+"artifacts/"+name)
+			}
+		}
+		if r.NextPageToken == "" {
+			break
+		}
+		pageToken = r.NextPageToken
+	}
+	sort.Strings(urls)
+	return urls, nil
+}
+
 // queryEscape is a tiny wrapper to keep the listing helpers self-contained
 // without pulling in net/url just for one call site.
 func queryEscape(s string) string {
@@ -195,7 +281,6 @@ func fetchBuildInfoWithBase(ctx context.Context, client *http.Client, base, prow
 		RepoVersion: s.RepoVer,
 		ProwURL:     prowURL,
 		BuildLogURL: base + "build-log.txt",
-		JUnitURL:    base + "artifacts/junit.e2e_suite.1.xml",
 	}
 
 	// finished.json may be absent if the build is still running.

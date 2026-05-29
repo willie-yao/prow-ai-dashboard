@@ -60,7 +60,11 @@ type BuildInfo struct {
 	RepoVersion     string    `json:"repo_version,omitempty"`
 	ProwURL         string    `json:"prow_url"`
 	BuildLogURL     string    `json:"build_log_url"`
-	JUnitURL        string    `json:"junit_url,omitempty"`
+	// JUnitURLs lists every junit*.xml under the build's artifacts/ dir,
+	// discovered at fetch time. Empty when discovery failed or the build
+	// has no junit output. Order is stable (sorted by full URL) so cache
+	// reuse stays deterministic.
+	JUnitURLs []string `json:"junit_urls,omitempty"`
 	// PullNumber is the PR number that triggered this build for presubmits.
 	// Empty for periodics. Required for reconstructing presubmit GCS paths
 	// from cached BuildResults without reparsing the job config.
@@ -101,13 +105,18 @@ type AIAnalysis struct {
 
 // TestCase represents a single test case from JUnit XML.
 type TestCase struct {
-	Name             string            `json:"name"`
-	Status           string            `json:"status"` // "passed", "failed", "skipped"
-	DurationSeconds  float64           `json:"duration_seconds"`
-	FailureMessage   string            `json:"failure_message,omitempty"`
-	FailureBody      string            `json:"failure_body,omitempty"`
-	FailureLocation  string            `json:"failure_location,omitempty"`
-	FailureLocURL    string            `json:"failure_location_url,omitempty"`
+	Name            string  `json:"name"`
+	Status          string  `json:"status"` // "passed", "failed", "skipped"
+	DurationSeconds float64 `json:"duration_seconds"`
+	FailureMessage  string  `json:"failure_message,omitempty"`
+	FailureBody     string  `json:"failure_body,omitempty"`
+	FailureLocation string  `json:"failure_location,omitempty"`
+	FailureLocURL   string  `json:"failure_location_url,omitempty"`
+	// JUnitFile is the basename (within artifacts/) of the file this case
+	// came from, e.g. "junit.e2e_suite.1.xml" or "junit_runner.xml". Lets
+	// the UI disambiguate same-named cases that show up in different
+	// shards or suites within one build.
+	JUnitFile        string            `json:"junit_file,omitempty"`
 	ClusterArtifacts *ClusterArtifacts `json:"cluster_artifacts,omitempty"`
 	AISummary        *AISummary        `json:"ai_summary,omitempty"`
 	AIAnalysis       *AIAnalysis       `json:"ai_analysis,omitempty"`

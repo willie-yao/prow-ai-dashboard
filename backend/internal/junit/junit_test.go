@@ -185,3 +185,32 @@ func TestParse_SingleTestSuite(t *testing.T) {
 		t.Errorf("expected passed, got %q", cases[0].Status)
 	}
 }
+
+// TestParseFile stamps the source basename on every returned case so
+// the UI can disambiguate same-named tests across sharded junit files
+// (e.g. node-e2e's junit_ubuntu01.xml vs junit_runner.xml).
+func TestParseFile(t *testing.T) {
+	data := loadFixture(t)
+	cases, err := ParseFile(data, "junit_runner.xml")
+	if err != nil {
+		t.Fatalf("ParseFile returned error: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("expected at least one case")
+	}
+	for i, tc := range cases {
+		if tc.JUnitFile != "junit_runner.xml" {
+			t.Errorf("case[%d].JUnitFile = %q, want %q", i, tc.JUnitFile, "junit_runner.xml")
+		}
+	}
+}
+
+// TestParseFile_PropagatesParseError surfaces malformed XML from the
+// underlying Parse so callers can decide whether to log + continue or
+// abort the build.
+func TestParseFile_PropagatesParseError(t *testing.T) {
+	_, err := ParseFile([]byte("<not-valid-xml"), "junit_runner.xml")
+	if err == nil {
+		t.Fatal("expected error from malformed XML")
+	}
+}
