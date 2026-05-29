@@ -50,8 +50,8 @@ func makeSearchBuild(buildID, jobName string, started time.Time, passed bool, te
 
 func searchJobs() []models.ProwJob {
 	return []models.ProwJob{
-		{Name: "job-alpha", TabName: "Alpha Tab", Branch: "main", Category: "e2e"},
-		{Name: "job-beta", TabName: "Beta Tab", Branch: "release-1.0", Category: "conformance"},
+		{Name: "job-alpha", JobID: "job-alpha", JobType: models.JobTypePeriodic, TabName: "Alpha Tab", Branch: "main", Category: "e2e"},
+		{Name: "job-beta", JobID: "job-beta", JobType: models.JobTypePeriodic, TabName: "Beta Tab", Branch: "release-1.0", Category: "conformance"},
 	}
 }
 
@@ -194,8 +194,8 @@ func TestBuildSearchIndex_SetupTeardownExclusion(t *testing.T) {
 
 func TestBuildSearchIndex_SortOrder(t *testing.T) {
 	jobs := []models.ProwJob{
-		{Name: "job-beta"},
-		{Name: "job-alpha"},
+		{Name: "job-beta", JobID: "job-beta", JobType: models.JobTypePeriodic},
+		{Name: "job-alpha", JobID: "job-alpha", JobType: models.JobTypePeriodic},
 	}
 	jobResults := map[string][]models.BuildResult{
 		"job-beta": {

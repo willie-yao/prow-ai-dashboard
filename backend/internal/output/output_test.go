@@ -35,7 +35,9 @@ func sampleDashboard() models.Dashboard {
 
 func sampleJobDetail(name string) models.JobDetail {
 	return models.JobDetail{
-		Name: name,
+		Name:    name,
+		JobID:   name,
+		JobType: models.JobTypePeriodic,
 		Runs: []models.BuildResult{
 			{
 				BuildInfo: models.BuildInfo{
@@ -192,7 +194,7 @@ func TestWriteAll(t *testing.T) {
 	}
 	// job files exist
 	for _, d := range details {
-		p := filepath.Join(dir, "jobs", SanitizeFilename(d.Name)+".json")
+		p := filepath.Join(dir, "jobs", SanitizeFilename(d.JobID)+".json")
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("job file %s missing", p)
 		}

@@ -11,10 +11,11 @@ const maxFlakyResults = 50
 
 // ComputeTestFlakiness computes flakiness stats for a single test across all runs of a job.
 // Runs are expected newest-first.
-func ComputeTestFlakiness(testName string, jobName string, runs []models.BuildResult) models.TestFlakiness {
+func ComputeTestFlakiness(testName, jobID, jobName string, runs []models.BuildResult) models.TestFlakiness {
 	tf := models.TestFlakiness{
 		TestName: testName,
 		JobName:  jobName,
+		JobID:    jobID,
 	}
 
 	type testOutcome struct {
@@ -151,10 +152,18 @@ func ComputeTestFlakiness(testName string, jobName string, runs []models.BuildRe
 }
 
 // ComputeFlakinessReport builds the full flakiness report across all jobs.
-func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, now time.Time) models.FlakinessReport {
+// jobResults is keyed by JobID. The jobs slice supplies JobID→Name lookup
+// so emitted TestFlakiness entries carry both fields, matching what the
+// search index and notification dedupe key expect.
+func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, now time.Time) models.FlakinessReport {
+	jobName := make(map[string]string, len(jobs))
+	for _, j := range jobs {
+		jobName[j.JobID] = j.Name
+	}
+
 	var allFlaky []models.TestFlakiness
 
-	for jobName, runs := range jobResults {
+	for jobID, runs := range jobResults {
 		// Collect all unique test names across runs.
 		testSet := make(map[string]struct{})
 		for _, r := range runs {
@@ -164,7 +173,7 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, now time
 		}
 
 		for testName := range testSet {
-			tf := ComputeTestFlakiness(testName, jobName, runs)
+			tf := ComputeTestFlakiness(testName, jobID, jobName[jobID], runs)
 			if tf.Failures > 0 {
 				allFlaky = append(allFlaky, tf)
 			}

@@ -74,6 +74,7 @@ func TestNewPersistentFailureDetection(t *testing.T) {
 	report := makeReport([]models.TestFlakiness{
 		{
 			TestName:            "TestSomething",
+			JobID:               "my-job",
 			JobName:             "my-job",
 			ConsecutiveFailures: 5,
 			LastFailure: &models.TestFailureInfo{
@@ -174,6 +175,7 @@ func TestErrorHashChangeDetection(t *testing.T) {
 	report := makeReport([]models.TestFlakiness{
 		{
 			TestName:            "TestChanged",
+			JobID:               "my-job",
 			JobName:             "my-job",
 			ConsecutiveFailures: 4,
 			LastFailure: &models.TestFailureInfo{
@@ -217,6 +219,7 @@ func TestDeduplication(t *testing.T) {
 	report := makeReport([]models.TestFlakiness{
 		{
 			TestName:            "TestSame",
+			JobID:               "my-job",
 			JobName:             "my-job",
 			ConsecutiveFailures: 5,
 			LastFailure: &models.TestFailureInfo{

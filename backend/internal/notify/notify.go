@@ -89,9 +89,10 @@ func (n *Notifier) SaveState() error {
 	return os.WriteFile(n.stateFile, data, 0644)
 }
 
-// notificationKey returns the de-duplication key for a test.
-func notificationKey(jobName, testName string) string {
-	return jobName + "::" + testName
+// notificationKey returns the de-duplication key for a test. Uses JobID so
+// presubmits and periodics with the same job name do not collide.
+func notificationKey(jobID, testName string) string {
+	return jobID + "::" + testName
 }
 
 // ProcessFailures compares current persistent failures against state and sends
@@ -103,7 +104,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 	current := make(map[string]models.TestFlakiness)
 	for _, tf := range report.PersistentFailures {
 		if tf.ConsecutiveFailures >= 3 {
-			key := notificationKey(tf.JobName, tf.TestName)
+			key := notificationKey(tf.JobID, tf.TestName)
 			current[key] = tf
 		}
 	}
@@ -122,7 +123,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 
 		if !wasNotified {
 			// NEW: send failure notification.
-			summary, rootCause := lookupAI(aiLookup, tf.JobName, tf.TestName)
+			summary, rootCause := lookupAI(aiLookup, tf.JobID, tf.TestName)
 			if err := n.sendFailureAlert(ctx, tf, summary, rootCause); err != nil {
 				log.Printf("  ⚠ Failed to send alert for %s: %v", key, err)
 			} else {
@@ -137,7 +138,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 			}
 		} else if currentHash != existing.ErrorHash {
 			// CHANGED: failure mode changed, send new notification.
-			summary, rootCause := lookupAI(aiLookup, tf.JobName, tf.TestName)
+			summary, rootCause := lookupAI(aiLookup, tf.JobID, tf.TestName)
 			if err := n.sendFailureAlert(ctx, tf, summary, rootCause); err != nil {
 				log.Printf("  ⚠ Failed to send changed-alert for %s: %v", key, err)
 			} else {
@@ -183,7 +184,7 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 				if tc.Status != "failed" {
 					continue
 				}
-				key := notificationKey(jd.Name, tc.Name)
+				key := notificationKey(jd.JobID, tc.Name)
 				if _, exists := lookup[key]; exists {
 					continue // keep first (most recent run comes first)
 				}
@@ -203,8 +204,8 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 	return lookup
 }
 
-func lookupAI(lookup map[string]aiEntry, jobName, testName string) (summary, rootCause string) {
-	key := notificationKey(jobName, testName)
+func lookupAI(lookup map[string]aiEntry, jobID, testName string) (summary, rootCause string) {
+	key := notificationKey(jobID, testName)
 	if e, ok := lookup[key]; ok {
 		return e.Summary, e.RootCause
 	}

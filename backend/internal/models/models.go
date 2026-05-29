@@ -23,23 +23,28 @@ type ProwJob struct {
 	MinimumInterval string `json:"minimum_interval" yaml:"minimum_interval"`
 	Timeout         string `json:"timeout"`
 	ConfigFile      string `json:"config_file"`
-	// JobType is "periodic" or "presubmit". Empty in legacy cache entries
-	// written before Phase E; EffectiveJobType treats empty as periodic.
-	JobType string `json:"job_type,omitempty"`
+	// JobType is "periodic" or "presubmit". Always stamped by the parser.
+	JobType string `json:"job_type"`
 	// Repo is the "org/repo" the job runs against. Populated for presubmits
 	// from the YAML map key; empty for periodics.
-	Repo string `json:"repo,omitempty"`
+	Repo string `json:"repo"`
+	// JobID is a stable identifier that uniquely distinguishes this job from
+	// a same-named job in a different repo or job type. Computed via
+	// JobIDFor(JobType, Repo, Name) at parse time and propagated to every
+	// downstream wire type. The frontend uses this for routing and file
+	// fetches; cache loaders use it as a map key.
+	JobID string `json:"job_id"`
 }
 
-// EffectiveJobType returns the job type, defaulting to periodic when unset.
-// All consumers that branch on job type should go through this helper so
-// legacy cache entries written before JobType was introduced behave as
-// periodics (which is what they were).
-func (j ProwJob) EffectiveJobType() string {
-	if j.JobType == "" {
-		return JobTypePeriodic
+// JobIDFor builds a stable per-job identifier. Periodics use the bare name
+// (Prow guarantees uniqueness within the periodics: list); presubmits use
+// "<repo>/<name>" so same-named jobs in different repos do not collide in
+// caches, search, flakiness, notifications, or AI cache entries.
+func JobIDFor(jobType, repo, name string) string {
+	if jobType == JobTypePresubmit {
+		return repo + "/" + name
 	}
-	return j.JobType
+	return name
 }
 
 // BuildInfo represents metadata for a single prow build.
@@ -186,10 +191,13 @@ type Dashboard struct {
 	Jobs        []JobSummary `json:"jobs"`
 }
 
-// JobDetail is the per-job detail structure for jobs/{job-name}.json.
+// JobDetail is the per-job detail structure for jobs/{job-id}.json.
 type JobDetail struct {
-	Name string        `json:"name"`
-	Runs []BuildResult `json:"runs"`
+	Name    string        `json:"name"`
+	JobID   string        `json:"job_id"`
+	JobType string        `json:"job_type"`
+	Repo    string        `json:"repo"`
+	Runs    []BuildResult `json:"runs"`
 }
 
 // FailureClassification indicates the type of failure.
@@ -205,6 +213,7 @@ const (
 type TestFlakiness struct {
 	TestName            string                `json:"test_name"`
 	JobName             string                `json:"job_name"`
+	JobID               string                `json:"job_id"`
 	TotalRuns           int                   `json:"total_runs"`
 	Failures            int                   `json:"failures"`
 	Passes              int                   `json:"passes"`
@@ -247,6 +256,9 @@ type SearchEntry struct {
 	Kind     string  `json:"kind"`      // "job" or "test"
 	TestName string  `json:"test_name"` // empty for job entries
 	JobName  string  `json:"job_name"`
+	JobID    string  `json:"job_id"`
+	JobType  string  `json:"job_type"`
+	Repo     string  `json:"repo"`
 	TabName  string  `json:"tab_name"`
 	Branch   string  `json:"branch"`
 	Category string  `json:"category"`

@@ -44,6 +44,7 @@ func TestParsePeriodics(t *testing.T) {
 	assertEqual(t, "ConfigFile", j.ConfigFile, "periodics.yaml")
 	assertEqual(t, "JobType", j.JobType, models.JobTypePeriodic)
 	assertEqual(t, "Repo", j.Repo, "")
+	assertEqual(t, "JobID", j.JobID, "periodic-cluster-api-provider-azure-conformance-main")
 
 	// Second job — e2e → generic "e2e" category (no project-specific override).
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "e2e")
@@ -75,6 +76,7 @@ func TestParsePresubmits(t *testing.T) {
 	assertEqual(t, "ConfigFile", j.ConfigFile, "presubmits.yaml")
 	assertEqual(t, "JobType", j.JobType, models.JobTypePresubmit)
 	assertEqual(t, "Repo", j.Repo, "kubernetes-sigs/cluster-api-provider-azure")
+	assertEqual(t, "JobID", j.JobID, "kubernetes-sigs/cluster-api-provider-azure/pull-cluster-api-provider-azure-e2e")
 
 	// Second presubmit — capi-e2e category.
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "capi-e2e")
@@ -304,21 +306,48 @@ presubmits:
 	}
 }
 
-// EffectiveJobType keeps legacy cache entries (written before JobType was
-// introduced) behaving as periodics so the periodic-only filter doesn't
-// silently drop them after the schema bump.
-func TestEffectiveJobType(t *testing.T) {
+// EffectiveJobType is gone; JobType is now always stamped by the parser.
+// JobIDFor builds a stable identifier that disambiguates same-named jobs
+// across repos and job types.
+func TestJobIDFor(t *testing.T) {
 	cases := []struct {
-		in, want string
+		name, jobType, repo, jobName, want string
 	}{
-		{"", models.JobTypePeriodic},
-		{models.JobTypePeriodic, models.JobTypePeriodic},
-		{models.JobTypePresubmit, models.JobTypePresubmit},
+		{"periodic", models.JobTypePeriodic, "", "periodic-foo", "periodic-foo"},
+		{"presubmit", models.JobTypePresubmit, "kubernetes-sigs/cluster-api", "pull-foo", "kubernetes-sigs/cluster-api/pull-foo"},
+		{"periodic ignores repo", models.JobTypePeriodic, "kubernetes-sigs/cluster-api", "periodic-foo", "periodic-foo"},
 	}
 	for _, c := range cases {
-		got := (models.ProwJob{JobType: c.in}).EffectiveJobType()
-		if got != c.want {
-			t.Errorf("EffectiveJobType(%q) = %q, want %q", c.in, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			got := models.JobIDFor(c.jobType, c.repo, c.jobName)
+			if got != c.want {
+				t.Errorf("JobIDFor(%q,%q,%q) = %q, want %q", c.jobType, c.repo, c.jobName, got, c.want)
+			}
+		})
 	}
+}
+
+// Parser stamps JobID using JobIDFor so cache loaders and aggregators can
+// key off a single field without re-deriving it.
+func TestParseStampsJobID(t *testing.T) {
+	yaml := []byte(`
+periodics:
+- name: periodic-foo
+  annotations:
+    testgrid-dashboards: d
+presubmits:
+  org/repo:
+  - name: pull-foo
+    annotations:
+      testgrid-dashboards: d
+`)
+	jobs, err := ParseJobConfig(yaml, "mixed.yaml", "d", project.DefaultCategories)
+	if err != nil {
+		t.Fatalf("ParseJobConfig: %v", err)
+	}
+	if got := len(jobs); got != 2 {
+		t.Fatalf("expected 2 jobs, got %d", got)
+	}
+	assertEqual(t, "periodic JobID", jobs[0].JobID, "periodic-foo")
+	assertEqual(t, "presubmit JobID", jobs[1].JobID, "org/repo/pull-foo")
 }

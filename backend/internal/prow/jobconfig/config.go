@@ -120,6 +120,7 @@ func convertJob(r rawJob, filename, jobType, repo string, categories []project.C
 		Category:        categorize(r.Name, categories),
 		JobType:         jobType,
 		Repo:            repo,
+		JobID:           models.JobIDFor(jobType, repo, r.Name),
 	}
 	if r.DecorationConfig != nil {
 		j.Timeout = r.DecorationConfig.Timeout

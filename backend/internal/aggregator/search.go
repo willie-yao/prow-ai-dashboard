@@ -28,16 +28,17 @@ func isSetupTeardown(name string) bool {
 }
 
 // BuildSearchIndex creates a searchable index of all unique test cases across all jobs.
+// jobResults is keyed by JobID so same-named jobs in different repos do not collide.
 func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, now time.Time) models.SearchIndex {
-	// Build a lookup from job name to ProwJob metadata.
+	// Build a lookup from JobID to ProwJob metadata.
 	jobMeta := make(map[string]models.ProwJob, len(jobs))
 	for _, j := range jobs {
-		jobMeta[j.Name] = j
+		jobMeta[j.JobID] = j
 	}
 
 	type testKey struct {
 		testName string
-		jobName  string
+		jobID    string
 	}
 	type testInfo struct {
 		latestStatus string
@@ -47,11 +48,11 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 
 	seen := make(map[testKey]*testInfo)
 
-	for jobName, runs := range jobResults {
+	for jobID, runs := range jobResults {
 		// Process runs newest-first: the first occurrence sets the latest status.
 		for _, run := range runs {
 			for _, tc := range run.TestCases {
-				key := testKey{testName: tc.Name, jobName: jobName}
+				key := testKey{testName: tc.Name, jobID: jobID}
 				info, ok := seen[key]
 				if !ok {
 					info = &testInfo{latestStatus: tc.Status}
@@ -75,11 +76,14 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 	var entries []models.SearchEntry
 
 	// Add job-level entries (searchable by job name and tab name).
-	for jobName := range jobResults {
-		meta := jobMeta[jobName]
+	for jobID := range jobResults {
+		meta := jobMeta[jobID]
 		entries = append(entries, models.SearchEntry{
 			Kind:     "job",
-			JobName:  jobName,
+			JobName:  meta.Name,
+			JobID:    jobID,
+			JobType:  meta.JobType,
+			Repo:     meta.Repo,
 			TabName:  meta.TabName,
 			Branch:   meta.Branch,
 			Category: meta.Category,
@@ -103,11 +107,14 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 			failRate = float64(info.failures) / float64(info.appearances)
 		}
 
-		meta := jobMeta[key.jobName]
+		meta := jobMeta[key.jobID]
 		entries = append(entries, models.SearchEntry{
 			Kind:     "test",
 			TestName: key.testName,
-			JobName:  key.jobName,
+			JobName:  meta.Name,
+			JobID:    key.jobID,
+			JobType:  meta.JobType,
+			Repo:     meta.Repo,
 			TabName:  meta.TabName,
 			Branch:   meta.Branch,
 			Category: meta.Category,
@@ -116,10 +123,10 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 		})
 	}
 
-	// Sort by job name then test name for deterministic output.
+	// Sort by JobID then test name for deterministic output.
 	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].JobName != entries[j].JobName {
-			return entries[i].JobName < entries[j].JobName
+		if entries[i].JobID != entries[j].JobID {
+			return entries[i].JobID < entries[j].JobID
 		}
 		return entries[i].TestName < entries[j].TestName
 	})

@@ -31,7 +31,7 @@ func NewBucket(name string) *Bucket { return &Bucket{Name: name} }
 // is required to construct the pr-logs prefix; the pull number is
 // per-build and lives on BuildLocation.
 type JobLocation struct {
-	JobType string // models.JobTypePeriodic ("" treated as periodic) or models.JobTypePresubmit
+	JobType string // models.JobTypePeriodic or models.JobTypePresubmit
 	Repo    string // org/repo for presubmits; ignored for periodics
 }
 
@@ -44,14 +44,6 @@ type BuildLocation struct {
 	PullNumber string // required for presubmits; ignored for periodics
 }
 
-// effectiveJobType returns the JobType with empty defaulting to periodic.
-func (l JobLocation) effectiveJobType() string {
-	if l.JobType == "" {
-		return models.JobTypePeriodic
-	}
-	return l.JobType
-}
-
 // jobTypePrefix returns the bucket-relative prefix above the job name.
 // Trailing slash included. Examples:
 //
@@ -61,7 +53,7 @@ func (l JobLocation) effectiveJobType() string {
 // Panics if JobType is presubmit and Repo or pullNumber is empty; these
 // are programming errors at construction time, not runtime user input.
 func (l JobLocation) jobTypePrefix(pullNumber string) string {
-	switch l.effectiveJobType() {
+	switch l.JobType {
 	case models.JobTypePeriodic:
 		return "logs/"
 	case models.JobTypePresubmit:

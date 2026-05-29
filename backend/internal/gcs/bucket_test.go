@@ -45,9 +45,8 @@ func TestBucketWithDifferentName(t *testing.T) {
 	}
 }
 
-// TestBuildURLs_Periodic exercises the new location-aware helpers for the
-// periodic case. The empty-JobType case asserts the default-to-periodic
-// behavior used by legacy ProwJob cache entries.
+// TestBuildURLs_Periodic exercises the location-aware helpers for the
+// periodic case.
 func TestBuildURLs_Periodic(t *testing.T) {
 	b := NewBucket("kubernetes-ci-logs")
 	loc := BuildLocation{
@@ -73,12 +72,6 @@ func TestBuildURLs_Periodic(t *testing.T) {
 		if c.got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
 		}
-	}
-
-	// Empty JobType defaults to periodic so legacy callers stay working.
-	empty := BuildLocation{JobName: "j", BuildID: "1"}
-	if got := b.BuildObjectURL(empty, "x"); got != "https://storage.googleapis.com/kubernetes-ci-logs/logs/j/1/x" {
-		t.Errorf("empty-JobType default: got %q", got)
 	}
 }
 
@@ -120,7 +113,8 @@ func TestBuildURLs_Presubmit(t *testing.T) {
 
 // TestBuildURLs_PresubmitValidation confirms that presubmit URL helpers
 // panic when required fields (Repo, PullNumber) are missing, because these
-// are construction-time programming errors rather than runtime data.
+// are construction-time programming errors rather than runtime data. An
+// empty JobType is also a programming bug (the parser always stamps it).
 func TestBuildURLs_PresubmitValidation(t *testing.T) {
 	b := NewBucket("kubernetes-ci-logs")
 	cases := []struct {
@@ -140,6 +134,10 @@ func TestBuildURLs_PresubmitValidation(t *testing.T) {
 				JobLocation: JobLocation{JobType: models.JobTypePresubmit, Repo: "org/repo"},
 				JobName:     "j", BuildID: "1",
 			},
+		},
+		{
+			name: "empty JobType",
+			loc:  BuildLocation{JobName: "j", BuildID: "1"},
 		},
 	}
 	for _, c := range cases {

@@ -117,7 +117,7 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.PeriodicOnly {
 		var periodic []models.ProwJob
 		for _, j := range jobs {
-			if j.EffectiveJobType() == models.JobTypePeriodic {
+			if j.JobType == models.JobTypePeriodic {
 				periodic = append(periodic, j)
 			}
 		}
@@ -147,7 +147,7 @@ func Run(ctx context.Context, opts Options) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, collector, j.Name, opts.BuildsPerJob, cachedJobs[j.Name])
+			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, collector, j.Name, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -182,18 +182,25 @@ func Run(ctx context.Context, opts Options) error {
 			continue // skipped due to fetch error
 		}
 		dashboard.Jobs = append(dashboard.Jobs, aggregator.ComputeJobSummary(r.job, r.runs, now))
-		details = append(details, models.JobDetail{Name: r.job.Name, Runs: r.runs})
+		details = append(details, models.JobDetail{
+			Name:    r.job.Name,
+			JobID:   r.job.JobID,
+			JobType: r.job.JobType,
+			Repo:    r.job.Repo,
+			Runs:    r.runs,
+		})
 	}
 
-	// Step 4: Flakiness report + search index.
+	// Step 4: Flakiness report + search index. Maps keyed by JobID so
+	// same-named jobs across repos do not overwrite each other.
 	jobResultMap := make(map[string][]models.BuildResult, len(results))
 	for _, r := range results {
 		if r.job.Name == "" {
 			continue
 		}
-		jobResultMap[r.job.Name] = r.runs
+		jobResultMap[r.job.JobID] = r.runs
 	}
-	flakinessReport := aggregator.ComputeFlakinessReport(jobResultMap, now)
+	flakinessReport := aggregator.ComputeFlakinessReport(jobResultMap, jobs, now)
 	log.Printf("Flakiness report: %d most flaky, %d persistent, %d recently broken",
 		len(flakinessReport.MostFlaky), len(flakinessReport.PersistentFailures), len(flakinessReport.RecentlyBroken))
 
@@ -235,8 +242,8 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// loadCachedJobDetails loads existing per-job JSON files from the output dir
-// and returns a map of job name → cached BuildResults (keyed by build ID).
+// loadCachedJobDetails loads existing per-job JSON files from the output
+// dir and returns a map of JobID → cached BuildResults (keyed by build ID).
 func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResult {
 	cached := make(map[string]map[string]models.BuildResult)
 	jobsDir := filepath.Join(outDir, "jobs")
@@ -253,7 +260,7 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 			continue
 		}
 		var detail models.JobDetail
-		if json.Unmarshal(data, &detail) != nil || detail.Name == "" {
+		if json.Unmarshal(data, &detail) != nil || detail.JobID == "" {
 			continue
 		}
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
@@ -264,7 +271,7 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 			}
 		}
 		if len(builds) > 0 {
-			cached[detail.Name] = builds
+			cached[detail.JobID] = builds
 		}
 	}
 	return cached
@@ -361,7 +368,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 
 	consecutiveMap := make(map[string]int)
 	for _, tf := range flakinessReport.PersistentFailures {
-		consecutiveMap[tf.TestName] = tf.ConsecutiveFailures
+		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
 	}
 
 	module, err := modules.Build(cfg)
@@ -421,7 +428,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					continue
 				}
 				before := tc.AISummary
-				service.Analyze(ctx, httpClient, run, tc)
+				service.Analyze(ctx, httpClient, details[i].JobID, run, tc)
 				if before == nil && tc.AISummary != nil && tc.AISummary.IsTransient && tc.AIAnalysis == nil {
 					transientSkipped++
 				}

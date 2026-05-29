@@ -43,8 +43,8 @@ type Service struct {
 
 // NewService constructs a Service. systemPrompt is the fully composed prompt
 // (engine base + consumer addendum + response format footer) and must be
-// non-empty. consecutiveMap is a lookup of test name to consecutive failure
-// count taken from the flakiness report; it may be nil.
+// non-empty. consecutiveMap is keyed by consecutiveKey(jobID, testName); it
+// may be nil.
 func NewService(client *Client, module Module, systemPrompt string, consecutiveMap map[string]int) *Service {
 	if consecutiveMap == nil {
 		consecutiveMap = map[string]int{}
@@ -76,6 +76,9 @@ func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, 
 func (s *Service) Module() Module { return s.module }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case.
+// jobID is the stable per-job identifier used to scope the consecutive map
+// and agentic cache key so same-named jobs across repos do not share state.
+//
 // Behavior:
 //   - skip entirely if both AISummary and AIAnalysis are already populated AND
 //     the cached analysis's Mode matches the currently desired mode
@@ -85,7 +88,7 @@ func (s *Service) Module() Module { return s.module }
 //     AgenticPreferrer opts in), otherwise run the single-shot curator pipeline
 //   - on API failure, leave an "AI analysis unavailable" summary so the UI
 //     still has something to render
-func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase) {
+func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID string, run *models.BuildResult, tc *models.TestCase) {
 	desiredMode := s.desiredMode(run, tc)
 
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc, desiredMode) {
@@ -109,7 +112,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 	}
 
 	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, desiredMode)
-	consec := s.consecutiveMap[tc.Name]
+	consec := s.consecutiveMap[consecutiveKey(jobID, tc.Name)]
 	if consec < 1 {
 		consec = 1
 	}
@@ -117,7 +120,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 
 	if desiredMode == AgenticMode {
-		summary, analysis, err := s.runAgentic(ctx, run, tc, userPrompt)
+		summary, analysis, err := s.runAgentic(ctx, jobID, run, tc, userPrompt)
 		if err == nil {
 			tc.AISummary = summary
 			tc.AIAnalysis = analysis
@@ -150,12 +153,12 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, run *mod
 
 // runAgentic does the per-failure agentic call setup (browser construction +
 // cache key + call). Kept separate so Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+func (s *Service) runAgentic(ctx context.Context, jobID string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
 	browser := s.browserFactory.ForBuild(run.JobName, run.BuildID)
-	cacheKey := s.agenticCacheKey(run.JobName, run.BuildID, tc.Name, tc.FailureMessage)
+	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
 	return s.client.doAnalyzeAgentic(ctx, browser, s.agenticOpts, cacheKey, s.systemPrompt, userPrompt)
 }
 
@@ -226,9 +229,15 @@ func (s *Service) cacheKey(testName, failureMessage string) string {
 // answer cites build-specific artifact paths and line numbers. Sharing the
 // curator key would mean different builds of the same test serve each other
 // the wrong line numbers.
-func (s *Service) agenticCacheKey(jobName, buildID, testName, failureMessage string) string {
+func (s *Service) agenticCacheKey(jobID, buildID, testName, failureMessage string) string {
 	hash := failureHash(testName, failureMessage)
-	return fmt.Sprintf("agentic:%s:%s:%s:%x", s.module.Name(), jobName, buildID, hash)
+	return fmt.Sprintf("agentic:%s:%s:%s:%x", s.module.Name(), jobID, buildID, hash)
+}
+
+// consecutiveKey scopes consecutive-failure counts by JobID + test name so
+// same-named tests in different jobs do not share streaks.
+func consecutiveKey(jobID, testName string) string {
+	return jobID + "::" + testName
 }
 
 // failureHash builds the deterministic hash used by both cache key flavors.

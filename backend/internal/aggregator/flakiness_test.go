@@ -74,7 +74,7 @@ func TestComputeTestFlakiness_FlipRate(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(4), true, []models.TestCase{makeTC("TestA", "passed", 1.0, "")}),
 	}
 
-	tf := ComputeTestFlakiness("TestA", "test-job", runs)
+	tf := ComputeTestFlakiness("TestA", "test-job", "test-job", runs)
 
 	if tf.TotalRuns != 4 {
 		t.Errorf("TotalRuns = %d, want 4", tf.TotalRuns)
@@ -102,7 +102,7 @@ func TestComputeTestFlakiness_NoFlips(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(3), false, []models.TestCase{makeTC("TestB", "failed", 1.0, "err")}),
 	}
 
-	tf := ComputeTestFlakiness("TestB", "test-job", runs)
+	tf := ComputeTestFlakiness("TestB", "test-job", "test-job", runs)
 
 	if tf.FlipRate != 0 {
 		t.Errorf("FlipRate = %f, want 0", tf.FlipRate)
@@ -121,7 +121,7 @@ func TestComputeTestFlakiness_ConsecutiveFailures(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(4), false, []models.TestCase{makeTC("TestC", "failed", 1.0, "err1")}),
 	}
 
-	tf := ComputeTestFlakiness("TestC", "test-job", runs)
+	tf := ComputeTestFlakiness("TestC", "test-job", "test-job", runs)
 
 	if tf.ConsecutiveFailures != 2 {
 		t.Errorf("ConsecutiveFailures = %d, want 2", tf.ConsecutiveFailures)
@@ -143,7 +143,7 @@ func TestComputeTestFlakiness_Classification(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(5), false, []models.TestCase{makeTC("TestD", "failed", 1.0, "timeout")}),
 	}
 
-	tf := ComputeTestFlakiness("TestD", "test-job", runs)
+	tf := ComputeTestFlakiness("TestD", "test-job", "test-job", runs)
 
 	if tf.Classification != models.ClassificationPersistent {
 		t.Errorf("Classification = %q, want %q", tf.Classification, models.ClassificationPersistent)
@@ -164,7 +164,7 @@ func TestComputeTestFlakiness_ErrorPatternGrouping(t *testing.T) {
 		}),
 	}
 
-	tf := ComputeTestFlakiness("TestE", "test-job", runs)
+	tf := ComputeTestFlakiness("TestE", "test-job", "test-job", runs)
 
 	if len(tf.ErrorPatterns) != 2 {
 		t.Fatalf("ErrorPatterns length = %d, want 2", len(tf.ErrorPatterns))
@@ -184,7 +184,7 @@ func TestComputeTestFlakiness_DurationHistory(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(2), false, []models.TestCase{makeTC("TestF", "failed", 10.0, "err")}),
 	}
 
-	tf := ComputeTestFlakiness("TestF", "test-job", runs)
+	tf := ComputeTestFlakiness("TestF", "test-job", "test-job", runs)
 
 	if len(tf.DurationHistory) != 2 {
 		t.Fatalf("DurationHistory length = %d, want 2", len(tf.DurationHistory))
@@ -205,7 +205,7 @@ func TestComputeTestFlakiness_LastFailure(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(3), false, []models.TestCase{makeTC("TestG", "failed", 1.0, "crash")}),
 	}
 
-	tf := ComputeTestFlakiness("TestG", "test-job", runs)
+	tf := ComputeTestFlakiness("TestG", "test-job", "test-job", runs)
 
 	if tf.LastFailure == nil {
 		t.Fatal("LastFailure should not be nil")
@@ -223,7 +223,7 @@ func TestComputeTestFlakiness_SingleRun(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(1), false, []models.TestCase{makeTC("TestH", "failed", 1.0, "err")}),
 	}
 
-	tf := ComputeTestFlakiness("TestH", "test-job", runs)
+	tf := ComputeTestFlakiness("TestH", "test-job", "test-job", runs)
 
 	if tf.TotalRuns != 1 {
 		t.Errorf("TotalRuns = %d, want 1", tf.TotalRuns)
@@ -244,7 +244,7 @@ func TestComputeTestFlakiness_TestNotInAllRuns(t *testing.T) {
 		makeFlakyBuild("1", flakyHoursAgo(3), true, []models.TestCase{makeTC("TestI", "passed", 1.0, "")}),
 	}
 
-	tf := ComputeTestFlakiness("TestI", "test-job", runs)
+	tf := ComputeTestFlakiness("TestI", "test-job", "test-job", runs)
 
 	if tf.TotalRuns != 2 {
 		t.Errorf("TotalRuns = %d, want 2", tf.TotalRuns)
@@ -277,7 +277,7 @@ func TestComputeFlakinessReport_MostFlakySorting(t *testing.T) {
 		},
 	}
 
-	report := ComputeFlakinessReport(jobResults, now)
+	report := ComputeFlakinessReport(jobResults, nil, now)
 
 	if len(report.MostFlaky) != 2 {
 		t.Fatalf("MostFlaky length = %d, want 2", len(report.MostFlaky))
@@ -313,7 +313,7 @@ func TestComputeFlakinessReport_PersistentFailures(t *testing.T) {
 		},
 	}
 
-	report := ComputeFlakinessReport(jobResults, now)
+	report := ComputeFlakinessReport(jobResults, nil, now)
 
 	if len(report.PersistentFailures) != 1 {
 		t.Fatalf("PersistentFailures length = %d, want 1", len(report.PersistentFailures))
@@ -351,7 +351,7 @@ func TestComputeFlakinessReport_RecentlyBroken(t *testing.T) {
 		},
 	}
 
-	report := ComputeFlakinessReport(jobResults, now)
+	report := ComputeFlakinessReport(jobResults, nil, now)
 
 	if len(report.RecentlyBroken) != 1 {
 		t.Fatalf("RecentlyBroken length = %d, want 1", len(report.RecentlyBroken))
@@ -374,7 +374,7 @@ func TestComputeFlakinessReport_ExcludesPassingTests(t *testing.T) {
 		},
 	}
 
-	report := ComputeFlakinessReport(jobResults, now)
+	report := ComputeFlakinessReport(jobResults, nil, now)
 
 	if len(report.MostFlaky) != 0 {
 		t.Errorf("MostFlaky length = %d, want 0 (no failures)", len(report.MostFlaky))
@@ -399,7 +399,10 @@ func TestComputeFlakinessReport_MultipleJobs(t *testing.T) {
 		},
 	}
 
-	report := ComputeFlakinessReport(jobResults, now)
+	report := ComputeFlakinessReport(jobResults, []models.ProwJob{
+		{Name: "job1", JobID: "job1", JobType: models.JobTypePeriodic},
+		{Name: "job2", JobID: "job2", JobType: models.JobTypePeriodic},
+	}, now)
 
 	if len(report.MostFlaky) != 2 {
 		t.Fatalf("MostFlaky length = %d, want 2 (one from each job)", len(report.MostFlaky))
@@ -417,7 +420,7 @@ func TestComputeFlakinessReport_MultipleJobs(t *testing.T) {
 
 func TestComputeFlakinessReport_GeneratedAt(t *testing.T) {
 	now := flakyBaseTime
-	report := ComputeFlakinessReport(nil, now)
+	report := ComputeFlakinessReport(nil, nil, now)
 
 	expected := now.UTC().Format(time.RFC3339)
 	if report.GeneratedAt != expected {

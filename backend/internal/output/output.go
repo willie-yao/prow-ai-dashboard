@@ -35,9 +35,11 @@ func WriteDashboard(dir string, dashboard models.Dashboard) error {
 	return writeJSON(filepath.Join(dir, "dashboard.json"), dashboard)
 }
 
-// WriteJobDetail writes a per-job detail file to dir/jobs/{sanitized-name}.json.
+// WriteJobDetail writes a per-job detail file to dir/jobs/{sanitized-job-id}.json.
+// Keying by JobID prevents same-named presubmit/periodic pairs (or same-named
+// presubmits across repos) from overwriting each other on disk.
 func WriteJobDetail(dir string, detail models.JobDetail) error {
-	name := SanitizeFilename(detail.Name) + ".json"
+	name := SanitizeFilename(detail.JobID) + ".json"
 	return writeJSON(filepath.Join(dir, "jobs", name), detail)
 }
 
