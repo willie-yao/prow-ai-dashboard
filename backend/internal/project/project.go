@@ -79,11 +79,15 @@ func (c *Config) EffectiveCategories() []CategoryRule {
 }
 
 // Source describes where in kubernetes/test-infra the project's prow
-// job YAMLs live and how to filter them.
+// job YAMLs live and how to filter them. TestInfraPaths may list one
+// or more directories under the repo root; all are scanned and the
+// union of matching jobs (per testgrid.dashboard) is fetched. FilePrefix
+// is optional; when empty, every *.yaml in each path (except presets)
+// is parsed and the dashboard label is the sole filter.
 type Source struct {
-	TestInfraPath     string `yaml:"test_infra_path"    json:"test_infra_path"`
-	FilePrefix        string `yaml:"file_prefix"        json:"file_prefix"`
-	IncludePresubmits bool   `yaml:"include_presubmits" json:"include_presubmits,omitempty"`
+	TestInfraPaths    []string `yaml:"test_infra_paths"   json:"test_infra_paths"`
+	FilePrefix        string   `yaml:"file_prefix,omitempty" json:"file_prefix,omitempty"`
+	IncludePresubmits bool     `yaml:"include_presubmits" json:"include_presubmits,omitempty"`
 }
 
 // TestGrid identifies the testgrid dashboard that owns the project's jobs.
@@ -522,8 +526,9 @@ func (c *Config) Validate() error {
 	}
 	require("id", c.ID)
 	require("name", c.Name)
-	require("source.test_infra_path", c.Source.TestInfraPath)
-	require("source.file_prefix", c.Source.FilePrefix)
+	if len(c.Source.TestInfraPaths) == 0 {
+		missing = append(missing, "source.test_infra_paths")
+	}
 	require("testgrid.dashboard", c.TestGrid.Dashboard)
 	require("gcs.bucket", c.GCS.Bucket)
 	require("branding.title", c.Branding.Title)
@@ -535,6 +540,23 @@ func (c *Config) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("project config missing required field(s): %s", strings.Join(missing, ", "))
 	}
+
+	// Normalize paths: trim whitespace + surrounding slashes; dedup; reject empties.
+	seen := make(map[string]struct{}, len(c.Source.TestInfraPaths))
+	cleaned := make([]string, 0, len(c.Source.TestInfraPaths))
+	for i, p := range c.Source.TestInfraPaths {
+		norm := strings.Trim(strings.TrimSpace(p), "/")
+		if norm == "" {
+			return fmt.Errorf("source.test_infra_paths[%d] is empty after trimming", i)
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		cleaned = append(cleaned, norm)
+	}
+	c.Source.TestInfraPaths = cleaned
+	c.Source.FilePrefix = strings.TrimSpace(c.Source.FilePrefix)
 
 	for i, r := range c.Categories {
 		match := strings.TrimSpace(r.Match)

@@ -61,9 +61,11 @@ and confirm the category rules you intend to declare.
    go build -o /tmp/fetcher ./cmd/fetcher
    ```
 2. Write a throwaway `project.yaml` with the minimum fields:
-   `source.test_infra_path`, `source.file_prefix`, `testgrid.dashboard`,
-   `gcs.bucket`, `branding.*`, `artifacts.collector`, `ai.module`. Skip
-   the categories block (the engine will use a sensible default).
+   `source.test_infra_paths` (list of ≥1 directory), `testgrid.dashboard`,
+   `gcs.bucket`, `branding.*`, `artifacts.collector`, `ai.module`. Set
+   `source.file_prefix` when all your job files share a prefix; omit it
+   for dashboards that span multiple files without one. Skip the
+   categories block (the engine will use a sensible default).
 3. Run a sweep:
    ```
    mkdir -p /tmp/sweep && cd /tmp/sweep
@@ -88,13 +90,24 @@ Start from [`configs/example/project.yaml`](../configs/example/project.yaml).
 The annotated fields document every knob; below are the ones that
 trip people up.
 
+### `source.test_infra_paths`
+
+A list of one or more directories under the kubernetes/test-infra repo
+root. The engine fetches every `*.yaml` under each (no recursion) and
+keeps jobs that advertise the configured `testgrid.dashboard`. Most
+single-SIG projects use a single path (e.g. CAPI:
+`config/jobs/kubernetes-sigs/cluster-api`); cross-SIG dashboards like
+`sig-node-kubelet` list multiple (`config/jobs/kubernetes/sig-node`,
+`config/jobs/kubernetes/sig-cluster-lifecycle`, ...).
+
 ### `source.file_prefix`
 
-The engine globs `config/jobs/<test_infra_path>/*` then keeps files whose
-name starts with `file_prefix`. CAPI uses `cluster-api-` (matches
-`cluster-api-main-periodics.yaml`, `cluster-api-prowjob-gen.yaml`, etc.);
-CAPZ uses `cluster-api-provider-azure-`. Pick the longest prefix that
-still catches every periodic file in the directory.
+Optional. When set, the engine keeps only files whose name starts with
+this prefix. CAPI uses `cluster-api-`, CAPZ uses
+`cluster-api-provider-azure-`. Omit (or leave empty) for dashboards
+whose jobs span multiple files without a shared prefix; the
+`testgrid-dashboards` annotation is then the sole filter and every
+`*.yaml` in each path is parsed.
 
 ### `testgrid.dashboard`
 

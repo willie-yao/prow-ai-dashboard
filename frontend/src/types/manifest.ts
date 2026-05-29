@@ -15,8 +15,8 @@ export interface Branding {
 }
 
 export interface Source {
-  test_infra_path: string;
-  file_prefix: string;
+  test_infra_paths: string[];
+  file_prefix?: string;
 }
 
 export interface TestGrid {

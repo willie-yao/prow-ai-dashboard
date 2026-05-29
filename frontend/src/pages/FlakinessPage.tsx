@@ -54,7 +54,7 @@ function metricLabel(tab: Tab): string {
 
 function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
   const manifest = useManifest();
-  const filePrefix = manifest.source.file_prefix;
+  const filePrefix = manifest.source.file_prefix ?? "";
   const [expanded, setExpanded] = useState(false);
   const failPct = Math.round(item.fail_rate * 100);
 

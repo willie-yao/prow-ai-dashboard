@@ -14,7 +14,7 @@ interface ItemGroup {
 
 export function NeedsAttention() {
   const manifest = useManifest();
-  const filePrefix = manifest.source.file_prefix;
+  const filePrefix = manifest.source.file_prefix ?? "";
   const { data, loading } = useFlakinessReport();
 
   const groups = useMemo<ItemGroup[]>(() => {

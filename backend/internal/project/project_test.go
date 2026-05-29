@@ -13,7 +13,8 @@ id: capz
 name: "Cluster API Provider Azure"
 short_name: "CAPZ"
 source:
-  test_infra_path: "config/jobs/kubernetes-sigs/cluster-api-provider-azure"
+  test_infra_paths:
+    - "config/jobs/kubernetes-sigs/cluster-api-provider-azure"
   file_prefix: "cluster-api-provider-azure-"
 testgrid:
   dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"
@@ -38,8 +39,8 @@ func TestParseValid(t *testing.T) {
 	if c.ID != "capz" {
 		t.Errorf("ID = %q, want %q", c.ID, "capz")
 	}
-	if c.Source.TestInfraPath != "config/jobs/kubernetes-sigs/cluster-api-provider-azure" {
-		t.Errorf("Source.TestInfraPath = %q", c.Source.TestInfraPath)
+	if len(c.Source.TestInfraPaths) != 1 || c.Source.TestInfraPaths[0] != "config/jobs/kubernetes-sigs/cluster-api-provider-azure" {
+		t.Errorf("Source.TestInfraPaths = %v", c.Source.TestInfraPaths)
 	}
 	if c.TestGrid.Dashboard != "sig-cluster-lifecycle-cluster-api-provider-azure" {
 		t.Errorf("TestGrid.Dashboard = %q", c.TestGrid.Dashboard)
@@ -62,18 +63,16 @@ func TestParseMissingRequiredFields(t *testing.T) {
 	const incomplete = `
 id: capz
 source:
-  test_infra_path: "x"
+  file_prefix: "x-"
 `
 	_, err := parse(strings.NewReader(incomplete))
 	if err == nil {
 		t.Fatalf("expected error for incomplete config, got nil")
 	}
 	msg := err.Error()
-	// Every absent required field should be named in the error so users
-	// can fix the YAML in one pass.
 	wantSubstrings := []string{
 		"name",
-		"source.file_prefix",
+		"source.test_infra_paths",
 		"testgrid.dashboard",
 		"gcs.bucket",
 		"branding.title",
@@ -95,7 +94,7 @@ id: capz
 name: x
 unknown_field: oops
 source:
-  test_infra_path: x
+  test_infra_paths: [x]
   file_prefix: x
 testgrid:
   dashboard: x
@@ -165,8 +164,8 @@ func validConfig() *Config {
 		ID:   "test",
 		Name: "Test",
 		Source: Source{
-			TestInfraPath: "config/jobs/test",
-			FilePrefix:    "test-",
+			TestInfraPaths: []string{"config/jobs/test"},
+			FilePrefix:     "test-",
 		},
 		TestGrid: TestGrid{Dashboard: "test-dashboard"},
 		GCS:      GCS{Bucket: "test-bucket"},
@@ -289,6 +288,92 @@ func assertValidate(t *testing.T, c *Config, wantSub string) {
 	}
 }
 
+// --- Source.TestInfraPaths normalization ---
+
+func TestValidate_SourceTestInfraPaths(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantSub string
+		check   func(*testing.T, *Config)
+	}{
+		{
+			name: "empty list rejected",
+			mutate: func(c *Config) {
+				c.Source.TestInfraPaths = nil
+			},
+			wantSub: "source.test_infra_paths",
+		},
+		{
+			name: "empty string entry rejected",
+			mutate: func(c *Config) {
+				c.Source.TestInfraPaths = []string{"config/jobs/foo", "   "}
+			},
+			wantSub: "source.test_infra_paths[1] is empty after trimming",
+		},
+		{
+			name: "whitespace and slashes trimmed",
+			mutate: func(c *Config) {
+				c.Source.TestInfraPaths = []string{"  /config/jobs/foo/  "}
+			},
+			check: func(t *testing.T, c *Config) {
+				if got := c.Source.TestInfraPaths; len(got) != 1 || got[0] != "config/jobs/foo" {
+					t.Errorf("got %v, want [config/jobs/foo]", got)
+				}
+			},
+		},
+		{
+			name: "duplicates deduped",
+			mutate: func(c *Config) {
+				c.Source.TestInfraPaths = []string{"a/b", "a/b", "/a/b/"}
+			},
+			check: func(t *testing.T, c *Config) {
+				if got := c.Source.TestInfraPaths; len(got) != 1 || got[0] != "a/b" {
+					t.Errorf("got %v, want [a/b]", got)
+				}
+			},
+		},
+		{
+			name: "multiple distinct paths preserved",
+			mutate: func(c *Config) {
+				c.Source.TestInfraPaths = []string{"a/b", "c/d"}
+			},
+			check: func(t *testing.T, c *Config) {
+				if got := c.Source.TestInfraPaths; len(got) != 2 || got[0] != "a/b" || got[1] != "c/d" {
+					t.Errorf("got %v, want [a/b c/d]", got)
+				}
+			},
+		},
+		{
+			name: "file_prefix is optional",
+			mutate: func(c *Config) {
+				c.Source.FilePrefix = ""
+			},
+		},
+		{
+			name: "file_prefix whitespace trimmed",
+			mutate: func(c *Config) {
+				c.Source.FilePrefix = "  foo-  "
+			},
+			check: func(t *testing.T, c *Config) {
+				if c.Source.FilePrefix != "foo-" {
+					t.Errorf("FilePrefix = %q, want %q", c.Source.FilePrefix, "foo-")
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			tc.mutate(c)
+			assertValidate(t, c, tc.wantSub)
+			if tc.check != nil && tc.wantSub == "" {
+				tc.check(t, c)
+			}
+		})
+	}
+}
+
 // --- Evidence schema ---
 
 func TestEffectiveEvidence_DefaultsWhenAIBlockAbsent(t *testing.T) {
@@ -396,7 +481,7 @@ func TestEffectiveEvidence_NilSliceIsTreatedAsOmitted(t *testing.T) {
 	const yaml = `
 id: capz
 name: x
-source: {test_infra_path: x, file_prefix: x-}
+source: {test_infra_paths: [x], file_prefix: x-}
 testgrid: {dashboard: x}
 gcs: {bucket: x}
 branding:
@@ -430,7 +515,7 @@ func TestEffectiveEvidence_BareStringControllerLogIsPromoted(t *testing.T) {
 	const yaml = `
 id: capz
 name: x
-source: {test_infra_path: x, file_prefix: x-}
+source: {test_infra_paths: [x], file_prefix: x-}
 testgrid: {dashboard: x}
 gcs: {bucket: x}
 branding:

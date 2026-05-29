@@ -142,8 +142,8 @@ func sampleConfig() *project.Config {
 		Name:      "Cluster API Provider Azure",
 		ShortName: "CAPZ",
 		Source: project.Source{
-			TestInfraPath: "config/jobs/kubernetes-sigs/cluster-api-provider-azure",
-			FilePrefix:    "cluster-api-provider-azure-",
+			TestInfraPaths: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure"},
+			FilePrefix:     "cluster-api-provider-azure-",
 		},
 		TestGrid: project.TestGrid{Dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"},
 		GCS:      project.GCS{Bucket: "kubernetes-ci-logs"},
