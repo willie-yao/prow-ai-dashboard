@@ -32,6 +32,12 @@ type Service struct {
 	agenticOn   bool
 	agenticAll  bool // when true, every failure goes agentic; else module decides
 
+	// universalOn flags the use_universal_path flow: agentic is always on,
+	// no curator fallback on ErrToolsUnsupported (the user explicitly opted
+	// into an agentic-only path), and AIAnalysis.Mode is stamped as
+	// UniversalMode so cached entries from any other mode get re-analyzed.
+	universalOn bool
+
 	// browserFactory provides per-build Browser instances. nil when
 	// agentic mode is off, in which case Analyze ignores it.
 	browserFactory artifacts.Factory
@@ -78,11 +84,15 @@ func NewService(client *Client, module Module, systemPrompt string, consecutiveM
 // model (e.g. filesystem + k8s tier-2). always=true forces every failure
 // through agentic mode; always=false defers the choice to the Module's
 // AgenticPreferrer (modules that don't implement it stay on curator).
+// universalPath=true selects the use_universal_path flow: implies always-on
+// agentic AND disables the ErrToolsUnsupported curator fallback (the
+// universal flow is explicitly an agentic-only pipeline).
 //
 // Safe to call once at Service construction; not safe for concurrent use.
-func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabledTools []string, always bool) {
+func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabledTools []string, always, universalPath bool) {
 	s.agenticOn = true
-	s.agenticAll = always
+	s.agenticAll = always || universalPath
+	s.universalOn = universalPath
 	s.agenticOpts = opts
 	s.browserFactory = factory
 	s.registry = registry
@@ -140,7 +150,14 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 
-	if desiredMode == AgenticMode {
+	if desiredMode == AgenticMode || desiredMode == UniversalMode {
+		// Universal mode bails fast if a prior failure already exposed that
+		// the endpoint can't do tools. No curator fallback: the user
+		// explicitly opted into an agentic-only path.
+		if s.universalOn && s.toolsUnsupported.Load() {
+			s.setUnavailable(tc, fmt.Errorf("universal AI path requires endpoint with function-calling support"))
+			return
+		}
 		summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt)
 		if err == nil {
 			tc.AISummary = summary
@@ -149,6 +166,11 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		}
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
+			if s.universalOn {
+				log.Printf("  ⚠ AI endpoint rejected tools; universal mode has no curator fallback: %v", err)
+				s.setUnavailable(tc, fmt.Errorf("universal AI path requires endpoint with function-calling support: %w", err))
+				return
+			}
 			log.Printf("  ⚠ AI endpoint rejected tools; falling back to curator for this run: %v", err)
 			// Fall through to curator path below.
 		} else {
@@ -191,8 +213,19 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		EnabledTools: s.enabledTools,
 		Cache:        cache,
 		WebURLBase:   run.WebURL,
+		Mode:         s.modeForRun(),
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
+}
+
+// modeForRun returns the Mode value to stamp on results produced by this
+// Service's agentic path. UniversalMode under use_universal_path, AgenticMode
+// otherwise.
+func (s *Service) modeForRun() string {
+	if s.universalOn {
+		return UniversalMode
+	}
+	return AgenticMode
 }
 
 // toolCacheFor returns the *tools.Cache scoped to one build. Cache instances
@@ -222,11 +255,17 @@ func (s *Service) setUnavailable(tc *models.TestCase, err error) {
 // accepted as "curator" by shouldReanalyze.
 const curatorMode = "curator"
 
-// desiredMode picks the pipeline to use for this failure. Returns AgenticMode
-// when agentic is enabled AND (always-on OR the module opts in via
-// AgenticPreferrer), else curatorMode. Honors the run-scoped tools-unsupported
-// flag so a 400 on one failure doesn't keep retrying for the rest of the run.
+// desiredMode picks the pipeline to use for this failure. Returns
+// UniversalMode when use_universal_path is on (sticky regardless of the
+// tools-unsupported flag — Analyze handles the early bail), AgenticMode
+// when regular agentic is enabled AND (always-on OR the module opts in via
+// AgenticPreferrer), else curatorMode. Honors the run-scoped
+// tools-unsupported flag so a 400 on one failure doesn't keep retrying for
+// the rest of the run.
 func (s *Service) desiredMode(run *models.BuildResult, tc *models.TestCase) string {
+	if s.universalOn {
+		return UniversalMode
+	}
 	if !s.agenticOn || s.toolsUnsupported.Load() {
 		return curatorMode
 	}

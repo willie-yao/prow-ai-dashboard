@@ -630,13 +630,13 @@ func TestEvidence_IsZero(t *testing.T) {
 func TestAgentic_Effective(t *testing.T) {
 	t.Run("nil receiver returns defaults with Enabled=false", func(t *testing.T) {
 		got := (*Agentic)(nil).EffectiveAgentic()
-		if got != DefaultAgentic {
+		if !agenticEqual(got, DefaultAgentic) {
 			t.Errorf("got %+v, want defaults %+v", got, DefaultAgentic)
 		}
 	})
 	t.Run("zero struct returns defaults", func(t *testing.T) {
 		got := (&Agentic{}).EffectiveAgentic()
-		if got != DefaultAgentic {
+		if !agenticEqual(got, DefaultAgentic) {
 			t.Errorf("got %+v, want defaults %+v", got, DefaultAgentic)
 		}
 	})
@@ -669,4 +669,78 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("GCSByteBudget = %d, want default %d", got.GCSByteBudget, DefaultAgentic.GCSByteBudget)
 		}
 	})
+	t.Run("Tools list passes through", func(t *testing.T) {
+		in := &Agentic{Tools: []string{"filesystem"}}
+		got := in.EffectiveAgentic()
+		if !equalStrings(got.Tools, []string{"filesystem"}) {
+			t.Errorf("Tools = %v, want [filesystem]", got.Tools)
+		}
+		// Mutate input slice; effective copy must NOT change.
+		in.Tools[0] = "mutated"
+		if got.Tools[0] != "filesystem" {
+			t.Errorf("EffectiveAgentic returned aliased slice; got %v after mutation", got.Tools)
+		}
+	})
+	t.Run("empty Tools falls back to default empty", func(t *testing.T) {
+		got := (&Agentic{}).EffectiveAgentic()
+		if len(got.Tools) != 0 {
+			t.Errorf("Tools = %v, want empty", got.Tools)
+		}
+	})
+}
+
+// agenticEqual compares two Agentic structs without using ==, which would
+// fail to compile once Tools (a slice) was added.
+func agenticEqual(a, b Agentic) bool {
+	return a.Enabled == b.Enabled &&
+		a.Always == b.Always &&
+		a.MaxIters == b.MaxIters &&
+		a.ModelByteBudget == b.ModelByteBudget &&
+		a.GCSByteBudget == b.GCSByteBudget &&
+		a.WallClock == b.WallClock &&
+		equalStrings(a.Tools, b.Tools)
+}
+
+// ---------- L.2: use_universal_path semantics ----------
+
+func TestValidate_UniversalModuleRequiresUniversalPath(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{Module: "universal"}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error when ai.module=universal without use_universal_path")
+	}
+	if !strings.Contains(err.Error(), "use_universal_path") {
+		t.Errorf("error %q should mention use_universal_path", err.Error())
+	}
+}
+
+func TestValidate_UniversalModuleWithFlagPasses(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{Module: "universal", UseUniversalPath: true}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("validation should pass when use_universal_path is true: %v", err)
+	}
+}
+
+func TestValidate_UniversalCaseInsensitive(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{Module: "Universal"} // capitalized; should still error
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for case-insensitive universal without flag")
+	}
+}
+
+func TestParse_UseUniversalPathField(t *testing.T) {
+	yml := validYAML + "\nai:\n  use_universal_path: true\n  agentic:\n    enabled: true\n    tools: [filesystem]\n"
+	c, err := parse(strings.NewReader(yml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if c.AI == nil || !c.AI.UseUniversalPath {
+		t.Errorf("UseUniversalPath = %v, want true", c.AI != nil && c.AI.UseUniversalPath)
+	}
+	if c.AI.Agentic == nil || !equalStrings(c.AI.Agentic.Tools, []string{"filesystem"}) {
+		t.Errorf("Agentic.Tools = %v, want [filesystem]", c.AI.Agentic)
+	}
 }

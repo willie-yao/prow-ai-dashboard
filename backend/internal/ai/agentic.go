@@ -23,6 +23,13 @@ import (
 // or "curator"; both are accepted as "curator" by Service.shouldReanalyze.
 const AgenticMode = "agentic"
 
+// UniversalMode is the value stored in models.AIAnalysis.Mode for results
+// produced by the use_universal_path flow. Distinct from AgenticMode so
+// that flipping a project from agentic-on-top-of-capi to universal
+// invalidates previously cached analyses (shouldReanalyze treats any mode
+// mismatch as cache-miss).
+const UniversalMode = "agentic-universal"
+
 // ErrToolsUnsupported is returned from the agentic loop when the configured
 // provider rejects function-calling on the first call (typically HTTP 400 with
 // a body mentioning "tools" or "functions"). Callers should fall back to the
@@ -138,11 +145,18 @@ func (s *agentState) gcsRemaining() int   { return s.opts.GCSByteBudget - s.gcsB
 // agentic exit point (cache hit, normal finish, finalize-round finish,
 // synthesized fallback). Mode is set here too so we can't accidentally
 // publish an agentic-produced analysis tagged with the curator mode.
-func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, cacheHit bool, start time.Time) {
+//
+// An empty mode argument defaults to AgenticMode for back-compat (existing
+// call sites pre-L.2 didn't pass one); the universal path passes
+// UniversalMode explicitly.
+func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode string, cacheHit bool, start time.Time) {
 	if analysis == nil {
 		return
 	}
-	analysis.Mode = AgenticMode
+	if mode == "" {
+		mode = AgenticMode
+	}
+	analysis.Mode = mode
 	analysis.CacheHit = cacheHit
 	analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
 	if state != nil {
@@ -162,6 +176,10 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, cache
 //   - Registry and EnabledTools are scoped to one Service (built once per
 //     project at fetcher startup).
 //   - Opts is per-project.
+//   - Mode is the value to stamp on the returned AIAnalysis. Empty defaults
+//     to AgenticMode; UniversalMode flags results produced via the
+//     use_universal_path flow so cache invalidation kicks in when consumers
+//     flip the switch.
 type AgenticInputs struct {
 	Browser      artifacts.Browser
 	Opts         AgenticOptions
@@ -169,6 +187,7 @@ type AgenticInputs struct {
 	EnabledTools []string
 	Cache        *tools.Cache
 	WebURLBase   string
+	Mode         string
 }
 
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
@@ -193,7 +212,7 @@ func (c *Client) doAnalyzeAgentic(
 		var parsed analysisResponse
 		if json.Unmarshal(raw, &parsed) == nil {
 			summary, analysis := c.buildOutputs(parsed)
-			stampAgenticTelemetry(analysis, nil, true, start)
+			stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
 			return summary, analysis, nil
 		}
 	}
@@ -279,13 +298,13 @@ func (c *Client) doAnalyzeAgentic(
 			SuggestedFix: "Unable to parse structured response",
 		}
 		summary, analysis := c.buildOutputs(parsed)
-		stampAgenticTelemetry(analysis, state, false, start)
+		stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 		return summary, analysis, nil
 	}
 
 	_ = c.cache.Set(cacheKey, parsed)
 	summary, analysis := c.buildOutputs(parsed)
-	stampAgenticTelemetry(analysis, state, false, start)
+	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
 }
 
