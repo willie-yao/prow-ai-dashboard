@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -67,21 +68,10 @@ type agFunction struct {
 	Arguments string `json:"arguments"`
 }
 
-type agToolDef struct {
-	Type     string     `json:"type"`
-	Function agToolFunc `json:"function"`
-}
-
-type agToolFunc struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-}
-
 type agChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []agChatMessage `json:"messages"`
-	Tools    []agToolDef     `json:"tools,omitempty"`
+	Tools    []tools.Schema  `json:"tools,omitempty"`
 }
 
 type agChatResponse struct {
@@ -93,98 +83,24 @@ type agChatResponse struct {
 
 func strPtr(s string) *string { return &s }
 
-// ---------- Tool definitions ----------
+// ---------- Tool documentation appended to the system prompt ----------
 
-func agToolDefs() []agToolDef {
-	return []agToolDef{
-		{
-			Type: "function",
-			Function: agToolFunc{
-				Name:        "list_artifacts",
-				Description: "List the immediate children of a directory in the build's GCS artifact tree. Pass an empty string for the build root. Returns dirs and files (with sizes).",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path": map[string]interface{}{
-							"type":        "string",
-							"description": "Directory path relative to the build root, e.g. \"\" for root, \"artifacts/\", \"artifacts/clusters/foo/machines/bar/\".",
-						},
-					},
-					"required": []string{"path"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: agToolFunc{
-				Name:        "read_artifact",
-				Description: "Read a byte range of a file. Use for small/known files. For large logs prefer tail_artifact or grep_artifact. Returns up to 16384 bytes per call.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path":   map[string]interface{}{"type": "string", "description": "File path relative to build root."},
-						"offset": map[string]interface{}{"type": "integer", "description": "Byte offset to start reading from (default 0).", "default": 0},
-						"length": map[string]interface{}{"type": "integer", "description": "Number of bytes to read (default 8192, max 16384).", "default": 8192},
-					},
-					"required": []string{"path"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: agToolFunc{
-				Name:        "tail_artifact",
-				Description: "Return the last N lines of a file. Most efficient way to inspect the end of a build log or controller log. Default 500 lines, max 2000.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path":  map[string]interface{}{"type": "string", "description": "File path relative to build root."},
-						"lines": map[string]interface{}{"type": "integer", "description": "Number of trailing lines (default 500, max 2000).", "default": 500},
-					},
-					"required": []string{"path"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: agToolFunc{
-				Name:        "grep_artifact",
-				Description: "Regex-search a file for matching lines. Returns matches with surrounding context lines and line numbers. Use this for huge build-logs where you want to find specific errors.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"path":          map[string]interface{}{"type": "string", "description": "File path relative to build root."},
-						"pattern":       map[string]interface{}{"type": "string", "description": "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."},
-						"context_lines": map[string]interface{}{"type": "integer", "description": "Lines of context before/after each match (default 2, max 5).", "default": 2},
-						"max_matches":   map[string]interface{}{"type": "integer", "description": "Max matches to return (default 30, max 100).", "default": 30},
-					},
-					"required": []string{"path", "pattern"},
-				},
-			},
-		},
-	}
-}
-
-// agToolDocs is the tool-usage section appended to the system prompt by the
-// agentic loop. Kept separate from the consumer's prompts/system.md so that
-// the engine can evolve the tool surface without forcing every consumer to
-// edit their prompt.
+// agToolDocs is the tool-usage strategy section appended to the system prompt
+// by the agentic loop. Tool names + descriptions are already conveyed to the
+// model via the schema array in each chat request, so this section focuses on
+// budget guidance and high-level investigation strategy rather than restating
+// what each tool does.
 const agToolDocs = `
 
-## Available tools
+## Tool usage strategy
 
-You have four tools for browsing the build's GCS artifact tree:
-  list_artifacts(path)                    - list immediate children of a dir
-  read_artifact(path, offset, length)     - read byte range of a file (max 16KB)
-  tail_artifact(path, lines)              - last N lines of a file (max 2000)
-  grep_artifact(path, pattern, ...)       - RE2 regex search with line numbers
+You have a set of tools for browsing the build's GCS artifact tree (see the
+tools field of this request for names, descriptions, and parameters).
 
-Strategy:
 1. Start by listing the build root to see what's there.
-2. Drill into artifacts/clusters/<name>/ for per-cluster dumps and per-machine logs.
-3. For multi-MB build-logs, ALWAYS use grep_artifact, never read_artifact or tail_artifact.
-4. Cite actual paths and line numbers in your final answer. Do not speculate; if evidence is incomplete, say so explicitly.
-5. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero.
+2. For multi-MB build-logs, ALWAYS use grep_artifact, never read_artifact or tail_artifact.
+3. Cite actual paths and line numbers in your final answer. Do not speculate; if evidence is incomplete, say so explicitly.
+4. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero.
 
 Tool calls cost time. Prefer 3-5 focused calls over many small ones. A confident "best evidence I found" answer beats running out of budget mid-investigation.`
 
@@ -201,12 +117,17 @@ continuing to investigate.`
 // ---------- Agent state ----------
 
 type agentState struct {
-	browser    artifacts.Browser
-	opts       AgenticOptions
-	startTime  time.Time
-	modelBytes int
-	gcsBytes   int
-	calls      int
+	browser         artifacts.Browser
+	opts            AgenticOptions
+	registry        *tools.Registry
+	enabledTools    []string
+	cache           *tools.Cache
+	webURLBase      string
+	startTime       time.Time
+	modelBytes      int
+	gcsBytes        int
+	calls           int
+	budgetExhausted bool
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -228,10 +149,27 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, cache
 		analysis.ToolCalls = state.calls
 		analysis.ModelBytes = state.modelBytes
 		analysis.GCSBytes = state.gcsBytes
+		analysis.BudgetExhausted = state.budgetExhausted
 	}
 }
 
 // ---------- Public entry point ----------
+
+// AgenticInputs bundles the per-failure context required by the agentic loop.
+// Lifetime notes:
+//   - Browser, Cache, and WebURLBase are scoped to one build (shared across
+//     all failures of that build).
+//   - Registry and EnabledTools are scoped to one Service (built once per
+//     project at fetcher startup).
+//   - Opts is per-project.
+type AgenticInputs struct {
+	Browser      artifacts.Browser
+	Opts         AgenticOptions
+	Registry     *tools.Registry
+	EnabledTools []string
+	Cache        *tools.Cache
+	WebURLBase   string
+}
 
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
 // same (summary, analysis) pair as doAnalyze so callers can treat both
@@ -247,8 +185,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, cache
 // failure.
 func (c *Client) doAnalyzeAgentic(
 	ctx context.Context,
-	browser artifacts.Browser,
-	opts AgenticOptions,
+	in AgenticInputs,
 	cacheKey, sysPrompt, userPrompt string,
 ) (*models.AISummary, *models.AIAnalysis, error) {
 	start := time.Now()
@@ -262,9 +199,13 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	state := &agentState{
-		browser:   browser,
-		opts:      opts,
-		startTime: time.Now(),
+		browser:      in.Browser,
+		opts:         in.Opts,
+		registry:     in.Registry,
+		enabledTools: in.EnabledTools,
+		cache:        in.Cache,
+		webURLBase:   in.WebURLBase,
+		startTime:    time.Now(),
 	}
 
 	fullSysPrompt := sysPrompt + agToolDocs
@@ -272,16 +213,16 @@ func (c *Client) doAnalyzeAgentic(
 		{Role: "system", Content: strPtr(fullSysPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
-	tools := agToolDefs()
+	schemas := state.registry.Schemas(state.enabledTools)
 
-	loopCtx, cancel := context.WithDeadline(ctx, state.startTime.Add(opts.WallClock))
+	loopCtx, cancel := context.WithDeadline(ctx, state.startTime.Add(in.Opts.WallClock))
 	defer cancel()
 
 	var finalContent string
 	var done bool
 
-	for iter := 0; iter < opts.MaxIters && !done; iter++ {
-		resp, err := c.callChatWithTools(loopCtx, messages, tools)
+	for iter := 0; iter < in.Opts.MaxIters && !done; iter++ {
+		resp, err := c.callChatWithTools(loopCtx, messages, schemas)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
 			if iter == 0 && isToolsUnsupportedError(err) {
@@ -400,10 +341,10 @@ func isToolsUnsupportedError(err error) bool {
 // callChatWithTools sends a chat-completions request with optional tool defs
 // and parses the OpenAI-shaped response. Retries on 429 like the single-shot
 // path. Sleeps the same callDelay between calls to be a good citizen.
-func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage, tools []agToolDef) (*agChatResponse, error) {
+func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage, toolDefs []tools.Schema) (*agChatResponse, error) {
 	time.Sleep(callDelay)
 
-	body, err := json.Marshal(agChatRequest{Model: c.model, Messages: messages, Tools: tools})
+	body, err := json.Marshal(agChatRequest{Model: c.model, Messages: messages, Tools: toolDefs})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -445,64 +386,38 @@ func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage
 
 // ---------- Tool dispatch ----------
 
+// dispatchAgenticTool routes one tool call through the registry, accumulates
+// bytes/budget telemetry on the agent state, and returns the model-bound
+// envelope JSON.
 func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) string {
 	s.calls++
 	if s.modelRemaining() <= 0 {
+		s.budgetExhausted = true
 		return toolErrJSON("model byte budget exhausted; produce final JSON now")
 	}
 	if s.gcsRemaining() <= 0 {
+		s.budgetExhausted = true
 		return toolErrJSON("GCS byte budget exhausted; produce final JSON now")
 	}
 
-	var args struct {
-		Path         string `json:"path"`
-		Offset       int    `json:"offset"`
-		Length       int    `json:"length"`
-		Lines        int    `json:"lines"`
-		Pattern      string `json:"pattern"`
-		ContextLines int    `json:"context_lines"`
-		MaxMatches   int    `json:"max_matches"`
+	env := &tools.Env{
+		Browser:             s.browser,
+		Cache:               s.cache,
+		WebURLBase:          s.webURLBase,
+		RemainingModelBytes: s.modelRemaining(),
+		RemainingGCSBytes:   s.gcsRemaining(),
 	}
-	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		return toolErrJSON(fmt.Sprintf("invalid arguments: %v", err))
+	result := s.registry.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+	s.gcsBytes += result.BytesFetched
+	if result.BudgetExhausted {
+		s.budgetExhausted = true
 	}
-
-	switch tc.Function.Name {
-	case "list_artifacts":
-		return doList(ctx, s, args.Path)
-	case "read_artifact":
-		if args.Length <= 0 {
-			args.Length = 8192
-		}
-		if args.Length > 16384 {
-			args.Length = 16384
-		}
-		return doRead(ctx, s, args.Path, args.Offset, args.Length)
-	case "tail_artifact":
-		if args.Lines <= 0 {
-			args.Lines = 500
-		}
-		if args.Lines > 2000 {
-			args.Lines = 2000
-		}
-		return doTail(ctx, s, args.Path, args.Lines)
-	case "grep_artifact":
-		if args.ContextLines < 0 {
-			args.ContextLines = 0
-		}
-		if args.ContextLines > 5 {
-			args.ContextLines = 5
-		}
-		if args.MaxMatches <= 0 {
-			args.MaxMatches = 30
-		}
-		if args.MaxMatches > 100 {
-			args.MaxMatches = 100
-		}
-		return doGrep(ctx, s, args.Path, args.Pattern, args.ContextLines, args.MaxMatches)
-	default:
-		return toolErrJSON("unknown tool: " + tc.Function.Name)
+	if result.Payload == nil {
+		// Defensive: registry promises a non-nil Payload, but never trust the
+		// edge case. Empty map is safer than a nil deref in toolEnvelopeJSON.
+		result.Payload = map[string]interface{}{}
 	}
+	return toolEnvelopeJSON(s, result.Payload)
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {
@@ -525,85 +440,4 @@ func capJSON(s string) string {
 		return s
 	}
 	return s[:agenticToolBudget] + `..."truncated":true}`
-}
-
-func doList(ctx context.Context, s *agentState, p string) string {
-	res, err := s.browser.List(ctx, p)
-	if err != nil {
-		return toolErrJSON(err.Error())
-	}
-	payload := map[string]interface{}{
-		"dir":  res.Dir,
-		"dirs": res.Dirs,
-	}
-	files := make([]map[string]interface{}, 0, len(res.Files))
-	for _, f := range res.Files {
-		files = append(files, map[string]interface{}{"name": f.Name, "size": f.Size})
-	}
-	payload["files"] = files
-	if res.Truncated {
-		payload["truncated"] = true
-	}
-	return toolEnvelopeJSON(s, payload)
-}
-
-func doRead(ctx context.Context, s *agentState, p string, offset, length int) string {
-	data, size, err := s.browser.Read(ctx, p, offset, length)
-	if err != nil {
-		return toolErrJSON(err.Error())
-	}
-	s.gcsBytes += len(data)
-	return toolEnvelopeJSON(s, map[string]interface{}{
-		"path":      p,
-		"file_size": size,
-		"offset":    offset,
-		"length":    len(data),
-		"content":   string(data),
-	})
-}
-
-func doTail(ctx context.Context, s *agentState, p string, lines int) string {
-	// Cap suffix-range fetch at 8x line budget * 200 chars per line, well
-	// within agenticToolBudget after envelope overhead.
-	maxBytes := agenticToolBudget - 256
-	if maxBytes < 4096 {
-		maxBytes = 4096
-	}
-	res, err := s.browser.Tail(ctx, p, lines, maxBytes)
-	if err != nil {
-		return toolErrJSON(err.Error())
-	}
-	s.gcsBytes += len(res.Content)
-	return toolEnvelopeJSON(s, map[string]interface{}{
-		"path":           p,
-		"file_size":      res.FileSize,
-		"lines_returned": res.LinesReturned,
-		"content":        string(res.Content),
-	})
-}
-
-func doGrep(ctx context.Context, s *agentState, p, pattern string, contextLines, maxMatches int) string {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return toolErrJSON("invalid regex: " + err.Error())
-	}
-	res, err := s.browser.Grep(ctx, p, re, contextLines, maxMatches, 1000)
-	if err != nil {
-		return toolErrJSON(err.Error())
-	}
-	s.gcsBytes += int(res.BytesScanned)
-	matches := make([]map[string]interface{}, 0, len(res.Matches))
-	for _, m := range res.Matches {
-		matches = append(matches, map[string]interface{}{
-			"line":    m.LineNo,
-			"context": m.Context,
-		})
-	}
-	return toolEnvelopeJSON(s, map[string]interface{}{
-		"path":          p,
-		"file_size":     res.FileSize,
-		"total_matches": res.TotalMatches,
-		"matches":       matches,
-		"truncated":     res.Truncated,
-	})
 }

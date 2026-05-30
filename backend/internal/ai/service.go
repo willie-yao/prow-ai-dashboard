@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -33,6 +35,18 @@ type Service struct {
 	// browserFactory provides per-build Browser instances. nil when
 	// agentic mode is off, in which case Analyze ignores it.
 	browserFactory artifacts.Factory
+
+	// registry + enabledTools define which tools the agentic loop can call.
+	// Constructed once per Service at EnableAgentic time so per-project tool
+	// configuration is honored without rebuilding on every failure.
+	registry     *tools.Registry
+	enabledTools []string
+
+	// toolCaches memoizes a *tools.Cache per buildPrefix. All failures of one
+	// build share the same cache so expensive tier-2 discovery (cluster
+	// listings, controller-log enumerations, etc.) is paid once per build
+	// rather than once per failure.
+	toolCaches sync.Map // map[string]*tools.Cache
 
 	// toolsUnsupported is set after the first agentic call that returns
 	// ErrToolsUnsupported, so subsequent failures fall straight back to
@@ -60,16 +74,19 @@ func NewService(client *Client, module Module, systemPrompt string, consecutiveM
 // EnableAgentic switches the Service into mixed curator + agentic mode. opts
 // is the resolved AgenticOptions (typically project.Agentic.EffectiveAgentic()
 // translated to the engine struct). factory provides per-build artifact
-// Browsers. always=true forces every failure through agentic mode; always=false
-// defers the choice to the Module's AgenticPreferrer (modules that don't
-// implement it stay on curator).
+// Browsers. registry + enabledTools define the tool surface exposed to the
+// model (e.g. filesystem + k8s tier-2). always=true forces every failure
+// through agentic mode; always=false defers the choice to the Module's
+// AgenticPreferrer (modules that don't implement it stay on curator).
 //
 // Safe to call once at Service construction; not safe for concurrent use.
-func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, always bool) {
+func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabledTools []string, always bool) {
 	s.agenticOn = true
 	s.agenticAll = always
 	s.agenticOpts = opts
 	s.browserFactory = factory
+	s.registry = registry
+	s.enabledTools = enabledTools
 }
 
 // Module returns the underlying Module (mainly for logging).
@@ -156,14 +173,38 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 }
 
 // runAgentic does the per-failure agentic call setup (browser construction +
-// cache key + call). Kept separate so Analyze stays readable.
+// build-scoped tool cache + call). Kept separate so Analyze stays readable.
 func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
+	if s.registry == nil {
+		return nil, nil, fmt.Errorf("agentic mode enabled but no tool registry configured")
+	}
 	browser := s.browserFactory.ForBuild(buildPrefix, run.JobName+"/"+run.BuildID)
+	cache := s.toolCacheFor(buildPrefix)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
-	return s.client.doAnalyzeAgentic(ctx, browser, s.agenticOpts, cacheKey, s.systemPrompt, userPrompt)
+	in := AgenticInputs{
+		Browser:      browser,
+		Opts:         s.agenticOpts,
+		Registry:     s.registry,
+		EnabledTools: s.enabledTools,
+		Cache:        cache,
+		WebURLBase:   run.WebURL,
+	}
+	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
+}
+
+// toolCacheFor returns the *tools.Cache scoped to one build. Cache instances
+// are created lazily on first use and live for the lifetime of the Service,
+// which is bounded to one fetcher run.
+func (s *Service) toolCacheFor(buildPrefix string) *tools.Cache {
+	if existing, ok := s.toolCaches.Load(buildPrefix); ok {
+		return existing.(*tools.Cache)
+	}
+	fresh := tools.NewCache()
+	actual, _ := s.toolCaches.LoadOrStore(buildPrefix, fresh)
+	return actual.(*tools.Cache)
 }
 
 func (s *Service) setUnavailable(tc *models.TestCase, err error) {

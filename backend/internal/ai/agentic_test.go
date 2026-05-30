@@ -15,10 +15,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
 // ---------- Test scaffolding ----------
+
+// newTestRegistry returns a tools.Registry preloaded with the filesystem
+// tier so tests exercise the real dispatch path. K8s tools are intentionally
+// omitted: the in-memory fakeBrowser doesn't model GCS layout deeply enough
+// for cluster discovery, and the filesystem tier is sufficient to validate
+// the agentic loop end-to-end.
+func newTestRegistry(t *testing.T) (*tools.Registry, []string) {
+	t.Helper()
+	r := tools.NewRegistry()
+	filesystem.Register(r)
+	enabled, err := r.Enable([]string{"filesystem"})
+	if err != nil {
+		t.Fatalf("registry.Enable: %v", err)
+	}
+	return r, enabled
+}
+
+// newTestAgenticInputs bundles the per-call agentic context for tests. Keeps
+// the test bodies readable without repeating the boilerplate.
+func newTestAgenticInputs(t *testing.T, browser artifacts.Browser, opts AgenticOptions) AgenticInputs {
+	t.Helper()
+	registry, enabled := newTestRegistry(t)
+	return AgenticInputs{
+		Browser:      browser,
+		Opts:         opts,
+		Registry:     registry,
+		EnabledTools: enabled,
+		Cache:        tools.NewCache(),
+	}
+}
 
 // fakeBrowser is an in-memory artifacts.Browser for agentic tests.
 type fakeBrowser struct {
@@ -209,7 +241,7 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	}
 	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
 
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), browser, opts, "agentic:test:job:1:abc", "system", "user")
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:job:1:abc", "system", "user")
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
@@ -251,11 +283,11 @@ func TestAgentic_CacheHit(t *testing.T) {
 	browser := &fakeBrowser{}
 	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
 
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), browser, opts, "agentic:test:cached", "sys", "user"); err != nil {
+	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	// Second call should hit the cache and NOT increment server calls.
-	_, a2, err := client.doAnalyzeAgentic(context.Background(), browser, opts, "agentic:test:cached", "sys", "user")
+	_, a2, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -282,7 +314,7 @@ func TestAgentic_ToolsUnsupported_FirstCall(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
-	_, _, err := client.doAnalyzeAgentic(context.Background(), &fakeBrowser{}, opts, "agentic:test:nope", "sys", "user")
+	_, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:nope", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -302,7 +334,7 @@ func TestAgentic_FinalizeRound_JSONRepair(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), &fakeBrowser{}, opts, "agentic:test:repair", "sys", "user")
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:repair", "sys", "user")
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
 	}
@@ -323,7 +355,7 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), &fakeBrowser{}, opts, "agentic:test:fallback", "sys", "user")
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user")
 	if err != nil {
 		t.Fatalf("expected fallback synthesis, not error, got: %v", err)
 	}
@@ -337,7 +369,7 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 	srv.push(200, chatRespFinal("still not json"))
 	srv.push(200, chatRespFinal("still not json"))
 	before := atomic.LoadInt32(&srv.calls)
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), &fakeBrowser{}, opts, "agentic:test:fallback", "sys", "user"); err != nil {
+	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user"); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if atomic.LoadInt32(&srv.calls) == before {

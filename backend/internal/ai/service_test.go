@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -82,8 +84,9 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true /* always */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */)
 
 	tc := newFailedTC("Test A", "failure msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -106,8 +109,9 @@ func TestService_ModuleOptIn_PreferAgentic(t *testing.T) {
 	mod := &stubPreferrer{stubModule: &stubModule{name: "capi", prompt: "user"}, /* default prefer=false */}
 	mod.prefer = true
 	mod.preferReason = "build log too large"
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, mod, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, false /* not always */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, false /* not always */)
 
 	tc := newFailedTC("Test A", "msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -127,8 +131,9 @@ func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"summary":"second","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true)
 
 	tc1 := newFailedTC("Test A", "msg-a")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
@@ -178,8 +183,9 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true)
 
 	// Test case already has CURATOR analysis cached on it from a prior run.
 	tc := newFailedTC("Test A", "msg")
@@ -266,6 +272,21 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if !strings.HasPrefix(a1, "agentic:capi:job1:build1:") {
 		t.Errorf("agentic key shape unexpected: %q", a1)
 	}
+}
+
+// newServiceTestRegistry returns a filesystem-only registry usable in
+// service-level tests. K8s tier is omitted because none of these tests
+// drive cluster discovery; agentic loops here exit on the first chat
+// response (either ErrToolsUnsupported or a final JSON message).
+func newServiceTestRegistry(t *testing.T) (*tools.Registry, []string) {
+	t.Helper()
+	r := tools.NewRegistry()
+	filesystem.Register(r)
+	enabled, err := r.Enable([]string{"filesystem"})
+	if err != nil {
+		t.Fatalf("registry.Enable: %v", err)
+	}
+	return r, enabled
 }
 
 // ---------- Test helper: fake factory ----------

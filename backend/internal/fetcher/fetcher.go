@@ -19,6 +19,9 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
@@ -408,18 +411,26 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 		eff := cfg.AI.Agentic.EffectiveAgentic()
 		if eff.Enabled {
 			factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
-			service.EnableAgentic(ai.AgenticOptions{
-				MaxIters:        eff.MaxIters,
-				ModelByteBudget: eff.ModelByteBudget,
-				GCSByteBudget:   eff.GCSByteBudget,
-				WallClock:       eff.WallClock,
-			}, factory, eff.Always)
-			mode := "module-opt-in"
-			if eff.Always {
-				mode = "always"
+			registry := tools.NewRegistry()
+			filesystem.Register(registry)
+			k8s.Register(registry)
+			enabled, err := registry.Enable([]string{"filesystem", "k8s"})
+			if err != nil {
+				log.Printf("⚠ Tool registry enable failed (%v); skipping agentic", err)
+			} else {
+				service.EnableAgentic(ai.AgenticOptions{
+					MaxIters:        eff.MaxIters,
+					ModelByteBudget: eff.ModelByteBudget,
+					GCSByteBudget:   eff.GCSByteBudget,
+					WallClock:       eff.WallClock,
+				}, factory, registry, enabled, eff.Always)
+				mode := "module-opt-in"
+				if eff.Always {
+					mode = "always"
+				}
+				log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, tools=%v)",
+					mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, enabled)
 			}
-			log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall)",
-				mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock)
 		}
 	}
 	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())
