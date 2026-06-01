@@ -182,6 +182,23 @@ type AI struct {
 	// build's artifact tree itself. Requires an AI endpoint that
 	// supports OpenAI-style function calling.
 	Agentic *Agentic `yaml:"agentic,omitempty" json:"agentic,omitempty"`
+
+	// UseUniversalPath, when true, bypasses the module-routed pipeline in
+	// favor of a project-agnostic agentic flow: per-build collector
+	// evidence is skipped, the per-failure prompt is reduced to the test
+	// failure context, and the agent is expected to discover everything
+	// it needs via the registered tools (filesystem + k8s by default).
+	//
+	// Implies agentic.enabled=true regardless of the agentic block. There
+	// is no curator fallback in this mode: an endpoint that rejects
+	// function-calling surfaces as an explicit "unavailable" summary
+	// instead of degrading silently to a tools-free prompt.
+	//
+	// Module is still validated for typos (it must be unset or name a
+	// registered module) but its prompt / evidence functions are NOT
+	// invoked. Existing consumers without this flag keep the
+	// module-routed pipeline unchanged.
+	UseUniversalPath bool `yaml:"use_universal_path,omitempty" json:"-"`
 }
 
 // Agentic configures the tool-calling AI loop. All fields are optional; zero
@@ -213,6 +230,14 @@ type Agentic struct {
 	// WallClock caps the total time spent in the agentic loop per
 	// failure. Defaults to DefaultAgentic.WallClock.
 	WallClock time.Duration `yaml:"wall_clock,omitempty" json:"wall_clock,omitempty"`
+
+	// Tools selects which registered tool groups (e.g. "filesystem",
+	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
+	// exposed to the model. When empty, the fetcher applies its default
+	// (["filesystem", "k8s"]). Non-K8s projects (e.g. node-level test
+	// failures) should set ["filesystem"] to avoid registering tier-2
+	// schemas that mostly return empty on their artifact trees.
+	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
 // DefaultAgentic is the zero-config fallback applied when a consumer enables
@@ -250,6 +275,9 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	if a.WallClock > 0 {
 		out.WallClock = a.WallClock
+	}
+	if len(a.Tools) > 0 {
+		out.Tools = append([]string(nil), a.Tools...)
 	}
 	return out
 }
@@ -597,6 +625,14 @@ func (c *Config) Validate() error {
 	// not on the first cache-miss AI run.
 	if _, err := c.EffectiveEvidence(); err != nil {
 		return err
+	}
+
+	// "universal" is reserved for the use_universal_path flow. Picking it
+	// as a normal module name without the flag would be a footgun: the
+	// fetcher's normal module registry never registers it, so the run
+	// would fail later with a confusing "unknown ai.module" error.
+	if c.AI != nil && strings.EqualFold(strings.TrimSpace(c.AI.Module), "universal") && !c.AI.UseUniversalPath {
+		return fmt.Errorf(`ai.module: "universal" requires ai.use_universal_path: true`)
 	}
 	return nil
 }

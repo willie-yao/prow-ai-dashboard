@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -82,8 +84,9 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true /* always */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, false /* universalPath */)
 
 	tc := newFailedTC("Test A", "failure msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -106,8 +109,9 @@ func TestService_ModuleOptIn_PreferAgentic(t *testing.T) {
 	mod := &stubPreferrer{stubModule: &stubModule{name: "capi", prompt: "user"}, /* default prefer=false */}
 	mod.prefer = true
 	mod.preferReason = "build log too large"
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, mod, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, false /* not always */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, false /* not always */, false /* universalPath */)
 
 	tc := newFailedTC("Test A", "msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -127,8 +131,9 @@ func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"summary":"second","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	tc1 := newFailedTC("Test A", "msg-a")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
@@ -178,8 +183,9 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, true)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	// Test case already has CURATOR analysis cached on it from a prior run.
 	tc := newFailedTC("Test A", "msg")
@@ -266,6 +272,117 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if !strings.HasPrefix(a1, "agentic:capi:job1:build1:") {
 		t.Errorf("agentic key shape unexpected: %q", a1)
 	}
+}
+
+// ---------- Universal mode (use_universal_path) ----------
+
+// TestService_UniversalOn_TagsModeUniversal asserts that when the Service is
+// constructed with universalPath=true, every produced analysis is stamped with
+// UniversalMode regardless of any module preference. This is the cache
+// invalidation contract: flipping use_universal_path on must force every
+// previously-cached entry to be re-analyzed by virtue of mode mismatch.
+func TestService_UniversalOn_TagsModeUniversal(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"u","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, true /* universalPath */)
+
+	tc := newFailedTC("Test A", "msg")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis == nil {
+		t.Fatal("AIAnalysis nil")
+	}
+	if tc.AIAnalysis.Mode != UniversalMode {
+		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, UniversalMode)
+	}
+}
+
+// TestService_UniversalOn_ToolsUnsupportedSetsUnavailable covers the no-fallback
+// invariant of the universal path: a tools-unsupported endpoint must not
+// silently regress to the curator pipeline (the user explicitly opted into
+// an agentic-only flow). The first failure trips ErrToolsUnsupported and is
+// marked unavailable; the second failure short-circuits without making any
+// HTTP call because the run-scoped tools-unsupported flag stuck.
+func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	// Only one server push: the agentic 400. The second Analyze() must
+	// short-circuit before issuing a request.
+	srv.push(400, `{"error":{"message":"function calling not supported"}}`)
+
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
+
+	tc1 := newFailedTC("Test A", "msg-a")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
+	tc2 := newFailedTC("Test B", "msg-b")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc2)
+
+	if tc1.AISummary == nil || !strings.Contains(tc1.AISummary.Summary, "AI analysis unavailable") {
+		t.Errorf("first failure: expected unavailable summary, got %+v", tc1.AISummary)
+	}
+	if tc1.AIAnalysis != nil {
+		t.Errorf("first failure: AIAnalysis should NOT be set under universal-mode tools-unsupported, got %+v", tc1.AIAnalysis)
+	}
+	if tc2.AISummary == nil || !strings.Contains(tc2.AISummary.Summary, "AI analysis unavailable") {
+		t.Errorf("second failure: expected unavailable summary (sticky flag), got %+v", tc2.AISummary)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Errorf("server calls = %d, want 1 (second failure must bail before HTTP)", got)
+	}
+}
+
+// TestService_UniversalOn_CacheInvalidatesAgenticEntries asserts that a
+// previously-cached AgenticMode analysis is re-run when the Service is now
+// universal-on, because Mode mismatch counts as cache-miss in
+// shouldReanalyze.
+func TestService_UniversalOn_CacheInvalidatesAgenticEntries(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"fresh universal","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
+
+	// Test case already has an AgenticMode analysis from a prior run.
+	tc := newFailedTC("Test A", "msg")
+	tc.AISummary = &models.AISummary{Summary: "stale agentic summary"}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale agentic root cause", Mode: AgenticMode}
+
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis.Mode != UniversalMode {
+		t.Errorf("Mode = %q, want %q (stale agentic entry should be re-analyzed under universal)", tc.AIAnalysis.Mode, UniversalMode)
+	}
+	if !strings.Contains(tc.AISummary.Summary, "fresh universal") {
+		t.Errorf("expected fresh universal summary, got %q", tc.AISummary.Summary)
+	}
+}
+
+// newServiceTestRegistry returns a filesystem-only registry usable in
+// service-level tests. K8s tier is omitted because none of these tests
+// drive cluster discovery; agentic loops here exit on the first chat
+// response (either ErrToolsUnsupported or a final JSON message).
+func newServiceTestRegistry(t *testing.T) (*tools.Registry, []string) {
+	t.Helper()
+	r := tools.NewRegistry()
+	filesystem.Register(r)
+	enabled, err := r.Enable([]string{"filesystem"})
+	if err != nil {
+		t.Fatalf("registry.Enable: %v", err)
+	}
+	return r, enabled
 }
 
 // ---------- Test helper: fake factory ----------

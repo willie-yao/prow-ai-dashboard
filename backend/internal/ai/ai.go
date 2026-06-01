@@ -120,11 +120,21 @@ type analysisResponse struct {
 // doAnalyze runs a single chat completion, parses the JSON response, and caches
 // it. Returns both the brief AISummary (for the list view) and the deep
 // AIAnalysis (for the detail page), derived from the same model output.
+//
+// The returned AIAnalysis is stamped with per-call telemetry (ElapsedMs,
+// ModelBytes, CacheHit) so the published JSON exposes the cost of each
+// analysis. ToolCalls and GCSBytes are zero by construction for the curator
+// path; agentic stamps them from the per-call agentState.
 func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+	start := time.Now()
 	if raw, ok := c.cache.Get(cacheKey); ok {
 		var parsed analysisResponse
 		if json.Unmarshal(raw, &parsed) == nil {
 			summary, analysis := c.buildOutputs(parsed)
+			if analysis != nil {
+				analysis.CacheHit = true
+				analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
+			}
 			return summary, analysis, nil
 		}
 	}
@@ -150,6 +160,10 @@ func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt 
 	_ = c.cache.Set(cacheKey, parsed)
 
 	summary, analysis := c.buildOutputs(parsed)
+	if analysis != nil {
+		analysis.ModelBytes = len(sysPrompt) + len(userPrompt) + len(resp)
+		analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
+	}
 	return summary, analysis, nil
 }
 

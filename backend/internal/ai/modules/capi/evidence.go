@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	evidencepkg "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/evidence"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -87,7 +88,7 @@ func (m *Module) collectEvidence(ctx context.Context, client *http.Client, run *
 	// 1. Build log: pattern-matched error lines + raw tail.
 	if run.BuildLogURL != "" {
 		ev.BuildLogErrors = collectBuildLogErrors(ctx, client, run.BuildLogURL, m.evidence.BuildLogPatterns)
-		ev.BuildLogTail = fetchLogTail(ctx, client, run.BuildLogURL, 500, 15000)
+		ev.BuildLogTail = evidencepkg.FetchLogTail(ctx, client, run.BuildLogURL, 500, 15000)
 	}
 
 	// 2. Bootstrap resource YAMLs (status: blocks from every resource type).
@@ -133,7 +134,7 @@ func collectMachineLogs(ctx context.Context, client *http.Client, ca *models.Clu
 			if !ok || url == "" {
 				continue
 			}
-			content = fetchLogTail(ctx, client, url, 500, 15000)
+			content = evidencepkg.FetchLogTail(ctx, client, url, 500, 15000)
 			if content != "" {
 				break
 			}
@@ -185,7 +186,7 @@ func collectControllerLogs(ctx context.Context, client *http.Client, run *models
 			if remaining < cap {
 				cap = remaining
 			}
-			content := fetchLogTail(ctx, client, url, 500, cap)
+			content := evidencepkg.FetchLogTail(ctx, client, url, 500, cap)
 			if content == "" {
 				ev.RequestedButMissing = append(ev.RequestedButMissing, "controller log "+key)
 				continue
@@ -472,27 +473,7 @@ func extractYAMLStatus(yamlContent string) string {
 
 // collectActivityLog fetches the provider (Azure) activity log tail.
 func collectActivityLog(ctx context.Context, client *http.Client, url string) string {
-	return fetchLogTail(ctx, client, url, 400, 10000)
-}
-
-// fetchLogTail fetches a log file and returns the last N lines, capped at maxChars.
-func fetchLogTail(ctx context.Context, client *http.Client, url string, lastN int, maxChars int) string {
-	data, err := gcs.FetchRaw(ctx, client, url)
-	if err != nil {
-		log.Printf("  ⚠ Evidence: failed to fetch %s: %v", url, err)
-		return ""
-	}
-
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > lastN {
-		lines = lines[len(lines)-lastN:]
-	}
-
-	result := strings.Join(lines, "\n")
-	if len(result) > maxChars {
-		result = result[:maxChars] + "..."
-	}
-	return result
+	return evidencepkg.FetchLogTail(ctx, client, url, 400, 10000)
 }
 
 // sortedKeys returns map keys sorted alphabetically. Used to render

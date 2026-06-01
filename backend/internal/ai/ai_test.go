@@ -198,6 +198,21 @@ func TestAnalyzeWithMock(t *testing.T) {
 	if analysis.Model != Model {
 		t.Errorf("unexpected model: %q", analysis.Model)
 	}
+	if analysis.CacheHit {
+		t.Error("expected cache_hit=false on first call")
+	}
+	if analysis.ElapsedMs < 0 {
+		t.Errorf("expected non-negative elapsed_ms, got %d", analysis.ElapsedMs)
+	}
+	if analysis.ModelBytes <= 0 {
+		t.Errorf("expected positive model_bytes on curator path, got %d", analysis.ModelBytes)
+	}
+	if analysis.ToolCalls != 0 {
+		t.Errorf("expected tool_calls=0 on curator path, got %d", analysis.ToolCalls)
+	}
+	if analysis.GCSBytes != 0 {
+		t.Errorf("expected gcs_bytes=0 on curator path, got %d", analysis.GCSBytes)
+	}
 }
 
 func TestAnalyzeFallbackSummaryFromRootCause(t *testing.T) {
@@ -231,21 +246,30 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 	ctx := context.Background()
 
 	// First call hits the API.
-	s1, _, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
+	s1, a1, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	if callCount != 1 {
 		t.Fatalf("expected 1 API call, got %d", callCount)
 	}
+	if a1.CacheHit {
+		t.Error("expected cache_hit=false on first call")
+	}
 
 	// Second call uses the cache.
-	s2, _, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
+	s2, a2, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if callCount != 1 {
 		t.Fatalf("expected still 1 API call (cache hit), got %d", callCount)
+	}
+	if !a2.CacheHit {
+		t.Error("expected cache_hit=true on second call")
+	}
+	if a2.ModelBytes != 0 {
+		t.Errorf("expected model_bytes=0 on cache hit (no model call), got %d", a2.ModelBytes)
 	}
 
 	if s1.Summary != s2.Summary {

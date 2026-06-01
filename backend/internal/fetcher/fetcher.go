@@ -19,6 +19,10 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/universal"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
@@ -77,7 +81,7 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("unknown artifacts.collector %q (registered: %s)",
 			cfg.CollectorName(), strings.Join(opts.Collectors.Names(), ", "))
 	}
-	if cfg.AI != nil && strings.TrimSpace(cfg.AI.Module) != "" && !opts.AIModules.Has(cfg.AI.Module) {
+	if cfg.AI != nil && strings.TrimSpace(cfg.AI.Module) != "" && !cfg.AI.UseUniversalPath && !opts.AIModules.Has(cfg.AI.Module) {
 		return fmt.Errorf("unknown ai.module %q (registered: %s)",
 			cfg.AI.Module, strings.Join(opts.AIModules.Names(), ", "))
 	}
@@ -316,8 +320,10 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 }
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build, then
-// delegates per-test artifact discovery to the configured collector.
-func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, _ *project.Config, collector collectors.Collector, job *models.ProwJob, build gcsweb.Build) (*models.BuildResult, error) {
+// delegates per-test artifact discovery to the configured collector. When
+// the project opts into use_universal_path, collector discovery is skipped
+// entirely (the agent walks artifacts on demand via tools).
+func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, build gcsweb.Build) (*models.BuildResult, error) {
 	loc := gcs.BuildLocation{
 		JobLocation: gcs.JobLocation{JobType: job.JobType, Repo: job.Repo},
 		JobName:     job.Name,
@@ -368,8 +374,10 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 		}
 	}
 
-	if err := collector.CollectArtifacts(ctx, loc, result); err != nil {
-		log.Printf("    ⚠ %s/%s: collector %s: %v", job.Name, build.ID, collector.Name(), err)
+	if cfg == nil || cfg.AI == nil || !cfg.AI.UseUniversalPath {
+		if err := collector.CollectArtifacts(ctx, loc, result); err != nil {
+			log.Printf("    ⚠ %s/%s: collector %s: %v", job.Name, build.ID, collector.Name(), err)
+		}
 	}
 
 	return result, nil
@@ -395,31 +403,71 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
 	}
 
-	module, err := modules.Build(cfg)
-	if err != nil {
-		// AI module registry was already validated in Run; reaching here
-		// means a programming error in fallback wiring rather than a
-		// recoverable config issue.
-		log.Printf("AI module build failed: %v; skipping AI analysis", err)
-		return
+	useUniversal := cfg != nil && cfg.AI != nil && cfg.AI.UseUniversalPath
+
+	var module ai.Module
+	if useUniversal {
+		module = universal.New()
+	} else {
+		m, err := modules.Build(cfg)
+		if err != nil {
+			// AI module registry was already validated in Run; reaching here
+			// means a programming error in fallback wiring rather than a
+			// recoverable config issue.
+			log.Printf("AI module build failed: %v; skipping AI analysis", err)
+			return
+		}
+		module = m
 	}
 	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
-	if cfg != nil && cfg.AI.Agentic != nil {
-		eff := cfg.AI.Agentic.EffectiveAgentic()
+	if cfg != nil && (useUniversal || cfg.AI.Agentic != nil) {
+		var eff project.Agentic
+		if cfg.AI.Agentic != nil {
+			eff = cfg.AI.Agentic.EffectiveAgentic()
+		} else {
+			eff = (&project.Agentic{}).EffectiveAgentic()
+		}
+		// Universal path implies agentic; force-enable regardless of
+		// agentic.enabled and treat it as always-on.
+		if useUniversal {
+			eff.Enabled = true
+			eff.Always = true
+		}
 		if eff.Enabled {
 			factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
-			service.EnableAgentic(ai.AgenticOptions{
-				MaxIters:        eff.MaxIters,
-				ModelByteBudget: eff.ModelByteBudget,
-				GCSByteBudget:   eff.GCSByteBudget,
-				WallClock:       eff.WallClock,
-			}, factory, eff.Always)
-			mode := "module-opt-in"
-			if eff.Always {
-				mode = "always"
+			registry := tools.NewRegistry()
+			filesystem.Register(registry)
+			k8s.Register(registry)
+			toolNames := eff.Tools
+			if len(toolNames) == 0 {
+				toolNames = []string{"filesystem", "k8s"}
 			}
-			log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall)",
-				mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock)
+			enabled, err := registry.Enable(toolNames)
+			if err != nil {
+				if useUniversal {
+					log.Printf("⚠ Tool registry enable failed under use_universal_path (%v); AI analysis will mark failures unavailable", err)
+				} else {
+					log.Printf("⚠ Tool registry enable failed (%v); skipping agentic", err)
+				}
+			} else {
+				service.EnableAgentic(ai.AgenticOptions{
+					MaxIters:        eff.MaxIters,
+					ModelByteBudget: eff.ModelByteBudget,
+					GCSByteBudget:   eff.GCSByteBudget,
+					WallClock:       eff.WallClock,
+				}, factory, registry, enabled, eff.Always, useUniversal)
+				if useUniversal {
+					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, tools=%v)",
+						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, enabled)
+				} else {
+					mode := "module-opt-in"
+					if eff.Always {
+						mode = "always"
+					}
+					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, tools=%v)",
+						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, enabled)
+				}
+			}
 		}
 	}
 	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())

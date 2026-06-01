@@ -582,9 +582,9 @@ export function TestDetailPage() {
                   <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Files to Check</p>
                   <ul className="list-disc list-inside text-sm text-on-surface space-y-0.5">
                     {[...selectedTc.ai_analysis.relevant_files]
-                      .sort((a, b) => fileSortKey(a, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo }) - fileSortKey(b, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo }))
+                      .sort((a, b) => fileSortKey(a, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo, webUrl: selectedRun?.web_url }) - fileSortKey(b, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo, webUrl: selectedRun?.web_url }))
                       .map((f, i) => {
-                      const url = fileToUrl(f, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo });
+                      const url = fileToUrl(f, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo, webUrl: selectedRun?.web_url });
                       return (
                         <li key={i} className="font-mono text-xs">
                           {url ? (

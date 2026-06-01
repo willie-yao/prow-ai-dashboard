@@ -101,6 +101,34 @@ type AIAnalysis struct {
 	// when the failure message is unchanged. Empty for legacy entries (read
 	// as "curator").
 	Mode string `json:"mode,omitempty"`
+
+	// Per-analysis telemetry (Phase L.0). Stamped at every code path that
+	// produces an AIAnalysis so cost + behavior comparisons across modes
+	// are measurable from published JSON. Curator path leaves ToolCalls
+	// and GCSBytes at zero (no tool calls; GCS fetches inside
+	// AnalysisPrompt aren't billed against the per-analysis budget today).
+
+	// ToolCalls is the number of agent tool invocations made during this
+	// analysis. Always zero for curator.
+	ToolCalls int `json:"tool_calls,omitempty"`
+	// ModelBytes is the cumulative bytes sent to / received from the chat
+	// completion endpoint (prompt + tool results + responses).
+	ModelBytes int `json:"model_bytes,omitempty"`
+	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
+	// calls. Always zero for curator.
+	GCSBytes int `json:"gcs_bytes,omitempty"`
+	// ElapsedMs is the wall-clock duration of the analysis in
+	// milliseconds, measured around the doAnalyze / doAnalyzeAgentic call.
+	ElapsedMs int `json:"elapsed_ms,omitempty"`
+	// CacheHit reports whether the analysis was served from the AI cache
+	// rather than recomputed against the model.
+	CacheHit bool `json:"cache_hit,omitempty"`
+	// BudgetExhausted reports whether the agentic loop hit one of its
+	// budget caps (iterations / model bytes / GCS bytes / wall clock) and
+	// was forced to finalize on best-effort evidence. Always false for
+	// curator. Reserved for L.1 (loop will inject a finalize message
+	// and stamp this field); L.0 always reports false.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 }
 
 // TestCase represents a single test case from JUnit XML.

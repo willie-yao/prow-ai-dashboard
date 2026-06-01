@@ -197,6 +197,16 @@ export interface FileToUrlContext {
   clusterArtifacts?: { machines?: { logs: Record<string, string> }[] };
   /** Source repo for repo-relative file paths in AI analyses. */
   sourceRepo?: SourceRepoRef;
+  /**
+   * Web URL root for the current build (e.g.
+   * `https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<id>/`). When the
+   * cited path does not match a known artifact via other heuristics, we
+   * resolve it as `<webUrl>/<path>` (prepending `artifacts/` when the
+   * path does not already start with it). Lets agent-cited artifact
+   * paths render as clickable links without depending on the
+   * `cluster_artifacts.machines` index.
+   */
+  webUrl?: string;
 }
 
 /** Turn a file path from AI analysis into a URL if possible. */
@@ -250,6 +260,25 @@ export function fileToUrl(
     const { owner, name } = context.sourceRepo;
     return `https://github.com/${owner}/${name}/blob/main/${clean}`;
   }
+
+  // Fallback: resolve plausible GCS artifact paths against the build's
+  // web URL. Catches agent-cited paths like
+  // "artifacts/clusters/<name>/machines/<vm>/kubelet.log" or
+  // "clusters/<name>/resources/Foo/bar.yaml" that the curator-era
+  // heuristics above could not map.
+  if (context?.webUrl) {
+    let path = clean.replace(/^\/+/, "");
+    const looksLikeArtifact =
+      /\.(log|yaml|yml|json|xml|txt|out|conf)$/i.test(path) && path.includes("/");
+    if (looksLikeArtifact) {
+      if (!path.startsWith("artifacts/")) {
+        path = `artifacts/${path}`;
+      }
+      const base = context.webUrl.replace(/\/+$/, "");
+      return `${base}/${path}`;
+    }
+  }
+
   return null;
 }
 

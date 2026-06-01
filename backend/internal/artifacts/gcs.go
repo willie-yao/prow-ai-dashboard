@@ -11,12 +11,22 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // GCSFactory creates per-build GCSBrowser instances over a single Prow bucket.
+//
+// Browsers are memoized by buildPrefix so multiple analyses against the same
+// build share the underlying small-file cache and any future per-build tool
+// cache. The factory is intended to be created once per fetcher run, so the
+// memo lives for the run; per-build entries are bounded by the number of
+// distinct builds analyzed.
 type GCSFactory struct {
 	bucket string
 	client *http.Client
+
+	mu       sync.Mutex
+	browsers map[string]*GCSBrowser
 }
 
 // NewGCSFactory returns a Factory backed by the given GCS bucket. The factory
@@ -25,7 +35,11 @@ func NewGCSFactory(bucket string, client *http.Client) *GCSFactory {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &GCSFactory{bucket: bucket, client: client}
+	return &GCSFactory{
+		bucket:   bucket,
+		client:   client,
+		browsers: map[string]*GCSBrowser{},
+	}
 }
 
 // ForBuild returns a Browser bound to a single Prow build. buildPrefix is
@@ -33,11 +47,19 @@ func NewGCSFactory(bucket string, client *http.Client) *GCSFactory {
 // e.g. "logs/<job>/<build>/" for periodics or
 // "pr-logs/pull/<org_repo>/<pr#>/<job>/<build>/" for presubmits.
 // displayName is the human-readable label surfaced via BuildRoot().
+//
+// Repeated calls with the same buildPrefix return the same Browser instance
+// so callers share its file cache.
 func (f *GCSFactory) ForBuild(buildPrefix, displayName string) Browser {
 	if !strings.HasSuffix(buildPrefix, "/") {
 		buildPrefix += "/"
 	}
-	return &GCSBrowser{
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if b, ok := f.browsers[buildPrefix]; ok {
+		return b
+	}
+	b := &GCSBrowser{
 		bucket:    f.bucket,
 		display:   displayName,
 		client:    f.client,
@@ -46,6 +68,8 @@ func (f *GCSFactory) ForBuild(buildPrefix, displayName string) Browser {
 		listURL:   fmt.Sprintf("https://storage.googleapis.com/storage/v1/b/%s/o", f.bucket),
 		cache:     map[string][]byte{},
 	}
+	f.browsers[buildPrefix] = b
+	return b
 }
 
 // GCSBrowser implements Browser against GCS for one Prow build.
