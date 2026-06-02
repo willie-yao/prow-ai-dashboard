@@ -44,6 +44,15 @@ type AgenticOptions struct {
 	ModelByteBudget int
 	GCSByteBudget   int
 	WallClock       time.Duration
+
+	// MinToolCalls is the minimum number of tool calls before a
+	// tools-free final answer from the model is accepted as cacheable.
+	// Defaults to 0 (no floor; behavior identical to pre-L.3). When set,
+	// the loop nudges the model with a "you haven't investigated enough"
+	// user message instead of accepting the early final, and skips the
+	// cache write for any final that lands below the floor (so the
+	// next run gets a fresh attempt). See project.Agentic.MinToolCalls.
+	MinToolCalls int
 }
 
 // agenticToolBudget is the per-call cap on bytes returned to the model by
@@ -120,6 +129,26 @@ analysis now using the evidence you have already gathered, following the
 definitive root cause, say so explicitly in root_cause (e.g. "Investigation
 reached budget; best-evidence hypothesis is X based on Y") rather than
 continuing to investigate.`
+
+// formatMinToolsNudge builds the user message appended after a tools-free
+// model response when the agent has not yet met AgenticOptions.MinToolCalls.
+// Kept generic about artifact paths because not every project has a
+// build-log.txt at the build root; the universal prompt and tool docs
+// already cover specific entry points.
+func formatMinToolsNudge(calls, floor int) string {
+	return fmt.Sprintf(`You attempted to finalize after only %d tool call(s), but this project requires at least %d before a final answer is accepted. Investigate the build's artifacts before responding: at minimum list the build root, inspect or grep the test's actual failure logs, and cite at least one concrete file path in your root_cause. If after additional investigation the evidence is genuinely inconclusive, say so explicitly in root_cause rather than speculating.`, calls, floor)
+}
+
+// agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
+// the raw model response (analysisResponse) and tags it with the tool-call
+// count so cache reads can invalidate entries that fall below the project's
+// current MinToolCalls floor. Backward compat: pre-L.3 cache entries have no
+// "tool_calls" key and unmarshal with ToolCalls=0, which is automatically
+// invalidated by any non-zero floor and re-analyzed on the next run.
+type agenticCacheData struct {
+	analysisResponse
+	ToolCalls int `json:"tool_calls,omitempty"`
+}
 
 // ---------- Agent state ----------
 
@@ -209,11 +238,16 @@ func (c *Client) doAnalyzeAgentic(
 ) (*models.AISummary, *models.AIAnalysis, error) {
 	start := time.Now()
 	if raw, ok := c.cache.Get(cacheKey); ok {
-		var parsed analysisResponse
-		if json.Unmarshal(raw, &parsed) == nil {
-			summary, analysis := c.buildOutputs(parsed)
-			stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
-			return summary, analysis, nil
+		var cached agenticCacheData
+		if json.Unmarshal(raw, &cached) == nil {
+			// Cache hit, but re-validate against the current floor. Pre-L.3
+			// entries default to ToolCalls=0 and are invalidated by any
+			// non-zero MinToolCalls.
+			if cached.ToolCalls >= in.Opts.MinToolCalls {
+				summary, analysis := c.buildOutputs(cached.analysisResponse)
+				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
+				return summary, analysis, nil
+			}
 		}
 	}
 
@@ -239,6 +273,11 @@ func (c *Client) doAnalyzeAgentic(
 
 	var finalContent string
 	var done bool
+	// nudgedAtCalls tracks the tool-call count when we last issued a
+	// min-tool-calls nudge. We only re-nudge once the model has made new
+	// tool-call progress since then; this prevents an infinite no-progress
+	// nudge loop when the model genuinely refuses to investigate further.
+	nudgedAtCalls := -1
 
 	for iter := 0; iter < in.Opts.MaxIters && !done; iter++ {
 		resp, err := c.callChatWithTools(loopCtx, messages, schemas)
@@ -256,9 +295,32 @@ func (c *Client) doAnalyzeAgentic(
 		msg := choice.Message
 
 		if len(msg.ToolCalls) == 0 {
+			candidate := ""
 			if msg.Content != nil {
-				finalContent = *msg.Content
+				candidate = *msg.Content
 			}
+
+			// Enforce the per-project min-tool-calls floor by nudging the
+			// model to investigate further before accepting its final.
+			// Skip the nudge when: (a) no floor configured, (b) the model
+			// has not made progress since the last nudge (avoid no-progress
+			// loops), or (c) budgets are already exhausted (nudge would
+			// fight the tool-side "budget exhausted; finalize now" signal).
+			if state.calls < in.Opts.MinToolCalls && state.calls > nudgedAtCalls && !state.budgetExhausted {
+				echo := agChatMessage{Role: "assistant"}
+				if msg.Content != nil {
+					echo.Content = msg.Content
+				}
+				messages = append(messages, echo, agChatMessage{
+					Role:    "user",
+					Content: strPtr(formatMinToolsNudge(state.calls, in.Opts.MinToolCalls)),
+				})
+				nudgedAtCalls = state.calls
+				log.Printf("  ↻ agentic nudge: tool_calls=%d < min=%d, asking model to investigate further", state.calls, in.Opts.MinToolCalls)
+				continue
+			}
+
+			finalContent = candidate
 			done = true
 			break
 		}
@@ -302,10 +364,25 @@ func (c *Client) doAnalyzeAgentic(
 		return summary, analysis, nil
 	}
 
-	_ = c.cache.Set(cacheKey, parsed)
+	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts)
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+// cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if the
+// agent met the project's MinToolCalls floor. Below-floor finals are still
+// published to the dashboard for this run (so triage always has something to
+// show) but are NOT cached, so the next fetcher run re-attempts the analysis
+// rather than serving the under-investigated answer.
+func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions) {
+	if state.calls < opts.MinToolCalls {
+		return
+	}
+	_ = c.cache.Set(cacheKey, agenticCacheData{
+		analysisResponse: parsed,
+		ToolCalls:        state.calls,
+	})
 }
 
 // runFinalizeRound asks the model for one more no-tools response containing

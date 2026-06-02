@@ -231,6 +231,24 @@ type Agentic struct {
 	// failure. Defaults to DefaultAgentic.WallClock.
 	WallClock time.Duration `yaml:"wall_clock,omitempty" json:"wall_clock,omitempty"`
 
+	// MinToolCalls is the minimum number of tool calls the model must
+	// make before its final JSON answer is accepted. When the model
+	// returns a tools-free response with fewer tool calls than this
+	// floor, the loop appends a nudge user-message asking it to
+	// investigate further. Defaults to 0 (no floor), which preserves
+	// the historical behavior for strong tool-using models (e.g. Claude
+	// Opus) that already investigate deeply. Set to ~3 for weaker
+	// open-weights models (e.g. Qwen3) that tend to finalize prematurely
+	// from the prompt alone without inspecting any artifacts.
+	//
+	// Below-floor finals are still published if the model refuses to
+	// investigate further (so triage always has SOMETHING to show), but
+	// they are NOT written to the AI cache, ensuring the next fetcher
+	// run retries the analysis with fresh tool calls. Cached results
+	// from previous runs that fall below the current floor are also
+	// invalidated and re-analyzed.
+	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -252,6 +270,7 @@ var DefaultAgentic = Agentic{
 	ModelByteBudget: 300_000,
 	GCSByteBudget:   1_000_000_000,
 	WallClock:       5 * time.Minute,
+	MinToolCalls:    0,
 }
 
 // EffectiveAgentic returns the resolved Agentic config with defaults applied
@@ -275,6 +294,9 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	if a.WallClock > 0 {
 		out.WallClock = a.WallClock
+	}
+	if a.MinToolCalls > 0 {
+		out.MinToolCalls = a.MinToolCalls
 	}
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
