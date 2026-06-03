@@ -140,14 +140,18 @@ func formatMinToolsNudge(calls, floor int) string {
 }
 
 // agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
-// the raw model response (analysisResponse) and tags it with the tool-call
-// count so cache reads can invalidate entries that fall below the project's
-// current MinToolCalls floor. Backward compat: pre-L.3 cache entries have no
-// "tool_calls" key and unmarshal with ToolCalls=0, which is automatically
-// invalidated by any non-zero floor and re-analyzed on the next run.
+// the raw model response (analysisResponse) and tags it with the per-analysis
+// telemetry (tool-call count + cost) so that cache reads can re-stamp the
+// published AIAnalysis and re-validate against the project's current
+// MinToolCalls floor. Backward compat: pre-L.3 cache entries have no
+// telemetry keys and unmarshal with zero values, so any non-zero floor
+// invalidates them on read and re-analyzes them on the next run.
 type agenticCacheData struct {
 	analysisResponse
-	ToolCalls int `json:"tool_calls,omitempty"`
+	ToolCalls       int  `json:"tool_calls,omitempty"`
+	ModelBytes      int  `json:"model_bytes,omitempty"`
+	GCSBytes        int  `json:"gcs_bytes,omitempty"`
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 }
 
 // ---------- Agent state ----------
@@ -246,6 +250,16 @@ func (c *Client) doAnalyzeAgentic(
 			if cached.ToolCalls >= in.Opts.MinToolCalls {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
+				// Restore the recorded per-analysis telemetry from the
+				// cache so the published JSON keeps its tool-call /
+				// cost / budget-exhausted signals across cache hits.
+				// Without this, cache hits would publish ToolCalls=0 and
+				// the build-level shouldReanalyze gate would re-trigger
+				// reanalysis on every run.
+				analysis.ToolCalls = cached.ToolCalls
+				analysis.ModelBytes = cached.ModelBytes
+				analysis.GCSBytes = cached.GCSBytes
+				analysis.BudgetExhausted = cached.BudgetExhausted
 				return summary, analysis, nil
 			}
 		}
@@ -382,6 +396,9 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	_ = c.cache.Set(cacheKey, agenticCacheData{
 		analysisResponse: parsed,
 		ToolCalls:        state.calls,
+		ModelBytes:       state.modelBytes,
+		GCSBytes:         state.gcsBytes,
+		BudgetExhausted:  state.budgetExhausted,
 	})
 }
 

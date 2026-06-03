@@ -370,6 +370,80 @@ func TestService_UniversalOn_CacheInvalidatesAgenticEntries(t *testing.T) {
 	}
 }
 
+// TestService_ShouldReanalyze_FloorTable covers the L.3 build-level cache
+// invalidation: when a cached agentic-mode analysis records fewer tool calls
+// than the current MinToolCalls floor, the build cache must NOT be trusted
+// (shouldReanalyze returns true) so the loop runs again and the new floor
+// can actually take effect. Curator caches are unaffected because they
+// legitimately have ToolCalls=0 by design.
+func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
+	cases := []struct {
+		name         string
+		cachedMode   string
+		cachedCalls  int
+		desiredMode  string
+		minToolCalls int
+		want         bool
+	}{
+		{"agentic_below_floor", AgenticMode, 0, AgenticMode, 3, true},
+		{"agentic_at_floor", AgenticMode, 3, AgenticMode, 3, false},
+		{"agentic_above_floor", AgenticMode, 5, AgenticMode, 3, false},
+		{"universal_below_floor", UniversalMode, 0, UniversalMode, 3, true},
+		{"universal_at_floor", UniversalMode, 3, UniversalMode, 3, false},
+		{"agentic_zero_floor_no_invalidation", AgenticMode, 0, AgenticMode, 0, false},
+		{"curator_floor_ignored", curatorMode, 0, curatorMode, 3, false},
+		{"mode_mismatch_overrides_floor", curatorMode, 5, AgenticMode, 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Service{agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls}}
+			testCase := &models.TestCase{
+				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls},
+			}
+			if got := s.shouldReanalyze(testCase, tc.desiredMode); got != tc.want {
+				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d) desired=%q floor=%d = %v, want %v",
+					tc.cachedMode, tc.cachedCalls, tc.desiredMode, tc.minToolCalls, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestService_BelowFloor_ReanalyzesBuildCacheEntry exercises the full Analyze
+// path: a build-cached agentic-universal analysis with ToolCalls below the
+// current floor must trigger a fresh API call instead of being served from
+// the build cache. Regression for the bug where shouldReanalyze only checked
+// Mode and let pre-floor zero-tool entries bypass the floor forever.
+func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	// Final after one tool call to satisfy floor=1.
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal(`{"summary":"fresh post-floor","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s.EnableAgentic(
+		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 1},
+		&fakeFactory{}, registry, enabled, true, true, /* universalPath */
+	)
+
+	// Pre-floor cached universal analysis with ToolCalls=0 already attached
+	// to the test case (as it would be after loading data/jobs/*.json).
+	tc := newFailedTC("Test A", "msg")
+	tc.AISummary = &models.AISummary{Summary: "stale zero-tool"}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale", Mode: UniversalMode, ToolCalls: 0}
+
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis.ToolCalls < 1 {
+		t.Errorf("ToolCalls = %d, want >= 1 (fresh analysis should satisfy floor)", tc.AIAnalysis.ToolCalls)
+	}
+	if !strings.Contains(tc.AISummary.Summary, "fresh post-floor") {
+		t.Errorf("expected fresh summary, got %q (build-cached pre-floor entry should have been invalidated)", tc.AISummary.Summary)
+	}
+}
+
 // newServiceTestRegistry returns a filesystem-only registry usable in
 // service-level tests. K8s tier is omitted because none of these tests
 // drive cluster discovery; agentic loops here exit on the first chat

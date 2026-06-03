@@ -607,12 +607,21 @@ func TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor(t *testing.T) {
 
 	// Third call with the same floor=2 should now hit the cache (re-analyzed
 	// entry has tool_calls=2 >= floor=2).
-	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:invalidate", "sys", "user")
+	_, hitAnalysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:invalidate", "sys", "user")
 	if err != nil {
 		t.Fatalf("third call: %v", err)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 4 {
 		t.Errorf("call count after expected cache hit = %d, want 4 (no extra server hit)", got)
+	}
+	if !hitAnalysis.CacheHit {
+		t.Errorf("CacheHit = false, want true")
+	}
+	// Cache-hit must restore the recorded telemetry from the prior run, not
+	// publish zero. Without this stamping, the build-level
+	// shouldReanalyze gate sees ToolCalls=0 and re-invalidates forever.
+	if hitAnalysis.ToolCalls != 2 {
+		t.Errorf("cache-hit ToolCalls = %d, want 2 (cached telemetry must be stamped on hit)", hitAnalysis.ToolCalls)
 	}
 }
 
