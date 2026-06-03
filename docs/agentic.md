@@ -95,7 +95,19 @@ cached) rather than looping until `max_iters` is exhausted.
 
 Cache invalidation: bumping `min_tool_calls` on an existing project
 invalidates any cached entries with a lower tool-call count on the
-next fetcher run; they re-analyze automatically.
+next fetcher run; they re-analyze automatically. Invalidation happens
+at two layers:
+
+- The agentic AI cache (`data/ai_cache.json`) is re-validated on each
+  read; pre-floor entries (which have no `tool_calls` field, default
+  to zero) are treated as a miss for any non-zero floor.
+- The build-cache test data (`data/jobs/*.json`) already carries the
+  prior run's `AIAnalysis` attached to each failure. When the cached
+  analysis's `tool_calls` falls below the current floor AND the
+  desired mode is agentic, the build-cache entry is also re-analyzed
+  rather than being served as-is. Without this layer, pre-floor
+  per-test analyses would skip the agentic cache check entirely and
+  bypass the floor forever.
 
 ### `always: true` vs `always: false`
 
