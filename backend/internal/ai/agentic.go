@@ -62,6 +62,26 @@ type AgenticOptions struct {
 	// returning 13 KB total against Qwen3-235B). Defaults to 0 (no
 	// floor). See project.Agentic.MinGCSBytes.
 	MinGCSBytes int
+
+	// CritiqueEnabled opts the run into the L.4 Step 2 regex critique:
+	// after the agentic loop produces a parseable tools-free final,
+	// run critiqueDraft on it. If it punts (suggested_fix is a
+	// diagnostic/information-gathering TODO list instead of a concrete
+	// remediation), append targeted feedback and re-prompt up to
+	// CritiqueMaxRetries times. Drafts that still punt after retries
+	// are published but not cached, so the next run gets a fresh
+	// attempt (mirrors the MinToolCalls / MinGCSBytes anti-thrash
+	// pattern). Defaults to false; behavior identical to pre-L.4-Step-2
+	// when off. See project.Agentic.Critique.
+	CritiqueEnabled bool
+
+	// CritiqueMaxRetries caps how many extra re-prompt rounds the
+	// loop will spend on critique. 0 means "critique once but never
+	// retry" (acts as a pure don't-cache gate); 2 means the model
+	// gets the original final plus up to 2 retries (so 3 total
+	// critique evaluations per analysis). Each retry consumes one
+	// extra agentic iteration. Only meaningful when CritiqueEnabled.
+	CritiqueMaxRetries int
 }
 
 // agenticToolBudget is the per-call cap on bytes returned to the model by
@@ -69,6 +89,14 @@ type AgenticOptions struct {
 // ModelByteBudget. 32KB matches the spike, well above any reasonable single
 // JSON envelope.
 const agenticToolBudget = 32 * 1024
+
+// critiqueRetryIters is the per-retry budget granted to the agentic loop
+// when a critique re-prompt is appended. Generous enough to cover the
+// expected response shape (1-2 follow-up tool calls + the new tools-free
+// final) plus a little slack. Tighter values (e.g. 1) starve retries
+// where the model elects to do more investigation before re-emitting —
+// caught by the L.4 Step 2 rubber-duck review.
+const critiqueRetryIters = 3
 
 // ---------- Chat protocol (parallel to ai.go's single-shot types) ----------
 
@@ -188,6 +216,14 @@ type agenticCacheData struct {
 	ModelBytes      int  `json:"model_bytes,omitempty"`
 	GCSBytes        int  `json:"gcs_bytes,omitempty"`
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+
+	// CritiquePassed is set only when the L.4 Step 2 critique gate
+	// ran against this draft and passed. Defaults to false on cache
+	// reads of pre-Step-2 entries (no critique ran) and on entries
+	// written while critique was disabled. Used by the cache-read
+	// gate to invalidate uncritiqued entries when a consumer enables
+	// critique (mirrors the L.3 raised-floor invalidation pattern).
+	CritiquePassed bool `json:"critique_passed,omitempty"`
 }
 
 // floorStatus tracks which per-project floors are currently unmet for a
@@ -225,6 +261,13 @@ type agentState struct {
 	gcsBytes        int
 	calls           int
 	budgetExhausted bool
+
+	// critiquePassed records whether the final accepted answer cleared
+	// the L.4 Step 2 critique gate. Stamped onto the published
+	// AIAnalysis so the build-level shouldReanalyze gate can invalidate
+	// uncritiqued entries when a consumer later enables critique.
+	// Meaningful only when opts.CritiqueEnabled.
+	critiquePassed bool
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -254,6 +297,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.ModelBytes = state.modelBytes
 		analysis.GCSBytes = state.gcsBytes
 		analysis.BudgetExhausted = state.budgetExhausted
+		analysis.CritiquePassed = state.critiquePassed
 	}
 }
 
@@ -307,7 +351,15 @@ func (c *Client) doAnalyzeAgentic(
 			// must satisfy whichever floors the project currently
 			// configures (raising either field invalidates entries
 			// that fell below it on a prior run).
-			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes {
+			//
+			// L.4 Step 2: also invalidate entries that weren't
+			// critique-checked when critique is now enabled. Pre-Step-2
+			// entries and entries written while critique was disabled
+			// both have CritiquePassed=false; entries that passed
+			// critique have CritiquePassed=true. When critique stays
+			// off, the check is skipped entirely.
+			critiqueOK := !in.Opts.CritiqueEnabled || cached.CritiquePassed
+			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
 				// Restore the recorded per-analysis telemetry from the
@@ -320,6 +372,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.ModelBytes = cached.ModelBytes
 				analysis.GCSBytes = cached.GCSBytes
 				analysis.BudgetExhausted = cached.BudgetExhausted
+				analysis.CritiquePassed = cached.CritiquePassed
 				return summary, analysis, nil
 			}
 		}
@@ -357,7 +410,27 @@ func (c *Client) doAnalyzeAgentic(
 	nudgedAtCalls := -1
 	nudgedAtGCSBytes := -1
 
-	for iter := 0; iter < in.Opts.MaxIters && !done; iter++ {
+	// L.4 Step 2: critique state. state.critiquePassed records whether
+	// the accepted final answer cleared the critique gate, used by the
+	// cache-write decision below and stamped onto the published
+	// AIAnalysis so the build-level shouldReanalyze gate can invalidate
+	// uncritiqued entries when critique is enabled later. Stored on
+	// state (not local) so stampAgenticTelemetry picks it up via the
+	// same path as ToolCalls / GCSBytes / BudgetExhausted. Starts false;
+	// set to true only when critique actually runs and passes (so when
+	// critique is disabled, it stays false and the cache write logic
+	// correctly ignores it via the CritiqueEnabled gate).
+	// critiqueRetriesUsed bounds the number of re-prompt rounds per
+	// analysis. Each retry extends maxIters by critiqueRetryIters so the
+	// model has room to do follow-up tool calls (responding to critique
+	// feedback by reading more artifacts is the desired behavior) plus
+	// re-emit. Bumping by 1 was too tight: the rubber-duck pass caught
+	// that a model reacting to feedback with even one tool call would
+	// fall off the end of the loop and end up in runFinalizeRound.
+	critiqueRetriesUsed := 0
+	maxIters := in.Opts.MaxIters
+
+	for iter := 0; iter < maxIters && !done; iter++ {
 		resp, err := c.callChatWithTools(loopCtx, messages, schemas)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
@@ -416,6 +489,44 @@ func (c *Client) doAnalyzeAgentic(
 				}
 			}
 
+			// L.4 Step 2: critique gate. Catches punt-shaped finals
+			// (suggested_fix that's a diagnostic TODO list instead of
+			// a concrete remediation) that the prompt rules alone
+			// don't catch in weaker models. Mirrors the floor-nudge
+			// pattern: re-prompt with feedback, give the model one
+			// more iteration to do the work it should have done, and
+			// bound by CritiqueMaxRetries to avoid runaway. Only
+			// applies when critique is enabled AND the candidate
+			// parses cleanly; unparseable finals fall through to the
+			// existing finalize-round path below and bypass critique
+			// in v1 (rare; can be revisited if shadow A/B data shows
+			// post-finalize punts are common).
+			if in.Opts.CritiqueEnabled {
+				if parsed, ok := tryParseAnalysis(candidate); ok {
+					out := critiqueDraft(parsed)
+					if out.Passed {
+						state.critiquePassed = true
+					} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
+						echo := agChatMessage{Role: "assistant"}
+						if msg.Content != nil {
+							echo.Content = msg.Content
+						}
+						messages = append(messages, echo, agChatMessage{
+							Role:    "user",
+							Content: strPtr(out.Feedback),
+						})
+						critiqueRetriesUsed++
+						maxIters += critiqueRetryIters
+						log.Printf("  ✗ agentic critique: punt detected %v; re-prompting (retry %d/%d)",
+							out.Matches, critiqueRetriesUsed, in.Opts.CritiqueMaxRetries)
+						continue
+					} else {
+						log.Printf("  ⚠ agentic critique: still punting after %d retries %v; accepting but not caching",
+							in.Opts.CritiqueMaxRetries, out.Matches)
+					}
+				}
+			}
+
 			finalContent = candidate
 			done = true
 			break
@@ -460,19 +571,49 @@ func (c *Client) doAnalyzeAgentic(
 		return summary, analysis, nil
 	}
 
-	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts)
+	// L.4 Step 2 fix (rubber-duck #1): also critique post-loop parsed
+	// answers when the in-loop path didn't already mark critique as
+	// passed. The in-loop critique only fires on tools-free responses
+	// that parse on the spot; outputs from runFinalizeRound (loop maxed
+	// out without tools-free) and slow-parse outputs bypass it. Without
+	// this check, a punt-shaped finalize-round result publishes-but-
+	// never-caches → re-analyzed on every fetcher run → unbounded cost.
+	// With it, a passing finalize-round caches normally; a failing one
+	// continues the L.3 anti-thrash "publish, don't cache, retry next
+	// run" pattern. No retry here: retries are an in-loop concept, and
+	// re-entering the loop post-finalize would require a larger refactor
+	// that v1 defers.
+	if in.Opts.CritiqueEnabled && !state.critiquePassed {
+		if out := critiqueDraft(parsed); out.Passed {
+			state.critiquePassed = true
+		} else {
+			log.Printf("  ⚠ agentic critique: post-loop draft still punting %v; accepting but not caching",
+				out.Matches)
+		}
+	}
+
+	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
 }
 
 // cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if the
-// agent met every per-project floor (MinToolCalls AND MinGCSBytes). Below-
-// floor finals are still published to the dashboard for this run (so triage
-// always has something to show) but are NOT cached, so the next fetcher run
-// re-attempts the analysis rather than serving the under-investigated answer.
-func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions) {
+// agent met every per-project quality gate. v1 floors: MinToolCalls AND
+// MinGCSBytes. v2 (L.4 Step 2) adds the critique gate: when CritiqueEnabled,
+// the draft must have passed critique (critiquePassed=true). Below-floor or
+// critique-failing finals are still published to the dashboard for this run
+// (so triage always has something to show) but are NOT cached, so the next
+// fetcher run re-attempts the analysis rather than serving the under-
+// investigated or punt-shaped answer.
+//
+// critiquePassed is meaningful only when opts.CritiqueEnabled; when critique
+// is off, its value is ignored.
+func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions, critiquePassed bool) {
 	if evalFloors(state, opts).anyUnmet() {
+		return
+	}
+	if opts.CritiqueEnabled && !critiquePassed {
 		return
 	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{
@@ -481,6 +622,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		ModelBytes:       state.modelBytes,
 		GCSBytes:         state.gcsBytes,
 		BudgetExhausted:  state.budgetExhausted,
+		CritiquePassed:   critiquePassed,
 	})
 }
 

@@ -451,23 +451,29 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 				}
 			} else {
 				service.EnableAgentic(ai.AgenticOptions{
-					MaxIters:        eff.MaxIters,
-					ModelByteBudget: eff.ModelByteBudget,
-					GCSByteBudget:   eff.GCSByteBudget,
-					WallClock:       eff.WallClock,
-					MinToolCalls:    eff.MinToolCalls,
-					MinGCSBytes:     eff.MinGCSBytes,
+					MaxIters:           eff.MaxIters,
+					ModelByteBudget:    eff.ModelByteBudget,
+					GCSByteBudget:      eff.GCSByteBudget,
+					WallClock:          eff.WallClock,
+					MinToolCalls:       eff.MinToolCalls,
+					MinGCSBytes:        eff.MinGCSBytes,
+					CritiqueEnabled:    eff.Critique.Enabled,
+					CritiqueMaxRetries: eff.Critique.MaxRetries,
 				}, factory, registry, enabled, eff.Always, useUniversal)
+				critiqueLog := "off"
+				if eff.Critique.Enabled {
+					critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
+				}
 				if useUniversal {
-					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, tools=%v)",
-						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, enabled)
+					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, tools=%v)",
+						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
-					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, tools=%v)",
-						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, enabled)
+					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, tools=%v)",
+						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, enabled)
 				}
 			}
 		}

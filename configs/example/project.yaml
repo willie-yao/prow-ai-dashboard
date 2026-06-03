@@ -202,3 +202,18 @@ ai:
   #                                 # min_tool_calls. 200000 (200 KB) is a
   #                                 # reasonable starting value for weaker
   #                                 # models; see docs/agentic.md.
+  #   critique:                     # L.4 Step 2 punt-detection gate.
+  #     enabled: false              # When true, the agentic loop checks
+  #                                 # suggested_fix against a regex that
+  #                                 # catches diagnostic / information-
+  #                                 # gathering TODO lists ("Check X. Verify
+  #                                 # Y. Investigate Z."), re-prompts the
+  #                                 # model with feedback, and refuses to
+  #                                 # cache drafts that still punt after
+  #                                 # max_retries. Recommended for weaker
+  #                                 # open-weights models that consistently
+  #                                 # punt despite the system-prompt rules.
+  #                                 # See docs/agentic.md.
+  #     max_retries: 2              # Re-prompt rounds before accepting a
+  #                                 # still-punting draft. Each retry adds
+  #                                 # one extra agentic iteration. Default 2.

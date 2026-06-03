@@ -711,6 +711,34 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("MinGCSBytes = %d, want 200000", got.MinGCSBytes)
 		}
 	})
+	t.Run("Critique disabled by default with default max retries", func(t *testing.T) {
+		got := (&Agentic{Enabled: true}).EffectiveAgentic()
+		if got.Critique.Enabled {
+			t.Error("Critique.Enabled = true, want false (default)")
+		}
+		if got.Critique.MaxRetries != 2 {
+			t.Errorf("Critique.MaxRetries = %d, want 2 (default)", got.Critique.MaxRetries)
+		}
+	})
+	t.Run("Critique.Enabled flips through", func(t *testing.T) {
+		got := (&Agentic{Enabled: true, Critique: AgenticCritique{Enabled: true}}).EffectiveAgentic()
+		if !got.Critique.Enabled {
+			t.Error("Critique.Enabled = false, want true")
+		}
+		// MaxRetries omitted in input → falls back to default 2.
+		if got.Critique.MaxRetries != 2 {
+			t.Errorf("Critique.MaxRetries = %d, want default 2", got.Critique.MaxRetries)
+		}
+	})
+	t.Run("Critique.MaxRetries passes through when set", func(t *testing.T) {
+		got := (&Agentic{
+			Enabled: true,
+			Critique: AgenticCritique{Enabled: true, MaxRetries: 5},
+		}).EffectiveAgentic()
+		if got.Critique.MaxRetries != 5 {
+			t.Errorf("Critique.MaxRetries = %d, want 5", got.Critique.MaxRetries)
+		}
+	})
 }
 
 // agenticEqual compares two Agentic structs without using ==, which would
@@ -724,6 +752,7 @@ func agenticEqual(a, b Agentic) bool {
 		a.WallClock == b.WallClock &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
+		a.Critique == b.Critique &&
 		equalStrings(a.Tools, b.Tools)
 }
 

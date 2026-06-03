@@ -65,6 +65,9 @@ ai:
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
+    critique:
+      enabled: false              # opt into the L.4 Step 2 punt-detection gate
+      max_retries: 2              # re-prompt rounds before accepting a still-punting draft
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -145,6 +148,60 @@ and used to risk being re-nudged every iteration. The current loop
 re-nudges only if the model has made progress on the specific axis
 that is still unmet; if neither calls nor bytes have advanced since
 the last nudge, the answer is accepted (but not cached).
+
+### `critique`
+
+A punt-detection gate that runs after the model produces a parseable
+tools-free final. Catches a residual failure mode in weaker models
+where `suggested_fix` is a diagnostic / information-gathering TODO
+list ("Check X. Verify Y. Investigate Z.") rather than a concrete
+remediation, despite the system prompt explicitly forbidding this
+shape. The check is a deterministic regex (see
+`backend/internal/ai/critique.go`); no extra LLM call.
+
+When the regex matches, the loop appends targeted feedback that
+quotes the offending suggested_fix back to the model, lists the
+exact phrases that tripped the gate, and re-states the two
+allowed shapes (concrete remediation OR the strict no-remediation
+escape hatch). It then re-prompts; each retry consumes one extra
+agentic iteration on top of `max_iters`. Drafts that still punt
+after `max_retries` retries are published but NOT cached, so the
+next fetcher run retries with a fresh attempt.
+
+Defaults to disabled. Recommended for weaker open-weights models
+that consistently punt despite the prompt-side rules (Qwen3-235B
+post-L.4-Step-1 measured at 80% punt rate on CAPZ failures, vs
+40% for Claude Opus on the same cases). Strong tool-using models
+benefit too but the cost / behavior trade-off is per-consumer:
+when enabled, expect 1.0-1.5x baseline iterations for the typical
+failure (most analyses pass critique on the first try; only the
+punts incur retries).
+
+`max_retries` defaults to `2` when `enabled: true`. Note that the
+field follows the `min_tool_calls` / `min_gcs_bytes` "0 = use
+default" convention: writing `max_retries: 0` in YAML is
+indistinguishable from omitting the field, so both yield the
+engine default. To disable retries entirely (treat critique as a
+pure don't-cache gate with no re-prompting), turn the whole
+feature off (`critique.enabled: false`) — the gate-only mode is
+a future option that the v1 implementation does not surface.
+
+Cache invalidation: enabling `critique` on an existing project
+invalidates any cached entries that didn't pass critique (which
+includes ALL pre-L.4-Step-2 entries, since they were written with
+no critique field; defaults to `false` on read). Same two-layer
+behavior as the floor invalidations (agentic AI cache + build-cache
+test data). Disabling critique does NOT invalidate previously
+critique-passed entries; they serve from cache as usual.
+
+Coverage: critique runs both in-loop (on tools-free finals that
+parse on the spot, with re-prompt retries) AND post-loop (on
+outputs from `runFinalizeRound` when the agentic loop maxed out
+without finalizing). The post-loop check is single-shot — it
+gates caching but doesn't re-prompt — so a punt-shaped
+finalize-round result publishes, doesn't cache, and re-analyzes
+on the next fetcher run (same anti-thrash trade-off as the floor
+gates).
 
 ### `always: true` vs `always: false`
 

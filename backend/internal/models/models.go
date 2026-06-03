@@ -129,6 +129,15 @@ type AIAnalysis struct {
 	// curator. Reserved for L.1 (loop will inject a finalize message
 	// and stamp this field); L.0 always reports false.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+
+	// CritiquePassed reports whether this analysis cleared the L.4 Step 2
+	// critique gate. Only meaningful when the project has critique
+	// enabled; left false for runs where critique was disabled (which the
+	// shouldReanalyze check interprets correctly via the current opts).
+	// Used to invalidate cache entries written before critique was
+	// enabled on a consumer (mirrors the floor-raise invalidation
+	// pattern). Always false for curator.
+	CritiquePassed bool `json:"critique_passed,omitempty"`
 }
 
 // TestCase represents a single test case from JUnit XML.

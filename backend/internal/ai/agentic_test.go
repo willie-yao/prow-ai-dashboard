@@ -950,3 +950,413 @@ func TestResponseFormatFooter_L4Step1Anchors(t *testing.T) {
 		}
 	}
 }
+
+// ---------- L.4 Step 2 critique gate ----------
+//
+// A "punt-shaped" suggested_fix is a diagnostic / information-gathering
+// TODO list ("Check X. Verify Y. Investigate Z.") instead of a concrete
+// remediation. Critique catches this pattern and re-prompts the model.
+// See critique.go for the regex; these tests exercise the loop integration.
+
+const puntyFinalJSON = `{"summary":"shallow","is_transient":false,"root_cause":"third CP machine cloud-init empty","severity":"High","suggested_fix":"Check the AzureMachine status conditions. Verify cloud-init script execution. Investigate Azure activity logs.","relevant_files":[]}`
+
+const cleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"third CP machine cloud-init empty due to vnet peering mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply and retry.","relevant_files":["kustomize/cluster-template.yaml"]}`
+
+// TestAgentic_Critique_FailRetryPass exercises the happy retry path: the
+// model returns a punt-shaped final, critique fails, the loop appends
+// feedback and re-prompts, the model returns a clean fix, critique passes,
+// and the answer is cached.
+func TestAgentic_Critique_FailRetryPass(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: punt-shaped final → critique fails → re-prompt.
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	// Round 2 (after critique feedback): clean final → critique passes.
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters:           5,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:critique-pass", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("call count = %d, want 2 (punt + retry)", got)
+	}
+	if summary.Summary != "deep" {
+		t.Errorf("expected clean final, got summary=%q", summary.Summary)
+	}
+	if !strings.Contains(analysis.SuggestedFix, "kustomize/cluster-template.yaml") {
+		t.Errorf("expected concrete fix, got %q", analysis.SuggestedFix)
+	}
+
+	// Critique-passing answer must be cached: second call hits cache, no
+	// extra server hit.
+	_, hit, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:critique-pass", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("call count after cache hit = %d, want 2 (no extra server hit)", got)
+	}
+	if !hit.CacheHit {
+		t.Errorf("CacheHit = false, want true")
+	}
+}
+
+// TestAgentic_Critique_ExhaustedAcceptedNotCached verifies the anti-thrash
+// behavior: a model that keeps emitting punts exhausts its retries, the
+// last draft is published, but it is NOT cached so the next run gets a
+// fresh attempt (same pattern as MinToolCalls stubborn-model).
+func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Three punts: original + 2 retries (CritiqueMaxRetries=2). All fail
+	// critique. Loop accepts the last one and skips the cache write.
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters:           5,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	summary, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:critique-exhausted", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count = %d, want 3 (original + 2 retries)", got)
+	}
+	if summary.Summary != "shallow" {
+		t.Errorf("expected punt-shaped final to be published, got %q", summary.Summary)
+	}
+
+	// Critique-failing answer must NOT be cached. Push three more punts
+	// and re-run; we should see all three consumed (cache miss → server
+	// hit on second analysis too).
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	before := atomic.LoadInt32(&srv.calls)
+	_, _, err = client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:critique-exhausted", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) == before {
+		t.Error("punt-shaped final should not have been cached (expected server hits on retry)")
+	}
+}
+
+// TestAgentic_Critique_Disabled_NoBehaviorChange verifies the default
+// (CritiqueEnabled=false) path: a punt-shaped final is accepted as-is
+// and cached, matching pre-L.4-Step-2 behavior so consumers that don't
+// opt in see no change.
+func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters:        5,
+		ModelByteBudget: 100_000,
+		GCSByteBudget:   100_000,
+		WallClock:       30 * time.Second,
+		// CritiqueEnabled defaults to false.
+	}
+	summary, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:critique-disabled", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Errorf("call count = %d, want 1 (no retry with critique off)", got)
+	}
+	if summary.Summary != "shallow" {
+		t.Errorf("expected unmodified punt-shaped final, got %q", summary.Summary)
+	}
+
+	// Cached: second call must hit cache (no critique gate when disabled).
+	_, hit, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		"agentic:test:critique-disabled", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Errorf("call count after cache hit = %d, want 1", got)
+	}
+	if !hit.CacheHit {
+		t.Errorf("CacheHit = false, want true")
+	}
+}
+
+// TestAgentic_Critique_CacheInvalidatesUncritiqued verifies the cache
+// invalidation path: an entry cached while critique was disabled (or
+// pre-Step-2) has CritiquePassed=false. When a consumer later enables
+// critique, that entry must be treated as a cache miss and re-analyzed.
+// Mirrors TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor for floors.
+func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// First call: critique disabled, model emits a punt-shaped final, cached.
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	client := newAgenticTestClient(t, srv.URL)
+	off := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	if _, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, off),
+		"agentic:test:critique-invalidate", "sys", "user"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("first call should hit server once, got %d", got)
+	}
+
+	// Enable critique. Cached CritiquePassed=false → invalidate → re-analyze.
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+	on := AgenticOptions{
+		MaxIters:           5,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	summary, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, on),
+		"agentic:test:critique-invalidate", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if summary.Summary != "deep" {
+		t.Errorf("expected re-analyzed clean final, got %q (stale cache served)", summary.Summary)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count = %d, want 3 (1 first + punt-retry-clean for second)", got)
+	}
+}
+
+// TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies the
+// rubber-duck-#1 fix: when the loop maxes out without ever returning a
+// tools-free message, runFinalizeRound produces the final answer. That
+// output must be critique-checked too, otherwise a punt-shaped
+// finalize-round result publishes-but-never-caches and re-analyzes on
+// every fetcher run (cost blow-up).
+func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// MaxIters=2: model only ever calls tools, never finalizes inside
+	// the loop. Loop exits via MaxIters → runFinalizeRound fires.
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	// runFinalizeRound: model emits a clean (non-punt) final.
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
+	opts := AgenticOptions{
+		MaxIters:           2,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:finalize-clean", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if summary.Summary != "deep" {
+		t.Errorf("expected finalize-round clean answer, got %q", summary.Summary)
+	}
+	// The clean answer must have passed the post-loop critique check
+	// AND been stamped onto AIAnalysis so the build-cache layer can
+	// serve it without re-invalidating next run.
+	if !analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = false, want true (finalize-round clean answer must be critique-checked)")
+	}
+
+	// Cache: a critique-passing finalize-round answer must cache
+	// normally. Without the post-loop critique check, state.critiquePassed
+	// would stay false → cache write blocked → next run re-analyzes.
+	// With the fix, cache hits and the server is not called again.
+	_, hit, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:finalize-clean", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count after cache hit = %d, want 3 (no extra server hit)", got)
+	}
+	if !hit.CacheHit {
+		t.Errorf("CacheHit = false, want true")
+	}
+	if !hit.CritiquePassed {
+		t.Errorf("cache-hit CritiquePassed = false, want true (cached telemetry must round-trip)")
+	}
+}
+
+// TestAgentic_Critique_FinalizeRoundPuntNotCached is the negative
+// counterpart: a finalize-round result that punts must NOT cache, but
+// must publish so triage still has something. Same cost-leak guard as
+// the in-loop exhausted-retry path.
+func TestAgentic_Critique_FinalizeRoundPuntNotCached(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	// runFinalizeRound: model emits a punt-shaped final → critique fails.
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
+	opts := AgenticOptions{
+		MaxIters:           2,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:finalize-punt", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if summary.Summary != "shallow" {
+		t.Errorf("expected punt-shaped finalize-round answer to be published, got %q", summary.Summary)
+	}
+	if analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = true, want false (punt-shaped finalize-round output)")
+	}
+
+	// Must not cache: re-running consumes server again.
+	srv.push(200, chatRespToolCall("c3", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c4", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	before := atomic.LoadInt32(&srv.calls)
+	_, _, err = client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:finalize-punt", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) == before {
+		t.Error("punt-shaped finalize-round answer should not have been cached (expected server hits on retry)")
+	}
+}
+
+// TestAgentic_Critique_RetryAllowsToolCallThenFinal verifies the
+// rubber-duck-#2 fix: when the model responds to critique feedback with
+// a tool call before re-emitting, the bumped maxIters must have room
+// for the tool round AND the new final. With the old maxIters++ this
+// test would fail because the tool call consumed the only extra
+// iteration and the re-final would fall into runFinalizeRound.
+func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: model emits a punt-shaped final → critique fails →
+	// re-prompt. With critiqueRetryIters=3 the loop now has room for
+	// the tool call + clean final, without resorting to runFinalizeRound.
+	srv.push(200, chatRespFinal(puntyFinalJSON))
+	// Round 2: model reads an artifact in response to critique feedback.
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
+		"path": "build-log.txt", "offset": 0, "length": 256,
+	}))
+	// Round 3: model re-emits with the clean final → critique passes.
+	srv.push(200, chatRespFinal(cleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": []byte("the error context\n")},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	// MaxIters=1 so we ONLY have room for one initial iteration; the
+	// critique retry budget must do the rest. Without the +3 retry
+	// bump, the tool call (round 2) would max us out and force a
+	// finalize-round which would bypass the in-loop critique state.
+	opts := AgenticOptions{
+		MaxIters:           1,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 1,
+	}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:critique-toolcall", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if summary.Summary != "deep" {
+		t.Errorf("expected clean re-emit after tool call, got %q", summary.Summary)
+	}
+	if !analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = false, want true (critique should have passed after tool-call retry)")
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count = %d, want 3 (punt + tool + clean)", got)
+	}
+}
+
+// TestCritiqueDraft_FeedbackTruncatesLongFix verifies rubber-duck-#5:
+// a pathologically long suggested_fix must be truncated in the quoted
+// portion of the feedback message so retries don't balloon the
+// conversation history. Matched phrases are still listed separately
+// and not truncated.
+func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
+	// Build a long fix that triggers the punt regex.
+	prefix := "Check the AzureMachine status. "
+	long := prefix + strings.Repeat("Additional details and context. ", 200)
+	if len(long) <= feedbackQuoteLimit {
+		t.Fatalf("test setup: long fix is too short (%d <= %d)", len(long), feedbackQuoteLimit)
+	}
+	out := critiqueDraft(analysisResponse{SuggestedFix: long})
+	if out.Passed {
+		t.Fatalf("expected punt")
+	}
+	if !strings.Contains(out.Feedback, "… [truncated]") {
+		t.Errorf("Feedback missing truncation marker for long fix\nlen(feedback)=%d", len(out.Feedback))
+	}
+	// Truncated quote is bounded; the rest of the feedback template is
+	// fixed-size, so the total length should not grow linearly with the
+	// input. Empirical bound: template ~1500 chars + quote limit + match
+	// list. Leave generous slack.
+	if got := len(out.Feedback); got > feedbackQuoteLimit+3000 {
+		t.Errorf("Feedback unexpectedly long: %d chars (limit ~%d)", got, feedbackQuoteLimit+3000)
+	}
+}

@@ -268,6 +268,24 @@ type Agentic struct {
 	// invalidated on the next read.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
+	// Critique configures the L.4 Step 2 critique gate: after the
+	// agentic loop produces a parseable tools-free final, run a
+	// deterministic regex check on suggested_fix. If it punts (i.e.
+	// the model emits a diagnostic / information-gathering TODO list
+	// instead of a concrete remediation), append targeted feedback
+	// asking the model to either drill in further OR use the strict
+	// no-remediation escape hatch, then re-prompt up to MaxRetries
+	// times. Drafts that still punt after retries are published but
+	// not cached (mirrors MinToolCalls / MinGCSBytes anti-thrash).
+	//
+	// Defaults to disabled. Recommended for weaker open-weights
+	// models (e.g. Qwen3-235B at 80% punt rate post-Step-1) where
+	// the prompt-only L.4 Step 1 fixes proved insufficient. Strong
+	// tool-using models (e.g. Claude Opus at 40% punt rate on the
+	// same cases) benefit too but the cost/benefit trade-off is
+	// per-consumer.
+	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -275,6 +293,27 @@ type Agentic struct {
 	// failures) should set ["filesystem"] to avoid registering tier-2
 	// schemas that mostly return empty on their artifact trees.
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+}
+
+// AgenticCritique is the per-project critique-gate config. See
+// Agentic.Critique for the operational semantics.
+type AgenticCritique struct {
+	// Enabled turns the critique gate on for this consumer. When
+	// false (the default), the agentic loop's tools-free final is
+	// accepted as-is and cached normally; behavior matches
+	// pre-L.4-Step-2.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// MaxRetries caps the number of extra re-prompt rounds the loop
+	// spends per analysis when critique fails. Each retry consumes
+	// one extra agentic iteration on top of the configured MaxIters.
+	// Defaults to 2 when Enabled is true and MaxRetries is left at
+	// 0; an explicit non-zero value overrides the default. Setting
+	// max_retries: 0 in YAML therefore yields the engine default
+	// (2), not "no retries"; this is consistent with the
+	// MinToolCalls / MinGCSBytes "0 = use default" convention used
+	// throughout this struct.
+	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
 // DefaultAgentic is the zero-config fallback applied when a consumer enables
@@ -291,6 +330,10 @@ var DefaultAgentic = Agentic{
 	WallClock:       5 * time.Minute,
 	MinToolCalls:    0,
 	MinGCSBytes:     0,
+	Critique: AgenticCritique{
+		Enabled:    false,
+		MaxRetries: 2,
+	},
 }
 
 // EffectiveAgentic returns the resolved Agentic config with defaults applied
@@ -320,6 +363,10 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	if a.MinGCSBytes > 0 {
 		out.MinGCSBytes = a.MinGCSBytes
+	}
+	out.Critique.Enabled = a.Critique.Enabled
+	if a.Critique.MaxRetries > 0 {
+		out.Critique.MaxRetries = a.Critique.MaxRetries
 	}
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
