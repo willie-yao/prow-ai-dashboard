@@ -499,6 +499,35 @@ func TestFindHallucinatedImportPaths_ScansProse(t *testing.T) {
 			t.Errorf("non-GOPATH word should not be flagged, got %v", got)
 		}
 	})
+
+	// L.4 Step 2.5.1: two escape variants observed in shadow data
+	// when the regex was anchored with `^`. Each token is a single
+	// whitespace-separated field (typical for relevant_files entries
+	// and for inline references in prose).
+	t.Run("GOPATH prefix inside Prow mod-cache absolute path flagged", func(t *testing.T) {
+		// Shadow build 2061015253067501568. Whole string is one
+		// whitespace-separated token; the embedded `sigs.k8s.io/...`
+		// prefix is the fabrication signal even though the leading
+		// `/home/prow/...` would defeat a `^`-anchored regex.
+		got := findHallucinatedImportPaths([]string{
+			"/home/prow/go/pkg/mod/sigs.k8s.io/cluster-api/test@v1.13.2/framework/clusterctl/client.go",
+		})
+		if len(got) != 1 {
+			t.Errorf("expected GOPATH-in-modcache path to be flagged, got %v", got)
+		}
+	})
+	t.Run("GitHub blob URL flagged", func(t *testing.T) {
+		// Shadow build 2061015253067501568. relevant_files entry
+		// pointing at an external GitHub URL is not a repo-relative
+		// path and per se invalid, regardless of whether the URL
+		// happens to resolve.
+		got := findHallucinatedImportPaths([]string{
+			"https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/test/e2e/clusterctl/client.go",
+		})
+		if len(got) != 1 {
+			t.Errorf("expected GitHub URL to be flagged, got %v", got)
+		}
+	})
 }
 
 // TestCritiqueDraft_FabricatedImportInRootCause covers the rubber-duck

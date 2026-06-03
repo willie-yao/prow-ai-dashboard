@@ -120,7 +120,10 @@ func findPunts(text string) []string {
 // entries from a weaker version are invalidated on read. v1 = L.4
 // Step 2 (punt-only). v2 = L.4 Step 2.5 (adds hallucination check on
 // artifact citations and import-path heuristic on relevant_files).
-const currentCritiqueVersion = 2
+// v3 = L.4 Step 2.5.1 (broadens import-path regex to catch GOPATH
+// prefixes embedded inside absolute mod-cache paths and inside URLs;
+// shadow A/B showed 2/8 escapes under v2).
+const currentCritiqueVersion = 3
 
 // artifactCitationRE matches strings in the model's prose that look
 // like Prow artifact filenames. Intentionally narrow on bare basenames
@@ -159,8 +162,19 @@ var artifactCitationRE = regexp.MustCompile(
 // for a file that doesn't exist; the GOPATH-shaped prefix is a tell
 // that the model is fabricating from intuition rather than citing a
 // real file it saw.
+//
+// The pattern is intentionally NOT anchored to the start of the
+// token: L.4 Step 2.5 shadow data caught two escape variants the
+// original anchor missed,
+//   - `/home/prow/go/pkg/mod/sigs.k8s.io/cluster-api/test@v1.13.2/...`
+//     (Prow's GOPATH mod-cache layout, leading absolute prefix)
+//   - `https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/...`
+//     (GitHub blob URL, leading scheme)
+//
+// Requiring the trailing `/` after the prefix preserves the
+// `sigs.k8s.iolib` false-positive guard the existing test pins.
 var hallucinatedImportPathRE = regexp.MustCompile(
-	`^(?i)(?:sigs\.k8s\.io|github\.com|k8s\.io|golang\.org|google\.golang\.org)/`,
+	`(?i)(?:sigs\.k8s\.io|github\.com|k8s\.io|golang\.org|google\.golang\.org)/`,
 )
 
 // citationStripRE removes line-number and column suffixes the model
