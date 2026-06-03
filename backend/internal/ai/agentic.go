@@ -112,9 +112,10 @@ func strPtr(s string) *string { return &s }
 
 // agToolDocs is the tool-usage strategy section appended to the system prompt
 // by the agentic loop. Tool names + descriptions are already conveyed to the
-// model via the schema array in each chat request, so this section focuses on
-// budget guidance and high-level investigation strategy rather than restating
-// what each tool does.
+// model via the schema array in each chat request, so this section focuses
+// on investigation strategy: drill into specifics, don't punt to the user,
+// and stop only when evidence is genuinely exhausted (not when the first
+// plausible symptom is found).
 const agToolDocs = `
 
 ## Tool usage strategy
@@ -123,11 +124,18 @@ You have a set of tools for browsing the build's GCS artifact tree (see the
 tools field of this request for names, descriptions, and parameters).
 
 1. Start by listing the build root to see what's there.
-2. For multi-MB build-logs, ALWAYS use grep_artifact, never read_artifact or tail_artifact.
-3. Cite actual paths and line numbers in your final answer. Do not speculate; if evidence is incomplete, say so explicitly.
-4. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero.
+2. For multi-MB build-logs, ALWAYS use grep_artifact (with wide surrounding context, e.g. ctx=20), never read_artifact or tail_artifact.
+3. Drill into the most relevant named resources. If your current best causal lead depends on a specific resource (a failing Machine, Pod, Node, VM, container, controller, or owning workload), read that resource's own artifacts before finalizing. Do not chase every resource name mentioned in passing; pick the 1-3 most directly tied to the failure. Examples: a failing resource X → read its manifest/status conditions, events, owner-controller log filtered for "X", and any resource-specific runtime logs. For CAPI/CAPZ jobs this typically means AzureMachine/X.yaml + cloud-init/kubelet/journal logs for that machine + the controller-manager log filtered for "X". Stopping at the first plausible symptom is the most common failure mode of this tool; treat each symptom as a lead, not the answer.
+4. Investigation is YOUR job, not the user's. suggested_fix must be a concrete remediation action (a code change, config edit, command to run, retry, redeploy, rollback, operational fix). It must NOT be a diagnostic or information-gathering task. If the sentence's primary purpose is to learn more (check, verify, investigate, ensure, inspect, examine, confirm, audit, review, look into, determine), it belongs in your tool work BEFORE finalizing, not in suggested_fix. A "then validate by ..." clause is fine, but only after a concrete remediation. If after following the directly relevant artifact leads you still cannot identify a concrete remediation, say so explicitly in suggested_fix and include all three of: (a) the strongest fact you established, (b) the specific artifacts/logs you consulted, (c) the exact missing evidence that prevents a remediation. Do not invoke this escape hatch if any standard remediation or best-evidence operational action is supported by the artifacts you read.
+5. Cite actual paths and quoted log lines in your final answer. Do not speculate; if evidence is incomplete, state what is known and what remains unclear.
+6. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero.
 
-Tool calls cost time. Prefer 3-5 focused calls over many small ones. A confident "best evidence I found" answer beats running out of budget mid-investigation.`
+Before finalizing, self-check:
+- Did I identify the earliest upstream cause, not just the terminal symptom?
+- Did I read the artifacts for the 1-3 named resources most central to the failure?
+- Is suggested_fix a remediation action, not a request for more investigation?
+
+A confident "I found X by reading Y at line Z" answer always beats "you should check X". The difference between a useful diagnosis and a useless one is whether the agent did the drilling itself or passed the work back to the user.`
 
 // agForceFinalizePrompt is the user message used to force a JSON-only final
 // round when the model has either exhausted iterations or returned text

@@ -866,3 +866,87 @@ func TestAgentic_MinGCSBytes_ListOnlyLoopNotInfinite(t *testing.T) {
 		t.Errorf("gcs_bytes = %d, want 0 (list_artifacts returns no bytes)", analysis.GCSBytes)
 	}
 }
+
+// TestAgToolDocs_L4Step1Anchors pins the L.4 Step 1 anti-punt, drill-down,
+// and self-check language in agToolDocs. These bullets exist specifically
+// to counter weaker models' tendency to write investigation TODOs into
+// suggested_fix instead of running the investigations themselves with the
+// tools, so silent deletion would regress the qualitative gap closed by
+// L.4. Bump deliberately if rewording.
+func TestAgToolDocs_L4Step1Anchors(t *testing.T) {
+	required := []string{
+		"Drill into the most relevant named resources",
+		"pick the 1-3 most directly tied to the failure",
+		"Investigation is YOUR job",
+		"diagnostic or information-gathering task",
+		"still cannot identify a concrete remediation",
+		"Do not invoke this escape hatch",
+		"Before finalizing, self-check",
+	}
+	for _, s := range required {
+		if !strings.Contains(agToolDocs, s) {
+			t.Errorf("agToolDocs missing required L.4 Step 1 anchor %q\nfull text:\n%s", s, agToolDocs)
+		}
+	}
+
+	// Forbidden: the old "Prefer 3-5 focused calls" line directly
+	// contradicted the L.3 min_tool_calls floor by telling the model to
+	// stop early. It must stay gone.
+	forbidden := []string{
+		"Prefer 3-5 focused calls",
+		"3-5 focused calls",
+	}
+	for _, s := range forbidden {
+		if strings.Contains(agToolDocs, s) {
+			t.Errorf("agToolDocs still contains forbidden pre-L.4 phrase %q\nfull text:\n%s", s, agToolDocs)
+		}
+	}
+}
+
+// TestResponseFormatFooter_L4Step1Anchors pins the L.4 Step 1 tightening of
+// the suggested_fix and root_cause schema descriptions. The footer is
+// shared by agentic and non-agentic consumers, so the wording must stay
+// tool-neutral: it forbids diagnostic tasks in suggested_fix and pushes
+// for the underlying cause in root_cause without assuming tools are
+// available. Tool-specific enforcement lives in agToolDocs.
+func TestResponseFormatFooter_L4Step1Anchors(t *testing.T) {
+	required := []string{
+		"concrete remediation",
+		"Do not list diagnostic or information-gathering tasks",
+		"trace the chain back to the underlying cause",
+		"No remediation possible from available evidence",
+		"available evidence allows",
+	}
+	for _, s := range required {
+		if !strings.Contains(ResponseFormatFooter, s) {
+			t.Errorf("ResponseFormatFooter missing required L.4 Step 1 anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+		}
+	}
+
+	// Forbidden: the old terse "exact fix with file paths and changes
+	// needed" description gave models no signal that investigation
+	// verbs were off-limits. Must stay rewritten.
+	forbidden := []string{
+		"exact fix with file paths and changes needed",
+	}
+	for _, s := range forbidden {
+		if strings.Contains(ResponseFormatFooter, s) {
+			t.Errorf("ResponseFormatFooter still contains pre-L.4 phrase %q\nfull text:\n%s", s, ResponseFormatFooter)
+		}
+	}
+
+	// The footer is shared with non-agentic consumers (e.g. the generic
+	// module that ships prebuilt evidence with no tools wired), so any
+	// language asserting tools must be used would be literally false in
+	// that mode. Keep tool-specific enforcement in agToolDocs only.
+	toolSpecificForbidden := []string{
+		"using your tools",
+		"with the tools",
+		"Investigation is the agent's job",
+	}
+	for _, s := range toolSpecificForbidden {
+		if strings.Contains(ResponseFormatFooter, s) {
+			t.Errorf("ResponseFormatFooter leaked tool-specific phrase %q (footer is shared with non-agentic consumers; keep tool wording in agToolDocs)\nfull text:\n%s", s, ResponseFormatFooter)
+		}
+	}
+}
