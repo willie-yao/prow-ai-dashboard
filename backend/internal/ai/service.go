@@ -304,11 +304,13 @@ func (s *Service) shouldReanalyze(tc *models.TestCase, desiredMode string) bool 
 // belowCurrentAgenticFloor returns true when desiredMode is one of the
 // agentic modes AND the cached analysis fails one of the project's current
 // quality gates: fewer tool calls than MinToolCalls, fewer GCS bytes than
-// MinGCSBytes, or (L.4 Step 2) critique is now enabled but the cached
-// entry didn't pass critique (CritiquePassed=false). Used to invalidate
-// pre-floor / pre-critique cache entries so a freshly-raised gate actually
-// re-runs the loop. Returns false for the curator path because curator
-// analyses legitimately have ToolCalls=0 / GCSBytes=0 / CritiquePassed=false
+// MinGCSBytes, (L.4 Step 2) critique is now enabled but the cached
+// entry didn't pass critique, or (L.4 Step 2.5) the cached entry passed
+// critique under an older contract version that didn't include the
+// hallucination check. Used to invalidate pre-floor / pre-critique
+// cache entries so a freshly-raised gate actually re-runs the loop.
+// Returns false for the curator path because curator analyses
+// legitimately have ToolCalls=0 / GCSBytes=0 / CritiquePassed=false
 // by design.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode string) bool {
 	if desiredMode != AgenticMode && desiredMode != UniversalMode {
@@ -320,8 +322,13 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode stri
 	if tc.AIAnalysis.GCSBytes < s.agenticOpts.MinGCSBytes {
 		return true
 	}
-	if s.agenticOpts.CritiqueEnabled && !tc.AIAnalysis.CritiquePassed {
-		return true
+	if s.agenticOpts.CritiqueEnabled {
+		if !tc.AIAnalysis.CritiquePassed {
+			return true
+		}
+		if tc.AIAnalysis.CritiqueVersion < currentCritiqueVersion {
+			return true
+		}
 	}
 	return false
 }

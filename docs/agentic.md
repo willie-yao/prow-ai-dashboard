@@ -203,6 +203,57 @@ finalize-round result publishes, doesn't cache, and re-analyzes
 on the next fetcher run (same anti-thrash trade-off as the floor
 gates).
 
+#### L.4 Step 2.5 strengthening: hallucinated citations + fabricated import paths
+
+L.4 Step 2 dropped Qwen3-235B's punt rate from 80% to 0% on CAPZ
+but exposed a new failure mode (Case 1 of the Step 2 A/B): a
+draft that passes the punt regex with high confidence but cites
+an artifact it never read (`actuators.go` it never opened),
+emitting a wrong-but-fluent root cause. Step 2.5 adds two
+deterministic checks that run alongside the punt regex and
+combine into one retry message:
+
+1. **Hallucinated artifact citations.** The agentic loop records
+   the path of every successful `read_artifact` / `tail_artifact`
+   / `grep_artifact` call. Critique then scans the draft's
+   `root_cause`, `summary`, `suggested_fix`, and each
+   `relevant_files` entry for artifact-shaped tokens (`.log`
+   files plus the known Prow artifacts: `build-log.txt`,
+   `clone-log.txt`, `started.json`, `finished.json`,
+   `prowjob.json`, `junit_*.xml`). Source files (`.go`, `.yaml`,
+   generic `.json`) are excluded because they legitimately live
+   in the source repo, not the artifact tree. A citation that
+   includes a directory prefix must match a full read path
+   exactly (catches the cross-machine basename-collision case:
+   reading `machine-a/boot.log` then citing `machine-b/boot.log`
+   fails). A bare basename matches any read with the same
+   basename. Failed reads (tool returned `{"error": ...}`)
+   do NOT count as reads, so a model cannot launder a citation
+   by reading a non-existent file.
+2. **Fabricated Go-import paths in `relevant_files`.** Entries
+   prefixed with `sigs.k8s.io/`, `github.com/`, `k8s.io/`,
+   `golang.org/`, or `google.golang.org/` are flagged: that field
+   is supposed to hold repo-relative source paths, and the L.4
+   Step 2 Case 1 hallucination used a GOPATH-shaped prefix on a
+   file that didn't exist. The check rejects the format; the
+   model is asked to re-emit with the correct repo-relative
+   path or omit the entry.
+
+When the agentic loop runs with `critique.enabled: true`, the
+read-tracking maps are pre-allocated even before the first
+successful read, so the hallucination check is active from the
+first tools-free final. When critique is disabled the maps stay
+nil and the check is a free no-op.
+
+Cache versioning: a `critique_version` int is stamped onto every
+critique-passing analysis (currently `2` = Step 2.5). The
+build-cache and per-failure-cache invalidation gates both reject
+entries whose `critique_version` is below the current engine's
+version. This guarantees that strengthening the gate
+(e.g. adding a new check in a future L.4 Step) automatically
+invalidates entries that passed under the older, weaker
+contract, without needing per-consumer cache clears.
+
 ### `always: true` vs `always: false`
 
 - `always: true` routes every failure through agentic regardless of the

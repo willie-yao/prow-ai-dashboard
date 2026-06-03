@@ -1345,7 +1345,7 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	if len(long) <= feedbackQuoteLimit {
 		t.Fatalf("test setup: long fix is too short (%d <= %d)", len(long), feedbackQuoteLimit)
 	}
-	out := critiqueDraft(analysisResponse{SuggestedFix: long})
+	out := critiqueDraft(analysisResponse{SuggestedFix: long}, nil, nil)
 	if out.Passed {
 		t.Fatalf("expected punt")
 	}
@@ -1358,5 +1358,281 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	// list. Leave generous slack.
 	if got := len(out.Feedback); got > feedbackQuoteLimit+3000 {
 		t.Errorf("Feedback unexpectedly long: %d chars (limit ~%d)", got, feedbackQuoteLimit+3000)
+	}
+}
+
+// --- L.4 Step 2.5: hallucination + import-path integration tests ---
+
+// hallucinatedFinalJSON: clean suggested_fix (passes punt regex), but
+// cites manager.log which has not been read. Tests the new gate.
+const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"manager.log shows the controller failed to reconcile the AzureMachine","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":[]}`
+
+// readThenCleanFinalJSON: same clean fix, but root_cause cites build-log.txt
+// which the model HAS read in this scenario. Should pass critique.
+const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"]}`
+
+// TestAgentic_HallucinationRetry exercises the Step 2.5 happy path:
+// the model cites manager.log without reading it → critique fails on
+// hallucination (not punt) → loop appends feedback → model reads
+// build-log.txt and re-emits with a citation that matches → passes.
+func TestAgentic_HallucinationRetry(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: model emits final citing manager.log (never read).
+	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
+	// Round 2 (after critique feedback): model reads build-log.txt.
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
+		"path": "build-log.txt", "offset": 0, "length": 256,
+	}))
+	// Round 3: re-emit citing build-log.txt → passes.
+	srv.push(200, chatRespFinal(readThenCleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch on line 42\n")},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	opts := AgenticOptions{
+		MaxIters:           2,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:halluc-retry", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if summary.Summary != "deep" {
+		t.Errorf("expected clean re-emit after hallucination retry, got %q", summary.Summary)
+	}
+	if !analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = false, want true")
+	}
+	if analysis.CritiqueVersion != currentCritiqueVersion {
+		t.Errorf("CritiqueVersion = %d, want %d", analysis.CritiqueVersion, currentCritiqueVersion)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count = %d, want 3 (hallucination + read + clean)", got)
+	}
+}
+
+// TestAgentic_FailedReadDoesNotSatisfyGate (rubber-duck #1): a
+// read_artifact that returns a "not found" error must NOT mark the
+// path as read; the citation against the failed path must still trip
+// the hallucination check. Otherwise a model could call read_artifact
+// against any non-existent path to launder its citation.
+func TestAgentic_FailedReadDoesNotSatisfyGate(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: model "reads" missing.log (fakeBrowser returns error).
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
+		"path": "missing.log", "offset": 0, "length": 256,
+	}))
+	// Round 2: emits final citing missing.log → critique should fail.
+	hallucinated := `{"summary":"shallow","is_transient":false,"root_cause":"missing.log shows the issue","severity":"Medium","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(hallucinated))
+	// Round 3: retry, model actually reads build-log.txt.
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{
+		"path": "build-log.txt", "offset": 0, "length": 256,
+	}))
+	// Round 4: clean re-emit citing build-log.txt.
+	srv.push(200, chatRespFinal(readThenCleanFinalJSON))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		// missing.log is intentionally NOT in files; fakeBrowser.Read returns "not found".
+		files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch on line 42\n")},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	opts := AgenticOptions{
+		MaxIters:           3,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:failed-read", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if !analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = false, want true (model recovered after retry)")
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Errorf("call count = %d, want 4 (failed-read + halluc + good-read + clean)", got)
+	}
+}
+
+// TestAgentic_BasenameCollisionAcrossMachines (rubber-duck #2): the
+// model reads artifacts/machine-a/boot.log and cites
+// artifacts/machine-b/boot.log. Full-path tracking must catch this
+// even though the basename matches; otherwise we'd silently accept
+// cross-machine fabrications, which is one of the failure modes
+// surfaced by L.4 Step 2 Case 1.
+func TestAgentic_BasenameCollisionAcrossMachines(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: read machine-a's boot.log.
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
+		"path": "artifacts/machine-a/boot.log", "offset": 0, "length": 256,
+	}))
+	// Round 2: emit final citing machine-b's boot.log → should fail.
+	wrong := `{"summary":"deep","is_transient":false,"root_cause":"artifacts/machine-b/boot.log shows DNS resolution failed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(wrong))
+	// Round 3: retry, read the correct machine-b boot.log.
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{
+		"path": "artifacts/machine-b/boot.log", "offset": 0, "length": 256,
+	}))
+	// Round 4: re-emit citing machine-b correctly.
+	correct := `{"summary":"deep","is_transient":false,"root_cause":"artifacts/machine-b/boot.log shows DNS resolution failed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":["artifacts/machine-b/boot.log"]}`
+	srv.push(200, chatRespFinal(correct))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{
+			"artifacts/machine-a/boot.log": []byte("clean boot\n"),
+			"artifacts/machine-b/boot.log": []byte("dns failure\n"),
+		},
+		dirs: map[string][]string{"": {"artifacts"}},
+	}
+	opts := AgenticOptions{
+		MaxIters:           3,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:basename-collision", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if !analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = false, want true (recovered after correct read)")
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Errorf("call count = %d, want 4 (read-A + wrong-cite + read-B + correct)", got)
+	}
+}
+
+// TestAgentic_FabricatedImportPath_RetryFix: the model puts a Go import
+// path in relevant_files. Critique fails on the import-path heuristic
+// → model retries with the entry omitted → passes.
+func TestAgentic_FabricatedImportPath_RetryFix(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Read so the hallucination check has reads to compare against.
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
+		"path": "build-log.txt", "offset": 0, "length": 256,
+	}))
+	// Final with a GOPATH-shaped relevant_files entry.
+	bad := `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt shows the error","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":["sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go"]}`
+	srv.push(200, chatRespFinal(bad))
+	// Retry with the bad entry replaced by a repo-relative path.
+	good := `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt shows the error","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":["controllers/azuremachine_controller.go"]}`
+	srv.push(200, chatRespFinal(good))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": []byte("the error context\n")},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	opts := AgenticOptions{
+		MaxIters:           2,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts),
+		"agentic:test:fabricated-import", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if !analysis.CritiquePassed {
+		t.Errorf("CritiquePassed = false, want true")
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count = %d, want 3 (read + bad + good)", got)
+	}
+}
+
+// TestAgentic_CacheInvalidatedByCritiqueVersionBump covers rubber-duck
+// #4: a cache entry stamped with CritiquePassed=true but CritiqueVersion=0
+// (i.e. wrote under the L.4 Step 2 contract) must be invalidated when
+// currentCritiqueVersion is now 2 (Step 2.5). Otherwise consumers that
+// upgrade the engine would never get the strengthened gate applied.
+func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// First call: clean fix, no citations → passes critique.
+	noCitations := `{"summary":"deep","is_transient":false,"root_cause":"vnet peering misconfigured","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 42; reapply.","relevant_files":["kustomize/cluster-template.yaml"]}`
+	srv.push(200, chatRespFinal(noCitations))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters:           5,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+	}
+	const key = "agentic:test:version-invalidate"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		key, "sys", "user")
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if !analysis.CritiquePassed || analysis.CritiqueVersion != currentCritiqueVersion {
+		t.Fatalf("first call: CritiquePassed=%v CritiqueVersion=%d, want %d", analysis.CritiquePassed, analysis.CritiqueVersion, currentCritiqueVersion)
+	}
+
+	// Simulate a Step-2-era cache entry by rewriting the per-failure
+	// cache directly: same payload, but CritiqueVersion=0.
+	raw, ok := client.Cache().Get(key)
+	if !ok {
+		t.Fatalf("first call should have written cache entry")
+	}
+	var cached agenticCacheData
+	if err := json.Unmarshal(raw, &cached); err != nil {
+		t.Fatalf("unmarshal cache: %v", err)
+	}
+	cached.CritiqueVersion = 0
+	if err := client.Cache().Set(key, cached); err != nil {
+		t.Fatalf("re-write cache: %v", err)
+	}
+
+	// Second call: cache read must reject the v0 entry → re-analyze.
+	srv.push(200, chatRespFinal(noCitations))
+	before := atomic.LoadInt32(&srv.calls)
+	_, analysis2, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, opts),
+		key, "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) == before {
+		t.Error("expected re-analysis after CritiqueVersion bump (server hit), got cache hit")
+	}
+	if analysis2.CritiqueVersion != currentCritiqueVersion {
+		t.Errorf("post-re-analysis CritiqueVersion = %d, want %d", analysis2.CritiqueVersion, currentCritiqueVersion)
 	}
 }

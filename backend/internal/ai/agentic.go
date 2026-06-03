@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -224,6 +225,16 @@ type agenticCacheData struct {
 	// gate to invalidate uncritiqued entries when a consumer enables
 	// critique (mirrors the L.3 raised-floor invalidation pattern).
 	CritiquePassed bool `json:"critique_passed,omitempty"`
+
+	// CritiqueVersion records which contract version this draft passed
+	// critique under. L.4 Step 2 wrote no version (deserializes as 0);
+	// L.4 Step 2.5 sets currentCritiqueVersion=2. The cache-read gate
+	// requires the cached version to be at least the current version
+	// when critique is enabled, so strengthening the gate (e.g. adding
+	// the hallucination check) properly invalidates entries that
+	// passed under the weaker contract. Bumped only on material
+	// strengthenings to keep cache churn proportional.
+	CritiqueVersion int `json:"critique_version,omitempty"`
 }
 
 // floorStatus tracks which per-project floors are currently unmet for a
@@ -268,6 +279,21 @@ type agentState struct {
 	// uncritiqued entries when a consumer later enables critique.
 	// Meaningful only when opts.CritiqueEnabled.
 	critiquePassed bool
+
+	// readArtifactsFull / readArtifactsBase track which artifacts the
+	// agent has successfully fetched via read_artifact / tail_artifact
+	// / grep_artifact. Used by the L.4 Step 2.5 hallucination check in
+	// critiqueDraft to flag prose citations of files the agent never
+	// actually opened. Keys are lowercased, slash-normalized; "full"
+	// keeps the directory prefix (catches cross-machine basename
+	// collisions where two clusters both have a boot.log), "base" is
+	// just path.Base (matches the model's bare-basename citations).
+	// Populated only after a successful tool dispatch (no error in the
+	// returned payload) so failed reads don't silently satisfy the
+	// gate. Both maps stay nil until first use to keep the no-critique
+	// path zero-allocation.
+	readArtifactsFull map[string]bool
+	readArtifactsBase map[string]bool
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -298,6 +324,9 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.GCSBytes = state.gcsBytes
 		analysis.BudgetExhausted = state.budgetExhausted
 		analysis.CritiquePassed = state.critiquePassed
+		if state.critiquePassed {
+			analysis.CritiqueVersion = currentCritiqueVersion
+		}
 	}
 }
 
@@ -358,7 +387,16 @@ func (c *Client) doAnalyzeAgentic(
 			// both have CritiquePassed=false; entries that passed
 			// critique have CritiquePassed=true. When critique stays
 			// off, the check is skipped entirely.
-			critiqueOK := !in.Opts.CritiqueEnabled || cached.CritiquePassed
+			//
+			// L.4 Step 2.5: also require CritiqueVersion to be at
+			// least the current contract version. Step-2 entries
+			// (CritiqueVersion=0) failed under the punt-only gate
+			// without ever seeing the hallucination check, so they
+			// must be re-analyzed when 2.5 is in effect. The check
+			// is no-op when critique is off (consumers who never
+			// enabled critique are unaffected).
+			critiqueOK := !in.Opts.CritiqueEnabled ||
+				(cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion)
 			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
@@ -373,6 +411,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.GCSBytes = cached.GCSBytes
 				analysis.BudgetExhausted = cached.BudgetExhausted
 				analysis.CritiquePassed = cached.CritiquePassed
+				analysis.CritiqueVersion = cached.CritiqueVersion
 				return summary, analysis, nil
 			}
 		}
@@ -386,6 +425,16 @@ func (c *Client) doAnalyzeAgentic(
 		cache:        in.Cache,
 		webURLBase:   in.WebURLBase,
 		startTime:    time.Now(),
+	}
+	// L.4 Step 2.5: when critique is enabled, pre-init the read-tracking
+	// maps so findUnreadArtifactCitations runs the check even when the
+	// model has made zero successful reads (otherwise its nil-disables
+	// contract would silently skip the worst-case hallucination scenario).
+	// Pre-init unconditionally would waste an allocation per run for the
+	// common critique-disabled path; conditionally is cheap.
+	if in.Opts.CritiqueEnabled {
+		state.readArtifactsFull = map[string]bool{}
+		state.readArtifactsBase = map[string]bool{}
 	}
 
 	fullSysPrompt := sysPrompt + agToolDocs
@@ -503,7 +552,7 @@ func (c *Client) doAnalyzeAgentic(
 			// post-finalize punts are common).
 			if in.Opts.CritiqueEnabled {
 				if parsed, ok := tryParseAnalysis(candidate); ok {
-					out := critiqueDraft(parsed)
+					out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase)
 					if out.Passed {
 						state.critiquePassed = true
 					} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
@@ -517,12 +566,12 @@ func (c *Client) doAnalyzeAgentic(
 						})
 						critiqueRetriesUsed++
 						maxIters += critiqueRetryIters
-						log.Printf("  ✗ agentic critique: punt detected %v; re-prompting (retry %d/%d)",
-							out.Matches, critiqueRetriesUsed, in.Opts.CritiqueMaxRetries)
+						log.Printf("  ✗ agentic critique: %v; re-prompting (retry %d/%d)",
+							out.Matches(), critiqueRetriesUsed, in.Opts.CritiqueMaxRetries)
 						continue
 					} else {
-						log.Printf("  ⚠ agentic critique: still punting after %d retries %v; accepting but not caching",
-							in.Opts.CritiqueMaxRetries, out.Matches)
+						log.Printf("  ⚠ agentic critique: still failing after %d retries %v; accepting but not caching",
+							in.Opts.CritiqueMaxRetries, out.Matches())
 					}
 				}
 			}
@@ -584,11 +633,11 @@ func (c *Client) doAnalyzeAgentic(
 	// re-entering the loop post-finalize would require a larger refactor
 	// that v1 defers.
 	if in.Opts.CritiqueEnabled && !state.critiquePassed {
-		if out := critiqueDraft(parsed); out.Passed {
+		if out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase); out.Passed {
 			state.critiquePassed = true
 		} else {
-			log.Printf("  ⚠ agentic critique: post-loop draft still punting %v; accepting but not caching",
-				out.Matches)
+			log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching",
+				out.Matches())
 		}
 	}
 
@@ -616,6 +665,10 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if opts.CritiqueEnabled && !critiquePassed {
 		return
 	}
+	version := 0
+	if opts.CritiqueEnabled && critiquePassed {
+		version = currentCritiqueVersion
+	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{
 		analysisResponse: parsed,
 		ToolCalls:        state.calls,
@@ -623,6 +676,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		GCSBytes:         state.gcsBytes,
 		BudgetExhausted:  state.budgetExhausted,
 		CritiquePassed:   critiquePassed,
+		CritiqueVersion:  version,
 	})
 }
 
@@ -754,7 +808,73 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) stri
 		// edge case. Empty map is safer than a nil deref in toolEnvelopeJSON.
 		result.Payload = map[string]interface{}{}
 	}
+
+	// L.4 Step 2.5: record successful artifact reads so critiqueDraft
+	// can flag prose citations of files the agent never opened. Only
+	// counts read_artifact / tail_artifact / grep_artifact (the
+	// content-fetching tools); list/find/discover tools are exempt
+	// because they don't justify claims about file contents. The
+	// payload "error" key check (rubber-duck #1) ensures a failed
+	// read can't silently satisfy the hallucination gate.
+	if isContentFetchingTool(tc.Function.Name) {
+		if _, hasErr := result.Payload["error"]; !hasErr {
+			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
+				s.recordSuccessfulRead(p)
+			}
+		}
+	}
+
 	return toolEnvelopeJSON(s, result.Payload)
+}
+
+// isContentFetchingTool reports whether a tool name corresponds to one
+// of the three filesystem read primitives that actually return file
+// bytes. Listing tools (list_artifacts, find_artifacts) are excluded:
+// seeing a filename in a directory listing does not justify claims
+// about the file's contents.
+func isContentFetchingTool(name string) bool {
+	switch name {
+	case "read_artifact", "tail_artifact", "grep_artifact":
+		return true
+	}
+	return false
+}
+
+// extractToolPathArg pulls the "path" field out of a content-fetching
+// tool's args. Returns "" on parse error or missing field; callers
+// treat empty as "don't record". All three content-fetching tools use
+// the same `{"path": "..."}` arg shape (see tools/filesystem.go).
+func extractToolPathArg(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(args.Path)
+}
+
+// recordSuccessfulRead normalizes a successfully-read path and adds it
+// to both the full-path and basename indices. When critique is disabled
+// the maps remain nil so this function silently no-ops (zero allocation
+// on the common path); when critique is enabled doAnalyzeAgentic
+// pre-allocates the maps so the hallucination check runs even on runs
+// with zero successful reads. See critique.go for normalizeArtifactCitation;
+// using the same normalizer here keeps the writer (this function) and
+// reader (findUnreadArtifactCitations) trivially consistent.
+func (s *agentState) recordSuccessfulRead(rawPath string) {
+	if s.readArtifactsFull == nil && s.readArtifactsBase == nil {
+		return
+	}
+	norm := normalizeArtifactCitation(rawPath)
+	if norm == "" {
+		return
+	}
+	s.readArtifactsFull[norm] = true
+	s.readArtifactsBase[path.Base(norm)] = true
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {

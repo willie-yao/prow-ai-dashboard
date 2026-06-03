@@ -138,6 +138,16 @@ type AIAnalysis struct {
 	// enabled on a consumer (mirrors the floor-raise invalidation
 	// pattern). Always false for curator.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
+
+	// CritiqueVersion records the critique-contract version under which
+	// this analysis was validated. Pre-L.4-Step-2.5 entries have
+	// version 0 (no field on disk); Step 2.5 stamps version 2. The
+	// build-level shouldReanalyze check requires version >= the
+	// engine's currentCritiqueVersion when critique is enabled, so a
+	// strengthening of the gate (e.g. adding the hallucination check)
+	// properly invalidates entries that passed under the older,
+	// weaker contract. Always 0 for curator. (L.4 Step 2.5)
+	CritiqueVersion int `json:"critique_version,omitempty"`
 }
 
 // TestCase represents a single test case from JUnit XML.
