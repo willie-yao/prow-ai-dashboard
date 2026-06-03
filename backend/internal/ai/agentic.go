@@ -53,6 +53,15 @@ type AgenticOptions struct {
 	// cache write for any final that lands below the floor (so the
 	// next run gets a fresh attempt). See project.Agentic.MinToolCalls.
 	MinToolCalls int
+
+	// MinGCSBytes is the minimum cumulative GCS bytes fetched via tool
+	// calls before a tools-free final answer is accepted. Complements
+	// MinToolCalls because tool-call count alone is gameable: weaker
+	// models can satisfy a calls floor with cheap list calls or tiny
+	// reads and still finalize without evidence (observed 6 calls
+	// returning 13 KB total against Qwen3-235B). Defaults to 0 (no
+	// floor). See project.Agentic.MinGCSBytes.
+	MinGCSBytes int
 }
 
 // agenticToolBudget is the per-call cap on bytes returned to the model by
@@ -130,28 +139,68 @@ definitive root cause, say so explicitly in root_cause (e.g. "Investigation
 reached budget; best-evidence hypothesis is X based on Y") rather than
 continuing to investigate.`
 
-// formatMinToolsNudge builds the user message appended after a tools-free
-// model response when the agent has not yet met AgenticOptions.MinToolCalls.
-// Kept generic about artifact paths because not every project has a
-// build-log.txt at the build root; the universal prompt and tool docs
-// already cover specific entry points.
-func formatMinToolsNudge(calls, floor int) string {
-	return fmt.Sprintf(`You attempted to finalize after only %d tool call(s), but this project requires at least %d before a final answer is accepted. Investigate the build's artifacts before responding: at minimum list the build root, inspect or grep the test's actual failure logs, and cite at least one concrete file path in your root_cause. If after additional investigation the evidence is genuinely inconclusive, say so explicitly in root_cause rather than speculating.`, calls, floor)
+// formatFloorsNudge builds the user message appended after a tools-free
+// model response when one or both per-project floors are unmet. Mentions
+// only the axes that are actually unmet so a project that only configures
+// MinToolCalls doesn't see a misleading "0 KB" complaint, and vice versa.
+//
+// The operational guidance below is general enough to apply to any prow
+// project (k8s-sigs CAPI providers, kubelet sig-node, etc.); examples of
+// "downstream symptoms" are flagged as examples rather than rules to
+// avoid over-anchoring the model on the CAPZ cases that motivated this.
+func formatFloorsNudge(state *agentState, opts AgenticOptions) string {
+	var unmet []string
+	if state.calls < opts.MinToolCalls {
+		unmet = append(unmet, fmt.Sprintf("only %d tool call(s) but need at least %d", state.calls, opts.MinToolCalls))
+	}
+	if state.gcsBytes < opts.MinGCSBytes {
+		unmet = append(unmet, fmt.Sprintf("only %d KB of GCS evidence but need at least %d KB", state.gcsBytes/1024, opts.MinGCSBytes/1024))
+	}
+	return fmt.Sprintf(`You attempted to finalize after %s, which this project requires before a final answer is accepted. Before responding:
+
+1. List the build root with list_artifacts to see what's actually there.
+2. For multi-MB build logs, use grep_artifact (not read_artifact) and ask for many matches with wide surrounding context so you see chains of causation, not isolated lines.
+3. When build-log.txt shows an error, cross-reference the corresponding timestamp in the relevant controller manager.log under artifacts/clusters/.../<namespace>/<deployment>/ or equivalent. Symptoms surfaced in build-log are often downstream of root causes in the controller.
+4. Don't accept the first plausible explanation. Common terminal symptoms (for example kubelet/API-server timeouts, context deadline exceeded, NotReady nodes) usually have earlier upstream causes such as webhook/cert problems, leader-election loss, image pull failures, or missing dependencies. Search nearby logs before concluding.
+5. Cite specific file paths and log line numbers in your root_cause. Include enough evidence to explain the causal chain, not just the surface error.
+
+If after this investigation the evidence is genuinely inconclusive, say so explicitly in root_cause rather than speculating.`, strings.Join(unmet, " and "))
 }
 
 // agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
 // the raw model response (analysisResponse) and tags it with the per-analysis
 // telemetry (tool-call count + cost) so that cache reads can re-stamp the
 // published AIAnalysis and re-validate against the project's current
-// MinToolCalls floor. Backward compat: pre-L.3 cache entries have no
-// telemetry keys and unmarshal with zero values, so any non-zero floor
-// invalidates them on read and re-analyzes them on the next run.
+// MinToolCalls / MinGCSBytes floors. Backward compat: pre-L.3 cache entries
+// have no telemetry keys and unmarshal with zero values, so any non-zero
+// floor invalidates them on read and re-analyzes them on the next run.
 type agenticCacheData struct {
 	analysisResponse
 	ToolCalls       int  `json:"tool_calls,omitempty"`
 	ModelBytes      int  `json:"model_bytes,omitempty"`
 	GCSBytes        int  `json:"gcs_bytes,omitempty"`
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+}
+
+// floorStatus tracks which per-project floors are currently unmet for a
+// given agent state. Used by both the loop's nudge decision and the
+// nudge message composer so the two stay in sync.
+type floorStatus struct {
+	callsUnmet bool
+	gcsUnmet   bool
+}
+
+func (fs floorStatus) anyUnmet() bool { return fs.callsUnmet || fs.gcsUnmet }
+
+// evalFloors returns which of the per-project floors the current agent
+// state fails to meet. A floor configured as 0 (the default) is never
+// reported as unmet, preserving pre-L.3 behavior for consumers that
+// don't opt in.
+func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
+	return floorStatus{
+		callsUnmet: state.calls < opts.MinToolCalls,
+		gcsUnmet:   state.gcsBytes < opts.MinGCSBytes,
+	}
 }
 
 // ---------- Agent state ----------
@@ -244,10 +293,13 @@ func (c *Client) doAnalyzeAgentic(
 	if raw, ok := c.cache.Get(cacheKey); ok {
 		var cached agenticCacheData
 		if json.Unmarshal(raw, &cached) == nil {
-			// Cache hit, but re-validate against the current floor. Pre-L.3
-			// entries default to ToolCalls=0 and are invalidated by any
-			// non-zero MinToolCalls.
-			if cached.ToolCalls >= in.Opts.MinToolCalls {
+			// Cache hit, but re-validate against the current floors.
+			// Pre-L.3 entries default to ToolCalls=0 and GCSBytes=0 and
+			// are invalidated by any non-zero floor. Post-L.3 entries
+			// must satisfy whichever floors the project currently
+			// configures (raising either field invalidates entries
+			// that fell below it on a prior run).
+			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
 				// Restore the recorded per-analysis telemetry from the
@@ -287,11 +339,15 @@ func (c *Client) doAnalyzeAgentic(
 
 	var finalContent string
 	var done bool
-	// nudgedAtCalls tracks the tool-call count when we last issued a
-	// min-tool-calls nudge. We only re-nudge once the model has made new
-	// tool-call progress since then; this prevents an infinite no-progress
-	// nudge loop when the model genuinely refuses to investigate further.
+	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
+	// time we last nudged so we can detect whether the model has made
+	// progress on the unmet axis since then. A model that keeps coming
+	// back tools-free without progressing on the floor we're complaining
+	// about gets its answer accepted (but not cached) so the loop doesn't
+	// burn iterations on a refusing model. Sentinel -1 ensures the very
+	// first iteration's zero-state always counts as progress.
 	nudgedAtCalls := -1
+	nudgedAtGCSBytes := -1
 
 	for iter := 0; iter < in.Opts.MaxIters && !done; iter++ {
 		resp, err := c.callChatWithTools(loopCtx, messages, schemas)
@@ -314,24 +370,42 @@ func (c *Client) doAnalyzeAgentic(
 				candidate = *msg.Content
 			}
 
-			// Enforce the per-project min-tool-calls floor by nudging the
-			// model to investigate further before accepting its final.
-			// Skip the nudge when: (a) no floor configured, (b) the model
-			// has not made progress since the last nudge (avoid no-progress
-			// loops), or (c) budgets are already exhausted (nudge would
-			// fight the tool-side "budget exhausted; finalize now" signal).
-			if state.calls < in.Opts.MinToolCalls && state.calls > nudgedAtCalls && !state.budgetExhausted {
-				echo := agChatMessage{Role: "assistant"}
-				if msg.Content != nil {
-					echo.Content = msg.Content
+			// Enforce per-project floors by nudging the model to
+			// investigate further before accepting its final answer.
+			// Skip the nudge when: (a) no floor is unmet, (b) budgets
+			// are already exhausted (a nudge would fight the tool-side
+			// "budget exhausted; finalize now" signal), or (c) the
+			// model has not made progress on any unmet floor since the
+			// last nudge (avoid no-progress loops). The per-axis
+			// progress check (rather than calls-only) covers the
+			// pathological list-only loop a bytes-floor enables:
+			// a model that calls list_artifacts repeatedly raises
+			// calls but never gcsBytes, and used to get re-nudged
+			// every iteration despite making no real progress.
+			floors := evalFloors(state, in.Opts)
+			if floors.anyUnmet() && !state.budgetExhausted {
+				progressed := false
+				if floors.callsUnmet && state.calls > nudgedAtCalls {
+					progressed = true
 				}
-				messages = append(messages, echo, agChatMessage{
-					Role:    "user",
-					Content: strPtr(formatMinToolsNudge(state.calls, in.Opts.MinToolCalls)),
-				})
-				nudgedAtCalls = state.calls
-				log.Printf("  ↻ agentic nudge: tool_calls=%d < min=%d, asking model to investigate further", state.calls, in.Opts.MinToolCalls)
-				continue
+				if floors.gcsUnmet && state.gcsBytes > nudgedAtGCSBytes {
+					progressed = true
+				}
+				if progressed {
+					echo := agChatMessage{Role: "assistant"}
+					if msg.Content != nil {
+						echo.Content = msg.Content
+					}
+					messages = append(messages, echo, agChatMessage{
+						Role:    "user",
+						Content: strPtr(formatFloorsNudge(state, in.Opts)),
+					})
+					nudgedAtCalls = state.calls
+					nudgedAtGCSBytes = state.gcsBytes
+					log.Printf("  ↻ agentic nudge: tool_calls=%d/min=%d, gcs_kb=%d/min=%d, asking model to investigate further",
+						state.calls, in.Opts.MinToolCalls, state.gcsBytes/1024, in.Opts.MinGCSBytes/1024)
+					continue
+				}
 			}
 
 			finalContent = candidate
@@ -385,12 +459,12 @@ func (c *Client) doAnalyzeAgentic(
 }
 
 // cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if the
-// agent met the project's MinToolCalls floor. Below-floor finals are still
-// published to the dashboard for this run (so triage always has something to
-// show) but are NOT cached, so the next fetcher run re-attempts the analysis
-// rather than serving the under-investigated answer.
+// agent met every per-project floor (MinToolCalls AND MinGCSBytes). Below-
+// floor finals are still published to the dashboard for this run (so triage
+// always has something to show) but are NOT cached, so the next fetcher run
+// re-attempts the analysis rather than serving the under-investigated answer.
 func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions) {
-	if state.calls < opts.MinToolCalls {
+	if evalFloors(state, opts).anyUnmet() {
 		return
 	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{

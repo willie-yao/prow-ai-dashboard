@@ -645,3 +645,224 @@ func TestAgentic_MinToolCalls_ZeroFloor_NoBehaviorChange(t *testing.T) {
 		t.Errorf("call count = %d, want 1 (no nudge with floor=0)", got)
 	}
 }
+
+// ---------- MinGCSBytes floor ----------
+
+// bigPayload returns a deterministic byte slice of the requested size, used
+// to drive fakeBrowser.Read past the per-test MinGCSBytes floor.
+func bigPayload(n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte('A' + (i % 26))
+	}
+	return out
+}
+
+// TestAgentic_MinGCSBytes_NudgeForcesMoreReading verifies that a model
+// satisfying MinToolCalls but with no GCS bytes read is nudged, and that
+// after subsequent reads cross the byte floor the answer is accepted and
+// cached.
+func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: list_artifacts (BytesFetched=0).
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Round 2: tools-free finalize with gcsBytes still 0.
+	premature := `{"summary":"shallow","is_transient":false,"root_cause":"unknown","severity":"Medium","suggested_fix":"x","relevant_files":[]}`
+	srv.push(200, chatRespFinal(premature))
+	// Round 3 (after nudge): read_artifact returning 16 KB so gcsBytes
+	// crosses the 15 KB floor.
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
+	// Round 4: tools-free with substantive content.
+	final := `{"summary":"deep","is_transient":false,"root_cause":"found in build-log.txt:42","severity":"High","suggested_fix":"fix","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": bigPayload(30_000)},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	opts := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, WallClock: 30 * time.Second, MinGCSBytes: 15_000}
+
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:gcsnudge", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if summary.Summary != "deep" {
+		t.Errorf("expected post-nudge final, got summary=%q", summary.Summary)
+	}
+	if analysis.GCSBytes < 15_000 {
+		t.Errorf("gcs_bytes = %d, want >= 15000 (floor must have been met before acceptance)", analysis.GCSBytes)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Errorf("call count = %d, want 4 (list + premature final + read + final)", got)
+	}
+
+	// Floor met → cached. Re-run hits cache.
+	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:gcsnudge", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Errorf("call count after cache hit = %d, want 4 (no extra server hit)", got)
+	}
+}
+
+// TestAgentic_MinGCSBytes_CacheInvalidatesBelowFloor mirrors the
+// MinToolCalls cache-invalidation test for the byte floor. A cached
+// analysis with gcs_bytes below the now-configured MinGCSBytes is treated
+// as a miss and re-analyzed even though tool_calls already met the (zero)
+// MinToolCalls floor on the prior run.
+func TestAgentic_MinGCSBytes_CacheInvalidatesBelowFloor(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// First call with no floors: one tiny read then finalize. Cached.
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	original := `{"summary":"original","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"s","relevant_files":[]}`
+	srv.push(200, chatRespFinal(original))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": bigPayload(40_000)},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	noFloor := AgenticOptions{MaxIters: 4, ModelByteBudget: 200_000, GCSByteBudget: 200_000, WallClock: 30 * time.Second}
+	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, noFloor), "agentic:test:gcsinvalidate", "sys", "user"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("expected 2 server calls after first analysis, got %d", got)
+	}
+
+	// Bump MinGCSBytes to 20 KB. The cached entry has gcsBytes=0 (list
+	// is the only call; BytesFetched=0) → cache miss. Model now reads
+	// 16 KB then 16 KB more, crossing the floor.
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
+	srv.push(200, chatRespToolCall("c3", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 16384, "length": 16384}))
+	rerun := `{"summary":"reanalyzed","is_transient":false,"root_cause":"r2","severity":"High","suggested_fix":"s2","relevant_files":[]}`
+	srv.push(200, chatRespFinal(rerun))
+
+	withFloor := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, WallClock: 30 * time.Second, MinGCSBytes: 20_000}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:gcsinvalidate", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if summary.Summary != "reanalyzed" {
+		t.Errorf("expected re-analyzed result, got %q (stale cache served)", summary.Summary)
+	}
+	if analysis.GCSBytes < 20_000 {
+		t.Errorf("gcs_bytes = %d, want >= 20000 (floor must have been met)", analysis.GCSBytes)
+	}
+
+	// Third call with the same floor should now hit the cache, and the
+	// stamped telemetry must include the recorded gcs_bytes so the
+	// build-level shouldReanalyze gate doesn't re-invalidate forever.
+	_, hitAnalysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:gcsinvalidate", "sys", "user")
+	if err != nil {
+		t.Fatalf("third call: %v", err)
+	}
+	if !hitAnalysis.CacheHit {
+		t.Errorf("CacheHit = false, want true")
+	}
+	if hitAnalysis.GCSBytes < 20_000 {
+		t.Errorf("cache-hit gcs_bytes = %d, want >= 20000 (cached telemetry must be stamped on hit)", hitAnalysis.GCSBytes)
+	}
+}
+
+// TestAgentic_MinGCSBytes_StubbornModelAcceptedButNotCached covers the
+// pathological case the rubber-duck flagged: a model that keeps returning
+// tools-free without making any new tool calls (and therefore without
+// growing gcsBytes) must eventually be accepted under the anti-thrash
+// rule rather than being nudged until MaxIters. Below-floor finals are
+// still published but NOT cached so the next fetcher run gets a fresh
+// attempt.
+func TestAgentic_MinGCSBytes_StubbornModelAcceptedButNotCached(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	stubborn := `{"summary":"refuses","is_transient":false,"root_cause":"guess","severity":"Medium","suggested_fix":"y","relevant_files":[]}`
+	// Round 1: tools-free (calls=0, gcs=0). Nudge.
+	srv.push(200, chatRespFinal(stubborn))
+	// Round 2: tools-free again (still calls=0, gcs=0). Anti-thrash
+	// rule: no progress on the unmet axis → accept.
+	srv.push(200, chatRespFinal(stubborn))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{MaxIters: 8, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinGCSBytes: 50_000}
+
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:gcsstubborn", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("call count = %d, want 2 (one nudge then accept under anti-thrash)", got)
+	}
+	if summary.Summary != "refuses" {
+		t.Errorf("expected below-floor stubborn final to be published; got %q", summary.Summary)
+	}
+	if analysis.GCSBytes != 0 {
+		t.Errorf("gcs_bytes = %d, want 0", analysis.GCSBytes)
+	}
+
+	// Below-floor answer must NOT be cached.
+	srv.push(200, chatRespFinal(stubborn))
+	srv.push(200, chatRespFinal(stubborn))
+	before := atomic.LoadInt32(&srv.calls)
+	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:gcsstubborn", "sys", "user"); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) == before {
+		t.Error("below-floor final should not have been cached (expected server hit on retry)")
+	}
+}
+
+// TestAgentic_MinGCSBytes_ListOnlyLoopNotInfinite is the rubber-duck #7
+// regression: a model that keeps calling list_artifacts (incrementing
+// calls but returning BytesFetched=0) must NOT trigger an infinite nudge
+// loop. Once calls stops progressing the anti-thrash rule kicks in; if
+// the model keeps calling tools, the loop exits at MaxIters and runs
+// the forced finalize round. Either way, the loop terminates.
+func TestAgentic_MinGCSBytes_ListOnlyLoopNotInfinite(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Loop: list (no bytes) → tools-free → list → tools-free → ...
+	// With MaxIters=4 and the floor unmet on the bytes axis,
+	// we expect: list (iter 1) → tools-free + nudge (iter 2) →
+	// list (iter 3) → tools-free + nudge OR accept (iter 4).
+	// Because calls progressed each round (the nudge fires every time
+	// the model makes a fresh tool call), we should hit MaxIters and
+	// then the forced finalize round produces the answer.
+	stubborn := `{"summary":"list_only","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"x","relevant_files":[]}`
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal(stubborn))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespFinal(stubborn))
+	// Forced finalize round response after MaxIters exhausted.
+	finalAfterFinalize := `{"summary":"forced","is_transient":false,"root_cause":"best effort","severity":"Medium","suggested_fix":"x","relevant_files":[]}`
+	srv.push(200, chatRespFinal(finalAfterFinalize))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
+	opts := AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinGCSBytes: 50_000}
+
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:listloop", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	// Either acceptance path is fine for the regression: the test
+	// passes as long as the loop terminates without panicking and
+	// without making more than MaxIters+1 server calls (the +1 is
+	// the optional finalize round).
+	if got := atomic.LoadInt32(&srv.calls); got > int32(opts.MaxIters+1) {
+		t.Errorf("call count = %d, want <= %d (loop must terminate)", got, opts.MaxIters+1)
+	}
+	if summary == nil || analysis == nil {
+		t.Fatalf("expected non-nil outputs even from list-only loop")
+	}
+	if analysis.GCSBytes != 0 {
+		t.Errorf("gcs_bytes = %d, want 0 (list_artifacts returns no bytes)", analysis.GCSBytes)
+	}
+}

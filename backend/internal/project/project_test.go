@@ -699,6 +699,18 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("MinToolCalls = %d, want 3", got.MinToolCalls)
 		}
 	})
+	t.Run("MinGCSBytes defaults to zero", func(t *testing.T) {
+		got := (&Agentic{Enabled: true}).EffectiveAgentic()
+		if got.MinGCSBytes != 0 {
+			t.Errorf("MinGCSBytes = %d, want 0", got.MinGCSBytes)
+		}
+	})
+	t.Run("MinGCSBytes passes through when set", func(t *testing.T) {
+		got := (&Agentic{Enabled: true, MinGCSBytes: 200_000}).EffectiveAgentic()
+		if got.MinGCSBytes != 200_000 {
+			t.Errorf("MinGCSBytes = %d, want 200000", got.MinGCSBytes)
+		}
+	})
 }
 
 // agenticEqual compares two Agentic structs without using ==, which would
@@ -711,6 +723,7 @@ func agenticEqual(a, b Agentic) bool {
 		a.GCSByteBudget == b.GCSByteBudget &&
 		a.WallClock == b.WallClock &&
 		a.MinToolCalls == b.MinToolCalls &&
+		a.MinGCSBytes == b.MinGCSBytes &&
 		equalStrings(a.Tools, b.Tools)
 }
 

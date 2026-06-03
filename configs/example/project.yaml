@@ -190,3 +190,15 @@ ai:
   #                                 # Default 0 (no floor). Useful for weaker
   #                                 # open-weights models that finalize from
   #                                 # the prompt alone; see docs/agentic.md.
+  #   min_gcs_bytes: 0              # if >0, refuse to accept a final answer
+  #                                 # until the model has fetched this many
+  #                                 # bytes from GCS via read/tail/grep calls
+  #                                 # (list_artifacts contributes 0). Catches
+  #                                 # the case where a model satisfies
+  #                                 # min_tool_calls with cheap list calls or
+  #                                 # tiny byte ranges and still finalizes
+  #                                 # without meaningful evidence. Same
+  #                                 # publish-but-don't-cache semantics as
+  #                                 # min_tool_calls. 200000 (200 KB) is a
+  #                                 # reasonable starting value for weaker
+  #                                 # models; see docs/agentic.md.

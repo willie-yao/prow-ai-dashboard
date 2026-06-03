@@ -372,37 +372,47 @@ func TestService_UniversalOn_CacheInvalidatesAgenticEntries(t *testing.T) {
 
 // TestService_ShouldReanalyze_FloorTable covers the L.3 build-level cache
 // invalidation: when a cached agentic-mode analysis records fewer tool calls
-// than the current MinToolCalls floor, the build cache must NOT be trusted
-// (shouldReanalyze returns true) so the loop runs again and the new floor
-// can actually take effect. Curator caches are unaffected because they
-// legitimately have ToolCalls=0 by design.
+// than the current MinToolCalls floor OR fewer GCS bytes than the current
+// MinGCSBytes floor, the build cache must NOT be trusted (shouldReanalyze
+// returns true) so the loop runs again and the new floor can actually take
+// effect. Curator caches are unaffected because they legitimately have
+// ToolCalls=0 and GCSBytes=0 by design.
 func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	cases := []struct {
 		name         string
 		cachedMode   string
 		cachedCalls  int
+		cachedGCS    int
 		desiredMode  string
 		minToolCalls int
+		minGCSBytes  int
 		want         bool
 	}{
-		{"agentic_below_floor", AgenticMode, 0, AgenticMode, 3, true},
-		{"agentic_at_floor", AgenticMode, 3, AgenticMode, 3, false},
-		{"agentic_above_floor", AgenticMode, 5, AgenticMode, 3, false},
-		{"universal_below_floor", UniversalMode, 0, UniversalMode, 3, true},
-		{"universal_at_floor", UniversalMode, 3, UniversalMode, 3, false},
-		{"agentic_zero_floor_no_invalidation", AgenticMode, 0, AgenticMode, 0, false},
-		{"curator_floor_ignored", curatorMode, 0, curatorMode, 3, false},
-		{"mode_mismatch_overrides_floor", curatorMode, 5, AgenticMode, 0, true},
+		{"agentic_below_calls_floor", AgenticMode, 0, 0, AgenticMode, 3, 0, true},
+		{"agentic_at_calls_floor", AgenticMode, 3, 0, AgenticMode, 3, 0, false},
+		{"agentic_above_calls_floor", AgenticMode, 5, 0, AgenticMode, 3, 0, false},
+		{"universal_below_calls_floor", UniversalMode, 0, 0, UniversalMode, 3, 0, true},
+		{"universal_at_calls_floor", UniversalMode, 3, 0, UniversalMode, 3, 0, false},
+		{"agentic_zero_floors_no_invalidation", AgenticMode, 0, 0, AgenticMode, 0, 0, false},
+		{"curator_floors_ignored", curatorMode, 0, 0, curatorMode, 3, 50_000, false},
+		{"mode_mismatch_overrides_floors", curatorMode, 5, 200_000, AgenticMode, 0, 0, true},
+		{"agentic_below_gcs_floor_only", AgenticMode, 10, 1_000, AgenticMode, 0, 50_000, true},
+		{"agentic_at_gcs_floor_only", AgenticMode, 10, 50_000, AgenticMode, 0, 50_000, false},
+		{"agentic_above_gcs_floor_only", AgenticMode, 10, 200_000, AgenticMode, 0, 50_000, false},
+		{"agentic_meets_calls_misses_gcs", AgenticMode, 5, 10_000, AgenticMode, 5, 50_000, true},
+		{"agentic_misses_calls_meets_gcs", AgenticMode, 1, 200_000, AgenticMode, 5, 50_000, true},
+		{"agentic_meets_both", AgenticMode, 5, 50_000, AgenticMode, 5, 50_000, false},
+		{"universal_below_gcs_floor", UniversalMode, 10, 1_000, UniversalMode, 0, 50_000, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Service{agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls}}
+			s := &Service{agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls, MinGCSBytes: tc.minGCSBytes}}
 			testCase := &models.TestCase{
-				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls},
+				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS},
 			}
 			if got := s.shouldReanalyze(testCase, tc.desiredMode); got != tc.want {
-				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d) desired=%q floor=%d = %v, want %v",
-					tc.cachedMode, tc.cachedCalls, tc.desiredMode, tc.minToolCalls, got, tc.want)
+				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) desired=%q floors(calls=%d, gcs=%d) = %v, want %v",
+					tc.cachedMode, tc.cachedCalls, tc.cachedGCS, tc.desiredMode, tc.minToolCalls, tc.minGCSBytes, got, tc.want)
 			}
 		})
 	}

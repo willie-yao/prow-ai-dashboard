@@ -249,6 +249,25 @@ type Agentic struct {
 	// invalidated and re-analyzed.
 	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty"`
 
+	// MinGCSBytes is the minimum cumulative bytes the model must have
+	// fetched from GCS via tool calls before its final JSON answer is
+	// accepted. Complements MinToolCalls because a model can satisfy a
+	// tool-call floor with cheap list calls or tiny byte ranges and
+	// still finalize without any meaningful evidence (observed against
+	// Qwen3-235B: 6 tool calls returning 13 KB total, then a
+	// fabricated "no specific error found" root cause). Tracked from
+	// the agent's GCS budget counter, so it follows the same accounting
+	// the engine already uses for cost capping. Defaults to 0 (no
+	// floor). 200_000 (200 KB) is a reasonable starting value for
+	// weaker open-weights models; raise gradually if the model keeps
+	// parking at the floor with shallow evidence.
+	//
+	// Same publish/cache semantics as MinToolCalls: below-floor finals
+	// are returned to the caller so triage has something, but they
+	// are NOT cached, and cached entries below the current floor are
+	// invalidated on the next read.
+	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -271,6 +290,7 @@ var DefaultAgentic = Agentic{
 	GCSByteBudget:   1_000_000_000,
 	WallClock:       5 * time.Minute,
 	MinToolCalls:    0,
+	MinGCSBytes:     0,
 }
 
 // EffectiveAgentic returns the resolved Agentic config with defaults applied
@@ -297,6 +317,9 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	if a.MinToolCalls > 0 {
 		out.MinToolCalls = a.MinToolCalls
+	}
+	if a.MinGCSBytes > 0 {
+		out.MinGCSBytes = a.MinGCSBytes
 	}
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)

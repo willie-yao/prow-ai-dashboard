@@ -288,8 +288,8 @@ func (s *Service) desiredMode(run *models.BuildResult, tc *models.TestCase) stri
 // shouldReanalyze returns true when a cached analysis must be discarded
 // because the mode changed (e.g. agentic flipped on) or, for agentic-mode
 // caches, because the prior analysis fell below the project's current
-// MinToolCalls floor. Treats legacy unset Mode as "curator" so existing
-// CAPZ caches keep hitting on curator runs.
+// MinToolCalls / MinGCSBytes floors. Treats legacy unset Mode as "curator"
+// so existing CAPZ caches keep hitting on curator runs.
 func (s *Service) shouldReanalyze(tc *models.TestCase, desiredMode string) bool {
 	cached := tc.AIAnalysis.Mode
 	if cached == "" {
@@ -303,15 +303,19 @@ func (s *Service) shouldReanalyze(tc *models.TestCase, desiredMode string) bool 
 
 // belowCurrentAgenticFloor returns true when desiredMode is one of the
 // agentic modes AND the cached analysis recorded fewer tool calls than the
-// project's current MinToolCalls floor. Used to invalidate pre-floor cache
-// entries (and below-floor accepted entries) so a freshly-raised floor
-// actually re-runs the loop. Returns false for the curator path because
-// curator analyses legitimately have ToolCalls=0 by design.
+// project's current MinToolCalls floor OR fewer GCS bytes than its current
+// MinGCSBytes floor. Used to invalidate pre-floor cache entries (and
+// below-floor accepted entries) so a freshly-raised floor actually re-runs
+// the loop. Returns false for the curator path because curator analyses
+// legitimately have ToolCalls=0 and GCSBytes=0 by design.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode string) bool {
 	if desiredMode != AgenticMode && desiredMode != UniversalMode {
 		return false
 	}
-	return tc.AIAnalysis.ToolCalls < s.agenticOpts.MinToolCalls
+	if tc.AIAnalysis.ToolCalls < s.agenticOpts.MinToolCalls {
+		return true
+	}
+	return tc.AIAnalysis.GCSBytes < s.agenticOpts.MinGCSBytes
 }
 
 // cacheKey returns the cache key for the combined analysis call. For the

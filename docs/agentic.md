@@ -64,6 +64,7 @@ ai:
     gcs_byte_budget: 1000000000   # total bytes fetched from GCS
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
+    min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -108,6 +109,42 @@ at two layers:
   rather than being served as-is. Without this layer, pre-floor
   per-test analyses would skip the agentic cache check entirely and
   bypass the floor forever.
+
+### `min_gcs_bytes`
+
+A minimum-evidence-bytes floor. Complements `min_tool_calls` because
+tool-call count alone is gameable: a weaker model can satisfy a calls
+floor with cheap `list_artifacts` calls or `read_artifact` requests
+on a default 8 KB length and still finalize without meaningful
+evidence. Observed against Dynamo-hosted Qwen3-235B: 6 tool calls
+returning 13 KB total, then a fabricated "no specific error found"
+root cause on a failure where Claude (same build) found the actual
+webhook x509 cert mismatch from 9 MB of logs.
+
+The byte counter is the same `gcs_bytes` counter the engine already
+uses for cost capping (`gcs_byte_budget`), so the floor is measured
+against bytes actually pulled from GCS by `read_artifact`,
+`tail_artifact`, and `grep_artifact`. `list_artifacts` contributes 0.
+
+Default is `0` — no floor. A reasonable starting value for weaker
+models is `200000` (200 KB); raise gradually if the model keeps
+parking at the floor with shallow evidence. Don't over-tune: bytes
+are a proxy for investigation depth, not a guarantee of evidence
+quality (a 500 KB grep with zero useful matches still satisfies the
+floor).
+
+Same publish-and-don't-cache semantics as `min_tool_calls`. Same
+two-layer cache invalidation (agentic cache + build-cache test data)
+when the floor is raised. The two floors are combined with AND: an
+analysis must meet BOTH to be cached and to bypass re-analysis on
+the next run.
+
+Anti-thrash: progress is tracked per floor. A model that calls
+`list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`,
+and used to risk being re-nudged every iteration. The current loop
+re-nudges only if the model has made progress on the specific axis
+that is still unmet; if neither calls nor bytes have advanced since
+the last nudge, the answer is accepted (but not cached).
 
 ### `always: true` vs `always: false`
 
