@@ -421,3 +421,218 @@ func TestTryParseAnalysis(t *testing.T) {
 		})
 	}
 }
+
+// ---------- MinToolCalls floor ----------
+
+// TestAgentic_MinToolCalls_NudgeForcesInvestigation verifies the loop refuses
+// a tools-free final answer when state.calls < MinToolCalls and instead nudges
+// the model. After the nudge, the model issues a tool call and produces a
+// final, which is accepted and cached.
+func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: model tries to finalize immediately with NO tool calls.
+	final1 := `{"summary":"made up","is_transient":false,"root_cause":"premature guess","severity":"High","suggested_fix":"x","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final1))
+	// Round 2 (after nudge): model calls list_artifacts.
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Round 3: model finalizes with the post-investigation answer.
+	final2 := `{"summary":"real cause","is_transient":false,"root_cause":"found in build-log.txt line 42","severity":"High","suggested_fix":"fix it","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(final2))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": []byte("the error\n")},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 1}
+
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:nudge1", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count = %d, want 3 (nudged round + tool round + final)", got)
+	}
+	if summary.Summary != "real cause" {
+		t.Errorf("expected post-nudge final, got summary=%q", summary.Summary)
+	}
+	if analysis.RootCause != "found in build-log.txt line 42" {
+		t.Errorf("expected post-nudge root cause, got %q", analysis.RootCause)
+	}
+	if analysis.ToolCalls != 1 {
+		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
+	}
+
+	// Floor met (1 >= 1) so the answer should be cached: second call hits
+	// the cache and the server is not called again.
+	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:nudge1", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 3 {
+		t.Errorf("call count after cache hit = %d, want 3 (no extra server hit)", got)
+	}
+}
+
+// TestAgentic_MinToolCalls_StubbornModelAcceptedButNotCached verifies the
+// anti-thrash heuristic: if the model returns tools-free twice in a row
+// without making any new tool calls between, the loop accepts the answer
+// (publication for this run) but does NOT cache it so the next run retries.
+func TestAgentic_MinToolCalls_StubbornModelAcceptedButNotCached(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: tools-free (calls=0 < min=3).
+	stubborn := `{"summary":"won't investigate","is_transient":false,"root_cause":"some hypothesis","severity":"Medium","suggested_fix":"y","relevant_files":[]}`
+	srv.push(200, chatRespFinal(stubborn))
+	// Round 2: tools-free again (still calls=0).
+	srv.push(200, chatRespFinal(stubborn))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 3}
+
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:stubborn", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Errorf("call count = %d, want 2 (one nudge then accept)", got)
+	}
+	if summary.Summary != "won't investigate" {
+		t.Errorf("expected below-floor final to be published; got %q", summary.Summary)
+	}
+	if analysis.ToolCalls != 0 {
+		t.Errorf("tool_calls = %d, want 0", analysis.ToolCalls)
+	}
+
+	// Critically: below-floor answer must NOT be cached. Re-running should
+	// hit the server again (not a cache hit).
+	srv.push(200, chatRespFinal(stubborn))
+	srv.push(200, chatRespFinal(stubborn))
+	before := atomic.LoadInt32(&srv.calls)
+	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:stubborn", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) == before {
+		t.Error("below-floor final should not have been cached (expected server hit on retry)")
+	}
+}
+
+// TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters is a
+// regression for a subtle bug: if the loop rejected a tools-free answer (to
+// nudge), the rejected content must not be reused as finalContent after the
+// loop exhausts MaxIters. Without the fix, tryParseAnalysis would succeed on
+// the stale rejected JSON and the wrong answer would be returned.
+func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Round 1: tools-free with valid JSON; we will reject this (calls=0 < min=2).
+	rejected := `{"summary":"REJECTED","is_transient":false,"root_cause":"premature","severity":"High","suggested_fix":"x","relevant_files":[]}`
+	srv.push(200, chatRespFinal(rejected))
+	// Rounds 2+ (after nudge): model only ever calls tools, never finalizes.
+	// MaxIters=3 means we get exactly 2 more chat calls. Both are tool calls.
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Loop exits via MaxIters; runFinalizeRound fires. Force a successful
+	// finalize so we land in the cache-write path.
+	final := `{"summary":"FINAL","is_transient":false,"root_cause":"from finalize round","severity":"High","suggested_fix":"y","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 2}
+
+	summary, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:notreused", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if summary.Summary == "REJECTED" {
+		t.Errorf("rejected pre-nudge JSON leaked into final output: got %q", summary.Summary)
+	}
+	if summary.Summary != "FINAL" {
+		t.Errorf("expected finalize-round output, got %q", summary.Summary)
+	}
+}
+
+// TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor verifies the cache-read
+// path re-validates against the current floor: a cached analysis with
+// ToolCalls below the now-configured MinToolCalls is treated as a miss and
+// re-analyzed.
+func TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// First call with min=0: model finalizes with 0 tool calls. Cached.
+	zeroTool := `{"summary":"original","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"s","relevant_files":[]}`
+	srv.push(200, chatRespFinal(zeroTool))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": []byte("err\n")},
+		dirs:  map[string][]string{"": {"artifacts"}},
+	}
+	noFloor := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 0}
+	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, noFloor), "agentic:test:invalidate", "sys", "user"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Fatalf("expected 1 server call after first analysis, got %d", got)
+	}
+
+	// Bump the floor to 2. The cached entry has ToolCalls=0 < 2 → cache miss.
+	// Model now does 2 tool calls + a final.
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	newFinal := `{"summary":"reanalyzed","is_transient":false,"root_cause":"r2","severity":"High","suggested_fix":"s2","relevant_files":[]}`
+	srv.push(200, chatRespFinal(newFinal))
+
+	withFloor := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 2}
+	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:invalidate", "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if summary.Summary != "reanalyzed" {
+		t.Errorf("expected re-analyzed result, got %q (stale cache served)", summary.Summary)
+	}
+	if analysis.ToolCalls != 2 {
+		t.Errorf("tool_calls = %d, want 2", analysis.ToolCalls)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Errorf("call count = %d, want 4 (1 first analysis + 3 second analysis)", got)
+	}
+
+	// Third call with the same floor=2 should now hit the cache (re-analyzed
+	// entry has tool_calls=2 >= floor=2).
+	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:invalidate", "sys", "user")
+	if err != nil {
+		t.Fatalf("third call: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Errorf("call count after expected cache hit = %d, want 4 (no extra server hit)", got)
+	}
+}
+
+// TestAgentic_MinToolCalls_ZeroFloor_NoBehaviorChange verifies the default
+// (MinToolCalls=0) path: a tools-free first response is accepted immediately,
+// matching pre-L.3 behavior so existing consumers see no change.
+func TestAgentic_MinToolCalls_ZeroFloor_NoBehaviorChange(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"fast","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"s","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 0}
+	if _, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:zerofloor", "sys", "user"); err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	} else if analysis.ToolCalls != 0 {
+		t.Errorf("tool_calls = %d, want 0", analysis.ToolCalls)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 1 {
+		t.Errorf("call count = %d, want 1 (no nudge with floor=0)", got)
+	}
+}

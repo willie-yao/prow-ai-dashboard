@@ -183,3 +183,10 @@ ai:
   #   model_byte_budget: 300000     # total bytes of tool output sent to the model
   #   gcs_byte_budget: 1000000000   # total bytes fetched from GCS
   #   wall_clock: 5m                # per-failure agentic wall-clock cap
+  #   min_tool_calls: 0             # if >0, refuse to accept a final answer
+  #                                 # until the model has made this many tool
+  #                                 # calls; below-floor finals are published
+  #                                 # but not cached, so the next run retries.
+  #                                 # Default 0 (no floor). Useful for weaker
+  #                                 # open-weights models that finalize from
+  #                                 # the prompt alone; see docs/agentic.md.

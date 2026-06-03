@@ -63,12 +63,39 @@ ai:
     model_byte_budget: 300000     # total bytes of tool output sent to the model
     gcs_byte_budget: 1000000000   # total bytes fetched from GCS
     wall_clock: 5m                # per-failure agentic wall-clock cap
+    min_tool_calls: 0             # minimum tool calls before a final answer is accepted
 ```
 
 Defaults match the spike that validated the design and are conservative
 enough that you almost never need to tune them. Lower `max_iters` first
 if you see the model loop without converging; raise `gcs_byte_budget` if
 your builds have very large logs and grep is being cut short.
+
+### `min_tool_calls`
+
+A minimum-investigation floor. When the model returns a final answer
+with fewer than this many tool calls, the loop appends a nudge
+("you have only made N tool calls, investigate further before
+finalizing") and re-prompts. Below-floor finals are still published
+(so triage always shows SOMETHING) but are NOT written to the AI cache,
+so the next fetcher run retries the analysis fresh.
+
+Default is `0` — no floor. Strong tool-using models (e.g. Claude Opus)
+already investigate deeply on the universal path (~9 tool calls
+median); the floor is unnecessary and would add noise. Weaker
+open-weights models (e.g. Qwen3-235B) tend to finalize from the
+prompt alone in 0-2 tool calls, fabricating wrong root causes. Set
+`min_tool_calls: 3` (or higher) for these endpoints to force at least
+some artifact inspection.
+
+Anti-thrash: the loop only re-nudges if the model has issued new tool
+calls since the last nudge. A model that ignores the nudge and
+immediately re-returns its tools-free answer is accepted (and not
+cached) rather than looping until `max_iters` is exhausted.
+
+Cache invalidation: bumping `min_tool_calls` on an existing project
+invalidates any cached entries with a lower tool-call count on the
+next fetcher run; they re-analyze automatically.
 
 ### `always: true` vs `always: false`
 

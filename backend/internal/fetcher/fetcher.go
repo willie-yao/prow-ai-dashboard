@@ -455,17 +455,18 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					ModelByteBudget: eff.ModelByteBudget,
 					GCSByteBudget:   eff.GCSByteBudget,
 					WallClock:       eff.WallClock,
+					MinToolCalls:    eff.MinToolCalls,
 				}, factory, registry, enabled, eff.Always, useUniversal)
 				if useUniversal {
-					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, tools=%v)",
-						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, enabled)
+					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, tools=%v)",
+						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
-					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, tools=%v)",
-						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, enabled)
+					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, tools=%v)",
+						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, enabled)
 				}
 			}
 		}
