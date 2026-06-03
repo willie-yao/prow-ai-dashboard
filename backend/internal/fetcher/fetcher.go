@@ -20,6 +20,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/universal"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
@@ -87,12 +88,30 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	var aiSystemPrompt string
+	var aiSkillSet *skills.Set
 	if opts.EnableAI {
 		_, prompt, err := project.LoadDir(opts.ProjectDir)
 		if err != nil {
 			return fmt.Errorf("loading AI prompt: %w", err)
 		}
 		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
+
+		// L.4 Step 3: load consumer-owned recipes from
+		// <project_dir>/skills/*.yaml. Missing directory or no
+		// recipes returns an empty Set (skills are opt-in). Any
+		// parse / regex compile error is a hard startup error so
+		// the fetcher refuses to run on a broken recipe rather than
+		// silently dropping it; mirrors the prompts/system.md
+		// contract.
+		set, err := skills.Load(opts.ProjectDir)
+		if err != nil {
+			return fmt.Errorf("loading AI skills: %w", err)
+		}
+		aiSkillSet = set
+		if n := len(aiSkillSet.Skills()); n > 0 {
+			log.Printf("Loaded %d AI skill recipe(s) from %s/skills/ (hash=%s)",
+				n, opts.ProjectDir, shortHash(aiSkillSet.Hash()))
+		}
 	}
 
 	aiToken := os.Getenv("AI_TOKEN")
@@ -219,7 +238,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Step 5: AI failure analysis (optional).
 	if opts.EnableAI {
-		analyzeFailuresWithAI(ctx, cfg, opts.AIModules, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt)
+		analyzeFailuresWithAI(ctx, cfg, opts.AIModules, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt, aiSkillSet)
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
@@ -384,7 +403,7 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 }
 
 // analyzeFailuresWithAI runs AI analysis on every failed test case.
-func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AIModuleRegistry, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir, systemPrompt string) {
+func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AIModuleRegistry, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir, systemPrompt string, skillSet *skills.Set) {
 	aiClient := ai.NewClientWithOptions(ai.Options{
 		Token:        token,
 		CacheDir:     outDir,
@@ -459,21 +478,34 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					MinGCSBytes:        eff.MinGCSBytes,
 					CritiqueEnabled:    eff.Critique.Enabled,
 					CritiqueMaxRetries: eff.Critique.MaxRetries,
+					SkillsEnabled:      eff.Skills.Enabled,
 				}, factory, registry, enabled, eff.Always, useUniversal)
+				// L.4 Step 3: hand the loaded recipe set to the
+				// service. nil-safe; with no recipes the service
+				// behaves as pre-Step-3.
+				service.SetSkills(skillSet)
 				critiqueLog := "off"
 				if eff.Critique.Enabled {
 					critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
 				}
+				skillsLog := "off"
+				if eff.Skills.Enabled {
+					n := 0
+					if skillSet != nil {
+						n = len(skillSet.Skills())
+					}
+					skillsLog = fmt.Sprintf("on/%d", n)
+				}
 				if useUniversal {
-					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, tools=%v)",
-						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, enabled)
+					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
-					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, tools=%v)",
-						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, enabled)
+					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				}
 			}
 		}
@@ -537,6 +569,18 @@ func aiEndpoint(cfg *project.Config) string {
 		return cfg.AI.Endpoint
 	}
 	return os.Getenv("AI_ENDPOINT")
+}
+
+// shortHash returns a short prefix of the SkillSet hash, suitable for
+// startup log lines. Empty input → empty output.
+func shortHash(h string) string {
+	if len(h) == 0 {
+		return ""
+	}
+	if len(h) <= 8 {
+		return h
+	}
+	return h[:8]
 }
 
 // aiModel returns the configured AI model identifier, or "" to let

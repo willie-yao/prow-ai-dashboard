@@ -1,8 +1,12 @@
 package ai
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 )
 
 // TestPuntRE_SanityTable mirrors the 12-case sanity check used to
@@ -79,7 +83,7 @@ func TestPuntRE_SanityTable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out := critiqueDraft(analysisResponse{SuggestedFix: tc.text}, nil, nil)
+			out := critiqueDraft(analysisResponse{SuggestedFix: tc.text}, nil, nil, nil)
 			gotPunt := !out.Passed
 			if gotPunt != tc.wantPunt {
 				t.Errorf("punt=%v, want %v\nmatches=%v\ntext=%q",
@@ -95,7 +99,7 @@ func TestPuntRE_SanityTable(t *testing.T) {
 func TestCritiqueDraft_PassedReturnsEmptyFeedback(t *testing.T) {
 	out := critiqueDraft(analysisResponse{
 		SuggestedFix: "Update kustomize/cluster-template.yaml line 42 to bump the kube-vip image tag.",
-	}, nil, nil)
+	}, nil, nil, nil)
 	if !out.Passed {
 		t.Fatalf("expected passed, got %+v", out)
 	}
@@ -115,7 +119,7 @@ func TestCritiqueDraft_PassedReturnsEmptyFeedback(t *testing.T) {
 // punt.
 func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 	bad := "Check the AzureMachine status. Verify cloud-init."
-	out := critiqueDraft(analysisResponse{SuggestedFix: bad}, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: bad}, nil, nil, nil)
 	if out.Passed {
 		t.Fatalf("expected punt, got passed")
 	}
@@ -145,7 +149,7 @@ func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 // the user-message short.
 func TestCritiqueDraft_FeedbackDeduplicatesMatches(t *testing.T) {
 	repeat := "Check A. Check B. Check C. Check D."
-	out := critiqueDraft(analysisResponse{SuggestedFix: repeat}, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: repeat}, nil, nil, nil)
 	if out.Passed {
 		t.Fatalf("expected punt")
 	}
@@ -162,7 +166,7 @@ func TestCritiqueDraft_FeedbackDeduplicatesMatches(t *testing.T) {
 // upstream caller is responsible for treating empty fixes as a
 // separate quality signal; critique just checks for punt patterns.
 func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
-	out := critiqueDraft(analysisResponse{SuggestedFix: ""}, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: ""}, nil, nil, nil)
 	if !out.Passed {
 		t.Errorf("empty suggested_fix should pass critique, got %+v", out)
 	}
@@ -341,7 +345,7 @@ func TestCritiqueDraft_HallucinationOnly(t *testing.T) {
 		SuggestedFix: "Update kustomize/cluster-template.yaml to match the vnet peering name; reapply.",
 	}
 	// Reads empty (initialized, not nil) so the hallucination check fires.
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{})
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
 	if out.Passed {
 		t.Fatalf("expected fail on hallucinated citation, got passed: %+v", out)
 	}
@@ -367,7 +371,7 @@ func TestCritiqueDraft_FabricatedImportOnly(t *testing.T) {
 		SuggestedFix:  "Update kustomize/cluster-template.yaml; reapply.",
 		RelevantFiles: []string{"sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go"},
 	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{})
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
 	if out.Passed {
 		t.Fatalf("expected fail on fabricated import path, got passed: %+v", out)
 	}
@@ -389,7 +393,7 @@ func TestCritiqueDraft_CombinedFeedback(t *testing.T) {
 		SuggestedFix:  "Check the AzureMachine status conditions.",
 		RelevantFiles: []string{"sigs.k8s.io/foo/bar.go"},
 	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{})
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
 	if out.Passed {
 		t.Fatalf("expected fail on all three signals, got passed")
 	}
@@ -420,12 +424,12 @@ func TestCritiqueDraft_HallucinationCheckEnabledByInitializedEmptyMap(t *testing
 		RootCause:    "Saw the build-log.txt error trace.",
 	}
 	// Nil = check off.
-	out := critiqueDraft(parsed, nil, nil)
+	out := critiqueDraft(parsed, nil, nil, nil)
 	if !out.Passed {
 		t.Errorf("nil maps should disable hallucination check (Passed=true), got %+v", out)
 	}
 	// Initialized empty = check on; build-log.txt citation flagged.
-	out2 := critiqueDraft(parsed, map[string]bool{}, map[string]bool{})
+	out2 := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
 	if out2.Passed {
 		t.Errorf("initialized empty maps should enable check; build-log.txt should be flagged, got passed")
 	}
@@ -539,11 +543,292 @@ func TestCritiqueDraft_FabricatedImportInRootCause(t *testing.T) {
 		SuggestedFix:  "Update kustomize/cluster-template.yaml; reapply.",
 		RelevantFiles: []string{"kustomize/cluster-template.yaml"},
 	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{})
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
 	if out.Passed {
 		t.Fatalf("expected fail on prose-embedded import path, got passed: %+v", out)
 	}
 	if len(out.FabricatedImports) == 0 {
 		t.Errorf("expected FabricatedImports to be populated from root_cause, got %v", out.FabricatedImports)
+	}
+}
+
+// ---------- L.4 Step 3: skill-driven missing-evidence tests ----------
+
+// loadSkillsForTest writes the given recipes into a temp dir and loads
+// them via skills.Load. Returns the loaded set; fails the test on any
+// load error so the test body can ignore wiring noise.
+func loadSkillsForTest(t *testing.T, recipes map[string]string) *skills.Set {
+	t.Helper()
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range recipes {
+		p := filepath.Join(skillsDir, name+".yaml")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := skills.Load(dir)
+	if err != nil {
+		t.Fatalf("skills.Load: %v", err)
+	}
+	return set
+}
+
+// TestCritiqueDraft_SkillMatchEvidenceSatisfied_Passes is the happy
+// path: a recipe matches the draft, but the agent has read artifacts
+// that satisfy every required-evidence group. Critique should pass
+// even though the recipe matched, because the contract is "if it
+// matches, the evidence must be present", not "if it matches, fail".
+func TestCritiqueDraft_SkillMatchEvidenceSatisfied_Passes(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook-tls": `
+id: webhook-tls-failure
+triggers:
+  - "(?i)x509"
+required_evidence:
+  - id: cert-config
+    description: cert-manager Certificate config
+    any_of:
+      - "config/certmanager/.*\\.ya?ml"
+`,
+	})
+	parsed := analysisResponse{
+		RootCause:    "Webhook x509 failure rooted in misconfigured cert-manager Certificate.",
+		SuggestedFix: "Patch config/certmanager/issuer.yaml to set the correct DNS names and reapply.",
+	}
+	reads := map[string]bool{
+		"config/certmanager/issuer.yaml": true,
+	}
+	out := critiqueDraft(parsed, reads, map[string]bool{"issuer.yaml": true}, set.Match("x509"))
+	if !out.Passed {
+		t.Fatalf("expected Passed=true with all evidence satisfied, got %+v", out)
+	}
+	if len(out.MissingSkillEvidence) != 0 {
+		t.Errorf("expected no MissingSkillEvidence, got %d entries", len(out.MissingSkillEvidence))
+	}
+}
+
+// TestCritiqueDraft_SkillMatchMissingEvidence_FailsAndQuotesProcedure
+// covers the central Step 3 invariant: when a recipe matches but the
+// agent hasn't read the required evidence, critique fails with a
+// feedback block that names the recipe, lists the missing groups,
+// and quotes the procedure.
+func TestCritiqueDraft_SkillMatchMissingEvidence_FailsAndQuotesProcedure(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook-tls": `
+id: webhook-tls-failure
+name: Webhook TLS failure
+triggers:
+  - "(?i)x509"
+required_evidence:
+  - id: cert-config
+    description: cert-manager Certificate config
+    any_of:
+      - "config/certmanager/.*\\.ya?ml"
+  - id: webhook-secret
+    description: webhook server cert secret contents
+    any_of:
+      - ".*webhook.*secret.*"
+procedure: |
+  1. List cert-manager Certificate objects with kubectl get certificate -A.
+  2. Inspect the webhook server secret with kubectl get secret -n webhook-system.
+`,
+	})
+	parsed := analysisResponse{
+		RootCause:    "Webhook x509 failure suggests cert-manager misconfiguration.",
+		SuggestedFix: "Patch the cert-manager Certificate and reapply.",
+	}
+	// Agent has read NOTHING relevant.
+	reads := map[string]bool{"build-log.txt": true}
+	out := critiqueDraft(parsed, reads, map[string]bool{"build-log.txt": true}, set.Match("x509"))
+	if out.Passed {
+		t.Fatalf("expected Passed=false with no evidence read, got passed: %+v", out)
+	}
+	if len(out.MissingSkillEvidence) != 1 {
+		t.Fatalf("expected 1 skill miss, got %d", len(out.MissingSkillEvidence))
+	}
+	miss := out.MissingSkillEvidence[0]
+	if miss.Skill.ID != "webhook-tls-failure" {
+		t.Errorf("expected skill ID webhook-tls-failure, got %q", miss.Skill.ID)
+	}
+	if len(miss.Missing) != 2 {
+		t.Errorf("expected 2 missing evidence groups, got %d", len(miss.Missing))
+	}
+	if out.MissingEvidenceCount() != 2 {
+		t.Errorf("MissingEvidenceCount = %d, want 2", out.MissingEvidenceCount())
+	}
+
+	for _, want := range []string{
+		"webhook-tls-failure", "Webhook TLS failure",
+		"cert-config", "webhook-secret",
+		"cert-manager Certificate config", "webhook server cert secret contents",
+		"List cert-manager Certificate objects", // procedure body
+		"consumer-authored guidance, not engine instruction", // disclaimer wrapper
+		"Do NOT rewrite your answer yet",                     // tool-first directive
+		"call read_artifact",                                 // explicit tool call
+	} {
+		if !strings.Contains(out.Feedback, want) {
+			t.Errorf("Feedback missing %q\n---feedback---\n%s", want, out.Feedback)
+		}
+	}
+}
+
+// TestCritiqueDraft_SkillMatchPartialEvidence_FlagsOnlyMissing
+// verifies that when only some groups are missing, only those are
+// surfaced in the outcome. Prevents a regression where the formatter
+// might quote satisfied groups as missing.
+func TestCritiqueDraft_SkillMatchPartialEvidence_FlagsOnlyMissing(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook-tls": `
+id: webhook-tls-failure
+triggers: ["x509"]
+required_evidence:
+  - id: cert-config
+    any_of: ["config/certmanager/.*\\.ya?ml"]
+  - id: webhook-secret
+    any_of: ["webhook.*secret"]
+`,
+	})
+	parsed := analysisResponse{RootCause: "x509 failure"}
+	reads := map[string]bool{
+		"config/certmanager/issuer.yaml": true,
+	}
+	out := critiqueDraft(parsed, reads, map[string]bool{}, set.Match("x509"))
+	if out.Passed {
+		t.Fatalf("expected fail when one group still missing, got %+v", out)
+	}
+	if got := len(out.MissingSkillEvidence[0].Missing); got != 1 {
+		t.Fatalf("expected 1 missing group, got %d", got)
+	}
+	if id := out.MissingSkillEvidence[0].Missing[0].ID; id != "webhook-secret" {
+		t.Errorf("expected webhook-secret to be the missing group, got %q", id)
+	}
+	if !strings.Contains(out.Feedback, "webhook-secret") {
+		t.Errorf("Feedback should mention missing group: %s", out.Feedback)
+	}
+	if strings.Contains(out.Feedback, "cert-config") {
+		// satisfied group should NOT be surfaced
+		t.Errorf("Feedback unexpectedly mentions satisfied group cert-config: %s", out.Feedback)
+	}
+}
+
+// TestCritiqueDraft_NilSkillsBackwardCompatible verifies the pre-
+// Step-3 contract: passing nil for matchedSkills disables the check
+// entirely, even if the draft would otherwise have matched a recipe.
+// Existing call sites that pre-date Step 3 rely on this.
+func TestCritiqueDraft_NilSkillsBackwardCompatible(t *testing.T) {
+	parsed := analysisResponse{
+		RootCause:    "Webhook x509 failure.",
+		SuggestedFix: "Fix the cert and reapply.",
+	}
+	out := critiqueDraft(parsed, map[string]bool{"build-log.txt": true}, map[string]bool{}, nil)
+	if !out.Passed {
+		t.Fatalf("expected Passed=true with nil skills, got %+v", out)
+	}
+	if len(out.MissingSkillEvidence) != 0 {
+		t.Errorf("expected no skill misses with nil input, got %d", len(out.MissingSkillEvidence))
+	}
+}
+
+// TestCritiqueDraft_MultipleSkillsMatchSurfaceAll verifies that when
+// multiple recipes match, each contributes its own miss block. The
+// loop budget needs to know the total count so the formatter must
+// surface all of them, not collapse them.
+func TestCritiqueDraft_MultipleSkillsMatchSurfaceAll(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook
+triggers: ["x509"]
+required_evidence:
+  - id: cert-config
+    any_of: ["never-matches-pattern"]
+`,
+		"machine": `
+id: machine-bootstrap
+triggers: ["cloud-init"]
+required_evidence:
+  - id: machine-yaml
+    any_of: ["never-matches-pattern-2"]
+`,
+	})
+	parsed := analysisResponse{
+		RootCause: "x509 webhook failure combined with cloud-init issues.",
+	}
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{},
+		set.Match(parsed.RootCause))
+	if out.Passed {
+		t.Fatalf("expected fail with two unmatched recipes, got passed")
+	}
+	if got := len(out.MissingSkillEvidence); got != 2 {
+		t.Fatalf("expected 2 skill misses, got %d", got)
+	}
+	// MissingEvidenceCount should sum per-recipe.
+	if c := out.MissingEvidenceCount(); c != 2 {
+		t.Errorf("MissingEvidenceCount = %d, want 2", c)
+	}
+	for _, want := range []string{"webhook", "machine-bootstrap"} {
+		if !strings.Contains(out.Feedback, want) {
+			t.Errorf("Feedback missing recipe %q: %s", want, out.Feedback)
+		}
+	}
+}
+
+// TestCritiqueDraft_SkillCombinesWithPuntAndHallucination verifies
+// the multi-section feedback contract: all four critique categories
+// (punt, unread citations, fabricated imports, missing skill evidence)
+// can fire together and each produces its own section. Ensures the
+// model gets one combined feedback message rather than playing
+// whack-a-mole across rounds.
+func TestCritiqueDraft_SkillCombinesWithPuntAndHallucination(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook
+triggers: ["x509"]
+required_evidence:
+  - id: cert-config
+    any_of: ["never-matches-pattern"]
+`,
+	})
+	parsed := analysisResponse{
+		RootCause:    "x509 failure visible in build-log.txt and machine-foo/boot.log.",
+		SuggestedFix: "Check the cert and verify the webhook secret.", // bare-imperative punt
+	}
+	// build-log.txt is read; machine-foo/boot.log is NOT read → unread
+	// citation. Also fabricated import in relevant_files.
+	parsed.RelevantFiles = []string{"sigs.k8s.io/some-pkg/x.go"}
+	out := critiqueDraft(parsed,
+		map[string]bool{"build-log.txt": true},
+		map[string]bool{"build-log.txt": true},
+		set.Match("x509"))
+
+	if out.Passed {
+		t.Fatalf("expected fail with all four issues firing, got passed: %+v", out)
+	}
+	if len(out.PuntMatches) == 0 {
+		t.Errorf("expected PuntMatches non-empty")
+	}
+	if len(out.UnreadCitations) == 0 {
+		t.Errorf("expected UnreadCitations non-empty (machine-foo/boot.log)")
+	}
+	if len(out.FabricatedImports) == 0 {
+		t.Errorf("expected FabricatedImports non-empty (sigs.k8s.io prefix)")
+	}
+	if len(out.MissingSkillEvidence) == 0 {
+		t.Errorf("expected MissingSkillEvidence non-empty (cert-config unread)")
+	}
+
+	// All four sections should appear in feedback.
+	for _, marker := range []string{
+		"diagnostic / information-gathering",   // punt section
+		"tool log shows no read_artifact",      // unread section
+		"Go-import-style prefixes",             // fabricated import section
+		"matches one or more diagnostic recipes", // skill section header
+	} {
+		if !strings.Contains(out.Feedback, marker) {
+			t.Errorf("Feedback missing section marker %q", marker)
+		}
 	}
 }

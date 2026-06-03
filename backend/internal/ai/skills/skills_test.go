@@ -1,0 +1,443 @@
+package skills
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// writeSkill writes a single recipe file into <dir>/skills/<name>.yaml.
+func writeSkill(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(skillsDir, name+".yaml")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestLoad_MissingDirReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected non-nil empty Set, got nil")
+	}
+	if n := len(got.Skills()); n != 0 {
+		t.Fatalf("expected 0 skills, got %d", n)
+	}
+	if got.Hash() != "" {
+		t.Fatalf("expected empty hash on empty set, got %q", got.Hash())
+	}
+	if matches := got.Match("anything goes here"); matches != nil {
+		t.Fatalf("expected no matches on empty set, got %d", len(matches))
+	}
+}
+
+func TestLoad_EmptyDirReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := len(got.Skills()); n != 0 {
+		t.Fatalf("expected 0 skills, got %d", n)
+	}
+}
+
+func TestLoad_ValidSkill(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "webhook-tls", `
+id: webhook-tls-failure
+name: Webhook TLS failure
+description: Bootstrap webhook fails with x509 errors.
+triggers:
+  - "(?i)x509:?\\s*certificate"
+  - "(?i)webhook.*tls"
+required_evidence:
+  - id: cert-manager-config
+    description: cert-manager Certificate or Issuer config
+    any_of:
+      - "config/certmanager/.*\\.ya?ml"
+      - ".*certificate\\.ya?ml"
+  - id: webhook-secret
+    description: webhook server cert secret contents
+    any_of:
+      - ".*webhook.*secret.*"
+procedure: |
+  1. List cert-manager Certificate objects.
+  2. Inspect the webhook server secret.
+`)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := len(set.Skills()); n != 1 {
+		t.Fatalf("expected 1 skill, got %d", n)
+	}
+	sk := set.Skills()[0]
+	if sk.ID != "webhook-tls-failure" {
+		t.Errorf("ID = %q, want webhook-tls-failure", sk.ID)
+	}
+	if sk.Priority != defaultPriority {
+		t.Errorf("Priority = %d, want default %d", sk.Priority, defaultPriority)
+	}
+	if len(sk.triggerREs) != 2 {
+		t.Errorf("triggerREs len = %d, want 2", len(sk.triggerREs))
+	}
+	if len(sk.RequiredEvidence) != 2 {
+		t.Fatalf("RequiredEvidence len = %d, want 2", len(sk.RequiredEvidence))
+	}
+	if len(sk.RequiredEvidence[0].anyOfREs) != 2 {
+		t.Errorf("evidence[0].anyOfREs len = %d, want 2", len(sk.RequiredEvidence[0].anyOfREs))
+	}
+	if set.Hash() == "" {
+		t.Error("expected non-empty hash on populated set")
+	}
+}
+
+func TestLoad_RejectsMissingID(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "bad", `
+triggers:
+  - "foo"
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on missing id")
+	} else if !strings.Contains(err.Error(), "missing id") {
+		t.Fatalf("error %q does not mention missing id", err)
+	}
+}
+
+func TestLoad_RejectsNoTriggers(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "bad", `
+id: no-triggers
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on missing triggers")
+	} else if !strings.Contains(err.Error(), "no triggers") {
+		t.Fatalf("error %q does not mention no triggers", err)
+	}
+}
+
+func TestLoad_RejectsBadRegex(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "bad", `
+id: bad-regex
+triggers:
+  - "[unclosed"
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on bad regex")
+	} else if !strings.Contains(err.Error(), "bad-regex") {
+		t.Fatalf("error %q does not include skill id", err)
+	}
+}
+
+func TestLoad_RejectsBadEvidenceRegex(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "bad", `
+id: bad-ev-regex
+triggers: ["foo"]
+required_evidence:
+  - id: g1
+    any_of: ["[unclosed"]
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on bad evidence regex")
+	}
+}
+
+func TestLoad_RejectsEmptyEvidenceAnyOf(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "bad", `
+id: bad-ev
+triggers: ["foo"]
+required_evidence:
+  - id: g1
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on empty any_of")
+	}
+}
+
+func TestLoad_RejectsDuplicateID(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "a", `
+id: dup
+triggers: ["foo"]
+`)
+	writeSkill(t, dir, "b", `
+id: dup
+triggers: ["bar"]
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on duplicate id")
+	} else if !strings.Contains(err.Error(), "duplicate skill id") {
+		t.Fatalf("error %q does not mention duplicate", err)
+	}
+}
+
+func TestLoad_RejectsUnknownField(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "strict", `
+id: strict
+triggers: ["foo"]
+typo_field: oops
+`)
+	if _, err := Load(dir); err == nil {
+		t.Fatal("expected error on unknown field with strict yaml")
+	}
+}
+
+func TestMatch_OrdersByPriorityThenID(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "lowprio", `
+id: low
+priority: 50
+triggers: ["foo"]
+`)
+	writeSkill(t, dir, "highprio", `
+id: high
+priority: 200
+triggers: ["foo"]
+`)
+	writeSkill(t, dir, "default-a", `
+id: aaa
+triggers: ["foo"]
+`)
+	writeSkill(t, dir, "default-b", `
+id: bbb
+triggers: ["foo"]
+`)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+	matches := set.Match("hello foo bar")
+	if len(matches) != 4 {
+		t.Fatalf("expected 4 matches, got %d", len(matches))
+	}
+	wantOrder := []string{"high", "aaa", "bbb", "low"}
+	for i, want := range wantOrder {
+		if matches[i].ID != want {
+			t.Errorf("matches[%d].ID = %q, want %q", i, matches[i].ID, want)
+		}
+	}
+}
+
+func TestMatch_NoMatchesReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "only", `
+id: only
+triggers: ["never-appears"]
+`)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Match("text that does not match"); got != nil {
+		t.Fatalf("expected nil, got %d matches", len(got))
+	}
+}
+
+func TestMatch_DedupesByID_SkillNotRetriggeredOnMultipleHits(t *testing.T) {
+	// A skill with two triggers that both fire on the same text
+	// should still only appear once in Match output.
+	dir := t.TempDir()
+	writeSkill(t, dir, "dup", `
+id: webhook
+triggers:
+  - "(?i)x509"
+  - "(?i)certificate"
+`)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := set.Match("x509: bad certificate")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(got))
+	}
+}
+
+func TestMatch_NilSetOrEmptyText(t *testing.T) {
+	var nilSet *Set
+	if got := nilSet.Match("anything"); got != nil {
+		t.Errorf("nil Set Match returned %d, want nil", len(got))
+	}
+	dir := t.TempDir()
+	writeSkill(t, dir, "x", `
+id: x
+triggers: ["foo"]
+`)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.Match(""); got != nil {
+		t.Errorf("empty text Match returned %d, want nil", len(got))
+	}
+}
+
+func TestEvidenceGroup_Satisfied(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "x", `
+id: webhook
+triggers: ["x"]
+required_evidence:
+  - id: certmgr
+    any_of:
+      - "config/certmanager/.*\\.ya?ml"
+      - ".*certificate\\.ya?ml"
+`)
+	set, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := set.Skills()[0].RequiredEvidence[0]
+
+	cases := []struct {
+		name  string
+		reads map[string]bool
+		want  bool
+	}{
+		{"empty reads", map[string]bool{}, false},
+		{"nil reads", nil, false},
+		{"unrelated reads", map[string]bool{"a/b.log": true}, false},
+		{"first pattern hit", map[string]bool{"config/certmanager/issuer.yaml": true}, true},
+		{"second pattern hit", map[string]bool{"foo/my-certificate.yml": true}, true},
+		{"both reads, one hits", map[string]bool{
+			"random.log":               true,
+			"foo/my-certificate.yaml":  true,
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := g.Satisfied(tc.reads); got != tc.want {
+				t.Errorf("Satisfied = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHash_DeterministicAcrossLoadOrder(t *testing.T) {
+	// Two skill files in two different filenames; load twice with
+	// reordered filenames; hash must be identical.
+	dir1 := t.TempDir()
+	writeSkill(t, dir1, "a-named-first", `
+id: webhook
+triggers: ["x"]
+`)
+	writeSkill(t, dir1, "b-named-second", `
+id: machine
+triggers: ["y"]
+`)
+
+	dir2 := t.TempDir()
+	writeSkill(t, dir2, "z-was-first", `
+id: machine
+triggers: ["y"]
+`)
+	writeSkill(t, dir2, "y-was-second", `
+id: webhook
+triggers: ["x"]
+`)
+
+	set1, err := Load(dir1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set2, err := Load(dir2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set1.Hash() != set2.Hash() {
+		t.Errorf("hash differs across filename order: %q vs %q", set1.Hash(), set2.Hash())
+	}
+}
+
+func TestHash_ChangesOnTriggerEdit(t *testing.T) {
+	dir1 := t.TempDir()
+	writeSkill(t, dir1, "x", `
+id: webhook
+triggers: ["x509"]
+`)
+	dir2 := t.TempDir()
+	writeSkill(t, dir2, "x", `
+id: webhook
+triggers: ["x509", "tls"]
+`)
+	set1, _ := Load(dir1)
+	set2, _ := Load(dir2)
+	if set1.Hash() == set2.Hash() {
+		t.Error("expected hash to change after trigger edit, but stayed equal")
+	}
+}
+
+func TestHash_ChangesOnEvidenceEdit(t *testing.T) {
+	dir1 := t.TempDir()
+	writeSkill(t, dir1, "x", `
+id: webhook
+triggers: ["x"]
+required_evidence:
+  - id: g
+    any_of: ["a"]
+`)
+	dir2 := t.TempDir()
+	writeSkill(t, dir2, "x", `
+id: webhook
+triggers: ["x"]
+required_evidence:
+  - id: g
+    any_of: ["b"]
+`)
+	set1, _ := Load(dir1)
+	set2, _ := Load(dir2)
+	if set1.Hash() == set2.Hash() {
+		t.Error("expected hash to change after evidence edit, but stayed equal")
+	}
+}
+
+func TestHash_StableOnWhitespaceOnly(t *testing.T) {
+	// Comments and whitespace inside the source file should NOT
+	// change the hash, only semantic field changes do.
+	dir1 := t.TempDir()
+	writeSkill(t, dir1, "x", `
+id: webhook
+triggers: ["x509"]
+required_evidence:
+  - id: g
+    any_of: ["a"]
+`)
+	dir2 := t.TempDir()
+	writeSkill(t, dir2, "x", `
+# leading comment
+id: webhook
+triggers:
+  - "x509"
+required_evidence:
+  - id: g
+    any_of:
+      - "a"
+
+# trailing comment
+`)
+	set1, _ := Load(dir1)
+	set2, _ := Load(dir2)
+	if set1.Hash() != set2.Hash() {
+		t.Errorf("expected hash to stay equal across whitespace/comment-only edits, got %q vs %q",
+			set1.Hash(), set2.Hash())
+	}
+}

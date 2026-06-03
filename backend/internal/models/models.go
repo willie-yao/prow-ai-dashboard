@@ -148,6 +148,18 @@ type AIAnalysis struct {
 	// properly invalidates entries that passed under the older,
 	// weaker contract. Always 0 for curator. (L.4 Step 2.5)
 	CritiqueVersion int `json:"critique_version,omitempty"`
+
+	// SkillSetHash is the L.4 Step 3 fingerprint of the consumer's
+	// loaded skill set (under <project_dir>/skills/*.yaml) at the
+	// time this analysis was validated. Empty when skills are not
+	// enabled or no recipes are loaded. Used by the cache-read
+	// gate to invalidate entries whose recipe set has drifted from
+	// the currently-loaded one: edits to triggers / required-
+	// evidence / procedure flip the hash and force re-analysis on
+	// the next run, without relying on the engine-only
+	// CritiqueVersion bump that's reserved for engine-side
+	// contract strengthenings. Always empty for curator. (L.4 Step 3)
+	SkillSetHash string `json:"skill_set_hash,omitempty"`
 }
 
 // TestCase represents a single test case from JUnit XML.

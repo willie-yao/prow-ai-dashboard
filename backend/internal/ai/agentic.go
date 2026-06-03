@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -83,6 +84,20 @@ type AgenticOptions struct {
 	// critique evaluations per analysis). Each retry consumes one
 	// extra agentic iteration. Only meaningful when CritiqueEnabled.
 	CritiqueMaxRetries int
+
+	// SkillsEnabled opts the run into the L.4 Step 3 recipe-driven
+	// missing-evidence check inside the critique gate. Only
+	// meaningful when CritiqueEnabled is also true (skills extend
+	// the critique gate; with critique off, this flag is a no-op).
+	// When true, the agentic loop matches the in-flight draft
+	// against the consumer's loaded skill set (AgenticInputs.Skills)
+	// at critique time, and for each matched recipe adds a
+	// missing-evidence section to the critique feedback when any
+	// required evidence group is not satisfied by the agent's read
+	// set. The retry budget is extended dynamically to give the
+	// agent room to satisfy the missing evidence (see
+	// formatSkillEvidenceSection and the in-loop budget logic).
+	SkillsEnabled bool
 }
 
 // agenticToolBudget is the per-call cap on bytes returned to the model by
@@ -98,6 +113,18 @@ const agenticToolBudget = 32 * 1024
 // where the model elects to do more investigation before re-emitting —
 // caught by the L.4 Step 2 rubber-duck review.
 const critiqueRetryIters = 3
+
+// critiqueMissingEvidenceBonusCap is the maximum number of extra iters
+// granted on top of critiqueRetryIters for a single missing-evidence
+// retry. Sized to absorb realistic recipes with 3-4 evidence groups
+// (1 iter to read each, 1 iter to reflect + re-emit) without giving
+// pathological recipes (say, 10 groups) unbounded budget. Rubber-duck
+// review of Step 3 design pointed out that the fixed critiqueRetryIters
+// was sized for "fix your draft" not "go read 3 more files", and a
+// dynamic extension proportional to the number of missing groups is
+// the smallest change that fixes the worst case without affecting the
+// punt-only / hallucination retry budgets. (L.4 Step 3)
+const critiqueMissingEvidenceBonusCap = 6
 
 // ---------- Chat protocol (parallel to ai.go's single-shot types) ----------
 
@@ -235,6 +262,14 @@ type agenticCacheData struct {
 	// passed under the weaker contract. Bumped only on material
 	// strengthenings to keep cache churn proportional.
 	CritiqueVersion int `json:"critique_version,omitempty"`
+
+	// SkillSetHash is the fingerprint of the consumer's loaded skill
+	// set at the time this draft was accepted. Empty when skills
+	// were disabled or no recipes were loaded. Used independently of
+	// CritiqueVersion to invalidate cached entries when the consumer
+	// edits recipes (engine-side contract version unchanged, but the
+	// effective evidence requirements drifted). (L.4 Step 3)
+	SkillSetHash string `json:"skill_set_hash,omitempty"`
 }
 
 // floorStatus tracks which per-project floors are currently unmet for a
@@ -294,6 +329,14 @@ type agentState struct {
 	// path zero-allocation.
 	readArtifactsFull map[string]bool
 	readArtifactsBase map[string]bool
+
+	// skillSet is the loaded recipe set (project-scoped). nil when
+	// skills are disabled or no recipes are configured. Held on
+	// state so the in-loop critique and post-loop critique both
+	// match against the same set, and so cacheAcceptedAnalysis can
+	// stamp the hash without re-threading it through every call.
+	// (L.4 Step 3)
+	skillSet *skills.Set
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -327,6 +370,9 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		if state.critiquePassed {
 			analysis.CritiqueVersion = currentCritiqueVersion
 		}
+		if state.skillSet != nil {
+			analysis.SkillSetHash = state.skillSet.Hash()
+		}
 	}
 }
 
@@ -351,6 +397,15 @@ type AgenticInputs struct {
 	Cache        *tools.Cache
 	WebURLBase   string
 	Mode         string
+
+	// Skills is the consumer's loaded recipe set, scoped to the
+	// project. Constructed once at fetcher startup via
+	// skills.Load(project_dir) and reused across all failures.
+	// nil disables skill matching entirely (also the case when
+	// Opts.SkillsEnabled is false). Skills.Hash() is stamped onto
+	// cached entries so consumer-side recipe edits invalidate
+	// cache without an engine version bump. (L.4 Step 3)
+	Skills *skills.Set
 }
 
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
@@ -397,6 +452,25 @@ func (c *Client) doAnalyzeAgentic(
 			// enabled critique are unaffected).
 			critiqueOK := !in.Opts.CritiqueEnabled ||
 				(cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion)
+			// L.4 Step 3: when skills are enabled, also require the
+			// cached SkillSetHash to match the currently-loaded set.
+			// Consumer recipe edits invalidate cache without bumping
+			// the engine-side currentCritiqueVersion (which is reserved
+			// for engine-side contract strengthenings). When skills are
+			// disabled, this check is a no-op so consumers who never
+			// authored recipes are unaffected. wantHash="" matches a
+			// cache entry written with no recipes (or with skills off
+			// after the v4 bump), which is intentional: no recipes
+			// loaded means no recipe-driven invalidation.
+			if in.Opts.SkillsEnabled {
+				wantHash := ""
+				if in.Skills != nil {
+					wantHash = in.Skills.Hash()
+				}
+				if cached.SkillSetHash != wantHash {
+					critiqueOK = false
+				}
+			}
 			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
@@ -412,6 +486,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.BudgetExhausted = cached.BudgetExhausted
 				analysis.CritiquePassed = cached.CritiquePassed
 				analysis.CritiqueVersion = cached.CritiqueVersion
+				analysis.SkillSetHash = cached.SkillSetHash
 				return summary, analysis, nil
 			}
 		}
@@ -425,6 +500,15 @@ func (c *Client) doAnalyzeAgentic(
 		cache:        in.Cache,
 		webURLBase:   in.WebURLBase,
 		startTime:    time.Now(),
+	}
+	// L.4 Step 3: hold the loaded skill set on state so the in-loop
+	// and post-loop critique paths both consult the same set, and so
+	// cacheAcceptedAnalysis / stampAgenticTelemetry can stamp the
+	// hash without re-threading it through every call. nil when
+	// skills are disabled OR no recipes are loaded; the agentic loop
+	// treats both cases identically (no skill matching, empty hash).
+	if in.Opts.SkillsEnabled {
+		state.skillSet = in.Skills
 	}
 	// L.4 Step 2.5: when critique is enabled, pre-init the read-tracking
 	// maps so findUnreadArtifactCitations runs the check even when the
@@ -552,7 +636,8 @@ func (c *Client) doAnalyzeAgentic(
 			// post-finalize punts are common).
 			if in.Opts.CritiqueEnabled {
 				if parsed, ok := tryParseAnalysis(candidate); ok {
-					out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase)
+					matchedSkills := matchSkillsForDraft(state, parsed)
+					out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
 					if out.Passed {
 						state.critiquePassed = true
 					} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
@@ -565,9 +650,27 @@ func (c *Client) doAnalyzeAgentic(
 							Content: strPtr(out.Feedback),
 						})
 						critiqueRetriesUsed++
-						maxIters += critiqueRetryIters
-						log.Printf("  ✗ agentic critique: %v; re-prompting (retry %d/%d)",
-							out.Matches(), critiqueRetriesUsed, in.Opts.CritiqueMaxRetries)
+						// L.4 Step 3: extend the retry budget
+						// proportional to the number of missing
+						// evidence groups. Plain critique re-prompts
+						// stay at critiqueRetryIters; skill-driven
+						// re-prompts get a bonus so the model can
+						// satisfy multiple missing groups in one
+						// retry (typically 1 tool call per group +
+						// 1 reflection / re-emit). Capped to prevent
+						// pathological recipes from unbounding the
+						// loop. Rubber-duck #3.
+						extra := critiqueRetryIters
+						if missing := out.MissingEvidenceCount(); missing > 0 {
+							bonus := 1 + 2*missing
+							if bonus > critiqueMissingEvidenceBonusCap {
+								bonus = critiqueMissingEvidenceBonusCap
+							}
+							extra += bonus
+						}
+						maxIters += extra
+						log.Printf("  ✗ agentic critique: %v; re-prompting (retry %d/%d, +%d iters)",
+							out.Matches(), critiqueRetriesUsed, in.Opts.CritiqueMaxRetries, extra)
 						continue
 					} else {
 						log.Printf("  ⚠ agentic critique: still failing after %d retries %v; accepting but not caching",
@@ -633,7 +736,8 @@ func (c *Client) doAnalyzeAgentic(
 	// re-entering the loop post-finalize would require a larger refactor
 	// that v1 defers.
 	if in.Opts.CritiqueEnabled && !state.critiquePassed {
-		if out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase); out.Passed {
+		matchedSkills := matchSkillsForDraft(state, parsed)
+		if out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills); out.Passed {
 			state.critiquePassed = true
 		} else {
 			log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching",
@@ -645,6 +749,26 @@ func (c *Client) doAnalyzeAgentic(
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+// matchSkillsForDraft joins the candidate draft's prose fields and
+// matches them against the loaded recipe set. Returns nil if skills
+// are disabled or no recipes are loaded (so the critique gate sees an
+// empty matched list and skips the missing-evidence section). Used by
+// both the in-loop critique and the post-loop critique so both paths
+// match against the same draft text and the same recipe set.
+// (L.4 Step 3)
+func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Skill {
+	if state == nil || state.skillSet == nil {
+		return nil
+	}
+	// Join all prose fields plus the relevant_files list with newlines
+	// so the regex engine sees each on its own line. A recipe's trigger
+	// might appear in any of them; sharing the join across all three
+	// is intentional, matching the critique gate's own approach.
+	parts := []string{parsed.RootCause, parsed.Summary, parsed.SuggestedFix}
+	parts = append(parts, parsed.RelevantFiles...)
+	return state.skillSet.Match(strings.Join(parts, "\n"))
 }
 
 // cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if the
@@ -669,6 +793,10 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if opts.CritiqueEnabled && critiquePassed {
 		version = currentCritiqueVersion
 	}
+	skillHash := ""
+	if state.skillSet != nil {
+		skillHash = state.skillSet.Hash()
+	}
 	_ = c.cache.Set(cacheKey, agenticCacheData{
 		analysisResponse: parsed,
 		ToolCalls:        state.calls,
@@ -677,6 +805,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		BudgetExhausted:  state.budgetExhausted,
 		CritiquePassed:   critiquePassed,
 		CritiqueVersion:  version,
+		SkillSetHash:     skillHash,
 	})
 }
 

@@ -286,6 +286,15 @@ type Agentic struct {
 	// per-consumer.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
+	// Skills configures the L.4 Step 3 recipe-driven evidence
+	// layer. Only meaningful when Critique.Enabled is also true.
+	// Recipes themselves live under <project_dir>/skills/*.yaml
+	// and are loaded by the engine's skills package; this field
+	// controls whether the loaded set is consulted by the critique
+	// gate. See the AgenticSkills doc-comment for the on/off
+	// semantics.
+	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -314,6 +323,25 @@ type AgenticCritique struct {
 	// MinToolCalls / MinGCSBytes "0 = use default" convention used
 	// throughout this struct.
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+}
+
+// AgenticSkills is the per-project skill-set config (L.4 Step 3).
+// Consumer-owned diagnostic recipes live under <project_dir>/skills/
+// and feed the critique gate's evidence checks.
+type AgenticSkills struct {
+	// Enabled turns the L.4 Step 3 skills layer on for this
+	// consumer. When false (the default), recipes under
+	// <project_dir>/skills/ are still loaded and validated at
+	// startup but the critique gate ignores them; behavior matches
+	// pre-Step-3. When true, matched recipes inject their
+	// procedure + required-evidence checks into the critique gate
+	// and may extend the retry budget to give the agent room to
+	// satisfy the missing evidence.
+	//
+	// Skills are only meaningful when Critique.Enabled is also true
+	// (they extend the critique gate). With critique off, this flag
+	// is a no-op.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 // DefaultAgentic is the zero-config fallback applied when a consumer enables
@@ -368,6 +396,7 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	if a.Critique.MaxRetries > 0 {
 		out.Critique.MaxRetries = a.Critique.MaxRetries
 	}
+	out.Skills.Enabled = a.Skills.Enabled
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
 	}

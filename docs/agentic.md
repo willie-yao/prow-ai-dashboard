@@ -68,6 +68,9 @@ ai:
     critique:
       enabled: false              # opt into the L.4 Step 2 punt-detection gate
       max_retries: 2              # re-prompt rounds before accepting a still-punting draft
+    skills:
+      enabled: false              # opt into the L.4 Step 3 recipe-driven evidence gate
+                                  # (loads <project_dir>/skills/*.yaml; see docs/skills.md)
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -246,13 +249,40 @@ first tools-free final. When critique is disabled the maps stay
 nil and the check is a free no-op.
 
 Cache versioning: a `critique_version` int is stamped onto every
-critique-passing analysis (currently `2` = Step 2.5). The
+critique-passing analysis (currently `4` = L.4 Step 3). The
 build-cache and per-failure-cache invalidation gates both reject
 entries whose `critique_version` is below the current engine's
 version. This guarantees that strengthening the gate
 (e.g. adding a new check in a future L.4 Step) automatically
 invalidates entries that passed under the older, weaker
 contract, without needing per-consumer cache clears.
+
+#### L.4 Step 3 strengthening: consumer-owned skill / recipe registry
+
+L.4 Step 2.5 cleaned up structural hallucinations but couldn't
+catch semantic ones (model reads an artifact and draws the wrong
+conclusion, e.g. "API throttling" when the build-log clearly
+shows x509 errors). Step 3 adds a consumer-side knowledge layer:
+each project ships YAML "skills" (recipes) under
+`<project_dir>/skills/*.yaml`. When a recipe's regex triggers
+match the model's draft, the critique gate enforces that the
+agent has read evidence the recipe declares canonical for the
+pattern. Missing evidence appends a per-recipe feedback block
+(with procedure quoted under a "consumer guidance, not engine
+instruction" disclaimer) and dynamically extends the retry budget
+so the agent has room to satisfy the missing evidence in the
+next round.
+
+Skills are opt-in via `ai.agentic.skills.enabled: true`. They
+extend the critique gate, so they only fire when `critique.enabled`
+is also true. Cache invalidation: every cache entry carries a
+`skill_set_hash` fingerprint of the loaded recipe set; consumer
+edits to any recipe change the hash and invalidate affected entries
+on the next run, independently of the engine-side
+`critique_version` bump.
+
+See [`docs/skills.md`](skills.md) for the full schema, authoring
+guidance, and observability notes.
 
 ### `always: true` vs `always: false`
 

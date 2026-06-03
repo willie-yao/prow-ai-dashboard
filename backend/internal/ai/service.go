@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -47,6 +48,15 @@ type Service struct {
 	// configuration is honored without rebuilding on every failure.
 	registry     *tools.Registry
 	enabledTools []string
+
+	// skillSet is the loaded recipe set (project-scoped). Constructed
+	// once at SetSkills time and reused across all failures. nil
+	// when the consumer has not loaded any recipes or has not opted
+	// in to skills. Passed through AgenticInputs.Skills on every
+	// runAgentic call so the agentic loop can match + critique
+	// against the same set the service was configured with.
+	// (L.4 Step 3)
+	skillSet *skills.Set
 
 	// toolCaches memoizes a *tools.Cache per buildPrefix. All failures of one
 	// build share the same cache so expensive tier-2 discovery (cluster
@@ -97,6 +107,17 @@ func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, 
 	s.browserFactory = factory
 	s.registry = registry
 	s.enabledTools = enabledTools
+}
+
+// SetSkills installs the consumer's loaded recipe set on the service.
+// Safe to call at most once during fetcher startup, immediately after
+// EnableAgentic; not safe for concurrent use. Passing nil leaves the
+// service in "no recipes" mode, which is also the default when this
+// method is never called. The agentic loop honors the set only when
+// Opts.SkillsEnabled is also true (set during EnableAgentic).
+// (L.4 Step 3)
+func (s *Service) SetSkills(set *skills.Set) {
+	s.skillSet = set
 }
 
 // Module returns the underlying Module (mainly for logging).
@@ -214,6 +235,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		Cache:        cache,
 		WebURLBase:   run.WebURL,
 		Mode:         s.modeForRun(),
+		Skills:       s.skillSet,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }
@@ -327,6 +349,23 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode stri
 			return true
 		}
 		if tc.AIAnalysis.CritiqueVersion < currentCritiqueVersion {
+			return true
+		}
+	}
+	// L.4 Step 3: when skills are enabled, also invalidate cached
+	// build-cache entries whose SkillSetHash doesn't match the
+	// currently-loaded set. Mirrors the AI-cache check in
+	// doAnalyzeAgentic so consumer recipe edits trigger re-analysis
+	// at the build level too (not just the in-memory AI cache).
+	// wantHash="" matches an entry stamped with no recipes (or
+	// skills disabled), which is the intended behavior: nothing to
+	// invalidate if no recipes are loaded.
+	if s.agenticOpts.SkillsEnabled {
+		wantHash := ""
+		if s.skillSet != nil {
+			wantHash = s.skillSet.Hash()
+		}
+		if tc.AIAnalysis.SkillSetHash != wantHash {
 			return true
 		}
 	}

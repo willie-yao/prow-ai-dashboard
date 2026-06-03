@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
@@ -1345,7 +1348,7 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	if len(long) <= feedbackQuoteLimit {
 		t.Fatalf("test setup: long fix is too short (%d <= %d)", len(long), feedbackQuoteLimit)
 	}
-	out := critiqueDraft(analysisResponse{SuggestedFix: long}, nil, nil)
+	out := critiqueDraft(analysisResponse{SuggestedFix: long}, nil, nil, nil)
 	if out.Passed {
 		t.Fatalf("expected punt")
 	}
@@ -1634,5 +1637,179 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	}
 	if analysis2.CritiqueVersion != currentCritiqueVersion {
 		t.Errorf("post-re-analysis CritiqueVersion = %d, want %d", analysis2.CritiqueVersion, currentCritiqueVersion)
+	}
+}
+
+// loadAgenticSkillsForTest creates a temp dir with one or more YAML
+// recipes and returns the loaded skills.Set, ready for stamping onto
+// AgenticInputs. Mirrors loadSkillsForTest in critique_test.go but
+// kept package-local-private so the two test files don't have to
+// share a helper.
+func loadAgenticSkillsForTest(t *testing.T, recipes map[string]string) *skills.Set {
+	t.Helper()
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range recipes {
+		p := filepath.Join(skillsDir, name+".yaml")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := skills.Load(dir)
+	if err != nil {
+		t.Fatalf("skills.Load: %v", err)
+	}
+	return set
+}
+
+// TestAgentic_CacheInvalidatedBySkillSetHashChange covers the L.4
+// Step 3 cache-invalidation contract: a cache entry written under one
+// skill set must be invalidated when the consumer edits a recipe
+// (changing the SkillSetHash). The currentCritiqueVersion bump cannot
+// catch this because the engine-side contract didn't change; only the
+// consumer's recipe set did. Without the hash check, a recipe edit
+// would never re-run analysis for existing entries.
+//
+// Setup mirrors TestAgentic_CacheInvalidatedByCritiqueVersionBump: a
+// first call writes a cache entry, the entry's SkillSetHash is
+// rewritten to simulate an older recipe set, and the second call
+// must re-analyze instead of serving from cache.
+func TestAgentic_CacheInvalidatedBySkillSetHashChange(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	// Clean draft so critique passes and the entry gets cached. The
+	// recipe does not trigger on this draft, so no skill-evidence
+	// check fires; the entry caches with the current SkillSetHash.
+	cleanFinal := `{"summary":"deep","is_transient":false,"root_cause":"vnet peering misconfigured","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 42; reapply.","relevant_files":["kustomize/cluster-template.yaml"]}`
+	srv.push(200, chatRespFinal(cleanFinal))
+
+	client := newAgenticTestClient(t, srv.URL)
+
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"unrelated": `
+id: unrelated-recipe
+triggers: ["never-matches-this-draft"]
+required_evidence:
+  - id: g
+    any_of: ["x"]
+`,
+	})
+
+	opts := AgenticOptions{
+		MaxIters:           5,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+		SkillsEnabled:      true,
+	}
+	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	in.Skills = set
+
+	const key = "agentic:test:skillhash-invalidate"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if !analysis.CritiquePassed {
+		t.Fatalf("first call: expected CritiquePassed=true, got %+v", analysis)
+	}
+	if analysis.SkillSetHash != set.Hash() {
+		t.Fatalf("first call: SkillSetHash = %q, want %q", analysis.SkillSetHash, set.Hash())
+	}
+
+	// Sanity: a second call with the SAME set should serve from
+	// cache (no model hit).
+	before := atomic.LoadInt32(&srv.calls)
+	_, _, err = client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("second call (same set): %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) != before {
+		t.Errorf("second call with same set hit model; expected cache hit")
+	}
+
+	// Now simulate a consumer recipe edit by loading a different set
+	// (same id, different trigger → different hash). The cached entry's
+	// SkillSetHash no longer matches → must re-analyze.
+	edited := loadAgenticSkillsForTest(t, map[string]string{
+		"unrelated": `
+id: unrelated-recipe
+triggers: ["still-does-not-match-this-draft-but-different-pattern"]
+required_evidence:
+  - id: g
+    any_of: ["x"]
+`,
+	})
+	if edited.Hash() == set.Hash() {
+		t.Fatal("test setup: edited skill set should have different hash")
+	}
+
+	srv.push(200, chatRespFinal(cleanFinal))
+	before2 := atomic.LoadInt32(&srv.calls)
+	in2 := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	in2.Skills = edited
+	_, analysis2, err := client.doAnalyzeAgentic(context.Background(), in2, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("third call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) == before2 {
+		t.Error("expected re-analysis after SkillSetHash change (server hit), got cache hit")
+	}
+	if analysis2.SkillSetHash != edited.Hash() {
+		t.Errorf("third call: SkillSetHash = %q, want %q (post-edit)", analysis2.SkillSetHash, edited.Hash())
+	}
+}
+
+// TestAgentic_SkillsDisabledSkipsHashCheck verifies that when skills
+// are disabled (SkillsEnabled=false), the SkillSetHash invalidation
+// check is a no-op. A consumer that never enables skills should never
+// have their cache invalidated by hash mismatches.
+func TestAgentic_SkillsDisabledSkipsHashCheck(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	cleanFinal := `{"summary":"deep","is_transient":false,"root_cause":"vnet peering misconfigured","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 42; reapply.","relevant_files":["kustomize/cluster-template.yaml"]}`
+	srv.push(200, chatRespFinal(cleanFinal))
+
+	client := newAgenticTestClient(t, srv.URL)
+	opts := AgenticOptions{
+		MaxIters:           5,
+		ModelByteBudget:    100_000,
+		GCSByteBudget:      100_000,
+		WallClock:          30 * time.Second,
+		CritiqueEnabled:    true,
+		CritiqueMaxRetries: 2,
+		SkillsEnabled:      false, // explicit
+	}
+	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
+	in.Skills = loadAgenticSkillsForTest(t, map[string]string{
+		"r1": "id: r1\ntriggers: [\"x\"]\n",
+	})
+
+	const key = "agentic:test:skills-disabled"
+	_, _, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Swap the recipe set entirely; with SkillsEnabled=false the cache
+	// must still hit because the hash check is skipped.
+	in.Skills = loadAgenticSkillsForTest(t, map[string]string{
+		"r2": "id: r2\ntriggers: [\"y\"]\n",
+	})
+
+	before := atomic.LoadInt32(&srv.calls)
+	_, _, err = client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if atomic.LoadInt32(&srv.calls) != before {
+		t.Error("expected cache hit when SkillsEnabled=false despite recipe set change, got model hit")
 	}
 }
