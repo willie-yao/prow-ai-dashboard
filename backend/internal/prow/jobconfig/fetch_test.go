@@ -7,33 +7,55 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-// fakeTestInfra hosts a stub of both the GitHub Code Search endpoint and
-// the raw.githubusercontent.com download endpoint. files maps a
-// repo-relative path (e.g. "config/jobs/foo/bar.yaml") to the raw YAML
-// the fetcher would download. Code search returns every path whose body
-// contains the dashboard string from the query.
+// fakeTestInfra hosts a stub of:
+//   - GET /commits/master            (returns a fake commit SHA)
+//   - GET /git/trees/<sha>?recursive=1 (returns a tree listing)
+//   - GET /raw/<sha>/<path>          (returns the raw YAML body)
+//
+// files maps repo-relative paths under config/jobs/ to their raw YAML body.
+// Anything in files is both included in the tree and downloadable.
 type fakeTestInfra struct {
-	files             map[string]string
-	forceIncomplete   bool // set incomplete_results=true on every page
-	pageSize          int  // results per page (defaults to 100)
-	forcedStatus      int  // when nonzero, returned instead of 200 on /search
-	forcedSearchBody  string
-	extraNonMatchPath string // a yaml path that the search returns despite not containing the dashboard string (for false-positive coverage)
+	files map[string]string
+
+	// Knobs for testing failure paths:
+	forceTruncated     bool   // tree response carries truncated=true
+	forcedTreeStatus   int    // nonzero overrides tree response status
+	forcedTreeBody     string // body returned with forcedTreeStatus
+	forcedCommitStatus int    // nonzero overrides /commits/master status
+	failRawPath        string // when set, returns 404 for this exact path
+	extraTreeEntries   []string // extra paths emitted in the tree (e.g. dir entries) for coverage
+
+	rawCalls atomic.Int64
 }
 
-func (f *fakeTestInfra) start(t *testing.T) (rawURL, searchURL string, stop func()) {
+const fakeSHA = "deadbeefcafef00d000000000000000000000000"
+
+func (f *fakeTestInfra) start(t *testing.T) (rawURL, apiURL string, stop func()) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/raw/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/raw/")
+		f.rawCalls.Add(1)
+		// /raw/<sha>/<path>
+		rest := strings.TrimPrefix(r.URL.Path, "/raw/")
+		// strip the sha segment
+		slash := strings.Index(rest, "/")
+		if slash < 0 {
+			http.NotFound(w, r)
+			return
+		}
+		path := rest[slash+1:]
+		if path == f.failRawPath {
+			http.Error(w, "fake 404", http.StatusNotFound)
+			return
+		}
 		body, ok := f.files[path]
 		if !ok {
 			http.NotFound(w, r)
@@ -41,72 +63,47 @@ func (f *fakeTestInfra) start(t *testing.T) (rawURL, searchURL string, stop func
 		}
 		_, _ = w.Write([]byte(body))
 	})
-	mux.HandleFunc("/search/code", func(w http.ResponseWriter, r *http.Request) {
-		if f.forcedStatus != 0 {
-			w.WriteHeader(f.forcedStatus)
-			_, _ = w.Write([]byte(f.forcedSearchBody))
+	mux.HandleFunc("/api/commits/master", func(w http.ResponseWriter, r *http.Request) {
+		if f.forcedCommitStatus != 0 {
+			w.WriteHeader(f.forcedCommitStatus)
+			_, _ = w.Write([]byte("forced commit failure"))
 			return
 		}
-		q := r.URL.Query().Get("q")
-		// Quote-delimited dashboard string is the first token. Extract
-		// what's between the quotes.
-		dash := ""
-		if i := strings.Index(q, `"`); i >= 0 {
-			if j := strings.Index(q[i+1:], `"`); j >= 0 {
-				dash = q[i+1 : i+1+j]
-			}
+		_, _ = w.Write([]byte(fakeSHA))
+	})
+	mux.HandleFunc("/api/git/trees/", func(w http.ResponseWriter, r *http.Request) {
+		if f.forcedTreeStatus != 0 {
+			w.WriteHeader(f.forcedTreeStatus)
+			_, _ = w.Write([]byte(f.forcedTreeBody))
+			return
 		}
-		page := 1
-		if p := r.URL.Query().Get("page"); p != "" {
-			_, _ = fmt.Sscanf(p, "%d", &page)
+		type entry struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
 		}
-		size := f.pageSize
-		if size == 0 {
-			size = 100
+		var entries []entry
+		for path := range f.files {
+			entries = append(entries, entry{Path: path, Type: "blob"})
 		}
-
-		var matching []string
-		for path, body := range f.files {
-			if dash != "" && !strings.Contains(body, dash) {
-				continue
-			}
-			matching = append(matching, path)
-		}
-		if f.extraNonMatchPath != "" {
-			matching = append(matching, f.extraNonMatchPath)
-		}
-		sort.Strings(matching)
-
-		total := len(matching)
-		start := (page - 1) * size
-		end := start + size
-		if start > total {
-			start = total
-		}
-		if end > total {
-			end = total
-		}
-		items := make([]map[string]string, 0, end-start)
-		for _, p := range matching[start:end] {
-			items = append(items, map[string]string{"path": p})
+		for _, p := range f.extraTreeEntries {
+			entries = append(entries, entry{Path: p, Type: "blob"})
 		}
 		out := map[string]any{
-			"total_count":        total,
-			"incomplete_results": f.forceIncomplete,
-			"items":              items,
+			"truncated": f.forceTruncated,
+			"tree":      entries,
 		}
 		_ = json.NewEncoder(w).Encode(out)
 	})
 	srv := httptest.NewServer(mux)
-	return srv.URL + "/raw/", srv.URL + "/search/code", srv.Close
+	return srv.URL + "/raw/", srv.URL + "/api/", srv.Close
 }
 
-func setURLs(t *testing.T, raw, search string) {
+func setURLs(t *testing.T, raw, api string) {
 	t.Helper()
-	origRaw, origSearch := rawBaseURL, searchBaseURL
-	rawBaseURL, searchBaseURL = raw, search
+	origRaw, origAPI := rawBaseURL, apiBaseURL
+	rawBaseURL, apiBaseURL = raw, api
 	t.Cleanup(func() {
-		rawBaseURL, searchBaseURL = origRaw, origSearch
+		rawBaseURL, apiBaseURL = origRaw, origAPI
 	})
 }
 
@@ -148,22 +145,21 @@ func TestFetchJobConfigs_DiscoversAcrossDirectoriesAndNames(t *testing.T) {
 	tf := &fakeTestInfra{files: map[string]string{
 		"config/jobs/kubernetes-sigs/cluster-api-provider-azure/cluster-api-provider-azure-periodics-main.yaml": periodicJob("periodic-cluster-api-provider-azure-e2e", dashboard),
 		"config/jobs/kubernetes/sig-scalability/sig-scalability-periodic-azure.yaml":                            periodicJob("ci-kubernetes-e2e-azure-scalability", dashboard),
+		// Noise: matches the prefix/suffix filter but advertises a different dashboard.
+		"config/jobs/kubernetes/sig-other/unrelated.yaml": periodicJob("unrelated", "some-other-dashboard"),
 	}}
-	raw, search, stop := tf.start(t)
+	raw, api, stop := tf.start(t)
 	defer stop()
-	setURLs(t, raw, search)
+	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{
-		TestGrid: project.TestGrid{Dashboard: dashboard},
-	}
-
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
 	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
 	}
 	if got := len(jobs); got != 2 {
-		t.Fatalf("expected 2 jobs, got %d (%+v)", got, jobs)
+		t.Fatalf("expected 2 dashboard-matching jobs, got %d (%+v)", got, jobs)
 	}
 
 	wantConfigFiles := map[string]string{
@@ -182,31 +178,24 @@ func TestFetchJobConfigs_DiscoversAcrossDirectoriesAndNames(t *testing.T) {
 	}
 }
 
-func TestFetchJobConfigs_FalsePositiveFilteredByAnnotation(t *testing.T) {
-	const dashboard = "wanted-dashboard"
+func TestFetchJobConfigs_OnlyConfigJobsYAMLsAreDownloaded(t *testing.T) {
+	const dashboard = "d"
 	tf := &fakeTestInfra{
 		files: map[string]string{
-			"config/jobs/k/sig-a/match.yaml": periodicJob("foo", dashboard),
-			// Search returns this file (it contains the dashboard string
-			// in a comment) but its job is annotated for a different
-			// dashboard. matchesDashboard must drop it.
-			"config/jobs/k/sig-b/false-positive.yaml": `# mentions wanted-dashboard in a comment
-periodics:
-- name: bar
-  minimum_interval: 1h
-  annotations:
-    testgrid-dashboards: some-other-dashboard
-    testgrid-tab-name: bar
-  extra_refs:
-  - org: o
-    repo: r
-    base_ref: main
-`,
+			"config/jobs/k/a.yaml": periodicJob("a", dashboard),
+		},
+		// Tree includes paths outside config/jobs/ and non-yaml files;
+		// the tree filter must exclude them, so no raw call is made.
+		extraTreeEntries: []string{
+			"config/testgrids/foo.yaml",
+			"prow/config.yaml",
+			"config/jobs/k/README.md",
+			"config/jobs/k/a.yaml.template",
 		},
 	}
-	raw, search, stop := tf.start(t)
+	raw, api, stop := tf.start(t)
 	defer stop()
-	setURLs(t, raw, search)
+	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
@@ -214,78 +203,43 @@ periodics:
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
 	}
-	if got := len(jobs); got != 1 || jobs[0].Name != "foo" {
-		t.Fatalf("expected only the annotated job, got %+v", jobs)
+	if got := len(jobs); got != 1 {
+		t.Fatalf("expected 1 job, got %d", got)
+	}
+	if got := tf.rawCalls.Load(); got != 1 {
+		t.Errorf("raw downloads = %d, want 1 (only the single config/jobs/*.yaml)", got)
 	}
 }
 
-func TestFetchJobConfigs_ZeroMatchErrors(t *testing.T) {
-	tf := &fakeTestInfra{files: map[string]string{}}
-	raw, search, stop := tf.start(t)
-	defer stop()
-	setURLs(t, raw, search)
-	setToken(t, "fake-token")
-
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "wanted"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
-	if err == nil {
-		t.Fatal("expected zero-match error, got nil")
-	}
-	for _, want := range []string{"no YAML files", `"wanted"`} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error missing %q: %v", want, err)
-		}
-	}
-}
-
-func TestFetchJobConfigs_RequiresGitHubToken(t *testing.T) {
-	tf := &fakeTestInfra{files: map[string]string{}}
-	raw, search, stop := tf.start(t)
-	defer stop()
-	setURLs(t, raw, search)
-	setToken(t, "")
-
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
-	if err == nil {
-		t.Fatal("expected missing-token error, got nil")
-	}
-	if !strings.Contains(err.Error(), "GITHUB_TOKEN") {
-		t.Errorf("error should mention GITHUB_TOKEN; got: %v", err)
-	}
-}
-
-func TestFetchJobConfigs_IncompleteResultsIsError(t *testing.T) {
+func TestFetchJobConfigs_TruncatedTreeIsError(t *testing.T) {
 	tf := &fakeTestInfra{
-		files: map[string]string{
-			"config/jobs/k/a.yaml": periodicJob("a", "d"),
-		},
-		forceIncomplete: true,
+		files:          map[string]string{"config/jobs/k/a.yaml": periodicJob("a", "d")},
+		forceTruncated: true,
 	}
-	raw, search, stop := tf.start(t)
+	raw, api, stop := tf.start(t)
 	defer stop()
-	setURLs(t, raw, search)
+	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
 	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err == nil {
-		t.Fatal("expected error for incomplete_results=true, got nil")
+		t.Fatal("expected error for truncated tree, got nil")
 	}
-	if !strings.Contains(err.Error(), "incomplete_results") {
-		t.Errorf("error should mention incomplete_results; got: %v", err)
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error should mention truncated; got: %v", err)
 	}
 }
 
-func TestFetchJobConfigs_SearchHTTPErrorIsError(t *testing.T) {
+func TestFetchJobConfigs_TreeHTTPErrorSurfacesBody(t *testing.T) {
 	tf := &fakeTestInfra{
 		files:            map[string]string{},
-		forcedStatus:     http.StatusForbidden,
-		forcedSearchBody: `{"message":"API rate limit exceeded"}`,
+		forcedTreeStatus: http.StatusForbidden,
+		forcedTreeBody:   `{"message":"API rate limit exceeded"}`,
 	}
-	raw, search, stop := tf.start(t)
+	raw, api, stop := tf.start(t)
 	defer stop()
-	setURLs(t, raw, search)
+	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
@@ -298,47 +252,89 @@ func TestFetchJobConfigs_SearchHTTPErrorIsError(t *testing.T) {
 	}
 }
 
-func TestFetchJobConfigs_PaginatesAndDedupes(t *testing.T) {
-	const dashboard = "d"
-	files := map[string]string{}
-	for i := 0; i < 5; i++ {
-		files[fmt.Sprintf("config/jobs/k/a%d.yaml", i)] = periodicJob(fmt.Sprintf("a%d", i), dashboard)
+func TestFetchJobConfigs_CommitResolutionFails(t *testing.T) {
+	tf := &fakeTestInfra{
+		files:              map[string]string{},
+		forcedCommitStatus: http.StatusServiceUnavailable,
 	}
-	tf := &fakeTestInfra{files: files, pageSize: 2}
-	raw, search, stop := tf.start(t)
+	raw, api, stop := tf.start(t)
 	defer stop()
-	setURLs(t, raw, search)
+	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
-	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
-	if err != nil {
-		t.Fatalf("FetchJobConfigs: %v", err)
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	if err == nil {
+		t.Fatal("expected error when commit resolution fails, got nil")
 	}
-	if got := len(jobs); got != 5 {
-		t.Fatalf("expected 5 jobs after pagination, got %d", got)
+	if !strings.Contains(err.Error(), "master SHA") {
+		t.Errorf("error should mention master SHA resolution; got: %v", err)
 	}
 }
 
-func TestFetchJobConfigs_SearchQueryEncoded(t *testing.T) {
-	// Dashboards with characters that would corrupt an unescaped query
-	// (e.g. spaces, plus, ampersand) round-trip correctly through url.Values.
-	const dashboard = `weird dashboard & name+test`
-	tf := &fakeTestInfra{files: map[string]string{
-		"config/jobs/k/a.yaml": periodicJob("a", dashboard),
-	}}
-	raw, search, stop := tf.start(t)
+func TestFetchJobConfigs_RawDownloadFailureCancelsBatch(t *testing.T) {
+	// One file 404s; the whole discovery must fail with a clear per-file
+	// error rather than silently dropping that file.
+	tf := &fakeTestInfra{
+		files: map[string]string{
+			"config/jobs/k/a.yaml": periodicJob("a", "d"),
+			"config/jobs/k/b.yaml": periodicJob("b", "d"),
+			"config/jobs/k/c.yaml": periodicJob("c", "d"),
+		},
+		failRawPath: "config/jobs/k/b.yaml",
+	}
+	raw, api, stop := tf.start(t)
 	defer stop()
-	setURLs(t, raw, search)
+	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	if err == nil {
+		t.Fatal("expected error when a candidate file fails to download, got nil")
+	}
+	if !strings.Contains(err.Error(), "config/jobs/k/b.yaml") || !strings.Contains(err.Error(), "404") {
+		t.Errorf("error should name the failing file and status; got: %v", err)
+	}
+}
+
+func TestFetchJobConfigs_ZeroMatchErrors(t *testing.T) {
+	// Tree returns files but none advertise the wanted dashboard.
+	tf := &fakeTestInfra{files: map[string]string{
+		"config/jobs/k/a.yaml": periodicJob("a", "other"),
+	}}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+	setToken(t, "fake-token")
+
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "wanted"}}
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	if err == nil {
+		t.Fatal("expected zero-match error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no jobs labeled with dashboard") || !strings.Contains(err.Error(), `"wanted"`) {
+		t.Errorf("error missing expected fragments: %v", err)
+	}
+}
+
+func TestFetchJobConfigs_AnonymousIsAllowed(t *testing.T) {
+	// GITHUB_TOKEN is optional, so a local dev with no env still works.
+	tf := &fakeTestInfra{files: map[string]string{
+		"config/jobs/k/a.yaml": periodicJob("a", "d"),
+	}}
+	raw, api, stop := tf.start(t)
+	defer stop()
+	setURLs(t, raw, api)
+	setToken(t, "")
+
+	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
 	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err != nil {
-		t.Fatalf("FetchJobConfigs: %v", err)
+		t.Fatalf("FetchJobConfigs without token: %v", err)
 	}
-	if got := len(jobs); got != 1 {
-		t.Fatalf("expected 1 job, got %d", got)
+	if len(jobs) != 1 {
+		t.Errorf("expected 1 job, got %d", len(jobs))
 	}
 }
 

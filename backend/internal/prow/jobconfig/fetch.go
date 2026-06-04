@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -18,161 +19,246 @@ import (
 // Base URLs for talking to kubernetes/test-infra on github.com. Vars rather
 // than consts so tests can swap them for an httptest.Server.
 var (
-	rawBaseURL    = "https://raw.githubusercontent.com/kubernetes/test-infra/master/"
-	searchBaseURL = "https://api.github.com/search/code"
+	rawBaseURL = "https://raw.githubusercontent.com/kubernetes/test-infra/"
+	apiBaseURL = "https://api.github.com/repos/kubernetes/test-infra/"
 )
 
-// searchPathScope restricts code-search results to the prow job tree. Anything
-// outside config/jobs/ (e.g. testgrid YAMLs or doc pages that happen to mention
-// a dashboard name) is not authoritative for job discovery.
-const searchPathScope = "config/jobs"
+// configJobsPrefix scopes discovery to the prow job tree. Anything outside
+// (e.g. config/testgrids/, prow/ scripts) is not authoritative for jobs.
+const configJobsPrefix = "config/jobs/"
 
-// maxSearchPages caps pagination. 1000 results per query is the GitHub Search
-// hard limit, so 10 pages of 100 covers the worst real-world dashboard
-// comfortably and keeps a runaway scan from making 100+ HTTP calls.
-const maxSearchPages = 10
+// downloadWorkers caps how many raw.githubusercontent.com requests can be in
+// flight concurrently. 10 keeps total time around 5-10s for ~600 files on a
+// typical runner while staying well under any plausible CDN burst limits.
+const downloadWorkers = 10
 
 // FetchJobConfigs discovers all of a project's Prow job YAMLs from the
 // kubernetes/test-infra repository and returns the parsed jobs. Discovery is
-// dashboard-driven: GitHub code search returns every YAML under config/jobs/
-// that mentions cfg.TestGrid.Dashboard, and the testgrid-dashboards annotation
-// on each parsed job is the final membership filter. False positives (a file
-// mentions the dashboard string outside an annotation) are dropped by
-// matchesDashboard and cost only a small wasted download.
+// snapshot-consistent: the engine resolves kubernetes/test-infra's HEAD
+// commit once, lists every YAML under config/jobs/ in that commit's tree,
+// and downloads each at that pinned SHA. The testgrid-dashboards annotation
+// on each parsed job is the final membership filter, so jobs are discovered
+// regardless of directory or filename convention.
 func FetchJobConfigs(ctx context.Context, client *http.Client, cfg *project.Config) ([]models.ProwJob, error) {
-	files, err := searchDashboardFiles(ctx, client, cfg.TestGrid.Dashboard)
+	sha, err := resolveMasterSHA(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("searching test-infra for dashboard %q: %w", cfg.TestGrid.Dashboard, err)
+		return nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
 	}
 
-	var allJobs []models.ProwJob
-	for _, file := range files {
-		url := rawBaseURL + file
+	files, err := listConfigJobsYAMLs(ctx, client, sha)
+	if err != nil {
+		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
+	}
+	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating request for %s: %w", file, err)
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("fetching %s: %w", file, err)
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", file, err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("fetching %s: HTTP %d", file, resp.StatusCode)
-		}
-
-		jobs, err := ParseJobConfig(body, file, cfg.TestGrid.Dashboard, cfg.EffectiveCategories())
-		if err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", file, err)
-		}
-		allJobs = append(allJobs, jobs...)
+	allJobs, err := downloadAndParseAll(ctx, client, sha, files, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(allJobs) == 0 {
-		return nil, fmt.Errorf("no jobs labeled with dashboard %q found across %d candidate file(s) returned by code search",
-			cfg.TestGrid.Dashboard, len(files))
+		return nil, fmt.Errorf("no jobs labeled with dashboard %q found across %d candidate YAML(s) at test-infra@%s",
+			cfg.TestGrid.Dashboard, len(files), sha[:7])
 	}
-
 	return allJobs, nil
 }
 
-// searchResponse mirrors the parts of the GitHub Search Code API we read.
-type searchResponse struct {
-	TotalCount        int  `json:"total_count"`
-	IncompleteResults bool `json:"incomplete_results"`
-	Items             []struct {
-		Path string `json:"path"`
-	} `json:"items"`
+// resolveMasterSHA returns the current commit SHA of kubernetes/test-infra's
+// master branch. Pinning to a single SHA for both tree-listing and raw
+// downloads gives every fetcher run a consistent snapshot, so a file that
+// appears in the tree won't 404 mid-run because someone pushed a rename.
+func resolveMasterSHA(ctx context.Context, client *http.Client) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"commits/master", nil)
+	if err != nil {
+		return "", err
+	}
+	// The vnd.github.sha media type returns the plain commit SHA as the
+	// response body instead of the full commit JSON.
+	req.Header.Set("Accept", "application/vnd.github.sha")
+	addGitHubAuth(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet(body))
+	}
+	sha := strings.TrimSpace(string(body))
+	if len(sha) < 7 {
+		return "", fmt.Errorf("unexpected SHA response: %q", sha)
+	}
+	return sha, nil
 }
 
-// searchDashboardFiles asks GitHub Code Search for every YAML in
-// kubernetes/test-infra/config/jobs that contains the dashboard string,
-// paginates through all pages, dedupes, and returns sorted repo-relative
-// paths. Requires GITHUB_TOKEN (code search is auth-only); partial or
-// rate-limited responses are hard errors rather than silent under-discovery.
-func searchDashboardFiles(ctx context.Context, client *http.Client, dashboard string) ([]string, error) {
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		return nil, fmt.Errorf("GITHUB_TOKEN is required for GitHub code search-based job discovery; set a token with public_repo / read access")
+// gitTreeResponse mirrors the parts of the Git Trees API we read.
+type gitTreeResponse struct {
+	Truncated bool `json:"truncated"`
+	Tree      []struct {
+		Path string `json:"path"`
+		Type string `json:"type"`
+	} `json:"tree"`
+}
+
+// listConfigJobsYAMLs returns sorted repo-relative paths of every YAML blob
+// under configJobsPrefix in the given commit's recursive tree. Truncated
+// responses are a hard error: silently under-discovering jobs would be worse
+// than a loud failure that points the operator at the cap.
+func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) ([]string, error) {
+	url := apiBaseURL + "git/trees/" + sha + "?recursive=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	addGitHubAuth(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet(body))
 	}
 
-	q := fmt.Sprintf(`"%s" repo:kubernetes/test-infra extension:yaml path:%s`, dashboard, searchPathScope)
-
-	seen := make(map[string]struct{})
-	for page := 1; page <= maxSearchPages; page++ {
-		params := url.Values{}
-		params.Set("q", q)
-		params.Set("per_page", "100")
-		params.Set("page", fmt.Sprintf("%d", page))
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchBaseURL+"?"+params.Encode(), nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating search request (page %d): %w", page, err)
-		}
-		req.Header.Set("Accept", "application/vnd.github.v3+json")
-		req.Header.Set("Authorization", "Bearer "+token)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("search request (page %d): %w", page, err)
-		}
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("reading search response (page %d): %w", page, err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			snippet := string(body)
-			if len(snippet) > 512 {
-				snippet = snippet[:512]
-			}
-			return nil, fmt.Errorf("search (page %d) HTTP %d: %s", page, resp.StatusCode, snippet)
-		}
-
-		var sr searchResponse
-		if err := json.Unmarshal(body, &sr); err != nil {
-			return nil, fmt.Errorf("parsing search response (page %d): %w", page, err)
-		}
-		if sr.IncompleteResults {
-			return nil, fmt.Errorf("search returned incomplete_results=true on page %d; refusing to silently under-discover jobs", page)
-		}
-
-		for _, it := range sr.Items {
-			if it.Path == "" {
-				continue
-			}
-			seen[it.Path] = struct{}{}
-		}
-
-		// Stop paginating once we've collected every reported result or
-		// the server stops returning items.
-		if len(sr.Items) == 0 || len(seen) >= sr.TotalCount {
-			break
-		}
-		if page == maxSearchPages && len(seen) < sr.TotalCount {
-			return nil, fmt.Errorf("search returned %d results for dashboard %q, exceeds %d-page cap (%d collected)",
-				sr.TotalCount, dashboard, maxSearchPages, len(seen))
-		}
+	var tr gitTreeResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return nil, fmt.Errorf("parsing tree response: %w", err)
+	}
+	if tr.Truncated {
+		return nil, fmt.Errorf("git tree response was truncated; test-infra has outgrown the recursive-tree cap")
 	}
 
-	if len(seen) == 0 {
-		return nil, fmt.Errorf("no YAML files under %s mention dashboard %q; double-check the dashboard name", searchPathScope, dashboard)
-	}
-
-	files := make([]string, 0, len(seen))
-	for p := range seen {
-		files = append(files, p)
+	files := make([]string, 0, 600)
+	for _, e := range tr.Tree {
+		if e.Type != "blob" {
+			continue
+		}
+		if !strings.HasPrefix(e.Path, configJobsPrefix) {
+			continue
+		}
+		if !strings.HasSuffix(e.Path, ".yaml") {
+			continue
+		}
+		files = append(files, e.Path)
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+// downloadAndParseAll fetches every candidate file in parallel from
+// raw.githubusercontent.com (pinned to the same SHA) and runs them through
+// ParseJobConfig, which keeps only jobs whose testgrid-dashboards annotation
+// contains cfg.TestGrid.Dashboard. The first file-level error cancels every
+// in-flight goroutine and is returned to the caller.
+func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config) ([]models.ProwJob, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	perFile := make([][]models.ProwJob, len(files))
+	sem := make(chan struct{}, downloadWorkers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	recordErr := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+	}
+
+	for i, file := range files {
+		wg.Add(1)
+		go func(idx int, f string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			body, err := downloadRaw(ctx, client, sha, f)
+			if err != nil {
+				if ctx.Err() == nil {
+					recordErr(fmt.Errorf("fetching %s: %w", f, err))
+				}
+				return
+			}
+			jobs, err := ParseJobConfig(body, f, cfg.TestGrid.Dashboard, cfg.EffectiveCategories())
+			if err != nil {
+				recordErr(fmt.Errorf("parsing %s: %w", f, err))
+				return
+			}
+			perFile[idx] = jobs
+		}(i, file)
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	var all []models.ProwJob
+	for _, jobs := range perFile {
+		all = append(all, jobs...)
+	}
+	return all, nil
+}
+
+// downloadRaw fetches a single file from raw.githubusercontent.com pinned to
+// the given commit SHA so the snapshot stays consistent with the tree listing.
+func downloadRaw(ctx context.Context, client *http.Client, sha, file string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawBaseURL+sha+"/"+file, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet(body))
+	}
+	return body, nil
+}
+
+// addGitHubAuth attaches the GITHUB_TOKEN when present. The token bumps the
+// API rate limit from 60/hr (anonymous) to 5000/hr (authenticated). It is
+// optional so local `make fetch-data-quick` works without setup, but warned
+// about: 60/hr is uncomfortably low for an iteration loop.
+func addGitHubAuth(req *http.Request) {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
+// snippet returns at most 256 bytes of body so error messages stay readable
+// when an upstream returns an HTML rate-limit page.
+func snippet(body []byte) string {
+	const max = 256
+	if len(body) <= max {
+		return string(body)
+	}
+	return string(body[:max]) + "..."
 }
 
 // DerivePeriodicPrefix returns the longest "periodic-<x>-" prefix shared by a
