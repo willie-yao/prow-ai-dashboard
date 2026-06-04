@@ -124,8 +124,8 @@ type Artifacts struct {
 // AI selects the AI module used to build prompts and gather evidence for
 // failure analysis. Implementations live under backend/internal/ai/modules/.
 type AI struct {
-	// Module names the registered AI module (e.g. "generic"). When unset,
-	// inferred from artifacts.collector with "generic" fallback.
+	// Module names the registered AI module (e.g. "generic"). Defaults
+	// to "generic" when unset.
 	Module string `yaml:"module" json:"module,omitempty"`
 
 	// Endpoint is the OpenAI-compatible chat-completions URL. When unset,
