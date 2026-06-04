@@ -954,6 +954,31 @@ func TestResponseFormatFooter_L4Step1Anchors(t *testing.T) {
 	}
 }
 
+// TestResponseFormatFooter_L4Step3DepthAnchors pins the lever-4 depth
+// tightening of the root_cause schema description (2026-06-04). The
+// median Qwen3-235B root_cause was ~430 chars vs Claude's ~1490 on the
+// same builds; the prior description ("the specific error found in
+// the available evidence") gave no signal that the model should
+// produce a multi-step causal chain. The new wording asks for
+// quoted log lines + cited artifact paths for each link in the
+// chain, with a ~3-5 sentence floor. These anchors must stay in
+// place so the depth signal isn't lost on a future cosmetic edit.
+func TestResponseFormatFooter_L4Step3DepthAnchors(t *testing.T) {
+	required := []string{
+		"Full causal chain",
+		"At least 3-5 sentences",
+		"Quote the exact log line",
+		"cite the artifact path",
+		"two distinct artifacts",
+		"verification step",
+	}
+	for _, s := range required {
+		if !strings.Contains(ResponseFormatFooter, s) {
+			t.Errorf("ResponseFormatFooter missing required L.4 Step 3 depth anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+		}
+	}
+}
+
 // ---------- L.4 Step 2 critique gate ----------
 //
 // A "punt-shaped" suggested_fix is a diagnostic / information-gathering

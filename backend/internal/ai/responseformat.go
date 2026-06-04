@@ -16,9 +16,9 @@ Always respond with a single JSON object matching this schema:
 {
   "summary":        "1-2 sentence headline derived from root_cause",
   "is_transient":   true | false,
-  "root_cause":     "the specific error found in the available evidence, with quoted log lines and concrete file paths when present. Do NOT describe a symptom and stop; trace the chain back to the underlying cause as far as the available evidence allows.",
+  "root_cause":     "Full causal chain from observed symptom back to the underlying cause as far as the available evidence allows. At least 3-5 sentences. Quote the exact log line(s) that prove each link in the chain and cite the artifact path each quote came from. Do NOT stop at the first error message you see; trace the chain back to the underlying cause through every layer the evidence supports. If two distinct artifacts independently support the same conclusion, cite both.",
   "severity":       "Critical" | "High" | "Medium" | "Low",
-  "suggested_fix":  "concrete remediation: the specific code change, config edit, command to run, or operational action that fixes the root_cause. Do not list diagnostic or information-gathering tasks as the fix; those belong in your analysis, not handed back to the user. If the available evidence is insufficient to determine a remediation, state that explicitly here (e.g. 'No remediation possible from available evidence: artifacts show X but not Y; would need Z') rather than disguising the gap as a TODO list.",
+  "suggested_fix":  "Provide a concrete remediation. Name the specific file (with line number where applicable), the exact edit or command, and one verification step the operator can run to confirm the fix worked. Do not list diagnostic or information-gathering tasks as the fix; those belong in your analysis, not handed back to the user. If the available evidence is insufficient to determine a remediation, state that explicitly here (e.g. 'No remediation possible from available evidence: artifacts show X but not Y; would need Z') rather than disguising the gap as a TODO list.",
   "relevant_files": ["file1.go", "file2.yaml"]
 }
 
