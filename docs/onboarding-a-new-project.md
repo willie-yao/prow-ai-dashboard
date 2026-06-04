@@ -67,16 +67,18 @@ and confirm the category rules you intend to declare.
    go build -o /tmp/fetcher ./cmd/fetcher
    ```
 2. Write a throwaway `project.yaml` with the minimum fields:
-   `source.test_infra_paths` (list of ≥1 directory), `testgrid.dashboard`,
-   `gcs.bucket`, `branding.*`, `artifacts.collector`, `ai.module`. Set
-   `source.file_prefix` when all your job files share a prefix; omit it
-   for dashboards that span multiple files without one. Skip the
-   categories block (the engine will use a sensible default).
-3. Run a sweep:
+   `testgrid.dashboard`, `gcs.bucket`, `branding.*`, `artifacts.collector`,
+   `ai.module`. Job discovery is fully automatic, the engine asks GitHub
+   code search for every YAML under `kubernetes/test-infra/config/jobs/`
+   that mentions your dashboard, so you do not enumerate paths or filename
+   prefixes. Skip the categories block (the engine will use a sensible
+   default).
+3. Run a sweep (`GITHUB_TOKEN` is required so code search works):
    ```
    mkdir -p /tmp/sweep && cd /tmp/sweep
    cp /path/to/throwaway/project.yaml .
    echo "# placeholder" > prompts/system.md   # mandatory; empty fails
+   export GITHUB_TOKEN=<your-pat>
    /tmp/fetcher -project-dir=. -ai=false -builds=1
    python3 -c "import json; d=json.load(open('data/dashboard.json')); \
      print(len(d['jobs']), 'jobs'); \
@@ -96,31 +98,18 @@ Start from [`configs/example/project.yaml`](../configs/example/project.yaml).
 The annotated fields document every knob; below are the ones that
 trip people up.
 
-### `source.test_infra_paths`
-
-A list of one or more directories under the kubernetes/test-infra repo
-root. The engine fetches every `*.yaml` under each (no recursion) and
-keeps jobs that advertise the configured `testgrid.dashboard`. Most
-single-SIG projects use a single path (e.g. CAPI:
-`config/jobs/kubernetes-sigs/cluster-api`); cross-SIG dashboards like
-`sig-node-kubelet` list multiple (`config/jobs/kubernetes/sig-node`,
-`config/jobs/kubernetes/sig-cluster-lifecycle`, ...).
-
-### `source.file_prefix`
-
-Optional. When set, the engine keeps only files whose name starts with
-this prefix. CAPI uses `cluster-api-`, CAPZ uses
-`cluster-api-provider-azure-`. Omit (or leave empty) for dashboards
-whose jobs span multiple files without a shared prefix; the
-`testgrid-dashboards` annotation is then the sole filter and every
-`*.yaml` in each path is parsed.
-
 ### `testgrid.dashboard`
 
-A single dashboard name. Jobs are kept only if they advertise this
-dashboard in their `testgrid-dashboards` annotation. Release-branch
-periodics typically advertise different dashboards (e.g. `cluster-api-core-1.13`)
-and are filtered out automatically.
+A single dashboard name. The engine uses GitHub code search to find every
+YAML under `kubernetes/test-infra/config/jobs/` that mentions it, then
+keeps the jobs whose `testgrid-dashboards` annotation contains it. That
+single string is the source of truth, jobs are discovered no matter which
+directory or filename convention they live under (e.g. CAPZ's
+`config/jobs/kubernetes/sig-scalability/sig-scalability-periodic-azure.yaml`
+is picked up alongside the canonical
+`config/jobs/kubernetes-sigs/cluster-api-provider-azure/...` files).
+Release-branch periodics typically advertise different dashboards
+(e.g. `cluster-api-core-1.13`) and are filtered out automatically.
 
 ### `categories`
 

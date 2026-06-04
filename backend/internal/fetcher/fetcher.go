@@ -150,6 +150,11 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	log.Printf("Discovered %d jobs (presubmits=%v)", len(jobs), includePresubmits)
 
+	// Derive the display-only short-name prefix from the discovered set so
+	// the frontend can render compact job names without consumers having to
+	// hand-maintain the prefix.
+	cfg.ShortNamePrefix = jobconfig.DerivePeriodicPrefix(jobs)
+
 	// Step 2: For each job, discover builds and fetch results. Cached data
 	// is reused for completed builds; only PENDING runs are re-fetched.
 	cachedJobs := loadCachedJobDetails(opts.OutDir)

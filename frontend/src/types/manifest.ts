@@ -15,8 +15,7 @@ export interface Branding {
 }
 
 export interface Source {
-  test_infra_paths: string[];
-  file_prefix?: string;
+  include_presubmits?: boolean;
 }
 
 export interface TestGrid {
@@ -43,4 +42,8 @@ export interface Manifest {
   branding: Branding;
   categories?: CategoryRule[];
   category_display_order?: string[];
+  // Display-only hint derived at fetch time: the longest periodic-<x>-
+  // prefix shared by a majority of discovered periodic jobs. Used by
+  // shortJobName to strip boilerplate from job names in the UI.
+  short_name_prefix?: string;
 }
