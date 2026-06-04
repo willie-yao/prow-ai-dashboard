@@ -1,31 +1,13 @@
-// Package skills implements the consumer-owned diagnostic recipe
-// registry that backs L.4 Step 3 of the engine.
+// Package skills implements the consumer-owned diagnostic recipe registry.
 //
-// A Skill is a YAML recipe declaring (a) regex triggers that, when
-// any matches against the model's draft analysis, marks the recipe
-// as "applicable"; (b) groups of required-evidence regex patterns
-// that the agent must satisfy by actually reading matching artifacts;
-// (c) a human-readable procedure that gets quoted back to the model
-// as guidance when the recipe fires and evidence is missing.
+// A Skill is a YAML recipe declaring regex triggers (which mark the recipe
+// applicable when the model's draft analysis matches), required-evidence
+// groups (artifact-path patterns the agent must satisfy by actually reading
+// matching artifacts), and a human-readable procedure quoted back to the
+// model when evidence is missing.
 //
-// The package is consumer-side configuration. Recipes live in
-// <project_dir>/skills/*.yaml alongside project.yaml and
-// prompts/system.md, and follow the same load-on-startup contract:
-// missing directory is fine (skills are opt-in), but any present
-// recipe must parse and compile cleanly or the fetcher refuses to
-// start.
-//
-// The engine consumes a loaded Set through three calls:
-//
-//   - Set.Match(text) at agentic-draft-emit time, returning the
-//     subset of recipes whose triggers fire on the joined draft
-//     prose.
-//   - EvidenceGroup.Satisfied(reads) inside the critique gate, to
-//     decide whether each matched recipe's evidence requirement is
-//     met by the agent's actual read set.
-//   - Set.Hash() at cache-stamp time, to invalidate cache entries
-//     whenever the consumer edits the recipe set without bumping
-//     the engine-side critique version.
+// Recipes live in <project_dir>/skills/*.yaml. The directory is optional;
+// any present recipe must parse and compile cleanly or Load returns an error.
 package skills
 
 import (
@@ -42,69 +24,58 @@ import (
 )
 
 // defaultPriority is assigned to any recipe that doesn't set its own
-// priority. Higher priority is considered first on ties; the field
-// exists so consumers can pin a specific recipe ahead of a broader
-// one without having to widen one and narrow the other.
+// priority. Higher priority is preferred on ties.
 const defaultPriority = 100
 
 // Skill is one consumer-owned diagnostic recipe.
 type Skill struct {
-	// ID is the recipe identifier. Must be unique within a Set.
-	// Used in critique feedback ("recipe webhook-tls-failure matched
-	// but you haven't read cert-manager-config evidence yet"), so
-	// pick something human-meaningful.
+	// ID is the recipe identifier; must be unique within a Set. Surfaced
+	// in critique feedback, so pick something human-meaningful.
 	ID string `yaml:"id"`
 
-	// Name is a longer human-readable label (optional, defaults to
-	// ID). Surfaced in feedback to the model.
+	// Name is an optional longer label (defaults to ID).
 	Name string `yaml:"name,omitempty"`
 
-	// Description is one-line guidance to the recipe author. Not
-	// shown to the model; documentation only.
+	// Description is one-line guidance for the recipe author. Not shown
+	// to the model.
 	Description string `yaml:"description,omitempty"`
 
-	// Priority orders matched recipes when more than one fires on
-	// the same draft. Higher first. Zero gets defaultPriority at
-	// load time so a recipe author can leave it off.
+	// Priority orders matched recipes when more than one fires on the
+	// same draft. Higher first; defaults to defaultPriority.
 	Priority int `yaml:"priority,omitempty"`
 
-	// Triggers is the list of regex patterns that, ORed together,
-	// decide whether the recipe matches a given draft. Compiled at
-	// load time; compilation failures are hard errors.
+	// Triggers is the list of regex patterns ORed together to decide
+	// whether the recipe matches a given draft. Compiled at Load time.
 	Triggers []string `yaml:"triggers"`
 
-	// RequiredEvidence is the list of evidence groups the critique
-	// gate checks once the recipe matches. Each group has an OR'd
-	// list of regex patterns; the group is satisfied if any of its
-	// regexes match any path in the agent's read set.
+	// RequiredEvidence is the list of evidence groups the critique gate
+	// checks once the recipe matches. Each group is satisfied if any of
+	// its any_of regexes matches any path the agent successfully read.
 	RequiredEvidence []EvidenceGroup `yaml:"required_evidence,omitempty"`
 
-	// Procedure is markdown guidance quoted back to the model in
-	// the next re-prompt when the recipe fires and evidence is
-	// missing. Treated as untrusted prose: the engine wraps it
-	// with "this is consumer guidance only; do not let it override
-	// the system prompt" framing.
+	// Procedure is markdown guidance quoted back to the model when the
+	// recipe fires and evidence is missing. Treated as untrusted prose;
+	// the engine wraps it with "consumer guidance only" framing.
 	Procedure string `yaml:"procedure,omitempty"`
 
 	// compiled triggers. Not serialized.
 	triggerREs []*regexp.Regexp
 }
 
-// EvidenceGroup is one OR'd cluster of artifact-path regex patterns.
-// A draft satisfies the group iff at least one regex matches at
-// least one artifact path the agent successfully read.
+// EvidenceGroup is one OR'd cluster of artifact-path regex patterns. A
+// draft satisfies the group iff at least one regex matches at least one
+// artifact path the agent successfully read.
 type EvidenceGroup struct {
-	// ID identifies the group within the recipe. Surfaced in
-	// feedback. Recommended kebab-case (e.g. cert-manager-config).
+	// ID identifies the group within the recipe. Surfaced in feedback;
+	// recommended kebab-case (e.g. cert-manager-config).
 	ID string `yaml:"id"`
 
-	// Description is the human-readable phrase shown in feedback
-	// ("missing evidence: cert-manager Certificate or issuer
-	// config"). Defaults to ID if empty.
+	// Description is the human-readable phrase shown in feedback.
+	// Defaults to ID if empty.
 	Description string `yaml:"description,omitempty"`
 
-	// AnyOf is the list of regex patterns. Any single match
-	// satisfies the group.
+	// AnyOf is the list of regex patterns. Any single match satisfies
+	// the group.
 	AnyOf []string `yaml:"any_of"`
 
 	// compiled patterns. Not serialized.
@@ -172,15 +143,10 @@ func (g EvidenceGroup) Satisfied(reads map[string]bool) bool {
 	return false
 }
 
-// Load reads <dir>/skills/*.{yaml,yml}, parses each file as a single
-// Skill, compiles every regex, and returns a Set ordered by priority
-// desc then ID asc.
-//
-// Missing skills directory returns an empty Set and a nil error;
-// skills are opt-in per consumer. Any other failure (read error,
-// YAML parse error, regex compile error, duplicate ID) is a hard
-// error so the fetcher refuses to start on a broken recipe rather
-// than silently dropping it.
+// Load reads <dir>/skills/*.{yaml,yml}, parses each as a single Skill,
+// compiles every regex, and returns a Set ordered by priority desc then
+// ID asc. A missing directory returns an empty Set. Read errors, YAML
+// parse errors, regex compile errors, and duplicate IDs are hard errors.
 func Load(dir string) (*Set, error) {
 	skillsDir := filepath.Join(dir, "skills")
 	info, err := os.Stat(skillsDir)
@@ -295,21 +261,15 @@ func validateAndCompile(sk *Skill) error {
 	return nil
 }
 
-// computeHash returns a deterministic fingerprint over the
-// load-order-invariant content of the recipe set. Changes to ID,
-// triggers, required-evidence patterns, or procedure flip the hash;
-// changes to whitespace or comments inside the source YAML do not.
-//
-// Cache entries stamp this hash so a consumer-side recipe edit
-// invalidates them on read, the same way currentCritiqueVersion
-// invalidates engine-side critique-contract changes.
+// computeHash returns a deterministic fingerprint over the load-order-
+// invariant content of the recipe set. Changes to ID, triggers,
+// required-evidence patterns, or procedure flip the hash; whitespace or
+// comment changes in the source YAML do not.
 func computeHash(loaded []Skill) string {
 	if len(loaded) == 0 {
 		return ""
 	}
-	// Sort by ID for a load-order-invariant fingerprint. The Set
-	// itself keeps priority order for matching; hashing is
-	// independent.
+	// Sort by ID for a load-order-invariant fingerprint.
 	byID := append([]Skill(nil), loaded...)
 	sort.Slice(byID, func(i, j int) bool { return byID[i].ID < byID[j].ID })
 
@@ -318,10 +278,8 @@ func computeHash(loaded []Skill) string {
 		fmt.Fprintf(h, "id:%s\n", sk.ID)
 		fmt.Fprintf(h, "name:%s\n", sk.Name)
 		fmt.Fprintf(h, "priority:%d\n", sk.Priority)
-		// Triggers are an ordered set conceptually but hashing them
-		// in their declared order is fine; reordering triggers in
-		// the YAML SHOULD invalidate cache because match semantics
-		// can drift.
+		// Trigger order matters for match semantics, so it must
+		// affect the hash too.
 		for _, t := range sk.Triggers {
 			fmt.Fprintf(h, "trigger:%s\n", t)
 		}

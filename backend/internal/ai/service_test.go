@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -384,7 +383,3 @@ func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 var _ Module = (*stubModule)(nil)
 var _ AgenticPreferrer = (*stubPreferrer)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)
-
-// Silence unused-import linters when this file's only consumer of errors is
-// indirect via doAnalyzeAgentic-routed paths.
-var _ = errors.Is

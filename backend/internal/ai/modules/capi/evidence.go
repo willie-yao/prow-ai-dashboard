@@ -19,11 +19,7 @@ import (
 )
 
 // evidence holds all artifact content gathered for a single test failure.
-// Module-private: only used to feed buildAnalysisPrompt.
-//
-// MachineLogs and ControllerLogs are keyed by the consumer-declared identifier
-// (filename for machine logs, namespace for controller logs) so the prompt
-// renders one section per request and stays in sync with the project config.
+// Module-private input to buildAnalysisPrompt.
 type evidence struct {
 	TestName         string
 	FailureMessage   string
@@ -35,37 +31,33 @@ type evidence struct {
 	BuildLogTail   string
 	ResourceYAMLs  map[string]string
 
-	// MachineLogs maps a declared filename (e.g. "kubelet.log") to the tail
-	// of that log fetched from the first machine that had a non-empty URL
-	// for the file.
+	// MachineLogs maps a declared filename (e.g. "kubelet.log") to the
+	// tail of that log from the first machine that had a URL for it.
 	MachineLogs map[string]string
 
-	// ControllerLogs maps a declared namespace (e.g. "capi-system") to the
-	// tail of the matched controller pod's container_log.
+	// ControllerLogs maps "<namespace>/<deployment>" to the tail of the
+	// matched controller pod's container_log.
 	ControllerLogs map[string]string
 
 	// ProviderActivityLog is the cloud-provider audit log (e.g. Azure
-	// activity log) sourced from the cluster artifacts directly, not from
-	// the evidence config.
+	// activity log) sourced from cluster artifacts.
 	ProviderActivityLog string
 
 	// RequestedButMissing lists evidence sources the project config asked
-	// for that produced no content (e.g. boot.log on a CAPD build with no
-	// VMs, or capz-system controller logs on a CAPI core build). Surfaced
-	// in the prompt footer so the AI doesn't speculate based on absence.
+	// for that produced no content. Surfaced in the prompt footer so the
+	// AI doesn't speculate based on absence.
 	RequestedButMissing []string
 }
 
-// errorRe matches "error" lines; "no error" lines are filtered out via noErrorRe.
-var errorRe = regexp.MustCompile(`(?i)error`)
+var (
+	// errorRe matches "error" lines; noErrorRe filters "no error".
+	errorRe = regexp.MustCompile(`(?i)error`)
+	// connectionRefusedRe is included only when ≥5 occurrences in the
+	// build log indicate a persistent issue worth surfacing.
+	connectionRefusedRe = regexp.MustCompile(`(?i)connection refused`)
+)
 
-// connectionRefusedRe is included only when ≥5 occurrences in the build log
-// indicate a persistent issue worth surfacing to the AI.
-var connectionRefusedRe = regexp.MustCompile(`(?i)connection refused`)
-
-// Budget for controller logs: each entry caps at perControllerLogCap bytes
-// and the aggregate across all controller logs caps at totalControllerLogCap.
-// Keeps the prompt size bounded when a build has many CAPI namespaces.
+// Per-entry and aggregate caps for controller log inclusion in the prompt.
 const (
 	perControllerLogCap   = 8000
 	totalControllerLogCap = 50000
@@ -147,13 +139,10 @@ func collectMachineLogs(ctx context.Context, client *http.Client, ca *models.Clu
 	}
 }
 
-// collectControllerLogs walks the declared controller_logs selectors and
-// fetches the matching controller pod's container_log tail from the URLs the
-// collector recorded on BuildResult.ControllerLogURLs. The collector keys
-// URLs by "<namespace>/<deployment>" (a single namespace can host multiple
-// controller deployments — e.g. capz-system runs both ASO and the CAPZ
-// controller — and we want all of them in the prompt). Aggregate size capped
-// at totalControllerLogCap; each fetch capped at perControllerLogCap.
+// collectControllerLogs fetches controller log tails from URLs the collector
+// recorded on BuildResult.ControllerLogURLs (keyed by "<namespace>/<deployment>"
+// since a namespace can host multiple controller deployments). Aggregate size
+// is capped by totalControllerLogCap; each fetch by perControllerLogCap.
 func collectControllerLogs(ctx context.Context, client *http.Client, run *models.BuildResult, declared []project.ControllerLogSelector, ev *evidence) {
 	if len(declared) == 0 {
 		return
@@ -320,28 +309,21 @@ func collectAllResources(ctx context.Context, client *http.Client, baseURL strin
 	return results
 }
 
-// parseResourceDirs extracts directory names from a GCSweb HTML listing,
-// filtering out the ".." back link.
-func parseResourceDirs(r io.Reader) ([]string, error) {
+// extractHrefs parses a GCSweb HTML listing and returns href values matching
+// the given predicate. Shared by directory and file-extension listings.
+func extractHrefs(r io.Reader, match func(href string) bool) ([]string, error) {
 	doc, err := html.Parse(r)
 	if err != nil {
 		return nil, err
 	}
 
-	var dirs []string
+	var hits []string
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.Data == "a" {
 			for _, attr := range n.Attr {
-				if attr.Key == "href" && strings.HasSuffix(attr.Val, "/") {
-					name := attr.Val
-					name = strings.TrimSuffix(name, "/")
-					if idx := strings.LastIndex(name, "/"); idx >= 0 {
-						name = name[idx+1:]
-					}
-					if name != "" && name != ".." {
-						dirs = append(dirs, name)
-					}
+				if attr.Key == "href" && match(attr.Val) {
+					hits = append(hits, attr.Val)
 				}
 			}
 		}
@@ -350,6 +332,26 @@ func parseResourceDirs(r io.Reader) ([]string, error) {
 		}
 	}
 	walk(doc)
+	return hits, nil
+}
+
+// parseResourceDirs extracts directory names from a GCSweb HTML listing,
+// filtering out the ".." back link.
+func parseResourceDirs(r io.Reader) ([]string, error) {
+	hrefs, err := extractHrefs(r, func(h string) bool { return strings.HasSuffix(h, "/") })
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for _, href := range hrefs {
+		name := strings.TrimSuffix(href, "/")
+		if idx := strings.LastIndex(name, "/"); idx >= 0 {
+			name = name[idx+1:]
+		}
+		if name != "" && name != ".." {
+			dirs = append(dirs, name)
+		}
+	}
 	return dirs, nil
 }
 
@@ -415,28 +417,7 @@ func fetchYAMLFileLinks(ctx context.Context, client *http.Client, listingURL str
 
 // parseYAMLLinks parses GCSweb HTML and extracts href values ending in .yaml.
 func parseYAMLLinks(r io.Reader) ([]string, error) {
-	doc, err := html.Parse(r)
-	if err != nil {
-		return nil, fmt.Errorf("parsing HTML: %w", err)
-	}
-
-	var urls []string
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.Data == "a" {
-			for _, attr := range n.Attr {
-				if attr.Key == "href" && strings.HasSuffix(attr.Val, ".yaml") {
-					urls = append(urls, attr.Val)
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-
-	return urls, nil
+	return extractHrefs(r, func(h string) bool { return strings.HasSuffix(h, ".yaml") })
 }
 
 // extractYAMLStatus extracts the status: section from a Kubernetes resource YAML.
