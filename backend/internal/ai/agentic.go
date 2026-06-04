@@ -21,8 +21,7 @@ import (
 )
 
 // AgenticMode is the value stored in models.AIAnalysis.Mode for results
-// produced by the agentic pipeline. The curator pipeline uses "" (legacy)
-// or "curator"; both are accepted as "curator" by Service.shouldReanalyze.
+// produced by the agentic pipeline.
 const AgenticMode = "agentic"
 
 // UniversalMode is the value stored in models.AIAnalysis.Mode for results
@@ -202,8 +201,7 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 // agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
 // the raw model response and tags it with per-analysis telemetry so cache
 // reads can re-stamp the published AIAnalysis and re-validate against the
-// project's current floors. Pre-floor cache entries have no telemetry keys
-// and unmarshal with zero values, so any non-zero floor invalidates them.
+// project's current floors.
 type agenticCacheData struct {
 	analysisResponse
 	ToolCalls       int  `json:"tool_calls,omitempty"`

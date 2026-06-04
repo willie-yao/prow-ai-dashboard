@@ -104,34 +104,14 @@ func TestAIModuleRegistry_ExplicitChoice(t *testing.T) {
 	}
 }
 
-func TestAIModuleRegistry_ImplicitFromCollector(t *testing.T) {
-	r := NewAIModuleRegistry()
-	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-	r.Register("kubernetes", func(_ *project.Config) ai.Module { return &stubModule{name: "kubernetes"} })
-
-	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "kubernetes"}}
-	got, err := r.Build(cfg)
-	if err != nil || got.Name() != "kubernetes" {
-		t.Errorf("implicit kubernetes from collector: got=%v err=%v", got, err)
-	}
-}
-
 func TestAIModuleRegistry_FallbackToGeneric(t *testing.T) {
 	r := NewAIModuleRegistry()
 	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-	// Note: no "kubernetes" module registered, so implicit fallback should pick generic.
 
-	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "kubernetes"}}
+	cfg := &project.Config{}
 	got, err := r.Build(cfg)
 	if err != nil || got.Name() != "generic" {
-		t.Errorf("fallback to generic: got=%v err=%v", got, err)
-	}
-
-	// No artifacts section either still falls back to generic.
-	cfg = &project.Config{}
-	got, err = r.Build(cfg)
-	if err != nil || got.Name() != "generic" {
-		t.Errorf("no collector falls back to generic: got=%v err=%v", got, err)
+		t.Errorf("unset ai.module falls back to generic: got=%v err=%v", got, err)
 	}
 }
 

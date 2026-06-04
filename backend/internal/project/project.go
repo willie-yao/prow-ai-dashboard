@@ -324,14 +324,6 @@ func (c *Config) CollectorName() string {
 	return c.Artifacts.Collector
 }
 
-// AIModuleName returns the configured AI module name, defaulting to "generic".
-func (c *Config) AIModuleName() string {
-	if c.AI != nil && strings.TrimSpace(c.AI.Module) != "" {
-		return c.AI.Module
-	}
-	return "generic"
-}
-
 // Load reads and validates a project.yaml file from disk.
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)

@@ -183,32 +183,6 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	}
 }
 
-// TestService_NormalizesEmptyModeOnLegacyCache covers analyses loaded from
-// disk that were written before AIAnalysis.Mode was populated. shouldReanalyze
-// treats empty Mode as curator and keeps the cached value; the Analyze
-// early-exit must then stamp Mode = "curator" so the next published JSON has a
-// uniform non-empty mode for every analysis.
-func TestService_NormalizesEmptyModeOnLegacyCache(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-
-	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached"}
-
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if got := atomic.LoadInt32(&srv.calls); got != 0 {
-		t.Errorf("server calls = %d, want 0 (legacy curator cache should be kept, not re-analyzed)", got)
-	}
-	if tc.AIAnalysis.Mode != curatorMode {
-		t.Errorf("Mode = %q, want %q (legacy empty Mode should be normalized to curator)", tc.AIAnalysis.Mode, curatorMode)
-	}
-}
-
 func TestService_CacheKeyShape(t *testing.T) {
 	s := &Service{module: &stubModule{name: "kubernetes"}}
 	curator := s.cacheKey("Test A", "boom")

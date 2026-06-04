@@ -97,7 +97,6 @@ type AIAnalysis struct {
 	RelevantFiles []string `json:"relevant_files,omitempty"`
 	// Mode records which analysis pipeline produced this result, so that
 	// switching modes (e.g. flipping agentic on) forces a re-analysis.
-	// Empty for legacy entries (read as "curator").
 	Mode string `json:"mode,omitempty"`
 
 	// ToolCalls is the number of agent tool invocations made during this

@@ -105,10 +105,7 @@ func (r *AIModuleRegistry) Names() []string {
 }
 
 // Build picks the AI module per project config. An explicit ai.module that
-// is not registered is an error; an implicit choice (derived from the
-// collector name when ai.module is unset) silently falls back to "generic"
-// so a project using a CAPI collector without a CAPI AI module still gets
-// useful analysis instead of a hard failure.
+// is not registered is an error; an unset ai.module falls back to "generic".
 func (r *AIModuleRegistry) Build(cfg *project.Config) (ai.Module, error) {
 	if cfg.AI != nil && strings.TrimSpace(cfg.AI.Module) != "" {
 		f, ok := r.factories[cfg.AI.Module]
@@ -116,11 +113,6 @@ func (r *AIModuleRegistry) Build(cfg *project.Config) (ai.Module, error) {
 			return nil, fmt.Errorf("unknown ai.module %q (registered: %s)", cfg.AI.Module, strings.Join(r.Names(), ", "))
 		}
 		return f(cfg), nil
-	}
-	if cfg.Artifacts != nil && cfg.Artifacts.Collector != "" {
-		if f, ok := r.factories[cfg.Artifacts.Collector]; ok {
-			return f(cfg), nil
-		}
 	}
 	f, ok := r.factories["generic"]
 	if !ok {

@@ -110,10 +110,6 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	desiredMode := s.desiredMode(run, tc)
 
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc, desiredMode) {
-		// Stamp a non-empty Mode on legacy cached analyses for uniform output.
-		if tc.AIAnalysis.Mode == "" {
-			tc.AIAnalysis.Mode = curatorMode
-		}
 		return
 	}
 
@@ -267,11 +263,7 @@ func (s *Service) desiredMode(run *models.BuildResult, tc *models.TestCase) stri
 // because the mode changed or, for agentic-mode caches, because the prior
 // analysis fell below the project's current floors or critique contract.
 func (s *Service) shouldReanalyze(tc *models.TestCase, desiredMode string) bool {
-	cached := tc.AIAnalysis.Mode
-	if cached == "" {
-		cached = curatorMode
-	}
-	if cached != desiredMode {
+	if tc.AIAnalysis.Mode != desiredMode {
 		return true
 	}
 	return s.belowCurrentAgenticFloor(tc, desiredMode)
