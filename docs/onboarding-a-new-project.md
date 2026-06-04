@@ -126,117 +126,38 @@ and are filtered out automatically.
 
 Ordered list of `{match, id, label}` triples. Rules are evaluated in
 order; first lowercase substring match against the job name wins. Order
-specific rules before broad ones. Example: CAPI puts `mink8s` before
-`e2e` so `periodic-cluster-api-e2e-mink8s-main` lands in the mink8s
-lane rather than the catch-all e2e lane.
+specific rules before broad ones (e.g. put `mink8s` before `e2e` so
+`periodic-...-mink8s-main` lands in the mink8s lane rather than the
+catch-all).
 
 The optional `category_display_order` lets you order sections in the UI
 independently of match precedence.
 
-### `capi.cluster_name_prefix`
+### `ai.module` (optional)
 
-Only consulted when `artifacts.collector: "capi"`. Two valid shapes:
+Defaults to `generic`. The engine registers `generic` as the only built-
+in module today. Custom modules can be added under
+`backend/internal/ai/modules/` and wired in `cmd/fetcher/main.go`, but
+the typical onboarding path uses `use_universal_path: true` (below) and
+ignores this field entirely.
 
-- **Non-empty prefix.** CAPZ-style projects whose E2E suite names every
-  workload cluster with a shared prefix (`capz-e2e-...`). The CAPI
-  collector matches test cases to clusters by looking for that prefix.
-- **Empty string.** CAPI core, where each ginkgo spec produces a workload
-  cluster named after the spec (`quick-start-bxqxxs`, `md-rollout-yhse4f`).
-  The collector falls back to a generic substring matcher that handles
-  these. Declare the field explicitly with an empty value rather than
-  omitting it, so the intent is visible.
+### `ai.use_universal_path` (recommended)
 
-### `ai.module`
+When `true`, the engine bypasses the module-routed pipeline and lets
+the LLM browse the build's GCS artifact tree itself via the registered
+tools (filesystem + k8s by default). Requires an endpoint that supports
+OpenAI-style function calling; there is no curator fallback.
 
-One of `generic` or `capi`. The CAPI module pulls per-cluster context
-into each AI request (controller logs, machine metadata, bootstrap
-resource YAMLs); the generic module just passes the JUnit failure
-message + build-log tail. Use `capi` whenever your project uses the
-CAPI collector.
-
-### `ai.evidence` (optional, `ai.module: capi` only)
-
-Controls which extra artifacts the CAPI module fetches alongside the
-build log and stack trace before each AI call. Every field is optional
-and falls back to an engine default when omitted.
-
-**Scope.** The entire `evidence:` block is interpreted only when
-`ai.module: capi`, because the field meanings reference paths that are
-specific to the Cluster API artifact layout
-(`artifacts/clusters/<name>/machines/<vm>/` for `machine_logs` and
-`artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/` for
-`controller_logs`). The `generic` module ignores the block and logs a
-warning at fetcher startup if it is non-empty, so a misconfiguration
-("I switched to generic and forgot evidence does nothing now") surfaces
-loudly. A non-CAPI project that wants its own per-failure evidence
-shape should add a new AI module rather than reuse these fields with a
-different meaning.
-
-The schema is a single `evidence:` block under `ai:` with three
-independent lists:
-
-- **`machine_logs`** — filenames under
-  `artifacts/clusters/<name>/machines/<vm>/` to fetch the tail of.
-  Engine default: `kubelet.log`, `containerd.log`, `journal.log`.
-  Add what your project actually publishes (CAPZ extends with
-  `boot.log` + `cloud-init-output.log`; CAPI core adds `kern.log`).
-
-- **`controller_logs`** — namespaces under
-  `artifacts/clusters/bootstrap/logs/` to walk for controller
-  `manager.log` files. The collector picks one log per deployment in
-  each namespace, so a single namespace hosting multiple controllers
-  (e.g. CAPZ's `capz-system` runs ASO and the CAPZ controller side by
-  side) yields multiple sections in the prompt. Each entry can be a
-  bare namespace string or `{namespace, pod_name_regex, container_log}`.
-  Engine default: `capi-system`, `capi-kubeadm-bootstrap-system`,
-  `capi-kubeadm-control-plane-system`.
-
-- **`build_log_patterns`** — regex patterns matched against each line
-  of `build-log.txt`. Matches plus 2 lines of context are inserted as
-  `=== Build Log Errors ===` in the prompt. The raw tail of the build
-  log is included separately, so generic `"error"` patterns are
-  redundant; reserve this list for high-signal, provider-specific
-  failures (CAPZ uses Azure error codes like `SkuNotAvailable`).
-  Engine default: `FAIL|\[FAIL\]`, `timed?\s*out|timeout`,
-  `ImagePullBackOff|ErrImagePull`, `CrashLoopBackOff`,
-  `NotFound|not found`.
-
-Of the three, only `build_log_patterns` is conceptually module-agnostic
-(every prow job has a `build-log.txt`). It lives next to the
-CAPI-specific fields today; if a second non-CAPI module ever wants
-build-log filtering, this field will be split out.
-
-Override semantics are nil-vs-empty:
-
-- Omit a field → engine default applies.
-- Set to `[]` → the engine default is suppressed and no values are
-  collected for that source.
-- Provide a list → that list replaces the engine default in full
-  (lists are not merged).
-
-Regex patterns are validated at fetcher startup, so a typo fails fast
-instead of silently dropping evidence on the next failure.
-
-Sources the consumer asks for that aren't present in the build's
-artifacts surface as a `Configured but missing` footer in the prompt,
-so the model knows not to infer absence as signal.
+This is the path both CAPZ dashboards use today and the recommended
+starting point for new consumers. See [docs/agentic.md](agentic.md)
+for the full agentic config schema.
 
 ### `ai.agentic` (optional)
 
-An alternative to the curator-driven evidence pipeline. Instead of
-the engine pre-fetching the artifacts listed under `ai.evidence`, the
-model browses the build's GCS artifact tree itself via four function-
-calling tools (`list_artifacts`, `read_artifact`, `tail_artifact`,
-`grep_artifact`). Useful for projects whose artifacts don't fit the
-CAPI layout, or for failures that happen before any cluster is
-created.
-
-Opt-in and off by default. See [docs/agentic.md](agentic.md) for the
-full reference (config schema, endpoint requirements, cost notes,
-fallback semantics). The `enabled: true` / `always: false` shape is
-the common case: the engine's `capi` module then routes only the
-failures with missing or empty `ClusterArtifacts` through agentic
-mode and leaves the rest on the curator path.
+Tunes the agentic loop's per-failure budgets, evidence floors, critique
+gate, and skill-set integration. The common starting point is
+`agentic: { enabled: true, tools: [filesystem, k8s] }`; everything
+else has sensible engine defaults. See [docs/agentic.md](agentic.md).
 
 ## Step 2: `prompts/system.md`
 

@@ -162,24 +162,7 @@ If you want the model to know any of that, it must be in your
 `prompts/system.md`.
 
 One adjacent knob you may also want, **outside** the system prompt: the
-list of artifacts attached to each AI call. Configured in `project.yaml`
-under `ai.evidence` (machine logs, controller logs, build-log regex
-patterns). See the "Evidence sources" section in
-[docs/onboarding-a-new-project.md](onboarding-a-new-project.md). Use
-this for non-VM providers where the engine's default machine-log list
-doesn't match what your CI publishes, or for cloud-specific build-log
-patterns that should land in the prompt as `=== Build Log Errors ===`.
-
-Note that `ai.evidence` only applies to `ai.module: capi` today: the
-field paths are Cluster API-shaped (`clusters/<name>/machines/<vm>/`
-and `clusters/bootstrap/logs/<ns>/<deployment>/<pod>/`). The generic
-module ignores the block and warns about it at startup. A non-CAPI
-project that wants its own evidence shape should add a new AI module
-rather than reuse these fields.
-
-For projects whose artifacts don't fit the curator schema at all (no
-per-cluster `Machines` collection, pre-cluster failures, layouts
-inherited from k/k or sig-storage), the alternative is to enable
-[agentic mode](agentic.md) and let the model browse the artifact tree
-on demand. Agentic mode also lives under `ai.` in `project.yaml` and
-is independent of `ai.evidence`.
+agentic loop configuration in `project.yaml` under `ai.agentic`. The
+loop's tool budget, evidence floors, and critique/skills gates all live
+there. See [docs/agentic.md](agentic.md) for the full reference and
+[docs/skills.md](skills.md) for recipe-driven evidence requirements.

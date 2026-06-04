@@ -27,10 +27,6 @@ export interface GCS {
   bucket: string;
 }
 
-export interface CAPI {
-  cluster_name_prefix: string;
-}
-
 export interface CategoryRule {
   match: string;
   id: string;
@@ -47,5 +43,4 @@ export interface Manifest {
   branding: Branding;
   categories?: CategoryRule[];
   category_display_order?: string[];
-  capi?: CAPI;
 }
