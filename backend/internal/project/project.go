@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -32,7 +31,6 @@ type Config struct {
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	Artifacts            *Artifacts     `yaml:"artifacts,omitempty"  json:"artifacts,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
-	CAPI                 *CAPI          `yaml:"capi,omitempty"       json:"capi,omitempty"`
 }
 
 // CategoryRule maps a substring in a job name to a category id and display
@@ -110,25 +108,19 @@ type SourceRepo struct {
 	Name  string `yaml:"name"  json:"name"`
 }
 
-// CAPI holds Cluster-API-specific knobs. Phase A keeps them at the top
-// level; Phase B will move them under a generic collector config section.
-type CAPI struct {
-	ClusterNamePrefix string `yaml:"cluster_name_prefix" json:"cluster_name_prefix"`
-}
-
 // Artifacts selects the per-build artifact collector used by the fetcher.
 // Implementations live under backend/internal/collectors/.
 type Artifacts struct {
-	// Collector names the registered collector (e.g. "capi", "generic").
-	// When unset or empty, the generic no-op collector is used.
+	// Collector names the registered collector (e.g. "generic"). When
+	// unset, the generic no-op collector is used.
 	Collector string `yaml:"collector" json:"collector,omitempty"`
 }
 
 // AI selects the AI module used to build prompts and gather evidence for
 // failure analysis. Implementations live under backend/internal/ai/modules/.
 type AI struct {
-	// Module names the registered AI module (e.g. "capi", "generic").
-	// When unset, inferred from artifacts.collector with "generic" fallback.
+	// Module names the registered AI module (e.g. "generic"). When unset,
+	// inferred from artifacts.collector with "generic" fallback.
 	Module string `yaml:"module" json:"module,omitempty"`
 
 	// Endpoint is the OpenAI-compatible chat-completions URL. When unset,
@@ -147,12 +139,6 @@ type AI struct {
 	// override the default Authorization scheme. Do not put secrets here;
 	// AI_TOKEN is the supported channel for the bearer token.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
-
-	// Evidence overrides the per-failure artifact sources the AI module
-	// fetches. Nil fields fall back to engine defaults; a non-nil empty
-	// slice disables that source entirely. Interpreted only by the
-	// "capi" module today.
-	Evidence *Evidence `yaml:"evidence,omitempty" json:"evidence,omitempty"`
 
 	// Agentic enables tool-calling-based artifact browsing. When on, the
 	// module skips its curator-driven evidence collection for failures
@@ -330,173 +316,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	return out
 }
 
-// Evidence configures which artifacts the AI module fetches for each failure.
-// All three fields are optional and independently fall back to engine defaults
-// (DefaultMachineLogs, DefaultControllerLogs, DefaultBuildLogPatterns).
-//
-// Interpreted only by the "capi" AI module; other modules ignore it and log
-// a warning at startup to surface misconfigurations.
-type Evidence struct {
-	// MachineLogs lists filenames looked up under each cluster's
-	// artifacts/clusters/<name>/machines/<vm>/<file> path.
-	MachineLogs []string `yaml:"machine_logs,omitempty" json:"machine_logs,omitempty"`
-
-	// ControllerLogs lists controller pod logs from
-	// artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/<container_log>.
-	// In YAML each entry may be a bare namespace string or a full object
-	// with pod_name_regex and container_log overrides.
-	ControllerLogs []ControllerLogSelector `yaml:"controller_logs,omitempty" json:"controller_logs,omitempty"`
-
-	// BuildLogPatterns are regexes grepped against the build log;
-	// matching lines (plus 2 lines of context) are included in the AI
-	// prompt. Use for provider-specific error strings.
-	BuildLogPatterns []string `yaml:"build_log_patterns,omitempty" json:"build_log_patterns,omitempty"`
-}
-
-// IsZero reports whether every field of Evidence is unset (nil slice). An
-// explicit `[]` counts as set so consumers can disable a default without
-// triggering "ignored config" warnings.
-func (e *Evidence) IsZero() bool {
-	if e == nil {
-		return true
-	}
-	return e.MachineLogs == nil && e.ControllerLogs == nil && e.BuildLogPatterns == nil
-}
-
-// ControllerLogSelector picks a controller pod log from the management
-// cluster's artifacts/clusters/bootstrap/logs/<namespace>/<deployment>/<pod>/<container_log>
-// layout. In project.yaml a bare string is shorthand for {namespace: <string>}
-// with default pod_name_regex (".*") and container_log ("manager.log").
-type ControllerLogSelector struct {
-	Namespace    string `yaml:"namespace" json:"namespace"`
-	PodNameRegex string `yaml:"pod_name_regex,omitempty" json:"pod_name_regex,omitempty"`
-	ContainerLog string `yaml:"container_log,omitempty"  json:"container_log,omitempty"`
-}
-
-// UnmarshalYAML accepts either a bare string (the namespace) or a full
-// mapping, so consumers can write either:
-//
-//	controller_logs:
-//	  - capi-system
-//	  - namespace: capi-kubeadm-control-plane-system
-//	    pod_name_regex: "^kcp-"
-func (s *ControllerLogSelector) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		s.Namespace = strings.TrimSpace(node.Value)
-		return nil
-	}
-	type alias ControllerLogSelector
-	var a alias
-	if err := node.Decode(&a); err != nil {
-		return err
-	}
-	*s = ControllerLogSelector(a)
-	return nil
-}
-
-// DefaultMachineLogs are the machine log filenames fetched per failure when
-// the consumer does not override. These are the universal Linux node logs;
-// provider-specific files (boot.log, cloud-init-output.log) must be added by
-// the consumer.
-var DefaultMachineLogs = []string{"kubelet.log", "containerd.log", "journal.log"}
-
-// DefaultControllerLogs are the CAPI core upstream controller-manager logs
-// fetched per failure when the consumer does not override. Provider-specific
-// controllers (capz-system, capv-system, ...) must be added by the consumer.
-var DefaultControllerLogs = []ControllerLogSelector{
-	{Namespace: "capi-system"},
-	{Namespace: "capi-kubeadm-bootstrap-system"},
-	{Namespace: "capi-kubeadm-control-plane-system"},
-}
-
-// DefaultBuildLogPatterns is the project-agnostic regex set greppped against
-// the build log when the consumer does not override. Provider-specific
-// patterns (e.g. SkuNotAvailable, GalleryImage) belong in the consumer's
-// project.yaml.
-var DefaultBuildLogPatterns = []string{
-	`(?i)FAIL|FAILED|\[FAIL\]`,
-	`(?i)timed?\s*out|timeout`,
-	`(?i)ImagePullBackOff|ErrImagePull`,
-	`(?i)CrashLoopBackOff`,
-	`(?i)NotFound|not found`,
-}
-
-// defaultPodNameRegex matches any pod name; used when a selector omits it.
-const defaultPodNameRegex = ".*"
-
-// defaultContainerLog is the controller-manager pod's primary log file as
-// emitted by the CAPI E2E framework.
-const defaultContainerLog = "manager.log"
-
-// EffectiveEvidence is the resolved per-failure evidence config. Regex
-// strings have been compiled and any defaults filled in, so AI modules and
-// collectors can use it directly without re-validating.
-type EffectiveEvidence struct {
-	// MachineLogs lists filenames to look up in each machine's logs map.
-	MachineLogs []string
-	// ControllerLogs lists selectors with all fields populated (defaults
-	// applied where the consumer left them empty).
-	ControllerLogs []ControllerLogSelector
-	// PodNameRegexes is parallel to ControllerLogs; PodNameRegexes[i] is the
-	// compiled regex for ControllerLogs[i].PodNameRegex.
-	PodNameRegexes []*regexp.Regexp
-	// BuildLogPatterns is the compiled form of the build-log grep patterns.
-	BuildLogPatterns []*regexp.Regexp
-}
-
-// EffectiveEvidence resolves the consumer's ai.evidence block against engine
-// defaults and compiles every regex. A nil top-level Evidence or nil field
-// means "use engine default"; a non-nil empty slice means "disable that
-// source". Regex compile errors include a YAML field path for easy fixing.
-func (c *Config) EffectiveEvidence() (EffectiveEvidence, error) {
-	var src Evidence
-	if c.AI != nil && c.AI.Evidence != nil {
-		src = *c.AI.Evidence
-	}
-
-	eff := EffectiveEvidence{
-		MachineLogs:    src.MachineLogs,
-		ControllerLogs: src.ControllerLogs,
-	}
-	if eff.MachineLogs == nil {
-		eff.MachineLogs = append([]string{}, DefaultMachineLogs...)
-	}
-	if eff.ControllerLogs == nil {
-		eff.ControllerLogs = append([]ControllerLogSelector{}, DefaultControllerLogs...)
-	}
-
-	for i := range eff.ControllerLogs {
-		if strings.TrimSpace(eff.ControllerLogs[i].Namespace) == "" {
-			return EffectiveEvidence{}, fmt.Errorf("ai.evidence.controller_logs[%d].namespace is required", i)
-		}
-		if eff.ControllerLogs[i].PodNameRegex == "" {
-			eff.ControllerLogs[i].PodNameRegex = defaultPodNameRegex
-		}
-		if eff.ControllerLogs[i].ContainerLog == "" {
-			eff.ControllerLogs[i].ContainerLog = defaultContainerLog
-		}
-		r, err := regexp.Compile(eff.ControllerLogs[i].PodNameRegex)
-		if err != nil {
-			return EffectiveEvidence{}, fmt.Errorf("ai.evidence.controller_logs[%d].pod_name_regex %q: %w", i, eff.ControllerLogs[i].PodNameRegex, err)
-		}
-		eff.PodNameRegexes = append(eff.PodNameRegexes, r)
-	}
-
-	patterns := src.BuildLogPatterns
-	if patterns == nil {
-		patterns = DefaultBuildLogPatterns
-	}
-	for i, p := range patterns {
-		r, err := regexp.Compile(p)
-		if err != nil {
-			return EffectiveEvidence{}, fmt.Errorf("ai.evidence.build_log_patterns[%d] %q: %w", i, p, err)
-		}
-		eff.BuildLogPatterns = append(eff.BuildLogPatterns, r)
-	}
-
-	return eff, nil
-}
-
 // CollectorName returns the configured collector name, defaulting to "generic".
 func (c *Config) CollectorName() string {
 	if c.Artifacts == nil || strings.TrimSpace(c.Artifacts.Collector) == "" {
@@ -505,15 +324,10 @@ func (c *Config) CollectorName() string {
 	return c.Artifacts.Collector
 }
 
-// AIModuleName returns the configured AI module name. When unset, it falls
-// back to the collector name so the AI prompt naturally matches the artifact
-// shape (e.g. capi collector → capi module). Final fallback is "generic".
+// AIModuleName returns the configured AI module name, defaulting to "generic".
 func (c *Config) AIModuleName() string {
 	if c.AI != nil && strings.TrimSpace(c.AI.Module) != "" {
 		return c.AI.Module
-	}
-	if c.Artifacts != nil && c.Artifacts.Collector != "" {
-		return c.Artifacts.Collector
 	}
 	return "generic"
 }
@@ -652,12 +466,6 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("category_display_order[%d] %q is not a declared category id", i, id)
 			}
 		}
-	}
-
-	// Compile evidence regexes early so YAML typos fail loud at startup,
-	// not on the first cache-miss AI run.
-	if _, err := c.EffectiveEvidence(); err != nil {
-		return err
 	}
 
 	// "universal" is reserved for the use_universal_path flow. Picking it

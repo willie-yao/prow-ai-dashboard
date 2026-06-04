@@ -156,7 +156,6 @@ func sampleConfig() *project.Config {
 				Name:  "cluster-api-provider-azure",
 			},
 		},
-		CAPI: &project.CAPI{ClusterNamePrefix: "capz-e2e"},
 	}
 }
 
@@ -255,8 +254,5 @@ func TestWriteManifest(t *testing.T) {
 	}
 	if got.ID != cfg.ID || got.Name != cfg.Name || got.Branding.SiteURL != cfg.Branding.SiteURL {
 		t.Errorf("manifest mismatch: got %+v want %+v", got, cfg)
-	}
-	if got.CAPI == nil || got.CAPI.ClusterNamePrefix != "capz-e2e" {
-		t.Errorf("CAPI section missing from manifest: %+v", got.CAPI)
 	}
 }

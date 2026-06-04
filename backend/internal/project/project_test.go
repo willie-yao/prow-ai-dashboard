@@ -27,8 +27,6 @@ branding:
   source_repo:
     owner: "kubernetes-sigs"
     name: "cluster-api-provider-azure"
-capi:
-  cluster_name_prefix: "capz-e2e"
 `
 
 func TestParseValid(t *testing.T) {
@@ -53,9 +51,6 @@ func TestParseValid(t *testing.T) {
 	}
 	if c.Branding.SourceRepo.Name != "cluster-api-provider-azure" {
 		t.Errorf("Branding.SourceRepo.Name = %q", c.Branding.SourceRepo.Name)
-	}
-	if c.CAPI == nil || c.CAPI.ClusterNamePrefix != "capz-e2e" {
-		t.Errorf("CAPI.ClusterNamePrefix not set as expected: %+v", c.CAPI)
 	}
 }
 
@@ -373,260 +368,6 @@ func TestValidate_SourceTestInfraPaths(t *testing.T) {
 		})
 	}
 }
-
-// --- Evidence schema ---
-
-func TestEffectiveEvidence_DefaultsWhenAIBlockAbsent(t *testing.T) {
-	c := validConfig()
-	c.AI = nil
-	ev, err := c.EffectiveEvidence()
-	if err != nil {
-		t.Fatalf("EffectiveEvidence: %v", err)
-	}
-	if got, want := len(ev.MachineLogs), len(DefaultMachineLogs); got != want {
-		t.Errorf("MachineLogs len = %d, want %d", got, want)
-	}
-	if got, want := len(ev.ControllerLogs), len(DefaultControllerLogs); got != want {
-		t.Errorf("ControllerLogs len = %d, want %d", got, want)
-	}
-	if len(ev.PodNameRegexes) != len(ev.ControllerLogs) {
-		t.Errorf("PodNameRegexes len = %d, want %d", len(ev.PodNameRegexes), len(ev.ControllerLogs))
-	}
-	if got, want := len(ev.BuildLogPatterns), len(DefaultBuildLogPatterns); got != want {
-		t.Errorf("BuildLogPatterns len = %d, want %d", got, want)
-	}
-	for i, sel := range ev.ControllerLogs {
-		if sel.PodNameRegex != defaultPodNameRegex {
-			t.Errorf("ControllerLogs[%d].PodNameRegex = %q, want default %q", i, sel.PodNameRegex, defaultPodNameRegex)
-		}
-		if sel.ContainerLog != defaultContainerLog {
-			t.Errorf("ControllerLogs[%d].ContainerLog = %q, want default %q", i, sel.ContainerLog, defaultContainerLog)
-		}
-	}
-}
-
-func TestEffectiveEvidence_EmptyEvidenceBlockUsesDefaults(t *testing.T) {
-	// `evidence: {}` decodes to a non-nil pointer to a zero-valued struct.
-	// Each nil slice within it should still fall back to defaults.
-	c := validConfig()
-	c.AI = &AI{Module: "capi", Evidence: &Evidence{}}
-	ev, err := c.EffectiveEvidence()
-	if err != nil {
-		t.Fatalf("EffectiveEvidence: %v", err)
-	}
-	if len(ev.MachineLogs) != len(DefaultMachineLogs) {
-		t.Errorf("MachineLogs len = %d, want %d", len(ev.MachineLogs), len(DefaultMachineLogs))
-	}
-	if len(ev.ControllerLogs) != len(DefaultControllerLogs) {
-		t.Errorf("ControllerLogs len = %d, want %d", len(ev.ControllerLogs), len(DefaultControllerLogs))
-	}
-	if len(ev.BuildLogPatterns) != len(DefaultBuildLogPatterns) {
-		t.Errorf("BuildLogPatterns len = %d, want %d", len(ev.BuildLogPatterns), len(DefaultBuildLogPatterns))
-	}
-}
-
-func TestEffectiveEvidence_ExplicitEmptySlicesDisableSources(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{
-		Module: "capi",
-		Evidence: &Evidence{
-			MachineLogs:      []string{},
-			ControllerLogs:   []ControllerLogSelector{},
-			BuildLogPatterns: []string{},
-		},
-	}
-	ev, err := c.EffectiveEvidence()
-	if err != nil {
-		t.Fatalf("EffectiveEvidence: %v", err)
-	}
-	if len(ev.MachineLogs) != 0 {
-		t.Errorf("MachineLogs should be empty, got %v", ev.MachineLogs)
-	}
-	if len(ev.ControllerLogs) != 0 {
-		t.Errorf("ControllerLogs should be empty, got %v", ev.ControllerLogs)
-	}
-	if len(ev.BuildLogPatterns) != 0 {
-		t.Errorf("BuildLogPatterns should be empty, got %v", ev.BuildLogPatterns)
-	}
-}
-
-func TestEffectiveEvidence_OmittedFieldFallsBack(t *testing.T) {
-	// Consumer sets only machine_logs; controller_logs and build_log_patterns
-	// should still get engine defaults.
-	c := validConfig()
-	c.AI = &AI{
-		Module: "capi",
-		Evidence: &Evidence{
-			MachineLogs: []string{"kubelet.log", "kern.log"},
-		},
-	}
-	ev, err := c.EffectiveEvidence()
-	if err != nil {
-		t.Fatalf("EffectiveEvidence: %v", err)
-	}
-	if got, want := ev.MachineLogs, []string{"kubelet.log", "kern.log"}; !equalStrings(got, want) {
-		t.Errorf("MachineLogs = %v, want %v", got, want)
-	}
-	if len(ev.ControllerLogs) != len(DefaultControllerLogs) {
-		t.Errorf("ControllerLogs should default to %d entries, got %d", len(DefaultControllerLogs), len(ev.ControllerLogs))
-	}
-	if len(ev.BuildLogPatterns) != len(DefaultBuildLogPatterns) {
-		t.Errorf("BuildLogPatterns should default, got %d entries", len(ev.BuildLogPatterns))
-	}
-}
-
-func TestEffectiveEvidence_NilSliceIsTreatedAsOmitted(t *testing.T) {
-	// `machine_logs: null` (YAML null) and `machine_logs:` (no value) both
-	// decode to a nil slice. Defaults must apply.
-	const yaml = `
-id: capz
-name: x
-source: {test_infra_paths: [x], file_prefix: x-}
-testgrid: {dashboard: x}
-gcs: {bucket: x}
-branding:
-  title: x
-  base_path: /x
-  site_url: https://x
-  source_repo: {owner: o, name: n}
-ai:
-  module: capi
-  evidence:
-    machine_logs:
-    build_log_patterns: null
-`
-	c, err := parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	ev, err := c.EffectiveEvidence()
-	if err != nil {
-		t.Fatalf("EffectiveEvidence: %v", err)
-	}
-	if len(ev.MachineLogs) != len(DefaultMachineLogs) {
-		t.Errorf("nil machine_logs should fall back to default, got %d entries", len(ev.MachineLogs))
-	}
-	if len(ev.BuildLogPatterns) != len(DefaultBuildLogPatterns) {
-		t.Errorf("nil build_log_patterns should fall back to default, got %d entries", len(ev.BuildLogPatterns))
-	}
-}
-
-func TestEffectiveEvidence_BareStringControllerLogIsPromoted(t *testing.T) {
-	const yaml = `
-id: capz
-name: x
-source: {test_infra_paths: [x], file_prefix: x-}
-testgrid: {dashboard: x}
-gcs: {bucket: x}
-branding:
-  title: x
-  base_path: /x
-  site_url: https://x
-  source_repo: {owner: o, name: n}
-ai:
-  module: capi
-  evidence:
-    controller_logs:
-      - capi-system
-      - namespace: capi-kubeadm-control-plane-system
-        pod_name_regex: "^kcp-"
-        container_log: manager.log
-`
-	c, err := parse(strings.NewReader(yaml))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	ev, err := c.EffectiveEvidence()
-	if err != nil {
-		t.Fatalf("EffectiveEvidence: %v", err)
-	}
-	if len(ev.ControllerLogs) != 2 {
-		t.Fatalf("ControllerLogs len = %d, want 2", len(ev.ControllerLogs))
-	}
-	if got := ev.ControllerLogs[0]; got.Namespace != "capi-system" || got.PodNameRegex != defaultPodNameRegex || got.ContainerLog != defaultContainerLog {
-		t.Errorf("bare-string entry not promoted with defaults: %+v", got)
-	}
-	if got := ev.ControllerLogs[1]; got.Namespace != "capi-kubeadm-control-plane-system" || got.PodNameRegex != "^kcp-" {
-		t.Errorf("object entry not parsed: %+v", got)
-	}
-}
-
-func TestEffectiveEvidence_InvalidPodNameRegexFailsAtLoad(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{
-		Module: "capi",
-		Evidence: &Evidence{
-			ControllerLogs: []ControllerLogSelector{
-				{Namespace: "capi-system", PodNameRegex: "(unterminated"},
-			},
-		},
-	}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "pod_name_regex") {
-		t.Fatalf("expected pod_name_regex error, got: %v", err)
-	}
-}
-
-func TestEffectiveEvidence_InvalidBuildLogPatternFailsAtLoad(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{
-		Module: "capi",
-		Evidence: &Evidence{
-			BuildLogPatterns: []string{"(unterminated"},
-		},
-	}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "build_log_patterns") {
-		t.Fatalf("expected build_log_patterns error, got: %v", err)
-	}
-}
-
-func TestEffectiveEvidence_EmptyNamespaceIsRejected(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{
-		Module:   "capi",
-		Evidence: &Evidence{ControllerLogs: []ControllerLogSelector{{Namespace: "   "}}},
-	}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "namespace is required") {
-		t.Fatalf("expected namespace required error, got: %v", err)
-	}
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func TestEvidence_IsZero(t *testing.T) {
-	cases := []struct {
-		name string
-		ev   *Evidence
-		want bool
-	}{
-		{"nil receiver", nil, true},
-		{"empty struct", &Evidence{}, true},
-		{"machine_logs set", &Evidence{MachineLogs: []string{"foo.log"}}, false},
-		{"machine_logs explicit empty slice counts as set",
-			&Evidence{MachineLogs: []string{}}, false},
-		{"controller_logs set",
-			&Evidence{ControllerLogs: []ControllerLogSelector{{Namespace: "x"}}}, false},
-		{"build_log_patterns set",
-			&Evidence{BuildLogPatterns: []string{"err"}}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.ev.IsZero(); got != tc.want {
-				t.Errorf("IsZero() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestAgentic_Effective(t *testing.T) {
 	t.Run("nil receiver returns defaults with Enabled=false", func(t *testing.T) {
 		got := (*Agentic)(nil).EffectiveAgentic()
@@ -798,4 +539,16 @@ func TestParse_UseUniversalPathField(t *testing.T) {
 	if c.AI.Agentic == nil || !equalStrings(c.AI.Agentic.Tools, []string{"filesystem"}) {
 		t.Errorf("Agentic.Tools = %v, want [filesystem]", c.AI.Agentic)
 	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

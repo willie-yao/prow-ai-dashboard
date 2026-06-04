@@ -37,10 +37,7 @@ func TestLoadExampleGolden(t *testing.T) {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
 		}
 	}
-	if cfg.Artifacts == nil || cfg.Artifacts.Collector != "capi" {
-		t.Errorf("Artifacts.Collector wrong: %+v", cfg.Artifacts)
-	}
-	if cfg.AI == nil || cfg.AI.Module != "capi" {
+	if cfg.AI == nil || cfg.AI.Module != "generic" {
 		t.Errorf("AI.Module wrong: %+v", cfg.AI)
 	}
 	if prompt == "" {
