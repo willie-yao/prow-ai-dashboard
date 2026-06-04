@@ -14,15 +14,12 @@ name: "Example Kubernetes Project"
 # Optional short name for compact UIs.
 short_name: "EXAMPLE"
 
-# Where to discover prow job YAMLs in kubernetes/test-infra. List one or
-# more directories under the repo root; all are scanned and the union of
-# matching jobs (per testgrid.dashboard) is used.
+# Optional source-side knobs. Job discovery itself is fully automatic:
+# the fetcher asks GitHub code search for every YAML under
+# kubernetes/test-infra/config/jobs/ that mentions your testgrid.dashboard,
+# then keeps the jobs whose testgrid-dashboards annotation matches exactly.
+# No paths or filename prefixes to maintain.
 source:
-  test_infra_paths:
-    - "config/jobs/kubernetes-sigs/your-project"
-  # Optional. When set, only files whose name starts with this prefix are
-  # parsed. Omit when the testgrid-dashboards annotation is the sole filter.
-  file_prefix: "your-project-"
   # Include presubmit jobs in addition to periodics. ORed with the
   # workflow's include-presubmits input. Default false (periodics only).
   include_presubmits: false

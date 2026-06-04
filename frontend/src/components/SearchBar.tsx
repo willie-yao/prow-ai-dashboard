@@ -9,7 +9,7 @@ import type { SearchEntry } from "../types/dashboard";
 
 export function SearchBar() {
   const manifest = useManifest();
-  const filePrefix = manifest.source.file_prefix ?? "";
+  const filePrefix = manifest.short_name_prefix ?? "";
   const { data } = useSearchIndex();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");

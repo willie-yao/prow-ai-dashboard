@@ -12,10 +12,6 @@ const validYAML = `
 id: capz
 name: "Cluster API Provider Azure"
 short_name: "CAPZ"
-source:
-  test_infra_paths:
-    - "config/jobs/kubernetes-sigs/cluster-api-provider-azure"
-  file_prefix: "cluster-api-provider-azure-"
 testgrid:
   dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"
 gcs:
@@ -37,9 +33,6 @@ func TestParseValid(t *testing.T) {
 	if c.ID != "capz" {
 		t.Errorf("ID = %q, want %q", c.ID, "capz")
 	}
-	if len(c.Source.TestInfraPaths) != 1 || c.Source.TestInfraPaths[0] != "config/jobs/kubernetes-sigs/cluster-api-provider-azure" {
-		t.Errorf("Source.TestInfraPaths = %v", c.Source.TestInfraPaths)
-	}
 	if c.TestGrid.Dashboard != "sig-cluster-lifecycle-cluster-api-provider-azure" {
 		t.Errorf("TestGrid.Dashboard = %q", c.TestGrid.Dashboard)
 	}
@@ -57,8 +50,6 @@ func TestParseValid(t *testing.T) {
 func TestParseMissingRequiredFields(t *testing.T) {
 	const incomplete = `
 id: capz
-source:
-  file_prefix: "x-"
 `
 	_, err := parse(strings.NewReader(incomplete))
 	if err == nil {
@@ -67,7 +58,6 @@ source:
 	msg := err.Error()
 	wantSubstrings := []string{
 		"name",
-		"source.test_infra_paths",
 		"testgrid.dashboard",
 		"gcs.bucket",
 		"branding.title",
@@ -88,9 +78,6 @@ func TestParseUnknownField(t *testing.T) {
 id: capz
 name: x
 unknown_field: oops
-source:
-  test_infra_paths: [x]
-  file_prefix: x
 testgrid:
   dashboard: x
 gcs:
@@ -109,6 +96,36 @@ branding:
 	}
 	if !strings.Contains(err.Error(), "unknown_field") {
 		t.Errorf("error should name the unknown field; got: %v", err)
+	}
+}
+
+func TestParseRejectsLegacySourcePaths(t *testing.T) {
+	// test_infra_paths / file_prefix were removed when discovery moved
+	// to dashboard-driven code search. Strict YAML parsing must reject
+	// them so stale consumer configs surface a clear error at startup.
+	const legacy = `
+id: x
+name: x
+source:
+  test_infra_paths: ["config/jobs/x"]
+testgrid:
+  dashboard: x
+gcs:
+  bucket: x
+branding:
+  title: x
+  base_path: /x
+  site_url: https://example.com
+  source_repo:
+    owner: x
+    name: x
+`
+	_, err := parse(strings.NewReader(legacy))
+	if err == nil {
+		t.Fatal("expected error for legacy source.test_infra_paths, got nil")
+	}
+	if !strings.Contains(err.Error(), "test_infra_paths") {
+		t.Errorf("error should mention the removed field; got: %v", err)
 	}
 }
 
@@ -156,12 +173,8 @@ func TestDisplayShortName(t *testing.T) {
 // below mutate it to exercise individual category-rule failure paths.
 func validConfig() *Config {
 	return &Config{
-		ID:   "test",
-		Name: "Test",
-		Source: Source{
-			TestInfraPaths: []string{"config/jobs/test"},
-			FilePrefix:     "test-",
-		},
+		ID:       "test",
+		Name:     "Test",
 		TestGrid: TestGrid{Dashboard: "test-dashboard"},
 		GCS:      GCS{Bucket: "test-bucket"},
 		Branding: Branding{
@@ -283,91 +296,6 @@ func assertValidate(t *testing.T, c *Config, wantSub string) {
 	}
 }
 
-// --- Source.TestInfraPaths normalization ---
-
-func TestValidate_SourceTestInfraPaths(t *testing.T) {
-	cases := []struct {
-		name    string
-		mutate  func(*Config)
-		wantSub string
-		check   func(*testing.T, *Config)
-	}{
-		{
-			name: "empty list rejected",
-			mutate: func(c *Config) {
-				c.Source.TestInfraPaths = nil
-			},
-			wantSub: "source.test_infra_paths",
-		},
-		{
-			name: "empty string entry rejected",
-			mutate: func(c *Config) {
-				c.Source.TestInfraPaths = []string{"config/jobs/foo", "   "}
-			},
-			wantSub: "source.test_infra_paths[1] is empty after trimming",
-		},
-		{
-			name: "whitespace and slashes trimmed",
-			mutate: func(c *Config) {
-				c.Source.TestInfraPaths = []string{"  /config/jobs/foo/  "}
-			},
-			check: func(t *testing.T, c *Config) {
-				if got := c.Source.TestInfraPaths; len(got) != 1 || got[0] != "config/jobs/foo" {
-					t.Errorf("got %v, want [config/jobs/foo]", got)
-				}
-			},
-		},
-		{
-			name: "duplicates deduped",
-			mutate: func(c *Config) {
-				c.Source.TestInfraPaths = []string{"a/b", "a/b", "/a/b/"}
-			},
-			check: func(t *testing.T, c *Config) {
-				if got := c.Source.TestInfraPaths; len(got) != 1 || got[0] != "a/b" {
-					t.Errorf("got %v, want [a/b]", got)
-				}
-			},
-		},
-		{
-			name: "multiple distinct paths preserved",
-			mutate: func(c *Config) {
-				c.Source.TestInfraPaths = []string{"a/b", "c/d"}
-			},
-			check: func(t *testing.T, c *Config) {
-				if got := c.Source.TestInfraPaths; len(got) != 2 || got[0] != "a/b" || got[1] != "c/d" {
-					t.Errorf("got %v, want [a/b c/d]", got)
-				}
-			},
-		},
-		{
-			name: "file_prefix is optional",
-			mutate: func(c *Config) {
-				c.Source.FilePrefix = ""
-			},
-		},
-		{
-			name: "file_prefix whitespace trimmed",
-			mutate: func(c *Config) {
-				c.Source.FilePrefix = "  foo-  "
-			},
-			check: func(t *testing.T, c *Config) {
-				if c.Source.FilePrefix != "foo-" {
-					t.Errorf("FilePrefix = %q, want %q", c.Source.FilePrefix, "foo-")
-				}
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := validConfig()
-			tc.mutate(c)
-			assertValidate(t, c, tc.wantSub)
-			if tc.check != nil && tc.wantSub == "" {
-				tc.check(t, c)
-			}
-		})
-	}
-}
 func TestAgentic_Effective(t *testing.T) {
 	t.Run("nil receiver returns defaults with Enabled=false", func(t *testing.T) {
 		got := (*Agentic)(nil).EffectiveAgentic()

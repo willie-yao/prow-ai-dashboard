@@ -185,11 +185,10 @@ export interface SourceRepoRef {
   name: string;
 }
 
-/** Strip the leading "periodic-<file_prefix>" off a job name for compact display. */
-export function shortJobName(name: string, filePrefix: string): string {
-  if (!filePrefix) return name;
-  const prefix = `periodic-${filePrefix}`;
-  return name.startsWith(prefix) ? name.slice(prefix.length) : name;
+/** Strip the derived short-name prefix off a job name for compact display. */
+export function shortJobName(name: string, shortNamePrefix: string): string {
+  if (!shortNamePrefix) return name;
+  return name.startsWith(shortNamePrefix) ? name.slice(shortNamePrefix.length) : name;
 }
 
 export interface FileToUrlContext {
