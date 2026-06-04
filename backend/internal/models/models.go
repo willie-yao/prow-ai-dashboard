@@ -2,7 +2,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -152,43 +151,9 @@ type TestCase struct {
 	// came from, e.g. "junit.e2e_suite.1.xml" or "junit_runner.xml". Lets
 	// the UI disambiguate same-named cases that show up in different
 	// shards or suites within one build.
-	JUnitFile        string            `json:"junit_file,omitempty"`
-	ClusterArtifacts *ClusterArtifacts `json:"cluster_artifacts,omitempty"`
-	AISummary        *AISummary        `json:"ai_summary,omitempty"`
-	AIAnalysis       *AIAnalysis       `json:"ai_analysis,omitempty"`
-}
-
-// ClusterArtifacts holds links to debug artifacts for a specific cluster.
-type ClusterArtifacts struct {
-	ClusterName           string             `json:"cluster_name"`
-	ProviderActivityLog   string             `json:"provider_activity_log,omitempty"`
-	Machines              []MachineArtifacts `json:"machines,omitempty"`
-	PodLogDirs            map[string]string  `json:"pod_log_dirs,omitempty"` // name → GCSweb URL
-	BootstrapResourcesURL string             `json:"bootstrap_resources_url,omitempty"`
-}
-
-// UnmarshalJSON migrates the legacy `azure_activity_log` field from cached
-// job JSON written by older fetcher runs into ProviderActivityLog. Once all
-// cached builds have rolled over this can be deleted.
-func (c *ClusterArtifacts) UnmarshalJSON(data []byte) error {
-	type alias ClusterArtifacts
-	aux := struct {
-		AzureActivityLog string `json:"azure_activity_log,omitempty"`
-		*alias
-	}{alias: (*alias)(c)}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if c.ProviderActivityLog == "" && aux.AzureActivityLog != "" {
-		c.ProviderActivityLog = aux.AzureActivityLog
-	}
-	return nil
-}
-
-// MachineArtifacts holds links to per-machine debug logs.
-type MachineArtifacts struct {
-	Name string            `json:"name"`
-	Logs map[string]string `json:"logs"`
+	JUnitFile  string      `json:"junit_file,omitempty"`
+	AISummary  *AISummary  `json:"ai_summary,omitempty"`
+	AIAnalysis *AIAnalysis `json:"ai_analysis,omitempty"`
 }
 
 // BuildResult is a complete result for a single build: metadata + test cases.
@@ -199,19 +164,6 @@ type BuildResult struct {
 	TestsPassed  int        `json:"tests_passed"`
 	TestsFailed  int        `json:"tests_failed"`
 	TestsSkipped int        `json:"tests_skipped"`
-
-	// ControllerLogURLs maps a "<namespace>/<deployment>" key (e.g.
-	// "capz-system/capz-controller-manager") to the URL of one pod's
-	// manager log, discovered under
-	// artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/<log>.
-	// The deployment level is included in the key because a single
-	// namespace can host multiple controller deployments (e.g.
-	// capz-system contains both ASO and the CAPZ controller). Populated
-	// by collectors when consumer project.yaml declares
-	// ai.evidence.controller_logs; empty otherwise. URLs only (not the
-	// content) are kept here so dashboard.json stays small; the AI module
-	// fetches the content on demand at prompt build time.
-	ControllerLogURLs map[string]string `json:"controller_log_urls,omitempty"`
 }
 
 // JobSummary represents aggregated data for a job on the landing page.
