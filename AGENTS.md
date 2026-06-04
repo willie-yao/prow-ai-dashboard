@@ -10,13 +10,8 @@ Guidance for AI coding agents working on `prow-ai-dashboard`. See
 dashboards. It is consumed by lightweight per-project repos (the
 "consumers") via a reusable GitHub Actions workflow. The engine repo holds
 all the code; consumer repos hold only `project.yaml` + `prompts/system.md`
-+ a ~20-line workflow file.
-
-Two production consumers today:
-
-- `willie-yao/capz-prow-ai-dashboard` - CAPZ on Claude (prod)
-- `willie-yao/capz-prow-ai-dashboard-qwen` - CAPZ on in-cluster Qwen3-235B
-  via Nvidia Dynamo (shadow, used for model A/B work)
++ a ~20-line workflow file. See [`README.md`](README.md) for the current
+list of live consumers.
 
 The data flow per scheduled deploy is:
 
@@ -62,7 +57,7 @@ backend/                       Go 1.25
       cache.go                 On-disk cache (JSON, keyed by mode+hash)
     aggregator/                Roll-ups across builds
     artifacts/                 Build-log + artifact parsing
-    collectors/                Generic-only after PR #4 (capi deleted)
+    collectors/                Pluggable; `generic` ships in-tree
     fetcher/                   AIModuleRegistry, CollectorRegistry wiring
     gcs/, gcsweb/              GCS reads + gcsweb HTML scraping
     junit/                     JUnit XML parser
@@ -106,14 +101,14 @@ engine checkout works without any consumer repo cloned.
 
 ```bash
 # Frontend dev loop with real production data (no AI calls)
-make fetch-data-quick PROJECT_DIR=../capz-prow-ai-dashboard
+make fetch-data-quick PROJECT_DIR=../<your-consumer-repo>
 make dev                       # http://localhost:5173 with HMR
 
 # With AI analysis (needs creds)
 export AI_TOKEN=<token>
 export AI_ENDPOINT=<chat-completions-url>
 export AI_MODEL=<model-id>
-make fetch-data-ai-quick PROJECT_DIR=../capz-prow-ai-dashboard
+make fetch-data-ai-quick PROJECT_DIR=../<your-consumer-repo>
 make dev
 
 # Frontend-only iteration (no Go, no GCS): drop pre-built JSON from a
@@ -138,7 +133,7 @@ needed for local dev (defaults to `/`).
     new warning from code you touched is a regression.
 
 CI (`.github/workflows/ci.yml`) runs build + test + vet on backend and
-build + lint on frontend. No staticcheck in CI today; please still run it
+build + lint on frontend. CI does not run staticcheck; please still run it
 locally before opening a PR.
 
 ### Anchor pin tests
@@ -181,9 +176,9 @@ If you're touching anything under `backend/internal/ai/`, read
 [`docs/agentic.md`](docs/agentic.md) and [`docs/skills.md`](docs/skills.md)
 first. Quick map:
 
-- **Two modes today:** `agentic-universal` (what every live consumer uses
-  via `ai.use_universal_path: true`) and `curator` (single-shot, kept
-  wired for endpoints that don't support function-calling). Selected per
+- **Two modes:** `agentic-universal` (the recommended path, used when
+  `ai.use_universal_path: true`) and `curator` (single-shot, kept wired
+  for endpoints that don't support function-calling). Selected per
   failure in `Service.desiredMode`.
 - **Agentic loop:** `agentic.go` runs up to `MaxIters` rounds (default 20).
   Each round: send conversation → model returns tool calls → engine runs
@@ -231,11 +226,12 @@ live deploy.
 
 ## Commit conventions
 
-- **No backward-compat scaffolding by default.** With only the two
-  internal consumers above and the engine still under heavy development,
-  the project prefers deleting dead code over maintaining compat
-  branches. Recent cleanup commits (`3859677`, `733f080` aka PR #4)
-  illustrate the pattern.
+- **No backward-compat scaffolding by default.** While the engine is
+  under heavy development with a small known set of consumers, the
+  project prefers deleting dead code over maintaining compat branches.
+  When in doubt, grep for callers: if nothing in any consumer's
+  `project.yaml` or the engine code paths references a given branch, it
+  is a deletion candidate.
 - **Conventional, terse commit messages.** Opening paragraph explains
   rationale; bulleted list describes the changes; closing line confirms
   `go build / vet / test / staticcheck` are clean.
@@ -252,15 +248,16 @@ live deploy.
   carefully.
 - **Anchor pin test failures.** You edited prompt text without updating
   the anchor test. Update both in the same commit.
-- **Universal mode vs curator mode confusion.** All live consumers use
-  `agentic-universal`. The `curator` (`""` was legacy, now removed) path
-  exists only as a fallback for endpoints rejecting function calls.
-- **In-cluster Dynamo endpoint** (Qwen consumer): unreachable from
-  GitHub-hosted runners. Use `runs-on:` + a self-hosted runner OR set
-  `skip-fetch: true` and commit pre-fetched `data/` to the consumer repo.
+- **Universal vs curator mode confusion.** Consumers using
+  `ai.use_universal_path: true` produce `agentic-universal` cache
+  entries; the `curator` path produces `curator` entries. A cache lookup
+  with a mismatched mode is treated as a miss and re-analyzed.
+- **In-cluster AI endpoints** are unreachable from GitHub-hosted runners.
+  Use `runs-on:` + a self-hosted runner OR set `skip-fetch: true` and
+  commit pre-fetched `data/` to the consumer repo.
 - **Per-deploy `builds:` input.** Trade-off between history depth and
-  cron-window budget. Prod CAPZ runs at `builds: 10`; Qwen runs at
-  `builds: 8`. Halving this halves cold-cache fetch time.
+  cron-window budget. Halving this halves cold-cache fetch time;
+  doubling it deepens history but risks overrunning the cron interval.
 
 ## Pointers to deeper docs
 
