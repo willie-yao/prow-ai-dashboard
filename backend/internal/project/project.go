@@ -36,17 +36,12 @@ type Config struct {
 }
 
 // CategoryRule maps a substring in a job name to a category id and display
-// label. Rules are evaluated in order; the first match wins. When no rule
+// label. Rules are evaluated in order; first match wins. When no rule
 // matches, the job is categorized as "other".
 //
-// Rule order controls backend categorization precedence, not necessarily
-// frontend display order — declare `category_display_order` separately
-// when the two need to diverge (e.g. a broad rule must come after a
-// specific one for matching, but should appear first in the UI).
-//
-// The engine ships a small generic default (see DefaultCategories) covering
-// conformance, capi-e2e, upgrade, coverage, scalability, e2e. Consumers
-// override or extend by listing their own rules in project.yaml.
+// Rule order controls categorization, not display order; declare
+// `category_display_order` separately when the two need to diverge.
+// Consumers can override or extend DefaultCategories from project.yaml.
 type CategoryRule struct {
 	// Match is the substring to look for in the job name. Comparison is
 	// case-insensitive on both sides.
@@ -133,71 +128,46 @@ type Artifacts struct {
 // failure analysis. Implementations live under backend/internal/ai/modules/.
 type AI struct {
 	// Module names the registered AI module (e.g. "capi", "generic").
-	// When unset, the module is inferred from artifacts.collector and
-	// falls back to "generic".
+	// When unset, inferred from artifacts.collector with "generic" fallback.
 	Module string `yaml:"module" json:"module,omitempty"`
 
-	// Endpoint is the chat-completions URL for the AI provider. Any
-	// OpenAI-compatible endpoint works (GitHub Copilot, OpenAI, Azure
-	// OpenAI, Nvidia Dynamo, vLLM, Ollama). When unset, the fetcher
-	// reads the AI_ENDPOINT environment variable; if that is also unset,
-	// it defaults to GitHub Copilot at
-	// https://api.githubcopilot.com/chat/completions. Excluded from
-	// manifest.json so it never reaches the deployed Pages site.
+	// Endpoint is the OpenAI-compatible chat-completions URL. When unset,
+	// reads AI_ENDPOINT env, then defaults to GitHub Copilot. Excluded
+	// from manifest.json.
 	Endpoint string `yaml:"endpoint,omitempty" json:"-"`
 
-	// Model is the model identifier the provider expects (e.g.
-	// "claude-opus-4.7-xhigh" for Copilot, "gpt-4o" for OpenAI,
-	// "meta/llama-3.1-70b-instruct" for an NVIDIA NIM). When unset, the
-	// fetcher reads the AI_MODEL environment variable; if that is also
-	// unset, it defaults to the engine's built-in Copilot model. MUST be
-	// set (via YAML or AI_MODEL) when pointing at any non-Copilot
-	// provider. Excluded from manifest.json so internal-only model
-	// labels never reach the deployed Pages site; use AI_MODEL for
-	// those.
+	// Model is the model identifier the provider expects. When unset,
+	// reads AI_MODEL env, then defaults to the engine's Copilot model.
+	// MUST be set when pointing at any non-Copilot provider. Excluded
+	// from manifest.json.
 	Model string `yaml:"model,omitempty" json:"-"`
 
-	// Headers are extra HTTP headers merged into every request to the AI
-	// provider after the defaults. Use this to add provider-specific
-	// routing headers (e.g. "NIM-Function-Id") or to override the default
-	// "Authorization: Bearer <token>" scheme for providers like Azure
-	// OpenAI that use a custom auth header.
-	//
-	// Values are passed through verbatim; do not put secrets here. The
-	// AI_TOKEN environment variable is the supported channel for the
-	// bearer token.
+	// Headers are extra HTTP headers merged into every AI request after
+	// the defaults. Use for provider-specific routing headers or to
+	// override the default Authorization scheme. Do not put secrets here;
+	// AI_TOKEN is the supported channel for the bearer token.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 
 	// Evidence overrides the per-failure artifact sources the AI module
-	// fetches. Fields left nil fall back to engine defaults. A non-nil
-	// empty slice (e.g. `machine_logs: []`) disables that source entirely.
-	// Currently interpreted only by the "capi" module; other modules
-	// ignore it and log a warning at startup to surface misconfigurations.
+	// fetches. Nil fields fall back to engine defaults; a non-nil empty
+	// slice disables that source entirely. Interpreted only by the
+	// "capi" module today.
 	Evidence *Evidence `yaml:"evidence,omitempty" json:"evidence,omitempty"`
 
-	// Agentic enables tool-calling-based artifact browsing. When enabled,
-	// the AI module skips its curator-driven evidence collection (the
-	// Evidence block) for failures the module opts into via the
-	// AgenticPreferrer interface and instead lets the model browse the
-	// build's artifact tree itself. Requires an AI endpoint that
-	// supports OpenAI-style function calling.
+	// Agentic enables tool-calling-based artifact browsing. When on, the
+	// module skips its curator-driven evidence collection for failures
+	// that opt in (via AgenticPreferrer) and lets the model browse the
+	// artifact tree itself. Requires a function-calling endpoint.
 	Agentic *Agentic `yaml:"agentic,omitempty" json:"agentic,omitempty"`
 
-	// UseUniversalPath, when true, bypasses the module-routed pipeline in
-	// favor of a project-agnostic agentic flow: per-build collector
-	// evidence is skipped, the per-failure prompt is reduced to the test
-	// failure context, and the agent is expected to discover everything
-	// it needs via the registered tools (filesystem + k8s by default).
+	// UseUniversalPath bypasses the module-routed pipeline in favor of a
+	// project-agnostic agentic flow: collector evidence is skipped, the
+	// per-failure prompt is reduced to the test failure context, and the
+	// agent discovers everything via the registered tools.
 	//
-	// Implies agentic.enabled=true regardless of the agentic block. There
-	// is no curator fallback in this mode: an endpoint that rejects
-	// function-calling surfaces as an explicit "unavailable" summary
-	// instead of degrading silently to a tools-free prompt.
-	//
-	// Module is still validated for typos (it must be unset or name a
-	// registered module) but its prompt / evidence functions are NOT
-	// invoked. Existing consumers without this flag keep the
-	// module-routed pipeline unchanged.
+	// Implies agentic.enabled=true. There is no curator fallback in this
+	// mode: an endpoint that rejects function-calling surfaces as
+	// "unavailable" rather than degrading to a tools-free prompt.
 	UseUniversalPath bool `yaml:"use_universal_path,omitempty" json:"-"`
 }
 
@@ -233,39 +203,16 @@ type Agentic struct {
 
 	// MinToolCalls is the minimum number of tool calls the model must
 	// make before its final JSON answer is accepted. When the model
-	// returns a tools-free response with fewer tool calls than this
-	// floor, the loop appends a nudge user-message asking it to
-	// investigate further. Defaults to 0 (no floor), which preserves
-	// the historical behavior for strong tool-using models (e.g. Claude
-	// Opus) that already investigate deeply. Set to ~3 for weaker
-	// open-weights models (e.g. Qwen3) that tend to finalize prematurely
-	// from the prompt alone without inspecting any artifacts.
-	//
-	// Below-floor finals are still published if the model refuses to
-	// investigate further (so triage always has SOMETHING to show), but
-	// they are NOT written to the AI cache, ensuring the next fetcher
-	// run retries the analysis with fresh tool calls. Cached results
-	// from previous runs that fall below the current floor are also
-	// invalidated and re-analyzed.
+	// returns a tools-free response below this floor, the loop nudges it
+	// to investigate further. Below-floor finals are still published
+	// but NOT cached, so the next run retries. Defaults to 0 (no floor).
 	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty"`
 
-	// MinGCSBytes is the minimum cumulative bytes the model must have
-	// fetched from GCS via tool calls before its final JSON answer is
-	// accepted. Complements MinToolCalls because a model can satisfy a
-	// tool-call floor with cheap list calls or tiny byte ranges and
-	// still finalize without any meaningful evidence (observed against
-	// Qwen3-235B: 6 tool calls returning 13 KB total, then a
-	// fabricated "no specific error found" root cause). Tracked from
-	// the agent's GCS budget counter, so it follows the same accounting
-	// the engine already uses for cost capping. Defaults to 0 (no
-	// floor). 200_000 (200 KB) is a reasonable starting value for
-	// weaker open-weights models; raise gradually if the model keeps
-	// parking at the floor with shallow evidence.
-	//
-	// Same publish/cache semantics as MinToolCalls: below-floor finals
-	// are returned to the caller so triage has something, but they
-	// are NOT cached, and cached entries below the current floor are
-	// invalidated on the next read.
+	// MinGCSBytes is the minimum cumulative bytes the model must fetch
+	// via tool calls before its final answer is accepted. Complements
+	// MinToolCalls because a model can satisfy a calls floor with cheap
+	// list calls or tiny reads. Same publish/no-cache semantics as
+	// MinToolCalls. Defaults to 0.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
 	// Critique configures the critique gate: after the agentic loop
@@ -385,33 +332,24 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 
 // Evidence configures which artifacts the AI module fetches for each failure.
 // All three fields are optional and independently fall back to engine defaults
-// (see DefaultMachineLogs, DefaultControllerLogs, DefaultBuildLogPatterns).
+// (DefaultMachineLogs, DefaultControllerLogs, DefaultBuildLogPatterns).
 //
-// Scope: every field is interpreted only by the "capi" AI module, because the
-// paths they refer to (clusters/<name>/machines/<vm>/ and
-// clusters/bootstrap/logs/<ns>/<deployment>/<pod>/) are specific to the
-// Cluster API artifact layout. Other modules (currently only "generic") ignore
-// the entire block and log a warning at startup so misconfigurations don't
-// silently slip through. A non-CAPI project that wants its own evidence shape
-// should add a new AI module, not reuse these fields with a different meaning.
+// Interpreted only by the "capi" AI module; other modules ignore it and log
+// a warning at startup to surface misconfigurations.
 type Evidence struct {
 	// MachineLogs lists filenames looked up under each cluster's
-	// artifacts/clusters/<name>/machines/<vm>/<file> path. The AI module
-	// fetches the tail of the first machine that has a non-empty URL for
-	// each filename.
+	// artifacts/clusters/<name>/machines/<vm>/<file> path.
 	MachineLogs []string `yaml:"machine_logs,omitempty" json:"machine_logs,omitempty"`
 
-	// ControllerLogs lists management-cluster controller pod logs to fetch
-	// from artifacts/clusters/bootstrap/logs/<namespace>/<deployment>/<pod>/<container_log>.
-	// In YAML each entry may be a bare namespace string (shorthand for
-	// {namespace: <string>}) or a full object with pod_name_regex and
-	// container_log overrides.
+	// ControllerLogs lists controller pod logs from
+	// artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/<container_log>.
+	// In YAML each entry may be a bare namespace string or a full object
+	// with pod_name_regex and container_log overrides.
 	ControllerLogs []ControllerLogSelector `yaml:"controller_logs,omitempty" json:"controller_logs,omitempty"`
 
-	// BuildLogPatterns is a list of regular expressions grepped against the
-	// build log; matching lines (plus 2 lines of context) are included in
-	// the AI prompt. Use to surface provider-specific error strings (e.g.
-	// "SkuNotAvailable" for Azure) that the project-agnostic defaults miss.
+	// BuildLogPatterns are regexes grepped against the build log;
+	// matching lines (plus 2 lines of context) are included in the AI
+	// prompt. Use for provider-specific error strings.
 	BuildLogPatterns []string `yaml:"build_log_patterns,omitempty" json:"build_log_patterns,omitempty"`
 }
 
@@ -507,15 +445,9 @@ type EffectiveEvidence struct {
 }
 
 // EffectiveEvidence resolves the consumer's ai.evidence block against engine
-// defaults and compiles every regex so callers don't have to re-validate.
-//
-// Nil semantics: a nil top-level Evidence or a nil field means "use engine
-// default". A non-nil empty slice (e.g. `machine_logs: []` in YAML, which
-// decodes as a 0-length non-nil slice) is preserved as an explicit "disable
-// this source" request.
-//
-// Regex compile errors are surfaced with a path pointing at the offending
-// field so users can fix the YAML in one pass.
+// defaults and compiles every regex. A nil top-level Evidence or nil field
+// means "use engine default"; a non-nil empty slice means "disable that
+// source". Regex compile errors include a YAML field path for easy fixing.
 func (c *Config) EffectiveEvidence() (EffectiveEvidence, error) {
 	var src Evidence
 	if c.AI != nil && c.AI.Evidence != nil {
