@@ -22,37 +22,37 @@ func (s *stubCollector) CollectArtifacts(_ context.Context, _ gcs.BuildLocation,
 
 type stubModule struct{ name string }
 
-func (s *stubModule) Name() string                              { return s.name }
-func (s *stubModule) IsKnownTransient(_ string) string          { return "" }
+func (s *stubModule) Name() string                     { return s.name }
+func (s *stubModule) IsKnownTransient(_ string) string { return "" }
 func (s *stubModule) AnalysisPrompt(_ context.Context, _ *http.Client, _ *models.BuildResult, _ *models.TestCase, _ int) string {
 	return ""
 }
 
 func TestCollectorRegistry_BuildAndNames(t *testing.T) {
 	r := NewCollectorRegistry()
-	r.Register("capi", func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
-		return &stubCollector{name: "capi"}, nil
+	r.Register("kubernetes", func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
+		return &stubCollector{name: "kubernetes"}, nil
 	})
 	r.Register("generic", func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
 		return &stubCollector{name: "generic"}, nil
 	})
 
-	if names := r.Names(); strings.Join(names, ",") != "capi,generic" {
-		t.Errorf("Names = %v, want sorted [capi generic]", names)
+	if names := r.Names(); strings.Join(names, ",") != "generic,kubernetes" {
+		t.Errorf("Names = %v, want sorted [generic kubernetes]", names)
 	}
-	if !r.Has("capi") || r.Has("missing") {
-		t.Errorf("Has wrong: capi=%v missing=%v", r.Has("capi"), r.Has("missing"))
+	if !r.Has("kubernetes") || r.Has("missing") {
+		t.Errorf("Has wrong: kubernetes=%v missing=%v", r.Has("kubernetes"), r.Has("missing"))
 	}
 
-	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "capi"}}
+	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "kubernetes"}}
 	got, err := r.Build(cfg, nil, nil)
-	if err != nil || got.Name() != "capi" {
-		t.Fatalf("Build(capi): got=%v err=%v", got, err)
+	if err != nil || got.Name() != "kubernetes" {
+		t.Fatalf("Build(kubernetes): got=%v err=%v", got, err)
 	}
 
 	cfg.Artifacts.Collector = "ghost"
 	_, err = r.Build(cfg, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "registered: capi, generic") {
+	if err == nil || !strings.Contains(err.Error(), "registered: generic, kubernetes") {
 		t.Errorf("unknown collector error should list registered: %v", err)
 	}
 }
@@ -89,17 +89,17 @@ func TestCollectorRegistry_DuplicatePanics(t *testing.T) {
 func TestAIModuleRegistry_ExplicitChoice(t *testing.T) {
 	r := NewAIModuleRegistry()
 	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-	r.Register("capi", func(_ *project.Config) ai.Module { return &stubModule{name: "capi"} })
+	r.Register("kubernetes", func(_ *project.Config) ai.Module { return &stubModule{name: "kubernetes"} })
 
-	cfg := &project.Config{AI: &project.AI{Module: "capi"}}
+	cfg := &project.Config{AI: &project.AI{Module: "kubernetes"}}
 	got, err := r.Build(cfg)
-	if err != nil || got.Name() != "capi" {
-		t.Errorf("explicit capi: got=%v err=%v", got, err)
+	if err != nil || got.Name() != "kubernetes" {
+		t.Errorf("explicit kubernetes: got=%v err=%v", got, err)
 	}
 
 	cfg.AI.Module = "missing"
 	_, err = r.Build(cfg)
-	if err == nil || !strings.Contains(err.Error(), "registered: capi, generic") {
+	if err == nil || !strings.Contains(err.Error(), "registered: generic, kubernetes") {
 		t.Errorf("explicit unknown should error with registered list: %v", err)
 	}
 }
@@ -107,21 +107,21 @@ func TestAIModuleRegistry_ExplicitChoice(t *testing.T) {
 func TestAIModuleRegistry_ImplicitFromCollector(t *testing.T) {
 	r := NewAIModuleRegistry()
 	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-	r.Register("capi", func(_ *project.Config) ai.Module { return &stubModule{name: "capi"} })
+	r.Register("kubernetes", func(_ *project.Config) ai.Module { return &stubModule{name: "kubernetes"} })
 
-	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "capi"}}
+	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "kubernetes"}}
 	got, err := r.Build(cfg)
-	if err != nil || got.Name() != "capi" {
-		t.Errorf("implicit capi from collector: got=%v err=%v", got, err)
+	if err != nil || got.Name() != "kubernetes" {
+		t.Errorf("implicit kubernetes from collector: got=%v err=%v", got, err)
 	}
 }
 
 func TestAIModuleRegistry_FallbackToGeneric(t *testing.T) {
 	r := NewAIModuleRegistry()
 	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-	// Note: no "capi" module registered, so implicit fallback should pick generic.
+	// Note: no "kubernetes" module registered, so implicit fallback should pick generic.
 
-	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "capi"}}
+	cfg := &project.Config{Artifacts: &project.Artifacts{Collector: "kubernetes"}}
 	got, err := r.Build(cfg)
 	if err != nil || got.Name() != "generic" {
 		t.Errorf("fallback to generic: got=%v err=%v", got, err)

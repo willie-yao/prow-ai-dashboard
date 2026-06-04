@@ -315,15 +315,9 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode stri
 	return false
 }
 
-// cacheKey returns the cache key for the curator analysis call. The "capi"
-// module keeps the legacy "comprehensive:<hash>" prefix for cache
-// compatibility; new modules get an "analyze:<module>:<hash>" key.
+// cacheKey returns the cache key for the curator analysis call.
 func (s *Service) cacheKey(testName, failureMessage string) string {
-	hash := failureHash(testName, failureMessage)
-	if s.module.Name() == "capi" {
-		return fmt.Sprintf("comprehensive:%x", hash)
-	}
-	return fmt.Sprintf("analyze:%s:%x", s.module.Name(), hash)
+	return fmt.Sprintf("analyze:%s:%x", s.module.Name(), failureHash(testName, failureMessage))
 }
 
 // agenticCacheKey scopes agentic results by job+build because the model's

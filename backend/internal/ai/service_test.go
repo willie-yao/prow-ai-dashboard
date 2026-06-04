@@ -65,7 +65,7 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, false /* universalPath */)
 
 	tc := newFailedTC("Test A", "failure msg")
@@ -91,7 +91,7 @@ func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	tc1 := newFailedTC("Test A", "msg-a")
@@ -117,7 +117,7 @@ func TestService_TransientShortCircuit(t *testing.T) {
 	// No server pushes: any HTTP call should explode this test.
 
 	client := newAgenticTestClient(t, srv.URL)
-	mod := &stubModule{name: "capi", prompt: "user", transientFor: "rate limit", transientWith: "HTTP 429: rate limited"}
+	mod := &stubModule{name: "kubernetes", prompt: "user", transientFor: "rate limit", transientWith: "HTTP 429: rate limited"}
 	s := NewService(client, mod, "sys", nil)
 
 	tc := newFailedTC("Test A", "rate limit")
@@ -143,7 +143,7 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	// Test case already has CURATOR analysis cached on it from a prior run.
@@ -167,7 +167,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	// No server pushes: should not call the API.
 
 	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
@@ -193,7 +193,7 @@ func TestService_NormalizesEmptyModeOnLegacyCache(t *testing.T) {
 	srv := newScriptedChatServer(t)
 
 	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
@@ -210,17 +210,10 @@ func TestService_NormalizesEmptyModeOnLegacyCache(t *testing.T) {
 }
 
 func TestService_CacheKeyShape(t *testing.T) {
-	s := &Service{module: &stubModule{name: "capi"}}
-	// Curator key for "capi" stays in the legacy "comprehensive:<hash>" shape.
+	s := &Service{module: &stubModule{name: "kubernetes"}}
 	curator := s.cacheKey("Test A", "boom")
-	if !strings.HasPrefix(curator, "comprehensive:") {
-		t.Errorf("capi curator key should start with 'comprehensive:', got %q", curator)
-	}
-	// Other module names get the new "analyze:<module>:<hash>" shape.
-	s2 := &Service{module: &stubModule{name: "kubernetes"}}
-	other := s2.cacheKey("Test A", "boom")
-	if !strings.HasPrefix(other, "analyze:kubernetes:") {
-		t.Errorf("non-capi curator key should start with 'analyze:kubernetes:', got %q", other)
+	if !strings.HasPrefix(curator, "analyze:kubernetes:") {
+		t.Errorf("curator key should start with 'analyze:kubernetes:', got %q", curator)
 	}
 	// Agentic key encodes job + build so two builds of the same test never collide.
 	a1 := s.agenticCacheKey("job1", "build1", "Test A", "boom")
@@ -228,7 +221,7 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if a1 == a2 {
 		t.Errorf("agentic key should differ between builds: %q vs %q", a1, a2)
 	}
-	if !strings.HasPrefix(a1, "agentic:capi:job1:build1:") {
+	if !strings.HasPrefix(a1, "agentic:kubernetes:job1:build1:") {
 		t.Errorf("agentic key shape unexpected: %q", a1)
 	}
 }
@@ -250,7 +243,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
 
 	tc1 := newFailedTC("Test A", "msg-a")
@@ -334,7 +327,7 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(
 		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 1},
 		&fakeFactory{}, registry, enabled, true, true, /* universalPath */

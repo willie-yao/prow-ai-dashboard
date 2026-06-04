@@ -13,9 +13,7 @@ import (
 	"os"
 	"time"
 
-	aicapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/capi"
 	aigeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/generic"
-	collectorcapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/capi"
 	collectorgeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 )
@@ -32,11 +30,9 @@ func main() {
 	flag.Parse()
 
 	opts.Collectors = fetcher.NewCollectorRegistry()
-	opts.Collectors.Register("capi", collectorcapi.Factory)
 	opts.Collectors.Register("generic", collectorgeneric.Factory)
 
 	opts.AIModules = fetcher.NewAIModuleRegistry()
-	opts.AIModules.Register("capi", aicapi.Factory)
 	opts.AIModules.Register("generic", aigeneric.Factory)
 
 	if err := fetcher.Run(context.Background(), opts); err != nil {
