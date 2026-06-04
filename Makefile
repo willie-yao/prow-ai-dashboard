@@ -3,6 +3,11 @@
        fe-install dev fe-build fe-check \
        dist dist-ai clean clean-cache clean-all deploy help
 
+# Path to a consumer project directory containing project.yaml + prompts/system.md.
+# Override on the command line, e.g.:
+#   make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard
+PROJECT_DIR ?= configs/example
+
 # Default target
 all: build
 
@@ -36,19 +41,19 @@ tidy:
 
 # Fetch fresh test data from GCS into frontend/public/data/
 fetch-data: build
-	./bin/fetcher -builds=8 -workers=5 -out=frontend/public/data -timeout=5m
+	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=5m
 
 # Fetch minimal data (3 builds per job, faster)
 fetch-data-quick: build
-	./bin/fetcher -builds=3 -workers=5 -out=frontend/public/data -timeout=3m
+	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=3m
 
 # Fetch data with AI analysis (requires AI_TOKEN env var)
 fetch-data-ai: build
-	./bin/fetcher -builds=8 -workers=5 -out=frontend/public/data -timeout=30m -ai
+	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=30m -ai
 
 # Fetch minimal data with AI analysis
 fetch-data-ai-quick: build
-	./bin/fetcher -builds=3 -workers=5 -out=frontend/public/data -timeout=5m -ai
+	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=5m -ai
 
 ## ─── Frontend ─────────────────────────────────────────────────
 
@@ -94,7 +99,7 @@ deploy:
 ## ─── Help ─────────────────────────────────────────────────────
 
 help:
-	@echo "CAPZ Prow Dashboard — Make Targets"
+	@echo "prow-ai-dashboard — Make Targets"
 	@echo ""
 	@echo "  build              Build Go data fetcher binary"
 	@echo "  test               Run Go tests"
@@ -103,10 +108,14 @@ help:
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
 	@echo ""
-	@echo "  fetch-data         Fetch data from GCS (15 builds/job)"
+	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"
 	@echo "  fetch-data-ai      Fetch data + AI analysis (needs AI_TOKEN)"
 	@echo "  fetch-data-ai-quick  Fetch minimal data + AI analysis"
+	@echo ""
+	@echo "    Override PROJECT_DIR to point at a consumer repo, e.g.:"
+	@echo "      make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard"
+	@echo "    Default: configs/example (renders an empty dashboard, smoke-test only)"
 	@echo ""
 	@echo "  fe-install         Install frontend npm dependencies"
 	@echo "  dev                Start Vite dev server"

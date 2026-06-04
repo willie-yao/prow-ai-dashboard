@@ -59,7 +59,7 @@ For sites whose repo already uses GitHub Pages for something else (project websi
 Three extension points:
 - **Layer 1 — `project.yaml`**: bucket, dashboard, branding, AI provider (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...). See [docs/ai-providers.md](docs/ai-providers.md). Optional [agentic mode](docs/agentic.md) lets the model browse the artifact tree on demand via function-calling tools instead of relying on the curator's pre-fetched evidence.
 - **Layer 2 — `prompts/system.md`**: project-specific AI knowledge. Mandatory — the fetcher hard-errors if missing when `-ai` is enabled. See [docs/writing-prompts.md](docs/writing-prompts.md).
-- **Layer 3 — Engine collectors and AI modules** (`backend/internal/collectors/`, `backend/internal/ai/modules/`): `generic | capi`. Selected by `project.yaml`.
+- **Layer 3 — Engine collectors and AI modules** (`backend/internal/collectors/`, `backend/internal/ai/modules/`): `generic` collector + `generic | universal` AI modules. Selected by `project.yaml`.
 
 ## Local development
 
@@ -70,11 +70,25 @@ make test
 
 # Frontend
 make fe-install
-make fe-build
+make dev    # http://localhost:5173 with HMR
 
-# Run fetcher against a project directory containing project.yaml + prompts/system.md
-./bin/fetcher -project-dir=configs/example -out=frontend/public/data
+# Run fetcher against a consumer repo (point PROJECT_DIR at any directory
+# containing project.yaml + prompts/system.md). Output lands in
+# frontend/public/data/ which the Vite dev server serves automatically.
+make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard
+
+# Or invoke the binary directly for one-off runs:
+./bin/fetcher \
+  -project-dir=../capz-prow-ai-dashboard \
+  -out=frontend/public/data \
+  -builds=3 -workers=5
+
+# Add -ai (and set AI_TOKEN / AI_ENDPOINT / AI_MODEL env vars) to populate
+# AI summaries. See docs/ai-providers.md for endpoint details.
 ```
+
+Frontend-only iteration (no fetcher run): drop pre-built JSON from a deployed
+site into `frontend/public/data/`, then `make dev`.
 
 ## Adding a project
 
