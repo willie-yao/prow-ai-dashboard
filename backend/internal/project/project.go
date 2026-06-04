@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -32,21 +31,15 @@ type Config struct {
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	Artifacts            *Artifacts     `yaml:"artifacts,omitempty"  json:"artifacts,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
-	CAPI                 *CAPI          `yaml:"capi,omitempty"       json:"capi,omitempty"`
 }
 
 // CategoryRule maps a substring in a job name to a category id and display
-// label. Rules are evaluated in order; the first match wins. When no rule
+// label. Rules are evaluated in order; first match wins. When no rule
 // matches, the job is categorized as "other".
 //
-// Rule order controls backend categorization precedence, not necessarily
-// frontend display order — declare `category_display_order` separately
-// when the two need to diverge (e.g. a broad rule must come after a
-// specific one for matching, but should appear first in the UI).
-//
-// The engine ships a small generic default (see DefaultCategories) covering
-// conformance, capi-e2e, upgrade, coverage, scalability, e2e. Consumers
-// override or extend by listing their own rules in project.yaml.
+// Rule order controls categorization, not display order; declare
+// `category_display_order` separately when the two need to diverge.
+// Consumers can override or extend DefaultCategories from project.yaml.
 type CategoryRule struct {
 	// Match is the substring to look for in the job name. Comparison is
 	// case-insensitive on both sides.
@@ -115,89 +108,52 @@ type SourceRepo struct {
 	Name  string `yaml:"name"  json:"name"`
 }
 
-// CAPI holds Cluster-API-specific knobs. Phase A keeps them at the top
-// level; Phase B will move them under a generic collector config section.
-type CAPI struct {
-	ClusterNamePrefix string `yaml:"cluster_name_prefix" json:"cluster_name_prefix"`
-}
-
 // Artifacts selects the per-build artifact collector used by the fetcher.
 // Implementations live under backend/internal/collectors/.
 type Artifacts struct {
-	// Collector names the registered collector (e.g. "capi", "generic").
-	// When unset or empty, the generic no-op collector is used.
+	// Collector names the registered collector (e.g. "generic"). When
+	// unset, the generic no-op collector is used.
 	Collector string `yaml:"collector" json:"collector,omitempty"`
 }
 
 // AI selects the AI module used to build prompts and gather evidence for
 // failure analysis. Implementations live under backend/internal/ai/modules/.
 type AI struct {
-	// Module names the registered AI module (e.g. "capi", "generic").
-	// When unset, the module is inferred from artifacts.collector and
-	// falls back to "generic".
+	// Module names the registered AI module (e.g. "generic"). When unset,
+	// inferred from artifacts.collector with "generic" fallback.
 	Module string `yaml:"module" json:"module,omitempty"`
 
-	// Endpoint is the chat-completions URL for the AI provider. Any
-	// OpenAI-compatible endpoint works (GitHub Copilot, OpenAI, Azure
-	// OpenAI, Nvidia Dynamo, vLLM, Ollama). When unset, the fetcher
-	// reads the AI_ENDPOINT environment variable; if that is also unset,
-	// it defaults to GitHub Copilot at
-	// https://api.githubcopilot.com/chat/completions. Excluded from
-	// manifest.json so it never reaches the deployed Pages site.
+	// Endpoint is the OpenAI-compatible chat-completions URL. When unset,
+	// reads AI_ENDPOINT env, then defaults to GitHub Copilot. Excluded
+	// from manifest.json.
 	Endpoint string `yaml:"endpoint,omitempty" json:"-"`
 
-	// Model is the model identifier the provider expects (e.g.
-	// "claude-opus-4.7-xhigh" for Copilot, "gpt-4o" for OpenAI,
-	// "meta/llama-3.1-70b-instruct" for an NVIDIA NIM). When unset, the
-	// fetcher reads the AI_MODEL environment variable; if that is also
-	// unset, it defaults to the engine's built-in Copilot model. MUST be
-	// set (via YAML or AI_MODEL) when pointing at any non-Copilot
-	// provider. Excluded from manifest.json so internal-only model
-	// labels never reach the deployed Pages site; use AI_MODEL for
-	// those.
+	// Model is the model identifier the provider expects. When unset,
+	// reads AI_MODEL env, then defaults to the engine's Copilot model.
+	// MUST be set when pointing at any non-Copilot provider. Excluded
+	// from manifest.json.
 	Model string `yaml:"model,omitempty" json:"-"`
 
-	// Headers are extra HTTP headers merged into every request to the AI
-	// provider after the defaults. Use this to add provider-specific
-	// routing headers (e.g. "NIM-Function-Id") or to override the default
-	// "Authorization: Bearer <token>" scheme for providers like Azure
-	// OpenAI that use a custom auth header.
-	//
-	// Values are passed through verbatim; do not put secrets here. The
-	// AI_TOKEN environment variable is the supported channel for the
-	// bearer token.
+	// Headers are extra HTTP headers merged into every AI request after
+	// the defaults. Use for provider-specific routing headers or to
+	// override the default Authorization scheme. Do not put secrets here;
+	// AI_TOKEN is the supported channel for the bearer token.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 
-	// Evidence overrides the per-failure artifact sources the AI module
-	// fetches. Fields left nil fall back to engine defaults. A non-nil
-	// empty slice (e.g. `machine_logs: []`) disables that source entirely.
-	// Currently interpreted only by the "capi" module; other modules
-	// ignore it and log a warning at startup to surface misconfigurations.
-	Evidence *Evidence `yaml:"evidence,omitempty" json:"evidence,omitempty"`
-
-	// Agentic enables tool-calling-based artifact browsing. When enabled,
-	// the AI module skips its curator-driven evidence collection (the
-	// Evidence block) for failures the module opts into via the
-	// AgenticPreferrer interface and instead lets the model browse the
-	// build's artifact tree itself. Requires an AI endpoint that
-	// supports OpenAI-style function calling.
+	// Agentic enables tool-calling-based artifact browsing. When on, the
+	// module skips its curator-driven evidence collection for failures
+	// that opt in (via AgenticPreferrer) and lets the model browse the
+	// artifact tree itself. Requires a function-calling endpoint.
 	Agentic *Agentic `yaml:"agentic,omitempty" json:"agentic,omitempty"`
 
-	// UseUniversalPath, when true, bypasses the module-routed pipeline in
-	// favor of a project-agnostic agentic flow: per-build collector
-	// evidence is skipped, the per-failure prompt is reduced to the test
-	// failure context, and the agent is expected to discover everything
-	// it needs via the registered tools (filesystem + k8s by default).
+	// UseUniversalPath bypasses the module-routed pipeline in favor of a
+	// project-agnostic agentic flow: collector evidence is skipped, the
+	// per-failure prompt is reduced to the test failure context, and the
+	// agent discovers everything via the registered tools.
 	//
-	// Implies agentic.enabled=true regardless of the agentic block. There
-	// is no curator fallback in this mode: an endpoint that rejects
-	// function-calling surfaces as an explicit "unavailable" summary
-	// instead of degrading silently to a tools-free prompt.
-	//
-	// Module is still validated for typos (it must be unset or name a
-	// registered module) but its prompt / evidence functions are NOT
-	// invoked. Existing consumers without this flag keep the
-	// module-routed pipeline unchanged.
+	// Implies agentic.enabled=true. There is no curator fallback in this
+	// mode: an endpoint that rejects function-calling surfaces as
+	// "unavailable" rather than degrading to a tools-free prompt.
 	UseUniversalPath bool `yaml:"use_universal_path,omitempty" json:"-"`
 }
 
@@ -233,66 +189,33 @@ type Agentic struct {
 
 	// MinToolCalls is the minimum number of tool calls the model must
 	// make before its final JSON answer is accepted. When the model
-	// returns a tools-free response with fewer tool calls than this
-	// floor, the loop appends a nudge user-message asking it to
-	// investigate further. Defaults to 0 (no floor), which preserves
-	// the historical behavior for strong tool-using models (e.g. Claude
-	// Opus) that already investigate deeply. Set to ~3 for weaker
-	// open-weights models (e.g. Qwen3) that tend to finalize prematurely
-	// from the prompt alone without inspecting any artifacts.
-	//
-	// Below-floor finals are still published if the model refuses to
-	// investigate further (so triage always has SOMETHING to show), but
-	// they are NOT written to the AI cache, ensuring the next fetcher
-	// run retries the analysis with fresh tool calls. Cached results
-	// from previous runs that fall below the current floor are also
-	// invalidated and re-analyzed.
+	// returns a tools-free response below this floor, the loop nudges it
+	// to investigate further. Below-floor finals are still published
+	// but NOT cached, so the next run retries. Defaults to 0 (no floor).
 	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty"`
 
-	// MinGCSBytes is the minimum cumulative bytes the model must have
-	// fetched from GCS via tool calls before its final JSON answer is
-	// accepted. Complements MinToolCalls because a model can satisfy a
-	// tool-call floor with cheap list calls or tiny byte ranges and
-	// still finalize without any meaningful evidence (observed against
-	// Qwen3-235B: 6 tool calls returning 13 KB total, then a
-	// fabricated "no specific error found" root cause). Tracked from
-	// the agent's GCS budget counter, so it follows the same accounting
-	// the engine already uses for cost capping. Defaults to 0 (no
-	// floor). 200_000 (200 KB) is a reasonable starting value for
-	// weaker open-weights models; raise gradually if the model keeps
-	// parking at the floor with shallow evidence.
-	//
-	// Same publish/cache semantics as MinToolCalls: below-floor finals
-	// are returned to the caller so triage has something, but they
-	// are NOT cached, and cached entries below the current floor are
-	// invalidated on the next read.
+	// MinGCSBytes is the minimum cumulative bytes the model must fetch
+	// via tool calls before its final answer is accepted. Complements
+	// MinToolCalls because a model can satisfy a calls floor with cheap
+	// list calls or tiny reads. Same publish/no-cache semantics as
+	// MinToolCalls. Defaults to 0.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
-	// Critique configures the L.4 Step 2 critique gate: after the
-	// agentic loop produces a parseable tools-free final, run a
-	// deterministic regex check on suggested_fix. If it punts (i.e.
-	// the model emits a diagnostic / information-gathering TODO list
-	// instead of a concrete remediation), append targeted feedback
-	// asking the model to either drill in further OR use the strict
-	// no-remediation escape hatch, then re-prompt up to MaxRetries
-	// times. Drafts that still punt after retries are published but
-	// not cached (mirrors MinToolCalls / MinGCSBytes anti-thrash).
+	// Critique configures the critique gate: after the agentic loop
+	// produces a parseable tools-free final, run a deterministic regex
+	// check on suggested_fix. If it punts, append targeted feedback
+	// and re-prompt up to MaxRetries times. Drafts that still punt
+	// after retries are published but not cached.
 	//
-	// Defaults to disabled. Recommended for weaker open-weights
-	// models (e.g. Qwen3-235B at 80% punt rate post-Step-1) where
-	// the prompt-only L.4 Step 1 fixes proved insufficient. Strong
-	// tool-using models (e.g. Claude Opus at 40% punt rate on the
-	// same cases) benefit too but the cost/benefit trade-off is
-	// per-consumer.
+	// Defaults to disabled. Recommended for weaker tool-using models
+	// where the prompt rules alone don't reliably prevent punt-shaped
+	// answers.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
-	// Skills configures the L.4 Step 3 recipe-driven evidence
-	// layer. Only meaningful when Critique.Enabled is also true.
-	// Recipes themselves live under <project_dir>/skills/*.yaml
-	// and are loaded by the engine's skills package; this field
-	// controls whether the loaded set is consulted by the critique
-	// gate. See the AgenticSkills doc-comment for the on/off
-	// semantics.
+	// Skills configures the recipe-driven evidence layer. Only
+	// meaningful when Critique.Enabled is also true. Recipes live under
+	// <project_dir>/skills/*.yaml; this field controls whether the
+	// loaded set is consulted by the critique gate.
 	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
 
 	// Tools selects which registered tool groups (e.g. "filesystem",
@@ -307,40 +230,30 @@ type Agentic struct {
 // AgenticCritique is the per-project critique-gate config. See
 // Agentic.Critique for the operational semantics.
 type AgenticCritique struct {
-	// Enabled turns the critique gate on for this consumer. When
-	// false (the default), the agentic loop's tools-free final is
-	// accepted as-is and cached normally; behavior matches
-	// pre-L.4-Step-2.
+	// Enabled turns the critique gate on for this consumer. When false
+	// (the default), the agentic loop's tools-free final is accepted
+	// as-is and cached normally.
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 
 	// MaxRetries caps the number of extra re-prompt rounds the loop
-	// spends per analysis when critique fails. Each retry consumes
-	// one extra agentic iteration on top of the configured MaxIters.
-	// Defaults to 2 when Enabled is true and MaxRetries is left at
-	// 0; an explicit non-zero value overrides the default. Setting
-	// max_retries: 0 in YAML therefore yields the engine default
-	// (2), not "no retries"; this is consistent with the
-	// MinToolCalls / MinGCSBytes "0 = use default" convention used
-	// throughout this struct.
+	// spends per analysis when critique fails. Each retry consumes one
+	// extra agentic iteration on top of MaxIters. Defaults to 2 when
+	// Enabled is true and MaxRetries is 0 (consistent with the "0 =
+	// use default" convention).
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
-// AgenticSkills is the per-project skill-set config (L.4 Step 3).
-// Consumer-owned diagnostic recipes live under <project_dir>/skills/
-// and feed the critique gate's evidence checks.
+// AgenticSkills is the per-project skill-set config. Consumer-owned
+// diagnostic recipes live under <project_dir>/skills/ and feed the
+// critique gate's evidence checks.
 type AgenticSkills struct {
-	// Enabled turns the L.4 Step 3 skills layer on for this
-	// consumer. When false (the default), recipes under
-	// <project_dir>/skills/ are still loaded and validated at
-	// startup but the critique gate ignores them; behavior matches
-	// pre-Step-3. When true, matched recipes inject their
-	// procedure + required-evidence checks into the critique gate
-	// and may extend the retry budget to give the agent room to
-	// satisfy the missing evidence.
-	//
-	// Skills are only meaningful when Critique.Enabled is also true
-	// (they extend the critique gate). With critique off, this flag
-	// is a no-op.
+	// Enabled turns the skills layer on for this consumer. When false
+	// (the default), recipes under <project_dir>/skills/ are still
+	// loaded and validated at startup but the critique gate ignores
+	// them. When true, matched recipes inject their procedure +
+	// required-evidence checks into the critique gate and may extend
+	// the retry budget. Only meaningful when Critique.Enabled is also
+	// true; otherwise a no-op.
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
@@ -403,188 +316,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	return out
 }
 
-// Evidence configures which artifacts the AI module fetches for each failure.
-// All three fields are optional and independently fall back to engine defaults
-// (see DefaultMachineLogs, DefaultControllerLogs, DefaultBuildLogPatterns).
-//
-// Scope: every field is interpreted only by the "capi" AI module, because the
-// paths they refer to (clusters/<name>/machines/<vm>/ and
-// clusters/bootstrap/logs/<ns>/<deployment>/<pod>/) are specific to the
-// Cluster API artifact layout. Other modules (currently only "generic") ignore
-// the entire block and log a warning at startup so misconfigurations don't
-// silently slip through. A non-CAPI project that wants its own evidence shape
-// should add a new AI module, not reuse these fields with a different meaning.
-type Evidence struct {
-	// MachineLogs lists filenames looked up under each cluster's
-	// artifacts/clusters/<name>/machines/<vm>/<file> path. The AI module
-	// fetches the tail of the first machine that has a non-empty URL for
-	// each filename.
-	MachineLogs []string `yaml:"machine_logs,omitempty" json:"machine_logs,omitempty"`
-
-	// ControllerLogs lists management-cluster controller pod logs to fetch
-	// from artifacts/clusters/bootstrap/logs/<namespace>/<deployment>/<pod>/<container_log>.
-	// In YAML each entry may be a bare namespace string (shorthand for
-	// {namespace: <string>}) or a full object with pod_name_regex and
-	// container_log overrides.
-	ControllerLogs []ControllerLogSelector `yaml:"controller_logs,omitempty" json:"controller_logs,omitempty"`
-
-	// BuildLogPatterns is a list of regular expressions grepped against the
-	// build log; matching lines (plus 2 lines of context) are included in
-	// the AI prompt. Use to surface provider-specific error strings (e.g.
-	// "SkuNotAvailable" for Azure) that the project-agnostic defaults miss.
-	BuildLogPatterns []string `yaml:"build_log_patterns,omitempty" json:"build_log_patterns,omitempty"`
-}
-
-// IsZero reports whether every field of Evidence is unset (nil slice). An
-// explicit `[]` counts as set so consumers can disable a default without
-// triggering "ignored config" warnings.
-func (e *Evidence) IsZero() bool {
-	if e == nil {
-		return true
-	}
-	return e.MachineLogs == nil && e.ControllerLogs == nil && e.BuildLogPatterns == nil
-}
-
-// ControllerLogSelector picks a controller pod log from the management
-// cluster's artifacts/clusters/bootstrap/logs/<namespace>/<deployment>/<pod>/<container_log>
-// layout. In project.yaml a bare string is shorthand for {namespace: <string>}
-// with default pod_name_regex (".*") and container_log ("manager.log").
-type ControllerLogSelector struct {
-	Namespace    string `yaml:"namespace" json:"namespace"`
-	PodNameRegex string `yaml:"pod_name_regex,omitempty" json:"pod_name_regex,omitempty"`
-	ContainerLog string `yaml:"container_log,omitempty"  json:"container_log,omitempty"`
-}
-
-// UnmarshalYAML accepts either a bare string (the namespace) or a full
-// mapping, so consumers can write either:
-//
-//	controller_logs:
-//	  - capi-system
-//	  - namespace: capi-kubeadm-control-plane-system
-//	    pod_name_regex: "^kcp-"
-func (s *ControllerLogSelector) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		s.Namespace = strings.TrimSpace(node.Value)
-		return nil
-	}
-	type alias ControllerLogSelector
-	var a alias
-	if err := node.Decode(&a); err != nil {
-		return err
-	}
-	*s = ControllerLogSelector(a)
-	return nil
-}
-
-// DefaultMachineLogs are the machine log filenames fetched per failure when
-// the consumer does not override. These are the universal Linux node logs;
-// provider-specific files (boot.log, cloud-init-output.log) must be added by
-// the consumer.
-var DefaultMachineLogs = []string{"kubelet.log", "containerd.log", "journal.log"}
-
-// DefaultControllerLogs are the CAPI core upstream controller-manager logs
-// fetched per failure when the consumer does not override. Provider-specific
-// controllers (capz-system, capv-system, ...) must be added by the consumer.
-var DefaultControllerLogs = []ControllerLogSelector{
-	{Namespace: "capi-system"},
-	{Namespace: "capi-kubeadm-bootstrap-system"},
-	{Namespace: "capi-kubeadm-control-plane-system"},
-}
-
-// DefaultBuildLogPatterns is the project-agnostic regex set greppped against
-// the build log when the consumer does not override. Provider-specific
-// patterns (e.g. SkuNotAvailable, GalleryImage) belong in the consumer's
-// project.yaml.
-var DefaultBuildLogPatterns = []string{
-	`(?i)FAIL|FAILED|\[FAIL\]`,
-	`(?i)timed?\s*out|timeout`,
-	`(?i)ImagePullBackOff|ErrImagePull`,
-	`(?i)CrashLoopBackOff`,
-	`(?i)NotFound|not found`,
-}
-
-// defaultPodNameRegex matches any pod name; used when a selector omits it.
-const defaultPodNameRegex = ".*"
-
-// defaultContainerLog is the controller-manager pod's primary log file as
-// emitted by the CAPI E2E framework.
-const defaultContainerLog = "manager.log"
-
-// EffectiveEvidence is the resolved per-failure evidence config. Regex
-// strings have been compiled and any defaults filled in, so AI modules and
-// collectors can use it directly without re-validating.
-type EffectiveEvidence struct {
-	// MachineLogs lists filenames to look up in each machine's logs map.
-	MachineLogs []string
-	// ControllerLogs lists selectors with all fields populated (defaults
-	// applied where the consumer left them empty).
-	ControllerLogs []ControllerLogSelector
-	// PodNameRegexes is parallel to ControllerLogs; PodNameRegexes[i] is the
-	// compiled regex for ControllerLogs[i].PodNameRegex.
-	PodNameRegexes []*regexp.Regexp
-	// BuildLogPatterns is the compiled form of the build-log grep patterns.
-	BuildLogPatterns []*regexp.Regexp
-}
-
-// EffectiveEvidence resolves the consumer's ai.evidence block against engine
-// defaults and compiles every regex so callers don't have to re-validate.
-//
-// Nil semantics: a nil top-level Evidence or a nil field means "use engine
-// default". A non-nil empty slice (e.g. `machine_logs: []` in YAML, which
-// decodes as a 0-length non-nil slice) is preserved as an explicit "disable
-// this source" request.
-//
-// Regex compile errors are surfaced with a path pointing at the offending
-// field so users can fix the YAML in one pass.
-func (c *Config) EffectiveEvidence() (EffectiveEvidence, error) {
-	var src Evidence
-	if c.AI != nil && c.AI.Evidence != nil {
-		src = *c.AI.Evidence
-	}
-
-	eff := EffectiveEvidence{
-		MachineLogs:    src.MachineLogs,
-		ControllerLogs: src.ControllerLogs,
-	}
-	if eff.MachineLogs == nil {
-		eff.MachineLogs = append([]string{}, DefaultMachineLogs...)
-	}
-	if eff.ControllerLogs == nil {
-		eff.ControllerLogs = append([]ControllerLogSelector{}, DefaultControllerLogs...)
-	}
-
-	for i := range eff.ControllerLogs {
-		if strings.TrimSpace(eff.ControllerLogs[i].Namespace) == "" {
-			return EffectiveEvidence{}, fmt.Errorf("ai.evidence.controller_logs[%d].namespace is required", i)
-		}
-		if eff.ControllerLogs[i].PodNameRegex == "" {
-			eff.ControllerLogs[i].PodNameRegex = defaultPodNameRegex
-		}
-		if eff.ControllerLogs[i].ContainerLog == "" {
-			eff.ControllerLogs[i].ContainerLog = defaultContainerLog
-		}
-		r, err := regexp.Compile(eff.ControllerLogs[i].PodNameRegex)
-		if err != nil {
-			return EffectiveEvidence{}, fmt.Errorf("ai.evidence.controller_logs[%d].pod_name_regex %q: %w", i, eff.ControllerLogs[i].PodNameRegex, err)
-		}
-		eff.PodNameRegexes = append(eff.PodNameRegexes, r)
-	}
-
-	patterns := src.BuildLogPatterns
-	if patterns == nil {
-		patterns = DefaultBuildLogPatterns
-	}
-	for i, p := range patterns {
-		r, err := regexp.Compile(p)
-		if err != nil {
-			return EffectiveEvidence{}, fmt.Errorf("ai.evidence.build_log_patterns[%d] %q: %w", i, p, err)
-		}
-		eff.BuildLogPatterns = append(eff.BuildLogPatterns, r)
-	}
-
-	return eff, nil
-}
-
 // CollectorName returns the configured collector name, defaulting to "generic".
 func (c *Config) CollectorName() string {
 	if c.Artifacts == nil || strings.TrimSpace(c.Artifacts.Collector) == "" {
@@ -593,15 +324,10 @@ func (c *Config) CollectorName() string {
 	return c.Artifacts.Collector
 }
 
-// AIModuleName returns the configured AI module name. When unset, it falls
-// back to the collector name so the AI prompt naturally matches the artifact
-// shape (e.g. capi collector → capi module). Final fallback is "generic".
+// AIModuleName returns the configured AI module name, defaulting to "generic".
 func (c *Config) AIModuleName() string {
 	if c.AI != nil && strings.TrimSpace(c.AI.Module) != "" {
 		return c.AI.Module
-	}
-	if c.Artifacts != nil && c.Artifacts.Collector != "" {
-		return c.Artifacts.Collector
 	}
 	return "generic"
 }
@@ -740,12 +466,6 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("category_display_order[%d] %q is not a declared category id", i, id)
 			}
 		}
-	}
-
-	// Compile evidence regexes early so YAML typos fail loud at startup,
-	// not on the first cache-miss AI run.
-	if _, err := c.EffectiveEvidence(); err != nil {
-		return err
 	}
 
 	// "universal" is reserved for the use_universal_path flow. Picking it

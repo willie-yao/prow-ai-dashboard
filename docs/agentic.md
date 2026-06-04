@@ -1,33 +1,24 @@
 # Agentic AI mode (tool calling)
 
-Agentic mode is an alternative to the curator-driven evidence pipeline.
-Instead of the engine pre-fetching a fixed set of artifacts based on
-`ai.evidence` in `project.yaml`, the model decides what to read by
-calling four function-calling tools that browse the build's GCS artifact
-tree directly: `list_artifacts`, `read_artifact`, `tail_artifact`, and
-`grep_artifact`.
+Agentic mode lets the LLM decide which artifacts to read instead of
+pre-fetching a fixed set. The model calls four function-calling tools
+that browse the build's GCS artifact tree: `list_artifacts`,
+`read_artifact`, `tail_artifact`, and `grep_artifact`. Optional tier-2
+tools add Kubernetes-shaped discovery (`discover_clusters`,
+`discover_controllers`, etc.).
 
-It is opt-in and off by default. The curator path remains the default
-because it is cheaper (~1/10 the tokens, ~1/7 the wall clock) and
-adequate for failures with well-structured per-cluster artifacts.
-Agentic mode is meant for the long-tail failures where the curator's
-hardcoded list misses what actually matters.
+Enable it with `ai.use_universal_path: true` + `ai.agentic.enabled: true`
+for the typical "let the model figure it out" flow. The non-universal
+opt-in flow is available too for projects that want a custom AI module
+to decide per-failure whether to go agentic.
 
 ## When to enable it
 
-Enable agentic mode if any of the following are true for your project:
-
-- Your prow jobs publish artifacts in a layout that doesn't fit the
-  `clusters/<name>/machines/<vm>/...` shape the `capi` curator expects,
-  and you don't want to write a new AI module.
-- A meaningful share of your failures happen before any cluster is
-  created (pre-flight checks, image build, controller startup), so
-  `ClusterArtifacts` is empty on those test cases.
-- You've been iterating on `ai.evidence` and the model still says "I'd
-  need more logs" in summaries.
-
-If your curator config is producing useful summaries today, leave
-agentic mode off.
+Agentic mode is the recommended starting point for any new consumer.
+Set `ai.use_universal_path: true` to get the full agentic flow with no
+curator pre-fetch step (the model browses everything itself via the
+registered tools). The universal flow is what both production CAPZ
+dashboards use today.
 
 ## Endpoint requirements
 
@@ -40,13 +31,12 @@ the response). Verified endpoints:
 - **Azure OpenAI** — supported on tool-calling-capable deployments.
 - **Ollama / vLLM / NIMs** — supported per-model; check your model card.
 
-The engine probes lazily: the first agentic call to an endpoint that
-returns HTTP 400/422 with a tools-related error message is treated as
-a soft capability miss. The fetcher logs
-`AI endpoint rejected tools; falling back to curator for this run` and
-runs every subsequent failure that run through the curator instead. No
-restart needed; flip your config back to `enabled: false` on the next
-deploy.
+Under `use_universal_path: true` there is no curator fallback: an
+endpoint that rejects tools surfaces as an explicit "unavailable"
+summary in the dashboard rather than silently degrading. The
+non-universal opt-in flow does fall back to curator on a tools-not-
+supported error and logs `AI endpoint rejected tools; falling back to
+curator for this run`.
 
 ## Configuring it
 
@@ -55,9 +45,9 @@ optional except `enabled`:
 
 ```yaml
 ai:
-  module: "capi"
+  use_universal_path: true        # recommended for new consumers
   agentic:
-    enabled: true                 # turn agentic on
+    enabled: true                 # required even under use_universal_path
     always: false                 # if true, run agentic on every failure
     max_iters: 15                 # tool-call rounds per failure
     model_byte_budget: 300000     # total bytes of tool output sent to the model
@@ -66,10 +56,10 @@ ai:
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
     critique:
-      enabled: false              # opt into the L.4 Step 2 punt-detection gate
-      max_retries: 2              # re-prompt rounds before accepting a still-punting draft
+      enabled: false              # opt into the deterministic critique gate
+      max_retries: 2              # re-prompt rounds before accepting a still-failing draft
     skills:
-      enabled: false              # opt into the L.4 Step 3 recipe-driven evidence gate
+      enabled: false              # opt into the recipe-driven evidence gate
                                   # (loads <project_dir>/skills/*.yaml; see docs/skills.md)
 ```
 
@@ -293,19 +283,9 @@ guidance, and observability notes.
 - `always: false` lets the AI module decide per-failure via its optional
   `AgenticPreferrer` implementation. Modules without one (currently the
   `generic` module) never go agentic in this mode, so `always: false`
-  with `module: generic` is effectively a no-op.
-
-The `capi` module's `PrefersAgentic` returns true when:
-
-1. `ClusterArtifacts` is nil on the test case (collector never matched
-   a cluster, usually meaning a pre-cluster failure), or
-2. `ClusterArtifacts` is present but both `Machines` and `PodLogDirs`
-   are empty (cluster name known but no per-machine or per-controller
-   logs collected).
-
-Both cases reduce the curator prompt to little more than the bare
-build-log; the agentic loop can hunt through the artifact tree on
-demand and reliably do better.
+  with `module: generic` is effectively a no-op. Under
+  `use_universal_path: true`, agentic is forced on for every failure
+  regardless of this field.
 
 ## Cost and behavior
 
@@ -322,10 +302,9 @@ always produces a usable analysis — incomplete is better than absent.
 ## Cache semantics
 
 Agentic and curator analyses are cached under different keys
-(`agentic:<module>:<job>:<build>:<hash>` vs
-`comprehensive:<hash>` / `analyze:<module>:<hash>`). Switching a
-project between modes does not re-analyze instantly; the engine
-detects the cached `mode` mismatch on the next fetcher run and
+(`agentic:<module>:<job>:<build>:<hash>` vs `analyze:<module>:<hash>`).
+Switching a project between modes does not re-analyze instantly; the
+engine detects the cached `mode` mismatch on the next fetcher run and
 re-analyzes the failure under the new mode.
 
 Cached agentic entries are scoped to a specific build because answers
@@ -337,16 +316,18 @@ deterministic given the test + failure message).
 ## Troubleshooting
 
 - **No agentic entries are appearing.** Confirm `agentic.enabled: true`
-  and either `agentic.always: true` or a module that implements
-  `AgenticPreferrer`. Check the fetcher logs for either
-  `Agentic AI enabled (...)` at startup or per-failure
-  `opted into agentic mode: ...` lines.
+  and either `use_universal_path: true`, `agentic.always: true`, or a
+  module that implements `AgenticPreferrer`. Check the fetcher logs for
+  either `Universal AI path enabled (...)` / `Agentic AI enabled (...)`
+  at startup.
 - **Every failure logs "AI endpoint rejected tools".** The endpoint
   doesn't support function calling. Either switch endpoints or set
-  `agentic.enabled: false` to silence the log line.
+  `agentic.enabled: false` to silence the log line. Under
+  `use_universal_path: true` this surfaces as an "unavailable" summary
+  for every failure instead.
 - **Costs spiked.** Drop `agentic.always: true` to `false`, or lower
-  `max_iters`. Inspect the cached analyses for `mode: "agentic"` to
-  estimate how much of the bill is agentic vs curator.
+  `max_iters`. Inspect the cached analyses for `mode: "agentic"` /
+  `"agentic-universal"` to estimate how much of the bill is agentic.
 - **Model loops without finalizing.** Lower `max_iters` and check
   whether the forced-finalize round produces a useful answer. If not,
   the `prompts/system.md` may not give the model enough structure to
@@ -356,10 +337,12 @@ deterministic given the test + failure message).
 
 - `backend/internal/ai/agentic.go` — the tool-calling loop, finalize
   round, and JSON repair.
+- `backend/internal/ai/critique.go` — the deterministic critique gate.
+- `backend/internal/ai/skills/` — the recipe-driven evidence layer.
+- `backend/internal/ai/modules/universal/` — the project-agnostic AI
+  module used under `use_universal_path: true`.
 - `backend/internal/artifacts/` — the `Browser` interface and
-  `GCSBrowser` implementation backing the four tools.
-- `backend/internal/ai/modules/capi/agentic.go` — the `capi` module's
-  `PrefersAgentic` heuristic.
+  `GCSBrowser` implementation backing the filesystem tools.
 - `backend/cmd/ai-toolcall-spike/` — the throwaway prototype the
   production design was validated against. Useful for spot-checking
   agentic answers against a single failure without redeploying.

@@ -22,17 +22,12 @@ import (
 const (
 	// ModelsAPIURL is the GitHub Copilot chat completions endpoint.
 	ModelsAPIURL = "https://api.githubcopilot.com/chat/completions"
-	// Model is used for the combined summary + root-cause analysis.
-	// claude-opus-4.7-xhigh: extra-high reasoning effort, 200K context.
-	// Marked "(Internal only)" in the Copilot agent model list but currently
-	// accepted by api.githubcopilot.com; treat availability as best-effort
-	// and override via project.yaml or AI_MODEL when a token lacks access.
+	// Model is the default model; override via Options.Model or AI_MODEL env.
 	Model = "claude-opus-4.7-xhigh"
 )
 
-// callDelay throttles consecutive API calls to be polite to upstream rate
-// limits. var (not const) so tests can shrink it; production callers should
-// not touch this.
+// callDelay throttles consecutive API calls. var (not const) so tests can
+// shrink it; production callers should not touch this.
 var callDelay = 500 * time.Millisecond
 
 // Client calls an OpenAI chat-completions compatible API for AI analysis.
@@ -45,23 +40,17 @@ type Client struct {
 	cache        *Cache
 }
 
-// Options configures a Client. All fields are optional; empty values fall back
-// to the GitHub Copilot defaults (ModelsAPIURL and Model). Token and CacheDir
-// are required for a useful client; the caller is responsible for supplying
-// them from the environment / project config.
+// Options configures a Client. Empty values fall back to the Copilot defaults.
 type Options struct {
 	Token    string
 	CacheDir string
-	// Endpoint is the chat-completions URL. Defaults to ModelsAPIURL
-	// (https://api.githubcopilot.com/chat/completions).
+	// Endpoint is the chat-completions URL. Defaults to ModelsAPIURL.
 	Endpoint string
-	// Model is the model identifier the provider expects. Defaults to Model
-	// (claude-opus-4.7-xhigh) which only the Copilot endpoint accepts;
-	// override when pointing at any other provider.
+	// Model is the model identifier the provider expects. Defaults to Model.
 	Model string
-	// ExtraHeaders are merged into every request after the defaults. Use this
-	// to add provider-specific routing headers (e.g. NIM-Function-Id for
-	// Nvidia Dynamo) or to override the default Authorization scheme.
+	// ExtraHeaders are merged into every request after the defaults. Use
+	// this for provider-specific routing headers or to override the default
+	// Authorization scheme.
 	ExtraHeaders map[string]string
 }
 
@@ -117,14 +106,19 @@ type analysisResponse struct {
 	RelevantFiles []string `json:"relevant_files"`
 }
 
-// doAnalyze runs a single chat completion, parses the JSON response, and caches
-// it. Returns both the brief AISummary (for the list view) and the deep
-// AIAnalysis (for the detail page), derived from the same model output.
-//
-// The returned AIAnalysis is stamped with per-call telemetry (ElapsedMs,
-// ModelBytes, CacheHit) so the published JSON exposes the cost of each
-// analysis. ToolCalls and GCSBytes are zero by construction for the curator
-// path; agentic stamps them from the per-call agentState.
+// proseFields returns RootCause + Summary + SuggestedFix + RelevantFiles
+// for callers that scan across every textual field of the draft.
+func (r analysisResponse) proseFields() []string {
+	out := make([]string, 0, 3+len(r.RelevantFiles))
+	out = append(out, r.RootCause, r.Summary, r.SuggestedFix)
+	out = append(out, r.RelevantFiles...)
+	return out
+}
+
+// doAnalyze runs a single chat completion, parses the JSON response, caches
+// it, and returns both the brief AISummary and the deep AIAnalysis derived
+// from the same model output. The AIAnalysis is stamped with per-call
+// telemetry (ElapsedMs, ModelBytes, CacheHit) for the published JSON.
 func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
 	start := time.Now()
 	if raw, ok := c.cache.Get(cacheKey); ok {
@@ -167,9 +161,8 @@ func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt 
 	return summary, analysis, nil
 }
 
-// buildOutputs splits an analysisResponse into the two structs the rest of the
-// pipeline consumes. The same generated_at timestamp is stamped on both so the
-// UI can correlate them.
+// buildOutputs splits an analysisResponse into the AISummary + AIAnalysis
+// pair the pipeline consumes, both stamped with the same generated_at.
 func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -236,10 +229,9 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-// setRequestHeaders applies the standard headers (Content-Type, bearer auth,
-// conditional Copilot routing header) and then merges the user-supplied
-// ExtraHeaders. Extras win on conflict so projects can override the auth
-// scheme (e.g. Azure OpenAI's "api-key") if needed.
+// setRequestHeaders applies the standard headers and then merges any
+// user-supplied ExtraHeaders. Extras win on conflict so projects can
+// override the default Authorization scheme.
 func (c *Client) setRequestHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
@@ -254,8 +246,7 @@ func (c *Client) setRequestHeaders(req *http.Request) {
 }
 
 // isCopilotEndpoint reports whether the URL points at GitHub Copilot's models
-// API. The Copilot-Integration-Id header is only meaningful there; sending it
-// to other providers (Dynamo, OpenAI, Azure) is harmless noise at best.
+// API. The Copilot-Integration-Id header is only meaningful there.
 func isCopilotEndpoint(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {

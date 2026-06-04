@@ -2,7 +2,6 @@
 package models
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -97,68 +96,45 @@ type AIAnalysis struct {
 	SuggestedFix  string   `json:"suggested_fix"`
 	RelevantFiles []string `json:"relevant_files,omitempty"`
 	// Mode records which analysis pipeline produced this result, so that
-	// switching modes (e.g. flipping agentic on) forces a re-analysis even
-	// when the failure message is unchanged. Empty for legacy entries (read
-	// as "curator").
+	// switching modes (e.g. flipping agentic on) forces a re-analysis.
+	// Empty for legacy entries (read as "curator").
 	Mode string `json:"mode,omitempty"`
-
-	// Per-analysis telemetry (Phase L.0). Stamped at every code path that
-	// produces an AIAnalysis so cost + behavior comparisons across modes
-	// are measurable from published JSON. Curator path leaves ToolCalls
-	// and GCSBytes at zero (no tool calls; GCS fetches inside
-	// AnalysisPrompt aren't billed against the per-analysis budget today).
 
 	// ToolCalls is the number of agent tool invocations made during this
 	// analysis. Always zero for curator.
 	ToolCalls int `json:"tool_calls,omitempty"`
 	// ModelBytes is the cumulative bytes sent to / received from the chat
-	// completion endpoint (prompt + tool results + responses).
+	// completion endpoint.
 	ModelBytes int `json:"model_bytes,omitempty"`
 	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
 	// calls. Always zero for curator.
 	GCSBytes int `json:"gcs_bytes,omitempty"`
-	// ElapsedMs is the wall-clock duration of the analysis in
-	// milliseconds, measured around the doAnalyze / doAnalyzeAgentic call.
+	// ElapsedMs is the wall-clock duration of the analysis in milliseconds.
 	ElapsedMs int `json:"elapsed_ms,omitempty"`
-	// CacheHit reports whether the analysis was served from the AI cache
-	// rather than recomputed against the model.
+	// CacheHit reports whether the analysis was served from the AI cache.
 	CacheHit bool `json:"cache_hit,omitempty"`
 	// BudgetExhausted reports whether the agentic loop hit one of its
-	// budget caps (iterations / model bytes / GCS bytes / wall clock) and
-	// was forced to finalize on best-effort evidence. Always false for
-	// curator. Reserved for L.1 (loop will inject a finalize message
-	// and stamp this field); L.0 always reports false.
+	// budget caps and was forced to finalize on best-effort evidence.
+	// Always false for curator.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 
-	// CritiquePassed reports whether this analysis cleared the L.4 Step 2
-	// critique gate. Only meaningful when the project has critique
-	// enabled; left false for runs where critique was disabled (which the
-	// shouldReanalyze check interprets correctly via the current opts).
-	// Used to invalidate cache entries written before critique was
-	// enabled on a consumer (mirrors the floor-raise invalidation
-	// pattern). Always false for curator.
+	// CritiquePassed reports whether this analysis cleared the critique
+	// gate. Only meaningful when the project has critique enabled.
+	// Always false for curator.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
 	// CritiqueVersion records the critique-contract version under which
-	// this analysis was validated. Pre-L.4-Step-2.5 entries have
-	// version 0 (no field on disk); Step 2.5 stamps version 2. The
-	// build-level shouldReanalyze check requires version >= the
-	// engine's currentCritiqueVersion when critique is enabled, so a
-	// strengthening of the gate (e.g. adding the hallucination check)
-	// properly invalidates entries that passed under the older,
-	// weaker contract. Always 0 for curator. (L.4 Step 2.5)
+	// this analysis was validated. The build-level shouldReanalyze check
+	// requires version >= the engine's current version when critique is
+	// enabled, so strengthening the gate invalidates older entries.
+	// Always 0 for curator.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
-	// SkillSetHash is the L.4 Step 3 fingerprint of the consumer's
-	// loaded skill set (under <project_dir>/skills/*.yaml) at the
-	// time this analysis was validated. Empty when skills are not
-	// enabled or no recipes are loaded. Used by the cache-read
-	// gate to invalidate entries whose recipe set has drifted from
-	// the currently-loaded one: edits to triggers / required-
-	// evidence / procedure flip the hash and force re-analysis on
-	// the next run, without relying on the engine-only
-	// CritiqueVersion bump that's reserved for engine-side
-	// contract strengthenings. Always empty for curator. (L.4 Step 3)
+	// SkillSetHash is the fingerprint of the consumer's loaded recipe
+	// set at the time this analysis was validated. Edits to triggers /
+	// required-evidence / procedure flip the hash and force re-analysis.
+	// Empty when skills are not enabled or no recipes are loaded.
+	// Always empty for curator.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 }
 
@@ -175,43 +151,9 @@ type TestCase struct {
 	// came from, e.g. "junit.e2e_suite.1.xml" or "junit_runner.xml". Lets
 	// the UI disambiguate same-named cases that show up in different
 	// shards or suites within one build.
-	JUnitFile        string            `json:"junit_file,omitempty"`
-	ClusterArtifacts *ClusterArtifacts `json:"cluster_artifacts,omitempty"`
-	AISummary        *AISummary        `json:"ai_summary,omitempty"`
-	AIAnalysis       *AIAnalysis       `json:"ai_analysis,omitempty"`
-}
-
-// ClusterArtifacts holds links to debug artifacts for a specific cluster.
-type ClusterArtifacts struct {
-	ClusterName           string             `json:"cluster_name"`
-	ProviderActivityLog   string             `json:"provider_activity_log,omitempty"`
-	Machines              []MachineArtifacts `json:"machines,omitempty"`
-	PodLogDirs            map[string]string  `json:"pod_log_dirs,omitempty"` // name → GCSweb URL
-	BootstrapResourcesURL string             `json:"bootstrap_resources_url,omitempty"`
-}
-
-// UnmarshalJSON migrates the legacy `azure_activity_log` field from cached
-// job JSON written by older fetcher runs into ProviderActivityLog. Once all
-// cached builds have rolled over this can be deleted.
-func (c *ClusterArtifacts) UnmarshalJSON(data []byte) error {
-	type alias ClusterArtifacts
-	aux := struct {
-		AzureActivityLog string `json:"azure_activity_log,omitempty"`
-		*alias
-	}{alias: (*alias)(c)}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if c.ProviderActivityLog == "" && aux.AzureActivityLog != "" {
-		c.ProviderActivityLog = aux.AzureActivityLog
-	}
-	return nil
-}
-
-// MachineArtifacts holds links to per-machine debug logs.
-type MachineArtifacts struct {
-	Name string            `json:"name"`
-	Logs map[string]string `json:"logs"`
+	JUnitFile  string      `json:"junit_file,omitempty"`
+	AISummary  *AISummary  `json:"ai_summary,omitempty"`
+	AIAnalysis *AIAnalysis `json:"ai_analysis,omitempty"`
 }
 
 // BuildResult is a complete result for a single build: metadata + test cases.
@@ -222,29 +164,16 @@ type BuildResult struct {
 	TestsPassed  int        `json:"tests_passed"`
 	TestsFailed  int        `json:"tests_failed"`
 	TestsSkipped int        `json:"tests_skipped"`
-
-	// ControllerLogURLs maps a "<namespace>/<deployment>" key (e.g.
-	// "capz-system/capz-controller-manager") to the URL of one pod's
-	// manager log, discovered under
-	// artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/<log>.
-	// The deployment level is included in the key because a single
-	// namespace can host multiple controller deployments (e.g.
-	// capz-system contains both ASO and the CAPZ controller). Populated
-	// by collectors when consumer project.yaml declares
-	// ai.evidence.controller_logs; empty otherwise. URLs only (not the
-	// content) are kept here so dashboard.json stays small; the AI module
-	// fetches the content on demand at prompt build time.
-	ControllerLogURLs map[string]string `json:"controller_log_urls,omitempty"`
 }
 
 // JobSummary represents aggregated data for a job on the landing page.
 type JobSummary struct {
 	ProwJob
-	OverallStatus string      `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
-	LastRun       *RunSummary `json:"last_run,omitempty"`
+	OverallStatus string       `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
+	LastRun       *RunSummary  `json:"last_run,omitempty"`
 	RecentRuns    []RunSummary `json:"recent_runs"`
-	PassRate7d    float64     `json:"pass_rate_7d"`
-	PassRate30d   float64     `json:"pass_rate_30d"`
+	PassRate7d    float64      `json:"pass_rate_7d"`
+	PassRate30d   float64      `json:"pass_rate_30d"`
 }
 
 // RunSummary is a compact summary of a single build run.

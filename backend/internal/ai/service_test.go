@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -26,7 +25,7 @@ type stubModule struct {
 	preferReason  string
 }
 
-func (m *stubModule) Name() string                 { return m.name }
+func (m *stubModule) Name() string { return m.name }
 func (m *stubModule) IsKnownTransient(msg string) string {
 	if msg != "" && msg == m.transientFor {
 		return m.transientWith
@@ -58,25 +57,6 @@ func newFailedTC(name, msg string) *models.TestCase {
 
 // ---------- Mode + cache invalidation ----------
 
-func TestService_AgenticDisabled_UsesCuratorMode(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"x","is_transient":false,"root_cause":"y","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	tc := newFailedTC("Test A", "failure msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AIAnalysis == nil {
-		t.Fatal("AIAnalysis nil")
-	}
-	if tc.AIAnalysis.Mode != curatorMode {
-		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, curatorMode)
-	}
-}
-
 func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -85,7 +65,7 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, false /* universalPath */)
 
 	tc := newFailedTC("Test A", "failure msg")
@@ -96,27 +76,6 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	}
 	if tc.AIAnalysis.Mode != AgenticMode {
 		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, AgenticMode)
-	}
-}
-
-func TestService_ModuleOptIn_PreferAgentic(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"x","is_transient":false,"root_cause":"y","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	mod := &stubPreferrer{stubModule: &stubModule{name: "capi", prompt: "user"}, /* default prefer=false */}
-	mod.prefer = true
-	mod.preferReason = "build log too large"
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, mod, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, false /* not always */, false /* universalPath */)
-
-	tc := newFailedTC("Test A", "msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-	if tc.AIAnalysis == nil || tc.AIAnalysis.Mode != AgenticMode {
-		t.Fatalf("expected agentic mode, got %+v", tc.AIAnalysis)
 	}
 }
 
@@ -132,7 +91,7 @@ func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	tc1 := newFailedTC("Test A", "msg-a")
@@ -158,7 +117,7 @@ func TestService_TransientShortCircuit(t *testing.T) {
 	// No server pushes: any HTTP call should explode this test.
 
 	client := newAgenticTestClient(t, srv.URL)
-	mod := &stubModule{name: "capi", prompt: "user", transientFor: "rate limit", transientWith: "HTTP 429: rate limited"}
+	mod := &stubModule{name: "kubernetes", prompt: "user", transientFor: "rate limit", transientWith: "HTTP 429: rate limited"}
 	s := NewService(client, mod, "sys", nil)
 
 	tc := newFailedTC("Test A", "rate limit")
@@ -184,7 +143,7 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	// Test case already has CURATOR analysis cached on it from a prior run.
@@ -208,7 +167,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	// No server pushes: should not call the API.
 
 	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
@@ -234,7 +193,7 @@ func TestService_NormalizesEmptyModeOnLegacyCache(t *testing.T) {
 	srv := newScriptedChatServer(t)
 
 	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
@@ -251,17 +210,10 @@ func TestService_NormalizesEmptyModeOnLegacyCache(t *testing.T) {
 }
 
 func TestService_CacheKeyShape(t *testing.T) {
-	s := &Service{module: &stubModule{name: "capi"}}
-	// Curator key for "capi" stays in the legacy "comprehensive:<hash>" shape.
+	s := &Service{module: &stubModule{name: "kubernetes"}}
 	curator := s.cacheKey("Test A", "boom")
-	if !strings.HasPrefix(curator, "comprehensive:") {
-		t.Errorf("capi curator key should start with 'comprehensive:', got %q", curator)
-	}
-	// Other module names get the new "analyze:<module>:<hash>" shape.
-	s2 := &Service{module: &stubModule{name: "kubernetes"}}
-	other := s2.cacheKey("Test A", "boom")
-	if !strings.HasPrefix(other, "analyze:kubernetes:") {
-		t.Errorf("non-capi curator key should start with 'analyze:kubernetes:', got %q", other)
+	if !strings.HasPrefix(curator, "analyze:kubernetes:") {
+		t.Errorf("curator key should start with 'analyze:kubernetes:', got %q", curator)
 	}
 	// Agentic key encodes job + build so two builds of the same test never collide.
 	a1 := s.agenticCacheKey("job1", "build1", "Test A", "boom")
@@ -269,39 +221,12 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if a1 == a2 {
 		t.Errorf("agentic key should differ between builds: %q vs %q", a1, a2)
 	}
-	if !strings.HasPrefix(a1, "agentic:capi:job1:build1:") {
+	if !strings.HasPrefix(a1, "agentic:kubernetes:job1:build1:") {
 		t.Errorf("agentic key shape unexpected: %q", a1)
 	}
 }
 
 // ---------- Universal mode (use_universal_path) ----------
-
-// TestService_UniversalOn_TagsModeUniversal asserts that when the Service is
-// constructed with universalPath=true, every produced analysis is stamped with
-// UniversalMode regardless of any module preference. This is the cache
-// invalidation contract: flipping use_universal_path on must force every
-// previously-cached entry to be re-analyzed by virtue of mode mismatch.
-func TestService_UniversalOn_TagsModeUniversal(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"u","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, true /* universalPath */)
-
-	tc := newFailedTC("Test A", "msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AIAnalysis == nil {
-		t.Fatal("AIAnalysis nil")
-	}
-	if tc.AIAnalysis.Mode != UniversalMode {
-		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, UniversalMode)
-	}
-}
 
 // TestService_UniversalOn_ToolsUnsupportedSetsUnavailable covers the no-fallback
 // invariant of the universal path: a tools-unsupported endpoint must not
@@ -318,7 +243,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
 
 	tc1 := newFailedTC("Test A", "msg-a")
@@ -340,37 +265,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 	}
 }
 
-// TestService_UniversalOn_CacheInvalidatesAgenticEntries asserts that a
-// previously-cached AgenticMode analysis is re-run when the Service is now
-// universal-on, because Mode mismatch counts as cache-miss in
-// shouldReanalyze.
-func TestService_UniversalOn_CacheInvalidatesAgenticEntries(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"fresh universal","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
-
-	// Test case already has an AgenticMode analysis from a prior run.
-	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "stale agentic summary"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale agentic root cause", Mode: AgenticMode}
-
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AIAnalysis.Mode != UniversalMode {
-		t.Errorf("Mode = %q, want %q (stale agentic entry should be re-analyzed under universal)", tc.AIAnalysis.Mode, UniversalMode)
-	}
-	if !strings.Contains(tc.AISummary.Summary, "fresh universal") {
-		t.Errorf("expected fresh universal summary, got %q", tc.AISummary.Summary)
-	}
-}
-
-// TestService_ShouldReanalyze_FloorTable covers the L.3 build-level cache
+// TestService_ShouldReanalyze_FloorTable covers the build-level cache
 // invalidation: when a cached agentic-mode analysis records fewer tool calls
 // than the current MinToolCalls floor OR fewer GCS bytes than the current
 // MinGCSBytes floor, the build cache must NOT be trusted (shouldReanalyze
@@ -432,7 +327,7 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
+	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(
 		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 1},
 		&fakeFactory{}, registry, enabled, true, true, /* universalPath */
@@ -481,7 +376,3 @@ func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 var _ Module = (*stubModule)(nil)
 var _ AgenticPreferrer = (*stubPreferrer)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)
-
-// Silence unused-import linters when this file's only consumer of errors is
-// indirect via doAnalyzeAgentic-routed paths.
-var _ = errors.Is

@@ -3,8 +3,7 @@
 # This file documents every field a consumer repo can set. Copy it into your
 # consumer repo as project.yaml, drop a prompts/system.md alongside it, and
 # point .github/workflows/deploy.yml at the reusable workflow in this engine
-# repo. See docs/onboarding-a-new-project.md and docs/writing-prompts.md for
-# details.
+# repo. See docs/onboarding-a-new-project.md and docs/writing-prompts.md.
 
 # Stable identifier used in cache keys and log lines. Lowercase, no spaces.
 id: example
@@ -22,15 +21,13 @@ source:
   test_infra_paths:
     - "config/jobs/kubernetes-sigs/your-project"
   # Optional. When set, only files whose name starts with this prefix are
-  # parsed. Omit for dashboards whose jobs span files without a shared
-  # prefix (the testgrid-dashboards annotation is then the sole filter).
+  # parsed. Omit when the testgrid-dashboards annotation is the sole filter.
   file_prefix: "your-project-"
   # Include presubmit jobs in addition to periodics. ORed with the
   # workflow's include-presubmits input. Default false (periodics only).
   include_presubmits: false
 
-# Which testgrid dashboard's jobs to show. Filter is applied to each job's
-# testgrid-dashboards annotation.
+# Which testgrid dashboard's jobs to show.
 testgrid:
   dashboard: "sig-foo-your-project"
 
@@ -38,182 +35,87 @@ testgrid:
 gcs:
   bucket: "kubernetes-ci-logs"
 
-# UI-facing branding. Frontend reads these from data/manifest.json at
-# runtime; backend uses site_url for notification deep links.
+# Job grouping. Rules are evaluated in order; first lowercase substring
+# match wins. Jobs with no match go in "other".
+categories:
+  - match: "conformance"
+    id: "conformance"
+    label: "Conformance"
+  - match: "e2e"
+    id: "e2e"
+    label: "E2E"
+
+# Optional display order for category sections on the landing page.
+# category_display_order:
+#   - e2e
+#   - conformance
+
+# UI branding. Frontend reads these from data/manifest.json at runtime.
 branding:
-  title: "Example Project Dashboard"
-  # GitHub Pages base path; must match your consumer repo name.
+  title: "Your Project Prow Dashboard"
   base_path: "/your-consumer-repo"
   site_url: "https://your-org.github.io/your-consumer-repo"
   source_repo:
     owner: "kubernetes-sigs"
     name: "your-project"
 
-# Per-build artifact collector. Pick one of:
-#   - "capi": artifacts/clusters/{name}/machines/{vm}/... (CAPI providers)
-#   - "generic": no project-specific layout; useful for k/k-style jobs
-artifacts:
-  collector: "capi"
-
-# CAPI-specific knobs. Only used when artifacts.collector == "capi".
-#
-# Set cluster_name_prefix when your E2E suite names every workload cluster
-# with a shared prefix (CAPZ uses "capz-e2e"). The CAPI collector matches
-# JUnit test cases to clusters by looking for that prefix.
-#
-# Leave cluster_name_prefix as the empty string when your suite uses
-# per-spec cluster names without a common prefix (CAPI core uses spec
-# names like "quick-start-bxqxxs", "md-rollout-yhse4f"). The collector
-# falls back to a generic substring matcher.
-capi:
-  cluster_name_prefix: "your-project-e2e"
-
 # AI configuration. Composed at fetcher startup from:
 #   1. engine's universal Prow base prompt
 #   2. this repo's prompts/system.md (mandatory)
 #   3. engine's JSON response schema footer
 #
-# The fetcher hard-errors at startup if prompts/system.md is missing or
-# empty. See docs/writing-prompts.md.
+# The fetcher hard-errors at startup if prompts/system.md is missing or empty.
+# See docs/writing-prompts.md.
 #
-# endpoint, model, and headers can target any OpenAI-compatible chat
-# completions API. Defaults point at GitHub Copilot. See
-# docs/ai-providers.md for Nvidia Dynamo / Azure OpenAI / OpenAI / Ollama
-# snippets.
+# endpoint, model, and headers target any OpenAI-compatible chat completions
+# API. Defaults point at GitHub Copilot. See docs/ai-providers.md for
+# Nvidia Dynamo / Azure OpenAI / OpenAI / Ollama snippets.
 #
-# To keep an internal-only model identifier or a private endpoint URL
-# out of this public file, omit them here and source them from repo
-# variables on the consumer instead (`gh variable set AI_MODEL ...`),
-# passed via the reusable workflow's `ai-model` / `ai-endpoint` inputs.
-# The fetcher reads AI_MODEL / AI_ENDPOINT from the environment when
-# the YAML fields are blank. The yaml field wins if both are set.
+# Keep internal-only identifiers out of this public file by omitting them
+# here and setting AI_ENDPOINT / AI_MODEL via repo variables on the consumer
+# (`gh variable set AI_MODEL ...`), passed through the reusable workflow's
+# ai-model / ai-endpoint inputs. The fetcher reads the env when YAML fields
+# are blank; the YAML wins if both are set.
 ai:
-  module: "capi"
+  module: "generic"
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  # claude-opus-4.7-xhigh: extra-high reasoning effort, 200K context.
-  # Marked "(Internal only)" in the Copilot model list but currently
-  # accepted by api.githubcopilot.com. Downgrade to claude-opus-4.6 if
-  # your AI_TOKEN doesn't have access.
   model: "claude-opus-4.7-xhigh"
 
-  # Per-failure evidence sent to the AI. The capi module gathers these
-  # alongside the build log and stack trace before each call. Every field
-  # is optional; omitting a field falls back to the engine default. To
-  # explicitly disable a default, set the field to an empty list ([]).
-  #
-  # SCOPE: this whole block is interpreted only when ai.module == "capi",
-  # because the field meanings reference the Cluster API artifact layout
-  # (clusters/<name>/machines/<vm>/ and clusters/bootstrap/logs/<ns>/...).
-  # Other modules (currently only "generic") ignore the block and log a
-  # warning at fetcher startup if it is non-empty. A non-CAPI project that
-  # wants its own evidence shape should add a new AI module rather than
-  # reuse these fields with a different meaning.
-  evidence:
-    # Filenames under artifacts/clusters/<name>/machines/<vm>/ to fetch
-    # the tail of and include as "=== Machine log: <name> ===" sections
-    # in the prompt.
-    #
-    # Engine default: kubelet.log, containerd.log, journal.log.
-    #
-    # Add the logs your project actually publishes. For example, CAPZ
-    # extends this with boot.log + cloud-init-output.log; CAPI core adds
-    # kern.log (CAPD jobs collect it).
-    # machine_logs:
-    #   - kubelet.log
-    #   - containerd.log
-    #   - journal.log
-    #   - boot.log
-    #   - cloud-init-output.log
+  # Universal agentic path: bypass the module-routed pipeline and let the
+  # LLM browse GCS + cluster artifacts itself via the registered tools.
+  # Requires a function-calling endpoint; there is no curator fallback.
+  use_universal_path: true
 
-    # Management-cluster ("bootstrap" kind cluster) namespaces to walk
-    # under artifacts/clusters/bootstrap/logs/. For each entry the
-    # collector picks one manager.log per deployment in that namespace.
-    # A single namespace can host multiple deployments (e.g. CAPZ's
-    # capz-system runs both ASO and the CAPZ controller); each gets its
-    # own "=== Controller log: <ns>/<deployment> ===" section.
-    #
-    # Engine default: capi-system, capi-kubeadm-bootstrap-system,
-    # capi-kubeadm-control-plane-system.
-    #
-    # Each entry can be a bare namespace string or an object with custom
-    # pod-name filter and container-log filename:
-    # controller_logs:
-    #   - capi-system                               # short form
-    #   - namespace: your-project-system           # full form
-    #     pod_name_regex: "your-controller-.*"    # default: ".*"
-    #     container_log: "manager.log"            # default: "manager.log"
-
-    # Regex patterns matched against each line of build-log.txt during
-    # evidence collection. Matches plus 2 lines of context are inserted
-    # as "=== Build Log Errors ===" in the prompt. The raw tail of the
-    # build log is also included separately, so generic "error" patterns
-    # are redundant here; reserve this list for high-signal,
-    # provider-specific failures.
-    #
-    # Engine default: FAIL|\[FAIL\], timed?\s*out|timeout,
-    # ImagePullBackOff|ErrImagePull, CrashLoopBackOff, NotFound|not found.
-    # build_log_patterns:
-    #   - "FAIL|\\[FAIL\\]"
-    #   - "your-provider-specific-error"
-
-  # Agentic mode is an alternative to the curator-driven evidence pipeline
-  # above. Instead of the engine pre-fetching a fixed set of artifacts based
-  # on the evidence: block, the model decides what to read by calling four
-  # function-calling tools (list/read/tail/grep) that browse the build's
-  # GCS artifact tree directly.
-  #
-  # Opt-in and off by default. Curator mode is cheaper (~1/10 the tokens,
-  # ~1/7 the wall clock) and adequate for failures with well-structured
-  # per-cluster artifacts. Enable agentic for failures the curator can't
-  # cover (pre-cluster failures, unusual artifact layouts).
-  #
-  # Requires an endpoint that supports OpenAI-style function calling
-  # (GitHub Copilot, OpenAI, Azure OpenAI, and tool-capable Ollama/NIM
-  # models do; the engine falls back to curator on endpoints that don't).
-  #
-  # See docs/agentic.md for the full reference.
-  # agentic:
-  #   enabled: true                 # turn agentic on
-  #   always: false                 # if true, run agentic on every failure;
-  #                                 # if false, the AI module's PrefersAgentic
-  #                                 # heuristic decides per-failure (the capi
-  #                                 # module triggers on missing or empty
-  #                                 # ClusterArtifacts)
-  #   max_iters: 15                 # tool-call rounds per failure
-  #   model_byte_budget: 300000     # total bytes of tool output sent to the model
-  #   gcs_byte_budget: 1000000000   # total bytes fetched from GCS
-  #   wall_clock: 5m                # per-failure agentic wall-clock cap
-  #   min_tool_calls: 0             # if >0, refuse to accept a final answer
-  #                                 # until the model has made this many tool
-  #                                 # calls; below-floor finals are published
-  #                                 # but not cached, so the next run retries.
-  #                                 # Default 0 (no floor). Useful for weaker
-  #                                 # open-weights models that finalize from
-  #                                 # the prompt alone; see docs/agentic.md.
-  #   min_gcs_bytes: 0              # if >0, refuse to accept a final answer
-  #                                 # until the model has fetched this many
-  #                                 # bytes from GCS via read/tail/grep calls
-  #                                 # (list_artifacts contributes 0). Catches
-  #                                 # the case where a model satisfies
-  #                                 # min_tool_calls with cheap list calls or
-  #                                 # tiny byte ranges and still finalizes
-  #                                 # without meaningful evidence. Same
-  #                                 # publish-but-don't-cache semantics as
-  #                                 # min_tool_calls. 200000 (200 KB) is a
-  #                                 # reasonable starting value for weaker
-  #                                 # models; see docs/agentic.md.
-  #   critique:                     # L.4 Step 2 punt-detection gate.
-  #     enabled: false              # When true, the agentic loop checks
-  #                                 # suggested_fix against a regex that
-  #                                 # catches diagnostic / information-
-  #                                 # gathering TODO lists ("Check X. Verify
-  #                                 # Y. Investigate Z."), re-prompts the
-  #                                 # model with feedback, and refuses to
-  #                                 # cache drafts that still punt after
-  #                                 # max_retries. Recommended for weaker
-  #                                 # open-weights models that consistently
-  #                                 # punt despite the system-prompt rules.
-  #                                 # See docs/agentic.md.
-  #     max_retries: 2              # Re-prompt rounds before accepting a
-  #                                 # still-punting draft. Each retry adds
-  #                                 # one extra agentic iteration. Default 2.
+  agentic:
+    enabled: true
+    # tools: which registered tool groups the model can call. Defaults to
+    # ["filesystem", "k8s"]. Narrow this if your project's artifact tree
+    # doesn't include kubernetes resource YAMLs.
+    tools:
+      - filesystem
+      - k8s
+    # max_iters: 15           # tool-call rounds per failure (engine default)
+    # model_byte_budget: 300000     # bytes of tool output the model sees
+    # gcs_byte_budget: 1000000000   # cap on bytes fetched from GCS
+    # wall_clock: 5m                # per-failure wall-clock cap
+    # min_tool_calls: 0       # if >0, refuse to accept a final answer
+    #                         # until the model has made this many calls.
+    #                         # Below-floor finals are published but not
+    #                         # cached, so the next run retries. Useful for
+    #                         # weaker models that finalize prematurely.
+    # min_gcs_bytes: 0        # if >0, also require this many bytes of GCS
+    #                         # evidence (catches the case where the model
+    #                         # satisfies min_tool_calls with cheap list
+    #                         # calls or tiny byte ranges). Same publish/
+    #                         # don't-cache semantics as min_tool_calls.
+    # critique:
+    #   enabled: false        # Deterministic regex pass that rejects
+    #                         # punt-shaped suggested_fix, hallucinated
+    #                         # artifact citations, fabricated import
+    #                         # paths, and missing skill-driven evidence.
+    #                         # Re-prompts up to max_retries times.
+    #   max_retries: 2
+    # skills:
+    #   enabled: false        # Recipe-driven evidence requirements loaded
+    #                         # from <project_dir>/skills/*.yaml. See
+    #                         # docs/skills.md for the schema.

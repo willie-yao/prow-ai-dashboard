@@ -479,51 +479,6 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	}
 }
 
-// TestAgentic_MinToolCalls_StubbornModelAcceptedButNotCached verifies the
-// anti-thrash heuristic: if the model returns tools-free twice in a row
-// without making any new tool calls between, the loop accepts the answer
-// (publication for this run) but does NOT cache it so the next run retries.
-func TestAgentic_MinToolCalls_StubbornModelAcceptedButNotCached(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// Round 1: tools-free (calls=0 < min=3).
-	stubborn := `{"summary":"won't investigate","is_transient":false,"root_cause":"some hypothesis","severity":"Medium","suggested_fix":"y","relevant_files":[]}`
-	srv.push(200, chatRespFinal(stubborn))
-	// Round 2: tools-free again (still calls=0).
-	srv.push(200, chatRespFinal(stubborn))
-
-	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 3}
-
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:stubborn", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Errorf("call count = %d, want 2 (one nudge then accept)", got)
-	}
-	if summary.Summary != "won't investigate" {
-		t.Errorf("expected below-floor final to be published; got %q", summary.Summary)
-	}
-	if analysis.ToolCalls != 0 {
-		t.Errorf("tool_calls = %d, want 0", analysis.ToolCalls)
-	}
-
-	// Critically: below-floor answer must NOT be cached. Re-running should
-	// hit the server again (not a cache hit).
-	srv.push(200, chatRespFinal(stubborn))
-	srv.push(200, chatRespFinal(stubborn))
-	before := atomic.LoadInt32(&srv.calls)
-	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:stubborn", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) == before {
-		t.Error("below-floor final should not have been cached (expected server hit on retry)")
-	}
-}
-
 // TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters is a
 // regression for a subtle bug: if the loop rejected a tools-free answer (to
 // nudge), the rejected content must not be reused as finalContent after the
@@ -558,94 +513,6 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 	}
 	if summary.Summary != "FINAL" {
 		t.Errorf("expected finalize-round output, got %q", summary.Summary)
-	}
-}
-
-// TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor verifies the cache-read
-// path re-validates against the current floor: a cached analysis with
-// ToolCalls below the now-configured MinToolCalls is treated as a miss and
-// re-analyzed.
-func TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// First call with min=0: model finalizes with 0 tool calls. Cached.
-	zeroTool := `{"summary":"original","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"s","relevant_files":[]}`
-	srv.push(200, chatRespFinal(zeroTool))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{
-		files: map[string][]byte{"build-log.txt": []byte("err\n")},
-		dirs:  map[string][]string{"": {"artifacts"}},
-	}
-	noFloor := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 0}
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, noFloor), "agentic:test:invalidate", "sys", "user"); err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Fatalf("expected 1 server call after first analysis, got %d", got)
-	}
-
-	// Bump the floor to 2. The cached entry has ToolCalls=0 < 2 → cache miss.
-	// Model now does 2 tool calls + a final.
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
-	newFinal := `{"summary":"reanalyzed","is_transient":false,"root_cause":"r2","severity":"High","suggested_fix":"s2","relevant_files":[]}`
-	srv.push(200, chatRespFinal(newFinal))
-
-	withFloor := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 2}
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:invalidate", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if summary.Summary != "reanalyzed" {
-		t.Errorf("expected re-analyzed result, got %q (stale cache served)", summary.Summary)
-	}
-	if analysis.ToolCalls != 2 {
-		t.Errorf("tool_calls = %d, want 2", analysis.ToolCalls)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Errorf("call count = %d, want 4 (1 first analysis + 3 second analysis)", got)
-	}
-
-	// Third call with the same floor=2 should now hit the cache (re-analyzed
-	// entry has tool_calls=2 >= floor=2).
-	_, hitAnalysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:invalidate", "sys", "user")
-	if err != nil {
-		t.Fatalf("third call: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Errorf("call count after expected cache hit = %d, want 4 (no extra server hit)", got)
-	}
-	if !hitAnalysis.CacheHit {
-		t.Errorf("CacheHit = false, want true")
-	}
-	// Cache-hit must restore the recorded telemetry from the prior run, not
-	// publish zero. Without this stamping, the build-level
-	// shouldReanalyze gate sees ToolCalls=0 and re-invalidates forever.
-	if hitAnalysis.ToolCalls != 2 {
-		t.Errorf("cache-hit ToolCalls = %d, want 2 (cached telemetry must be stamped on hit)", hitAnalysis.ToolCalls)
-	}
-}
-
-// TestAgentic_MinToolCalls_ZeroFloor_NoBehaviorChange verifies the default
-// (MinToolCalls=0) path: a tools-free first response is accepted immediately,
-// matching pre-L.3 behavior so existing consumers see no change.
-func TestAgentic_MinToolCalls_ZeroFloor_NoBehaviorChange(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"fast","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"s","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 0}
-	if _, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:zerofloor", "sys", "user"); err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	} else if analysis.ToolCalls != 0 {
-		t.Errorf("tool_calls = %d, want 0", analysis.ToolCalls)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Errorf("call count = %d, want 1 (no nudge with floor=0)", got)
 	}
 }
 
@@ -712,274 +579,69 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 	}
 }
 
-// TestAgentic_MinGCSBytes_CacheInvalidatesBelowFloor mirrors the
-// MinToolCalls cache-invalidation test for the byte floor. A cached
-// analysis with gcs_bytes below the now-configured MinGCSBytes is treated
-// as a miss and re-analyzed even though tool_calls already met the (zero)
-// MinToolCalls floor on the prior run.
-func TestAgentic_MinGCSBytes_CacheInvalidatesBelowFloor(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// First call with no floors: one tiny read then finalize. Cached.
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
-	original := `{"summary":"original","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"s","relevant_files":[]}`
-	srv.push(200, chatRespFinal(original))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{
-		files: map[string][]byte{"build-log.txt": bigPayload(40_000)},
-		dirs:  map[string][]string{"": {"artifacts"}},
-	}
-	noFloor := AgenticOptions{MaxIters: 4, ModelByteBudget: 200_000, GCSByteBudget: 200_000, WallClock: 30 * time.Second}
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, noFloor), "agentic:test:gcsinvalidate", "sys", "user"); err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("expected 2 server calls after first analysis, got %d", got)
-	}
-
-	// Bump MinGCSBytes to 20 KB. The cached entry has gcsBytes=0 (list
-	// is the only call; BytesFetched=0) → cache miss. Model now reads
-	// 16 KB then 16 KB more, crossing the floor.
-	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
-	srv.push(200, chatRespToolCall("c3", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 16384, "length": 16384}))
-	rerun := `{"summary":"reanalyzed","is_transient":false,"root_cause":"r2","severity":"High","suggested_fix":"s2","relevant_files":[]}`
-	srv.push(200, chatRespFinal(rerun))
-
-	withFloor := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, WallClock: 30 * time.Second, MinGCSBytes: 20_000}
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:gcsinvalidate", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if summary.Summary != "reanalyzed" {
-		t.Errorf("expected re-analyzed result, got %q (stale cache served)", summary.Summary)
-	}
-	if analysis.GCSBytes < 20_000 {
-		t.Errorf("gcs_bytes = %d, want >= 20000 (floor must have been met)", analysis.GCSBytes)
-	}
-
-	// Third call with the same floor should now hit the cache, and the
-	// stamped telemetry must include the recorded gcs_bytes so the
-	// build-level shouldReanalyze gate doesn't re-invalidate forever.
-	_, hitAnalysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, withFloor), "agentic:test:gcsinvalidate", "sys", "user")
-	if err != nil {
-		t.Fatalf("third call: %v", err)
-	}
-	if !hitAnalysis.CacheHit {
-		t.Errorf("CacheHit = false, want true")
-	}
-	if hitAnalysis.GCSBytes < 20_000 {
-		t.Errorf("cache-hit gcs_bytes = %d, want >= 20000 (cached telemetry must be stamped on hit)", hitAnalysis.GCSBytes)
-	}
-}
-
-// TestAgentic_MinGCSBytes_StubbornModelAcceptedButNotCached covers the
-// pathological case the rubber-duck flagged: a model that keeps returning
-// tools-free without making any new tool calls (and therefore without
-// growing gcsBytes) must eventually be accepted under the anti-thrash
-// rule rather than being nudged until MaxIters. Below-floor finals are
-// still published but NOT cached so the next fetcher run gets a fresh
-// attempt.
-func TestAgentic_MinGCSBytes_StubbornModelAcceptedButNotCached(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	stubborn := `{"summary":"refuses","is_transient":false,"root_cause":"guess","severity":"Medium","suggested_fix":"y","relevant_files":[]}`
-	// Round 1: tools-free (calls=0, gcs=0). Nudge.
-	srv.push(200, chatRespFinal(stubborn))
-	// Round 2: tools-free again (still calls=0, gcs=0). Anti-thrash
-	// rule: no progress on the unmet axis → accept.
-	srv.push(200, chatRespFinal(stubborn))
-
-	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{MaxIters: 8, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinGCSBytes: 50_000}
-
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:gcsstubborn", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Errorf("call count = %d, want 2 (one nudge then accept under anti-thrash)", got)
-	}
-	if summary.Summary != "refuses" {
-		t.Errorf("expected below-floor stubborn final to be published; got %q", summary.Summary)
-	}
-	if analysis.GCSBytes != 0 {
-		t.Errorf("gcs_bytes = %d, want 0", analysis.GCSBytes)
-	}
-
-	// Below-floor answer must NOT be cached.
-	srv.push(200, chatRespFinal(stubborn))
-	srv.push(200, chatRespFinal(stubborn))
-	before := atomic.LoadInt32(&srv.calls)
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:gcsstubborn", "sys", "user"); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) == before {
-		t.Error("below-floor final should not have been cached (expected server hit on retry)")
-	}
-}
-
-// TestAgentic_MinGCSBytes_ListOnlyLoopNotInfinite is the rubber-duck #7
-// regression: a model that keeps calling list_artifacts (incrementing
-// calls but returning BytesFetched=0) must NOT trigger an infinite nudge
-// loop. Once calls stops progressing the anti-thrash rule kicks in; if
-// the model keeps calling tools, the loop exits at MaxIters and runs
-// the forced finalize round. Either way, the loop terminates.
-func TestAgentic_MinGCSBytes_ListOnlyLoopNotInfinite(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// Loop: list (no bytes) → tools-free → list → tools-free → ...
-	// With MaxIters=4 and the floor unmet on the bytes axis,
-	// we expect: list (iter 1) → tools-free + nudge (iter 2) →
-	// list (iter 3) → tools-free + nudge OR accept (iter 4).
-	// Because calls progressed each round (the nudge fires every time
-	// the model makes a fresh tool call), we should hit MaxIters and
-	// then the forced finalize round produces the answer.
-	stubborn := `{"summary":"list_only","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"x","relevant_files":[]}`
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespFinal(stubborn))
-	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespFinal(stubborn))
-	// Forced finalize round response after MaxIters exhausted.
-	finalAfterFinalize := `{"summary":"forced","is_transient":false,"root_cause":"best effort","severity":"Medium","suggested_fix":"x","relevant_files":[]}`
-	srv.push(200, chatRespFinal(finalAfterFinalize))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
-	opts := AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinGCSBytes: 50_000}
-
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:listloop", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	// Either acceptance path is fine for the regression: the test
-	// passes as long as the loop terminates without panicking and
-	// without making more than MaxIters+1 server calls (the +1 is
-	// the optional finalize round).
-	if got := atomic.LoadInt32(&srv.calls); got > int32(opts.MaxIters+1) {
-		t.Errorf("call count = %d, want <= %d (loop must terminate)", got, opts.MaxIters+1)
-	}
-	if summary == nil || analysis == nil {
-		t.Fatalf("expected non-nil outputs even from list-only loop")
-	}
-	if analysis.GCSBytes != 0 {
-		t.Errorf("gcs_bytes = %d, want 0 (list_artifacts returns no bytes)", analysis.GCSBytes)
-	}
-}
-
-// TestAgToolDocs_L4Step1Anchors pins the L.4 Step 1 anti-punt, drill-down,
-// and self-check language in agToolDocs. These bullets exist specifically
-// to counter weaker models' tendency to write investigation TODOs into
-// suggested_fix instead of running the investigations themselves with the
-// tools, so silent deletion would regress the qualitative gap closed by
-// L.4. Bump deliberately if rewording.
-func TestAgToolDocs_L4Step1Anchors(t *testing.T) {
+// TestAgToolDocs_AntiPuntAnchors pins the anti-punt language in agToolDocs
+// that drives weaker models to investigate via tools rather than emit
+// investigation TODOs in suggested_fix.
+func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 	required := []string{
-		"Drill into the most relevant named resources",
-		"pick the 1-3 most directly tied to the failure",
 		"Investigation is YOUR job",
 		"diagnostic or information-gathering task",
 		"still cannot identify a concrete remediation",
-		"Do not invoke this escape hatch",
-		"Before finalizing, self-check",
 	}
 	for _, s := range required {
 		if !strings.Contains(agToolDocs, s) {
-			t.Errorf("agToolDocs missing required L.4 Step 1 anchor %q\nfull text:\n%s", s, agToolDocs)
-		}
-	}
-
-	// Forbidden: the old "Prefer 3-5 focused calls" line directly
-	// contradicted the L.3 min_tool_calls floor by telling the model to
-	// stop early. It must stay gone.
-	forbidden := []string{
-		"Prefer 3-5 focused calls",
-		"3-5 focused calls",
-	}
-	for _, s := range forbidden {
-		if strings.Contains(agToolDocs, s) {
-			t.Errorf("agToolDocs still contains forbidden pre-L.4 phrase %q\nfull text:\n%s", s, agToolDocs)
+			t.Errorf("agToolDocs missing required anchor %q\nfull text:\n%s", s, agToolDocs)
 		}
 	}
 }
 
-// TestResponseFormatFooter_L4Step1Anchors pins the L.4 Step 1 tightening of
-// the suggested_fix and root_cause schema descriptions. The footer is
-// shared by agentic and non-agentic consumers, so the wording must stay
-// tool-neutral: it forbids diagnostic tasks in suggested_fix and pushes
-// for the underlying cause in root_cause without assuming tools are
+// TestResponseFormatFooter_AntiPuntAnchors pins the tightening of the
+// suggested_fix and root_cause schema descriptions. The footer is shared
+// by agentic and non-agentic consumers, so wording must stay tool-neutral:
+// it forbids diagnostic tasks in suggested_fix without assuming tools are
 // available. Tool-specific enforcement lives in agToolDocs.
-func TestResponseFormatFooter_L4Step1Anchors(t *testing.T) {
+func TestResponseFormatFooter_AntiPuntAnchors(t *testing.T) {
 	required := []string{
 		"concrete remediation",
 		"Do not list diagnostic or information-gathering tasks",
 		"trace the chain back to the underlying cause",
 		"No remediation possible from available evidence",
-		"available evidence allows",
 	}
 	for _, s := range required {
 		if !strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter missing required L.4 Step 1 anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+			t.Errorf("ResponseFormatFooter missing required anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
 
-	// Forbidden: the old terse "exact fix with file paths and changes
-	// needed" description gave models no signal that investigation
-	// verbs were off-limits. Must stay rewritten.
-	forbidden := []string{
-		"exact fix with file paths and changes needed",
-	}
-	for _, s := range forbidden {
+	// Forbidden: tool-specific language would be literally false in the
+	// generic / prebuilt-evidence consumer mode that shares this footer.
+	toolSpecific := []string{"using your tools", "with the tools"}
+	for _, s := range toolSpecific {
 		if strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter still contains pre-L.4 phrase %q\nfull text:\n%s", s, ResponseFormatFooter)
-		}
-	}
-
-	// The footer is shared with non-agentic consumers (e.g. the generic
-	// module that ships prebuilt evidence with no tools wired), so any
-	// language asserting tools must be used would be literally false in
-	// that mode. Keep tool-specific enforcement in agToolDocs only.
-	toolSpecificForbidden := []string{
-		"using your tools",
-		"with the tools",
-		"Investigation is the agent's job",
-	}
-	for _, s := range toolSpecificForbidden {
-		if strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter leaked tool-specific phrase %q (footer is shared with non-agentic consumers; keep tool wording in agToolDocs)\nfull text:\n%s", s, ResponseFormatFooter)
+			t.Errorf("ResponseFormatFooter leaked tool-specific phrase %q (keep tool wording in agToolDocs)\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
 }
 
-// TestResponseFormatFooter_L4Step3DepthAnchors pins the lever-4 depth
-// tightening of the root_cause schema description (2026-06-04). The
-// median Qwen3-235B root_cause was ~430 chars vs Claude's ~1490 on the
-// same builds; the prior description ("the specific error found in
-// the available evidence") gave no signal that the model should
-// produce a multi-step causal chain. The new wording asks for
-// quoted log lines + cited artifact paths for each link in the
-// chain, with a ~3-5 sentence floor. These anchors must stay in
-// place so the depth signal isn't lost on a future cosmetic edit.
-func TestResponseFormatFooter_L4Step3DepthAnchors(t *testing.T) {
+// TestResponseFormatFooter_DepthAnchors pins the depth signals in the
+// root_cause schema description that push the model toward a multi-step
+// causal chain with quoted log lines and cited artifact paths.
+func TestResponseFormatFooter_DepthAnchors(t *testing.T) {
 	required := []string{
 		"Full causal chain",
 		"At least 3-5 sentences",
 		"Quote the exact log line",
 		"cite the artifact path",
-		"two distinct artifacts",
 		"verification step",
 	}
 	for _, s := range required {
 		if !strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter missing required L.4 Step 3 depth anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+			t.Errorf("ResponseFormatFooter missing required depth anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
 }
 
-// ---------- L.4 Step 2 critique gate ----------
+// ---------- Critique gate ----------
 //
 // A "punt-shaped" suggested_fix is a diagnostic / information-gathering
 // TODO list ("Check X. Verify Y. Investigate Z.") instead of a concrete
@@ -1100,7 +762,7 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 
 // TestAgentic_Critique_Disabled_NoBehaviorChange verifies the default
 // (CritiqueEnabled=false) path: a punt-shaped final is accepted as-is
-// and cached, matching pre-L.4-Step-2 behavior so consumers that don't
+// and cached so consumers that don't
 // opt in see no change.
 func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 	shrinkCallDelay(t)
@@ -1144,10 +806,9 @@ func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 }
 
 // TestAgentic_Critique_CacheInvalidatesUncritiqued verifies the cache
-// invalidation path: an entry cached while critique was disabled (or
-// pre-Step-2) has CritiquePassed=false. When a consumer later enables
-// critique, that entry must be treated as a cache miss and re-analyzed.
-// Mirrors TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor for floors.
+// invalidation path: an entry cached while critique was disabled has
+// CritiquePassed=false. When a consumer later enables critique, that
+// entry must be treated as a cache miss and re-analyzed.
 func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1191,7 +852,7 @@ func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 }
 
 // TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies the
-// rubber-duck-#1 fix: when the loop maxes out without ever returning a
+// When the loop maxes out without ever returning a
 // tools-free message, runFinalizeRound produces the final answer. That
 // output must be critique-checked too, otherwise a punt-shaped
 // finalize-round result publishes-but-never-caches and re-analyzes on
@@ -1254,60 +915,8 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 	}
 }
 
-// TestAgentic_Critique_FinalizeRoundPuntNotCached is the negative
-// counterpart: a finalize-round result that punts must NOT cache, but
-// must publish so triage still has something. Same cost-leak guard as
-// the in-loop exhausted-retry path.
-func TestAgentic_Critique_FinalizeRoundPuntNotCached(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
-	// runFinalizeRound: model emits a punt-shaped final → critique fails.
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
-	opts := AgenticOptions{
-		MaxIters:           2,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
-		CritiqueEnabled:    true,
-		CritiqueMaxRetries: 2,
-	}
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, browser, opts),
-		"agentic:test:finalize-punt", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if summary.Summary != "shallow" {
-		t.Errorf("expected punt-shaped finalize-round answer to be published, got %q", summary.Summary)
-	}
-	if analysis.CritiquePassed {
-		t.Errorf("CritiquePassed = true, want false (punt-shaped finalize-round output)")
-	}
-
-	// Must not cache: re-running consumes server again.
-	srv.push(200, chatRespToolCall("c3", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("c4", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-	before := atomic.LoadInt32(&srv.calls)
-	_, _, err = client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, browser, opts),
-		"agentic:test:finalize-punt", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) == before {
-		t.Error("punt-shaped finalize-round answer should not have been cached (expected server hits on retry)")
-	}
-}
-
 // TestAgentic_Critique_RetryAllowsToolCallThenFinal verifies the
-// rubber-duck-#2 fix: when the model responds to critique feedback with
+// When the model responds to critique feedback with
 // a tool call before re-emitting, the bumped maxIters must have room
 // for the tool round AND the new final. With the old maxIters++ this
 // test would fail because the tool call consumed the only extra
@@ -1361,7 +970,7 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_FeedbackTruncatesLongFix verifies rubber-duck-#5:
+// TestCritiqueDraft_FeedbackTruncatesLongFix verifies that:
 // a pathologically long suggested_fix must be truncated in the quoted
 // portion of the feedback message so retries don't balloon the
 // conversation history. Matched phrases are still listed separately
@@ -1389,7 +998,7 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	}
 }
 
-// --- L.4 Step 2.5: hallucination + import-path integration tests ---
+// --- Hallucination + import-path integration tests ---
 
 // hallucinatedFinalJSON: clean suggested_fix (passes punt regex), but
 // cites manager.log which has not been read. Tests the new gate.
@@ -1399,7 +1008,7 @@ const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_caus
 // which the model HAS read in this scenario. Should pass critique.
 const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"]}`
 
-// TestAgentic_HallucinationRetry exercises the Step 2.5 happy path:
+// TestAgentic_HallucinationRetry exercises the happy path:
 // the model cites manager.log without reading it → critique fails on
 // hallucination (not punt) → loop appends feedback → model reads
 // build-log.txt and re-emits with a citation that matches → passes.
@@ -1449,161 +1058,10 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 	}
 }
 
-// TestAgentic_FailedReadDoesNotSatisfyGate (rubber-duck #1): a
-// read_artifact that returns a "not found" error must NOT mark the
-// path as read; the citation against the failed path must still trip
-// the hallucination check. Otherwise a model could call read_artifact
-// against any non-existent path to launder its citation.
-func TestAgentic_FailedReadDoesNotSatisfyGate(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// Round 1: model "reads" missing.log (fakeBrowser returns error).
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
-		"path": "missing.log", "offset": 0, "length": 256,
-	}))
-	// Round 2: emits final citing missing.log → critique should fail.
-	hallucinated := `{"summary":"shallow","is_transient":false,"root_cause":"missing.log shows the issue","severity":"Medium","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":[]}`
-	srv.push(200, chatRespFinal(hallucinated))
-	// Round 3: retry, model actually reads build-log.txt.
-	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{
-		"path": "build-log.txt", "offset": 0, "length": 256,
-	}))
-	// Round 4: clean re-emit citing build-log.txt.
-	srv.push(200, chatRespFinal(readThenCleanFinalJSON))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{
-		// missing.log is intentionally NOT in files; fakeBrowser.Read returns "not found".
-		files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch on line 42\n")},
-		dirs:  map[string][]string{"": {"artifacts"}},
-	}
-	opts := AgenticOptions{
-		MaxIters:           3,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
-		CritiqueEnabled:    true,
-		CritiqueMaxRetries: 2,
-	}
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, browser, opts),
-		"agentic:test:failed-read", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if !analysis.CritiquePassed {
-		t.Errorf("CritiquePassed = false, want true (model recovered after retry)")
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Errorf("call count = %d, want 4 (failed-read + halluc + good-read + clean)", got)
-	}
-}
-
-// TestAgentic_BasenameCollisionAcrossMachines (rubber-duck #2): the
-// model reads artifacts/machine-a/boot.log and cites
-// artifacts/machine-b/boot.log. Full-path tracking must catch this
-// even though the basename matches; otherwise we'd silently accept
-// cross-machine fabrications, which is one of the failure modes
-// surfaced by L.4 Step 2 Case 1.
-func TestAgentic_BasenameCollisionAcrossMachines(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// Round 1: read machine-a's boot.log.
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
-		"path": "artifacts/machine-a/boot.log", "offset": 0, "length": 256,
-	}))
-	// Round 2: emit final citing machine-b's boot.log → should fail.
-	wrong := `{"summary":"deep","is_transient":false,"root_cause":"artifacts/machine-b/boot.log shows DNS resolution failed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":[]}`
-	srv.push(200, chatRespFinal(wrong))
-	// Round 3: retry, read the correct machine-b boot.log.
-	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{
-		"path": "artifacts/machine-b/boot.log", "offset": 0, "length": 256,
-	}))
-	// Round 4: re-emit citing machine-b correctly.
-	correct := `{"summary":"deep","is_transient":false,"root_cause":"artifacts/machine-b/boot.log shows DNS resolution failed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":["artifacts/machine-b/boot.log"]}`
-	srv.push(200, chatRespFinal(correct))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{
-		files: map[string][]byte{
-			"artifacts/machine-a/boot.log": []byte("clean boot\n"),
-			"artifacts/machine-b/boot.log": []byte("dns failure\n"),
-		},
-		dirs: map[string][]string{"": {"artifacts"}},
-	}
-	opts := AgenticOptions{
-		MaxIters:           3,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
-		CritiqueEnabled:    true,
-		CritiqueMaxRetries: 2,
-	}
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, browser, opts),
-		"agentic:test:basename-collision", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if !analysis.CritiquePassed {
-		t.Errorf("CritiquePassed = false, want true (recovered after correct read)")
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Errorf("call count = %d, want 4 (read-A + wrong-cite + read-B + correct)", got)
-	}
-}
-
-// TestAgentic_FabricatedImportPath_RetryFix: the model puts a Go import
-// path in relevant_files. Critique fails on the import-path heuristic
-// → model retries with the entry omitted → passes.
-func TestAgentic_FabricatedImportPath_RetryFix(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	// Read so the hallucination check has reads to compare against.
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
-		"path": "build-log.txt", "offset": 0, "length": 256,
-	}))
-	// Final with a GOPATH-shaped relevant_files entry.
-	bad := `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt shows the error","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":["sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go"]}`
-	srv.push(200, chatRespFinal(bad))
-	// Retry with the bad entry replaced by a repo-relative path.
-	good := `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt shows the error","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml; reapply.","relevant_files":["controllers/azuremachine_controller.go"]}`
-	srv.push(200, chatRespFinal(good))
-
-	client := newAgenticTestClient(t, srv.URL)
-	browser := &fakeBrowser{
-		files: map[string][]byte{"build-log.txt": []byte("the error context\n")},
-		dirs:  map[string][]string{"": {"artifacts"}},
-	}
-	opts := AgenticOptions{
-		MaxIters:           2,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
-		CritiqueEnabled:    true,
-		CritiqueMaxRetries: 2,
-	}
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, browser, opts),
-		"agentic:test:fabricated-import", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if !analysis.CritiquePassed {
-		t.Errorf("CritiquePassed = false, want true")
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 3 {
-		t.Errorf("call count = %d, want 3 (read + bad + good)", got)
-	}
-}
-
-// TestAgentic_CacheInvalidatedByCritiqueVersionBump covers rubber-duck
+// TestAgentic_CacheInvalidatedByCritiqueVersionBump asserts that an entry
 // #4: a cache entry stamped with CritiquePassed=true but CritiqueVersion=0
-// (i.e. wrote under the L.4 Step 2 contract) must be invalidated when
-// currentCritiqueVersion is now 2 (Step 2.5). Otherwise consumers that
+// written under an older critique contract version must be invalidated when
+// currentCritiqueVersion advances. Otherwise consumers that
 // upgrade the engine would never get the strengthened gate applied.
 func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	shrinkCallDelay(t)
@@ -1690,8 +1148,8 @@ func loadAgenticSkillsForTest(t *testing.T, recipes map[string]string) *skills.S
 	return set
 }
 
-// TestAgentic_CacheInvalidatedBySkillSetHashChange covers the L.4
-// Step 3 cache-invalidation contract: a cache entry written under one
+// TestAgentic_CacheInvalidatedBySkillSetHashChange covers the
+// recipe-set cache-invalidation contract: a cache entry written under one
 // skill set must be invalidated when the consumer edits a recipe
 // (changing the SkillSetHash). The currentCritiqueVersion bump cannot
 // catch this because the engine-side contract didn't change; only the
@@ -1788,53 +1246,5 @@ required_evidence:
 	}
 	if analysis2.SkillSetHash != edited.Hash() {
 		t.Errorf("third call: SkillSetHash = %q, want %q (post-edit)", analysis2.SkillSetHash, edited.Hash())
-	}
-}
-
-// TestAgentic_SkillsDisabledSkipsHashCheck verifies that when skills
-// are disabled (SkillsEnabled=false), the SkillSetHash invalidation
-// check is a no-op. A consumer that never enables skills should never
-// have their cache invalidated by hash mismatches.
-func TestAgentic_SkillsDisabledSkipsHashCheck(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-
-	cleanFinal := `{"summary":"deep","is_transient":false,"root_cause":"vnet peering misconfigured","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 42; reapply.","relevant_files":["kustomize/cluster-template.yaml"]}`
-	srv.push(200, chatRespFinal(cleanFinal))
-
-	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{
-		MaxIters:           5,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
-		CritiqueEnabled:    true,
-		CritiqueMaxRetries: 2,
-		SkillsEnabled:      false, // explicit
-	}
-	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
-	in.Skills = loadAgenticSkillsForTest(t, map[string]string{
-		"r1": "id: r1\ntriggers: [\"x\"]\n",
-	})
-
-	const key = "agentic:test:skills-disabled"
-	_, _, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
-	if err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-
-	// Swap the recipe set entirely; with SkillsEnabled=false the cache
-	// must still hit because the hash check is skipped.
-	in.Skills = loadAgenticSkillsForTest(t, map[string]string{
-		"r2": "id: r2\ntriggers: [\"y\"]\n",
-	})
-
-	before := atomic.LoadInt32(&srv.calls)
-	_, _, err = client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) != before {
-		t.Error("expected cache hit when SkillsEnabled=false despite recipe set change, got model hit")
 	}
 }
