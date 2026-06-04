@@ -167,7 +167,6 @@ wrong; otherwise leave it alone so warm caches survive engine upgrades. See
 - **Comment length:** terse. Most exported types/functions get 1-3 short
   lines; complex algorithms get more, but stay focused on what + why,
   not how the code came to be written that way.
-- **No em dashes** in any comments or written response.
 - **Errors:** wrap with `fmt.Errorf("...: %w", err)`. Surface enough
   context for the operator to find the failing artifact / cache key.
 - **Logging:** `log.Printf` with a leading emoji/icon and the test or job
@@ -230,19 +229,13 @@ Never check engine-side per-project config into this repo. The
 `configs/example/` directory is documentation-only and not loaded by any
 live deploy.
 
-## Git workflow
+## Commit conventions
 
-Per the repo's CLAUDE/Copilot conventions (also enforced by user
-preference):
-
-- **Never `git push` without explicit user permission.** Committing locally
-  is fine; pushing is privileged.
-- **No GPG signing.** Use `git -c commit.gpgsign=false commit ...` -
-  signing breaks the agent UI.
-- **No em dashes** in commit messages or written replies.
-- **No backward-compat scaffolding by default.** Only 2 internal consumers;
-  we delete dead code rather than maintain compat branches. The most recent
-  cleanup commits (`3859677`, `733f080` aka PR #4) embody this.
+- **No backward-compat scaffolding by default.** With only the two
+  internal consumers above and the engine still under heavy development,
+  the project prefers deleting dead code over maintaining compat
+  branches. Recent cleanup commits (`3859677`, `733f080` aka PR #4)
+  illustrate the pattern.
 - **Conventional, terse commit messages.** Opening paragraph explains
   rationale; bulleted list describes the changes; closing line confirms
   `go build / vet / test / staticcheck` are clean.
