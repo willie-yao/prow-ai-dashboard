@@ -9,64 +9,49 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 )
 
-// L.4 Step 2: regex-based critique that catches the punt-style
-// suggested_fix pattern observed in L.4 Step 1 measurements (Qwen
-// punt_rate=80% post-Step-1, having dropped only 9pp from L.3 Step 2's
-// 89%). The Step 1 prompt rewrites are necessary but not sufficient
-// for weaker models: Qwen reads "do not write investigation tasks"
-// then writes one anyway. This file adds a second-pass gate that
-// rejects punt-shaped finals and re-prompts the agentic loop with a
-// targeted feedback message before caching.
+// Package ai's critique gate runs a deterministic regex pass on the model's
+// final answer and rejects four classes of failure that pure prompt rules
+// don't reliably catch on weaker models:
+//   - punt-shaped suggested_fix (diagnostic imperatives like "check X");
+//   - artifact citations the agent never actually read;
+//   - Go-import-style paths in relevant_files (sigs.k8s.io/...);
+//   - matched-recipe evidence the agent didn't fetch (see skills package).
 //
-// Implementation is intentionally deterministic in v1: the regex
-// catches the dominant failure mode (imperative diagnostic verbs in
-// suggested_fix) without an extra LLM round-trip. A future v2 may
-// add an LLM judge for subtler issues (e.g. root_cause names a
-// resource that was never read), but ship the cheap fix first.
+// Rejected drafts are re-prompted with targeted feedback. Drafts that still
+// fail after the configured retry budget are published but not cached, so
+// the next fetcher run re-attempts them.
 
-// _diagVerbs and _diagGerunds enumerate the diagnostic / information-
-// gathering vocabulary the L.4 Step 1 prompts already declare forbidden
-// in suggested_fix. Kept as raw alternation strings so the same lists
-// can be reused across the bare-imperative pattern and the
-// "<subject> should <verb>" pattern without duplication.
-const _diagVerbs = `check|verify|investigate|ensure|inspect|examine|confirm|audit|review|determine|monitor|troubleshoot|debug|look\s+into|look\s+at|analyze`
-const _diagGerunds = `checking|verifying|investigating|ensuring|inspecting|examining|confirming|auditing|reviewing|determining|monitoring|troubleshooting|debugging|looking\s+into|looking\s+at|analyzing`
+// diagVerbs and diagGerunds enumerate the diagnostic / information-
+// gathering vocabulary forbidden in suggested_fix. Shared raw alternation
+// strings so the bare-imperative and "<subject> should <verb>" patterns
+// stay in sync.
+const diagVerbs = `check|verify|investigate|ensure|inspect|examine|confirm|audit|review|determine|monitor|troubleshoot|debug|look\s+into|look\s+at|analyze`
+const diagGerunds = `checking|verifying|investigating|ensuring|inspecting|examining|confirming|auditing|reviewing|determining|monitoring|troubleshooting|debugging|looking\s+into|looking\s+at|analyzing`
 
-// puntPattern is one of the four punt shapes recognized by critique.
-// Each pattern runs as its own regex because Go's RE2 has no negative
-// lookahead; the bare-imperative and should/need shapes need to be
-// filtered against a validation-followup exemption ("verify BY
-// rerunning" is fine, "verify cloud-init" is a punt). Patterns 3 and
-// 4 (recommend-gerund) don't get the exemption.
-//
-// Doing this as multiple regexes is also clearer than a giant
-// alternation with parenthesized capture groups for branch detection.
+// puntPattern is one of four punt shapes. Split across multiple regexes
+// because RE2 has no negative lookahead and the bare-imperative / should-
+// verb shapes need a validation-followup exemption ("verify BY rerunning"
+// is allowed, "verify cloud-init" is not).
 type puntPattern struct {
 	re                     *regexp.Regexp
 	exemptValidationFollow bool
 }
 
-// validationFollowRE matches the prepositional phrase the L.4 Step 1
-// prompts explicitly allow in composite remediations like "apply the
-// fix; verify BY tailing the controller log". Applied to the text
-// immediately after a candidate match.
+// validationFollowRE matches the prepositional phrase the prompts allow
+// in composite remediations like "apply the fix; verify BY tailing the
+// controller log". Applied to text immediately after a candidate match.
 var validationFollowRE = regexp.MustCompile(`^\s+(?:by|via|through|using|that)\b`)
 
-// puntPatterns is the Go port of the validated A/B-harness regex from
-// build_ab_l4s1.py, split into four single-purpose patterns to work
-// around RE2's lack of negative lookahead.
-//  1. Bare diagnostic imperative at sentence/bullet start
-//     ("Check X", "1. Verify Y", "- Investigate Z").
-//  2. "<subject> should/need-to <diagnostic verb>"
-//     ("You should check", "operator needs to verify").
-//  3. "<subject> recommend(s) <diagnostic gerund>"
-//     ("We recommend reviewing").
+// puntPatterns:
+//  1. Bare diagnostic imperative at sentence/bullet start ("Check X").
+//  2. "<subject> should/need-to <diag verb>" ("operator needs to verify").
+//  3. "<subject> recommend(s) <diag gerund>" ("we recommend reviewing").
 //  4. Standalone "recommend <gerund>" at sentence/bullet start.
 var puntPatterns = []puntPattern{
 	{
 		re: regexp.MustCompile(
 			`(?im)(?:^|[.!?]\s+|;\s+|^\s*\d+[.)]\s*|^\s*[-*]\s*)` +
-				`(?:please\s+)?(?:` + _diagVerbs + `)\b`,
+				`(?:please\s+)?(?:` + diagVerbs + `)\b`,
 		),
 		exemptValidationFollow: true,
 	},
@@ -74,28 +59,27 @@ var puntPatterns = []puntPattern{
 		re: regexp.MustCompile(
 			`(?i)\b(?:user|operator|developer|engineer|team|you|we|they|one)\s+` +
 				`(?:should|must|need\s+to|needs\s+to|ought\s+to|may\s+want\s+to|might\s+want\s+to|could)\s+` +
-				`(?:also\s+)?(?:` + _diagVerbs + `)\b`,
+				`(?:also\s+)?(?:` + diagVerbs + `)\b`,
 		),
 		exemptValidationFollow: true,
 	},
 	{
 		re: regexp.MustCompile(
-			`(?i)\b(?:i|we|they|operator|team)\s+recommends?\s+(?:` + _diagGerunds + `)\b`,
+			`(?i)\b(?:i|we|they|operator|team)\s+recommends?\s+(?:` + diagGerunds + `)\b`,
 		),
 	},
 	{
 		re: regexp.MustCompile(
 			`(?im)(?:^|[.!?]\s+|;\s+|^\s*\d+[.)]\s*|^\s*[-*]\s*)` +
-				`recommends?\s+(?:` + _diagGerunds + `)\b`,
+				`recommends?\s+(?:` + diagGerunds + `)\b`,
 		),
 	},
 }
 
-// findPunts runs every punt pattern against text and returns the set
-// of matched substrings after applying the validation-followup
-// exemption. Trims leading punctuation/whitespace that the
-// sentence-start anchor pulled into the match so the feedback message
-// quotes only the meaningful phrase.
+// findPunts runs every punt pattern against text and returns the matched
+// substrings after applying the validation-followup exemption. Trims
+// leading punctuation/whitespace that the sentence-start anchor pulled
+// into the match.
 func findPunts(text string) []string {
 	var out []string
 	for _, p := range puntPatterns {
@@ -107,7 +91,7 @@ func findPunts(text string) []string {
 					continue
 				}
 			}
-			match := strings.TrimLeft(text[start:end], " \t\n.!?;-*0123456789).")
+			match := strings.TrimLeft(text[start:end], " \t\n.!?;-*0123456789)")
 			match = strings.TrimSpace(match)
 			if match != "" {
 				out = append(out, match)
@@ -117,37 +101,21 @@ func findPunts(text string) []string {
 	return out
 }
 
-// currentCritiqueVersion is the schema version of the critique
-// contract. Bumped on material strengthening of the gate so cache
-// entries from a weaker version are invalidated on read. v1 = L.4
-// Step 2 (punt-only). v2 = L.4 Step 2.5 (adds hallucination check on
-// artifact citations and import-path heuristic on relevant_files).
-// v3 = L.4 Step 2.5.1 (broadens import-path regex to catch GOPATH
-// prefixes embedded inside absolute mod-cache paths and inside URLs;
-// shadow A/B showed 2/8 escapes under v2). v4 = L.4 Step 3 (adds
-// recipe-driven missing-evidence check that consults the consumer's
-// loaded skill set; per-recipe semantic evidence is enforced via
-// the SkillSetHash cache invalidation contract independently of
-// this version, but the engine-side gate behavior change still
-// bumps it).
+// currentCritiqueVersion is the schema version of the critique contract.
+// Bumped on material strengthening of the gate so cache entries from a
+// weaker version are invalidated on read. Cosmetic prompt-shape changes
+// do not bump; only behavior changes that would make a previously-cached
+// answer invalid under today's contract.
 const currentCritiqueVersion = 4
 
-// artifactCitationRE matches strings in the model's prose that look
-// like Prow artifact filenames. Intentionally narrow on bare basenames
-// (only well-known artifact names) but broader on qualified paths
-// (artifact-shaped .log/.txt/.json under any directory). Source-file
-// extensions on bare basenames (.yaml, .go, .py, .md, generic .json)
-// are still excluded because the model legitimately cites those
-// without reading them via tools (they live in the source repo).
-//
-// Captures one or more path segments so that qualified citations
-// ("machine-foo/cloud-init-output.log", "artifacts/.../events.json")
-// round-trip through normalizeArtifactCitation for both full-path and
-// basename matching.
+// artifactCitationRE matches strings in the model's prose that look like
+// Prow artifact filenames. Intentionally narrow on bare basenames (only
+// well-known artifact names) but broader on qualified paths (.log/.txt/
+// .json/.xml under any directory). Source-file extensions on bare basenames
+// (.yaml, .go, .py, .md) are excluded because the model legitimately cites
+// those without reading them via tools (they live in the source repo).
 var artifactCitationRE = regexp.MustCompile(
-	// Qualified path (has a directory) ending in any of the artifact
-	// extensions. The capturing group ensures we keep the leading
-	// directory prefix.
+	// Qualified path (has a directory) ending in any artifact extension.
 	`(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.(?:log|txt|json|xml)` +
 		// OR a well-known bare artifact basename.
 		`|(?:` +
@@ -162,39 +130,27 @@ var artifactCitationRE = regexp.MustCompile(
 		`)`,
 )
 
-// hallucinatedImportPathRE catches the specific failure mode where the
-// model puts Go-import-style prefixes into relevant_files (which is
-// supposed to hold repo-relative source paths). Surfaced by L.4 Step 2
-// Case 1: Qwen produced `sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go`
-// for a file that doesn't exist; the GOPATH-shaped prefix is a tell
-// that the model is fabricating from intuition rather than citing a
-// real file it saw.
-//
-// The pattern is intentionally NOT anchored to the start of the
-// token: L.4 Step 2.5 shadow data caught two escape variants the
-// original anchor missed,
-//   - `/home/prow/go/pkg/mod/sigs.k8s.io/cluster-api/test@v1.13.2/...`
-//     (Prow's GOPATH mod-cache layout, leading absolute prefix)
-//   - `https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/...`
-//     (GitHub blob URL, leading scheme)
-//
-// Requiring the trailing `/` after the prefix preserves the
-// `sigs.k8s.iolib` false-positive guard the existing test pins.
+// hallucinatedImportPathRE catches Go-import-style prefixes (sigs.k8s.io/,
+// github.com/, k8s.io/) anywhere in a token. These are GOPATH paths, not
+// repo-relative source paths; in observed cases they accompany fabricated
+// filenames. The pattern is intentionally NOT start-anchored to also catch
+// embedded variants like `/home/prow/go/pkg/mod/sigs.k8s.io/...` (Prow's
+// GOPATH mod-cache layout) and `https://github.com/.../blob/main/...`
+// (GitHub blob URLs). Requiring a trailing `/` after the prefix preserves
+// the `sigs.k8s.iolib` false-positive guard.
 var hallucinatedImportPathRE = regexp.MustCompile(
 	`(?i)(?:sigs\.k8s\.io|github\.com|k8s\.io|golang\.org|google\.golang\.org)/`,
 )
 
-// citationStripRE removes line-number and column suffixes the model
-// often appends to artifact citations ("build-log.txt:1720",
-// "manager.log#L42-L50") so the basename matches the form the tool
-// arg actually had.
+// citationStripRE removes line-number and column suffixes the model often
+// appends to artifact citations ("build-log.txt:1720", "manager.log#L42-L50")
+// so the basename matches the form the tool arg actually had.
 var citationStripRE = regexp.MustCompile(`(?::\d+(?:-\d+)?|#L\d+(?:-L?\d+)?)\b`)
 
-// normalizeArtifactCitation cleans up a path-shaped match for
-// comparison against the reads set. Slash semantics (not OS), lowercase,
-// trims wrapping punctuation/quotes/backticks, strips line-number
-// suffixes. Returns the cleaned full path; callers use path.Base for
-// basename-only comparison.
+// normalizeArtifactCitation cleans up a path-shaped match for comparison
+// against the reads set: slash semantics, lowercase, trim wrapping
+// punctuation/quotes, strip line-number suffixes. Returns the cleaned
+// full path; callers use path.Base for basename-only comparison.
 func normalizeArtifactCitation(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "`'\"(),;:")
@@ -206,34 +162,25 @@ func normalizeArtifactCitation(s string) string {
 	return s
 }
 
-// findUnreadArtifactCitations extracts artifact-path-shaped tokens
-// from text and returns the ones that don't match any path the agent
-// actually fetched via read_artifact / tail_artifact / grep_artifact.
+// findUnreadArtifactCitations extracts artifact-path-shaped tokens from text
+// and returns the ones that don't match any path the agent actually fetched
+// via read_artifact / tail_artifact / grep_artifact.
 //
-// Calling convention: pass nil for BOTH readsFull and readsBase to
-// disable the check (returns nil). Pass an initialized map (even if
-// empty) to enable the check. The agentic loop's state.readArtifactsFull
-// / readArtifactsBase are lazy-initialized on first successful read,
-// so nil naturally means "the agent has made zero successful reads",
-// in which case the check is skipped to avoid false-positives on
-// the escape hatch ("the log was truncated" with no read recorded).
-// In production this is fine because MinGCSBytes forces at least some
-// reads before critique can run; tests that exercise punt-only
-// behavior pass nil.
+// Calling convention: pass nil for BOTH readsFull and readsBase to disable
+// the check (returns nil). Pass initialized maps (even if empty) to enable
+// it. doAnalyzeAgentic pre-inits both when critique is enabled, so nil
+// only happens in tests that exercise punt-only behavior.
 //
-// Match rules (rubber-duck #2):
-//   - If the citation includes a directory prefix (contains a "/"),
-//     require an exact full-path match against readsFull. This catches
-//     the cross-machine basename collision where Qwen reads machine-A's
-//     boot.log and cites machine-B's boot.log.
-//   - If the citation is basename-only, match against readsBase. The
-//     model citing a bare "boot.log" without qualification only proves
-//     it knows the basename, which matches any cluster/machine's
-//     boot.log the agent did read.
+// Match rules:
+//   - Citation with a directory prefix → require exact full-path match
+//     against readsFull. Catches the cross-machine basename collision
+//     where the agent reads machine-A's boot.log and cites machine-B's.
+//   - Bare basename → match against readsBase. Citing "boot.log" only
+//     proves the model knows the basename, satisfied by any read of that
+//     basename.
 //
 // Returns the de-duplicated list of unread citations in input order.
-// readsFull and readsBase keys are pre-normalized basenames / full paths
-// (lowercase, slash semantics).
+// Map keys are pre-normalized (lowercase, slash semantics).
 func findUnreadArtifactCitations(text string, readsFull, readsBase map[string]bool) []string {
 	if readsFull == nil && readsBase == nil {
 		return nil
@@ -275,47 +222,50 @@ func findUnreadArtifactCitations(text string, readsFull, readsBase map[string]bo
 	return out
 }
 
-// findHallucinatedImportPaths flags Go-import-style prefixes
-// (sigs.k8s.io/foo, github.com/bar). These are GOPATH paths, not
-// repo-relative source paths; in observed cases they accompany
-// fabricated filenames (Case 1 of the L.4 Step 2 A/B). Scans an
-// arbitrary set of strings (relevant_files entries plus root_cause /
-// suggested_fix prose) so that a hallucinated GOPATH-shaped citation
-// is caught wherever the model puts it.
-func findHallucinatedImportPaths(candidates []string) []string {
-	if len(candidates) == 0 {
-		return nil
-	}
-	seen := map[string]bool{}
-	var out []string
-	for _, c := range candidates {
-		// For relevant_files entries the candidate is the whole string;
-		// for prose we tokenize on whitespace and common punctuation so
-		// "see sigs.k8s.io/foo/bar.go for X" matches the prefix.
-		for _, tok := range tokenizeForImportPath(c) {
-			s := strings.Trim(tok, "`'\"(),;:")
-			if s == "" {
-				continue
-			}
-			if !hallucinatedImportPathRE.MatchString(s) {
-				continue
-			}
-			key := strings.ToLower(s)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, s)
+// dedupLower returns a copy of in with case-insensitive duplicates removed,
+// preserving first-occurrence order and stripping leading/trailing whitespace.
+func dedupLower(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
 		}
+		key := strings.ToLower(s)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
 	}
 	return out
 }
 
-// tokenizeForImportPath splits a string on whitespace so the import-path
-// regex can be applied to each token. relevant_files entries are
-// whole strings (one token); prose fields contain many tokens.
-func tokenizeForImportPath(s string) []string {
-	return strings.Fields(s)
+// findHallucinatedImportPaths flags Go-import-style prefixes
+// (sigs.k8s.io/foo, github.com/bar). These are GOPATH paths, not
+// repo-relative source paths, and accompany fabricated filenames in
+// observed cases. Scans an arbitrary set of strings so a hallucinated
+// GOPATH-shaped citation is caught wherever the model puts it.
+func findHallucinatedImportPaths(candidates []string) []string {
+	if len(candidates) == 0 {
+		return nil
+	}
+	var hits []string
+	for _, c := range candidates {
+		// relevant_files entries are one token; prose contains many,
+		// so split on whitespace before applying the import-path regex.
+		for _, tok := range strings.Fields(c) {
+			s := strings.Trim(tok, "`'\"(),;:")
+			if s == "" {
+				continue
+			}
+			if hallucinatedImportPathRE.MatchString(s) {
+				hits = append(hits, s)
+			}
+		}
+	}
+	return dedupLower(hits)
 }
 
 // critiqueOutcome is returned by critiqueDraft. Passed=true means the
@@ -325,42 +275,34 @@ type critiqueOutcome struct {
 	Passed   bool
 	Feedback string
 
-	// PuntMatches lists exact substrings that triggered the
-	// suggested_fix punt regex. Quoted back in Feedback so the model
-	// sees its own offending text. Empty when no punt was detected.
+	// PuntMatches lists exact substrings that triggered the suggested_fix
+	// punt regex. Quoted back in Feedback so the model sees its own
+	// offending text.
 	PuntMatches []string
 
-	// UnreadCitations lists artifact-path tokens the model cited
-	// without ever fetching via a read/tail/grep tool. Quoted back in
-	// Feedback so the model knows which files to actually read on
-	// retry. Empty when no hallucination was detected. (L.4 Step 2.5)
+	// UnreadCitations lists artifact-path tokens the model cited without
+	// ever fetching via a read/tail/grep tool.
 	UnreadCitations []string
 
-	// FabricatedImports lists relevant_files entries that look like
-	// Go import paths rather than repo-relative paths. Surfaced in
-	// Feedback. Empty when none detected. (L.4 Step 2.5)
+	// FabricatedImports lists tokens that look like Go import paths
+	// rather than repo-relative paths.
 	FabricatedImports []string
 
-	// MissingSkillEvidence lists the per-recipe evidence groups the
-	// agent has not satisfied. Each entry pairs the matched recipe
-	// with the still-missing group(s) so the feedback formatter can
-	// quote the recipe's procedure once and list which evidence is
-	// outstanding. (L.4 Step 3)
+	// MissingSkillEvidence pairs each matched recipe with the evidence
+	// groups it still requires the agent to satisfy.
 	MissingSkillEvidence []skillEvidenceMiss
 }
 
-// skillEvidenceMiss bundles one matched recipe with the evidence
-// groups it requires but the agent has not yet satisfied. One
-// instance per (skill, missing-groups) pair; if the same skill has
-// two missing groups they share one instance.
+// skillEvidenceMiss bundles one matched recipe with the evidence groups it
+// requires but the agent has not yet satisfied. One instance per skill; a
+// skill with two missing groups shares one instance.
 type skillEvidenceMiss struct {
 	Skill   skills.Skill
 	Missing []skills.EvidenceGroup
 }
 
-// Matches is the back-compat union of all match categories, for the
-// agentic loop's log line and for legacy callers that just want a
-// flat list of "things that tripped the gate".
+// Matches is the flat union of all triggered checks, for log lines and
+// for callers that just want "what tripped the gate".
 func (o critiqueOutcome) Matches() []string {
 	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.FabricatedImports) + len(o.MissingSkillEvidence)
 	if n == 0 {
@@ -381,10 +323,8 @@ func (o critiqueOutcome) Matches() []string {
 	return out
 }
 
-// MissingEvidenceCount totals the missing evidence groups across all
-// matched skills. Used by the agentic loop to size the dynamic retry
-// budget extension: one extra iteration per missing group on top of
-// the base critiqueRetryIters.
+// MissingEvidenceCount totals the missing evidence groups across all matched
+// skills. Used by the agentic loop to size the dynamic retry budget extension.
 func (o critiqueOutcome) MissingEvidenceCount() int {
 	n := 0
 	for _, m := range o.MissingSkillEvidence {
@@ -393,36 +333,26 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 	return n
 }
 
-// critiqueDraft inspects a parsed final analysis against the L.4
-// critique contract (Step 2 punt regex + Step 2.5 hallucination /
-// import-path checks + Step 3 recipe-driven missing-evidence check).
-// Returns Passed=true only when every check passes; on any failure,
-// Feedback combines all triggered checks into one user-role message
-// so the model fixes everything in a single retry rather than playing
-// whack-a-mole across rounds.
+// critiqueDraft inspects a parsed final answer against the critique contract
+// (punt regex + hallucination + import-path + recipe-driven missing-evidence).
+// Returns Passed=true only when every check passes; on failure, Feedback
+// combines all triggered checks into one message so the model fixes
+// everything in a single retry rather than playing whack-a-mole.
 //
-// readsFull / readsBase are the agent's actually-fetched artifact
-// paths (full and basename); pass empty maps to skip the hallucination
-// check (e.g. for early-loop critique against a state with no tool
-// calls yet). When BOTH maps are empty AND the text cites artifacts,
-// the check still fires: zero reads with specific citations is
-// definitionally a hallucination.
-//
-// matchedSkills is the L.4 Step 3 recipe set the agentic loop matched
-// against this draft; pass nil to disable the skill-evidence check.
-// Each recipe contributes one missing-evidence entry per unsatisfied
-// EvidenceGroup; readsFull is the path set the groups check against
-// (skills only consult full paths, not basenames, because evidence
-// patterns are authored against the recipe's expected directory
-// structure).
+// readsFull / readsBase are the agent's actually-fetched artifact paths
+// (full and basename). matchedSkills is the recipe subset whose triggers
+// fired on this draft; pass nil to disable the skill-evidence check.
 func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool, matchedSkills []skills.Skill) critiqueOutcome {
 	puntMatches := findPunts(parsed.SuggestedFix)
 
-	// Scan all prose fields plus each relevant_files entry: the model
-	// may cite an unread artifact in any of them.
+	// Scan every prose field plus each relevant_files entry: the model
+	// may cite an unread artifact in any of them, and may bury a
+	// fabricated import path anywhere too.
+	fields := parsed.proseFields()
+
 	var unread []string
 	scanned := map[string]bool{}
-	scan := func(s string) {
+	for _, s := range fields {
 		for _, u := range findUnreadArtifactCitations(s, readsFull, readsBase) {
 			if scanned[u] {
 				continue
@@ -431,26 +361,14 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 			unread = append(unread, u)
 		}
 	}
-	scan(parsed.RootCause)
-	scan(parsed.Summary)
-	scan(parsed.SuggestedFix)
-	for _, rf := range parsed.RelevantFiles {
-		scan(rf)
-	}
 
-	// Rubber-duck #6: scan prose fields for fabricated import paths
-	// too, not just relevant_files. The Step 2 Case 1 hallucination
-	// embedded sigs.k8s.io/.../actuators.go in root_cause.
-	importCandidates := append([]string{parsed.RootCause, parsed.Summary, parsed.SuggestedFix}, parsed.RelevantFiles...)
-	fabricated := findHallucinatedImportPaths(importCandidates)
+	fabricated := findHallucinatedImportPaths(fields)
 
-	// L.4 Step 3: for each matched recipe, check whether every
-	// required-evidence group is satisfied by the agent's read set.
-	// A group is satisfied iff ANY of its any_of regexes matches ANY
-	// fully-qualified path the agent successfully read. Skills with
-	// no missing groups (all evidence satisfied) drop out of the
-	// outcome; only the ones still missing something are surfaced
-	// in feedback.
+	// For each matched recipe, check whether every required-evidence group
+	// is satisfied by the agent's read set. A group is satisfied iff any
+	// of its any_of regexes matches any fully-qualified path the agent
+	// successfully read. Only skills with at least one missing group are
+	// surfaced in feedback.
 	var missingSkillEv []skillEvidenceMiss
 	for _, sk := range matchedSkills {
 		var missing []skills.EvidenceGroup
@@ -481,14 +399,8 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 
 // formatCritiqueFeedback builds the user-role message appended to the
 // agentic conversation when a draft fails critique. Combines feedback
-// for whichever of the four checks failed (punt, hallucinated artifact
-// citations, fabricated import paths, missing skill evidence) into a
-// single message so the model can address everything in one retry.
-//
-// suggested_fix is truncated to feedbackQuoteLimit characters (with an
-// ellipsis) so a pathologically long fix doesn't balloon the
-// conversation history on every retry. Matched phrases / unread
-// citations are listed separately and are not truncated.
+// for whichever checks failed into one message so the model can address
+// everything in a single retry rather than playing whack-a-mole.
 func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string {
 	var sections []string
 
@@ -510,21 +422,11 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	return strings.Join(sections, "\n\n")
 }
 
-// formatPuntSection is the L.4 Step 2 punt-detection feedback,
-// extracted so the combined formatter can include it alongside the
-// Step 2.5 sections.
+// formatPuntSection is the punt-detection feedback, extracted so the
+// combined formatter can include it alongside the other sections.
 func formatPuntSection(parsed analysisResponse, matches []string) string {
-	seen := map[string]bool{}
-	uniq := make([]string, 0, len(matches))
-	for _, m := range matches {
-		key := strings.ToLower(strings.TrimSpace(m))
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		uniq = append(uniq, strings.TrimSpace(m))
-	}
-	var quoted []string
+	uniq := dedupLower(matches)
+	quoted := make([]string, 0, len(uniq))
 	for _, m := range uniq {
 		quoted = append(quoted, fmt.Sprintf("%q", m))
 	}
@@ -552,13 +454,9 @@ A composite "apply the fix, then verify by Y" is allowed; "check X, verify Y, in
 		strings.Join(quoted, ", "))
 }
 
-// formatUnreadSection is the L.4 Step 2.5 hallucination feedback. The
-// model named an artifact in its prose but the tool log shows no
-// read_artifact / tail_artifact / grep_artifact call against it. Either
-// the model invented the citation or it inferred from a directory
-// listing; either way, force it to actually fetch the bytes before
-// claiming what they contain. Encourages batching reads in one
-// assistant turn so the existing critiqueRetryIters=3 budget suffices.
+// formatUnreadSection is the hallucination feedback. The model named an
+// artifact in its prose but never fetched it; force the model to actually
+// read the bytes before claiming what they contain.
 func formatUnreadSection(unread []string) string {
 	var quoted []string
 	for _, u := range unread {
@@ -576,12 +474,9 @@ Either you fabricated these citations or you inferred from a directory listing; 
 		strings.Join(quoted, "\n"))
 }
 
-// formatFabricatedImportSection is the L.4 Step 2.5 import-path
-// heuristic feedback. relevant_files is supposed to hold repo-relative
-// source paths, but in observed cases (L.4 Step 2 A/B Case 1) the
-// model emits GOPATH-shaped prefixes (sigs.k8s.io/foo/bar.go) for
-// files that don't exist. Reject those and ask the model to omit
-// rather than fabricate.
+// formatFabricatedImportSection is the import-path heuristic feedback.
+// relevant_files must hold repo-relative source paths, not Go import
+// paths like sigs.k8s.io/foo/bar.go.
 func formatFabricatedImportSection(fabricated []string) string {
 	var quoted []string
 	for _, f := range fabricated {
@@ -596,23 +491,14 @@ relevant_files must contain REPO-RELATIVE source paths (e.g. "controllers/azurem
 }
 
 // feedbackQuoteLimit caps how much of the model's draft suggested_fix
-// is quoted into a critique-retry feedback message. Long enough to be
-// useful as a "your own words" reminder, short enough to keep the
-// per-retry token cost bounded.
+// is quoted into a critique-retry feedback message.
 const feedbackQuoteLimit = 600
 
-// formatSkillEvidenceSection is the L.4 Step 3 missing-evidence
-// feedback. For each matched recipe, list which evidence groups are
-// still missing and quote the recipe's procedure as guidance. Wraps
-// the consumer-authored procedure with a disclaimer so weaker models
-// can't be redirected away from the system prompt or response schema
-// by injected recipe prose.
-//
-// The feedback explicitly demands tool calls before re-finalize. The
-// observed failure mode on weaker models is to re-shape the same
-// wrong answer using whatever new guidance arrives instead of going
-// back to the tools; "first call tools, do not reshape your answer
-// yet" is the one-line counter to that.
+// formatSkillEvidenceSection is the recipe-driven missing-evidence feedback.
+// For each matched recipe, lists which evidence groups are still missing
+// and quotes the recipe's procedure as guidance. Wraps the consumer-
+// authored procedure with a disclaimer so weaker models can't be
+// redirected away from the system prompt by injected recipe prose.
 func formatSkillEvidenceSection(misses []skillEvidenceMiss) string {
 	var perSkill []string
 	for _, m := range misses {
@@ -650,8 +536,7 @@ Do NOT rewrite your answer yet. First, in your next assistant turn, call read_ar
 }
 
 // quotePatternList renders the regex alternatives in a group as a
-// comma-separated quoted list, intended for the per-group feedback
-// line so the model sees what shape of path satisfies the group.
+// comma-separated quoted list for the per-group feedback line.
 func quotePatternList(pats []string) string {
 	out := make([]string, 0, len(pats))
 	for _, p := range pats {
@@ -660,10 +545,7 @@ func quotePatternList(pats []string) string {
 	return strings.Join(out, ", ")
 }
 
-// indentLines prefixes every line of s with indent. Used when quoting
-// multi-line procedure text into critique feedback so the model can
-// visually distinguish the recipe's guidance from the engine's
-// instruction text.
+// indentLines prefixes every non-empty line of s with indent.
 func indentLines(s, indent string) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {

@@ -27,16 +27,15 @@ const AgenticMode = "agentic"
 
 // UniversalMode is the value stored in models.AIAnalysis.Mode for results
 // produced by the use_universal_path flow. Distinct from AgenticMode so
-// that flipping a project from agentic-on-top-of-capi to universal
-// invalidates previously cached analyses (shouldReanalyze treats any mode
-// mismatch as cache-miss).
+// that flipping a project between the two invalidates previously cached
+// analyses (shouldReanalyze treats any mode mismatch as cache-miss).
 const UniversalMode = "agentic-universal"
 
 // ErrToolsUnsupported is returned from the agentic loop when the configured
-// provider rejects function-calling on the first call (typically HTTP 400 with
-// a body mentioning "tools" or "functions"). Callers should fall back to the
-// single-shot curator pipeline for that failure and avoid retrying agentic
-// mode against the same endpoint for the rest of the run.
+// provider rejects function-calling on the first call (typically HTTP 400
+// with a body mentioning "tools" or "functions"). Callers should fall back
+// to the single-shot curator pipeline for that failure and avoid retrying
+// agentic mode against the same endpoint for the rest of the run.
 var ErrToolsUnsupported = errors.New("ai endpoint does not support function calling")
 
 // AgenticOptions is the resolved per-failure budget config. Build via
@@ -47,83 +46,58 @@ type AgenticOptions struct {
 	GCSByteBudget   int
 	WallClock       time.Duration
 
-	// MinToolCalls is the minimum number of tool calls before a
-	// tools-free final answer from the model is accepted as cacheable.
-	// Defaults to 0 (no floor; behavior identical to pre-L.3). When set,
-	// the loop nudges the model with a "you haven't investigated enough"
-	// user message instead of accepting the early final, and skips the
-	// cache write for any final that lands below the floor (so the
-	// next run gets a fresh attempt). See project.Agentic.MinToolCalls.
+	// MinToolCalls is the minimum number of tool calls before a tools-free
+	// final answer is accepted as cacheable. Defaults to 0 (no floor). The
+	// loop nudges the model with a "you haven't investigated enough" user
+	// message and skips the cache write for any final that lands below
+	// the floor so the next run gets a fresh attempt.
 	MinToolCalls int
 
 	// MinGCSBytes is the minimum cumulative GCS bytes fetched via tool
 	// calls before a tools-free final answer is accepted. Complements
-	// MinToolCalls because tool-call count alone is gameable: weaker
-	// models can satisfy a calls floor with cheap list calls or tiny
-	// reads and still finalize without evidence (observed 6 calls
-	// returning 13 KB total against Qwen3-235B). Defaults to 0 (no
-	// floor). See project.Agentic.MinGCSBytes.
+	// MinToolCalls because tool-call count alone is gameable: weak models
+	// can satisfy a calls floor with cheap list calls or tiny reads. The
+	// floor invalidates calls-only finalization. Defaults to 0.
 	MinGCSBytes int
 
-	// CritiqueEnabled opts the run into the L.4 Step 2 regex critique:
-	// after the agentic loop produces a parseable tools-free final,
-	// run critiqueDraft on it. If it punts (suggested_fix is a
-	// diagnostic/information-gathering TODO list instead of a concrete
-	// remediation), append targeted feedback and re-prompt up to
-	// CritiqueMaxRetries times. Drafts that still punt after retries
-	// are published but not cached, so the next run gets a fresh
-	// attempt (mirrors the MinToolCalls / MinGCSBytes anti-thrash
-	// pattern). Defaults to false; behavior identical to pre-L.4-Step-2
-	// when off. See project.Agentic.Critique.
+	// CritiqueEnabled opts the run into the regex critique gate. After
+	// the agentic loop produces a parseable tools-free final, critiqueDraft
+	// inspects it; punt-shaped, hallucinated, or import-fabricating
+	// answers get re-prompted with targeted feedback up to
+	// CritiqueMaxRetries times. Drafts that still fail after retries are
+	// published but not cached so the next run gets a fresh attempt.
 	CritiqueEnabled bool
 
-	// CritiqueMaxRetries caps how many extra re-prompt rounds the
-	// loop will spend on critique. 0 means "critique once but never
-	// retry" (acts as a pure don't-cache gate); 2 means the model
-	// gets the original final plus up to 2 retries (so 3 total
-	// critique evaluations per analysis). Each retry consumes one
-	// extra agentic iteration. Only meaningful when CritiqueEnabled.
+	// CritiqueMaxRetries caps the extra re-prompt rounds the loop spends
+	// on critique. 0 means "critique once but never retry" (pure don't-
+	// cache gate); 2 gets up to 3 total evaluations. Each retry consumes
+	// one extra agentic iteration. Only meaningful when CritiqueEnabled.
 	CritiqueMaxRetries int
 
-	// SkillsEnabled opts the run into the L.4 Step 3 recipe-driven
-	// missing-evidence check inside the critique gate. Only
-	// meaningful when CritiqueEnabled is also true (skills extend
-	// the critique gate; with critique off, this flag is a no-op).
-	// When true, the agentic loop matches the in-flight draft
-	// against the consumer's loaded skill set (AgenticInputs.Skills)
-	// at critique time, and for each matched recipe adds a
-	// missing-evidence section to the critique feedback when any
-	// required evidence group is not satisfied by the agent's read
-	// set. The retry budget is extended dynamically to give the
-	// agent room to satisfy the missing evidence (see
-	// formatSkillEvidenceSection and the in-loop budget logic).
+	// SkillsEnabled opts the run into recipe-driven missing-evidence
+	// checks inside the critique gate. Only meaningful when CritiqueEnabled
+	// is also true. When true, matched recipes contribute a missing-
+	// evidence section to the critique feedback whenever any required
+	// evidence group is not satisfied by the agent's read set; the retry
+	// budget is extended dynamically to fit the missing-group count.
 	SkillsEnabled bool
 }
 
-// agenticToolBudget is the per-call cap on bytes returned to the model by
-// any single tool result. Keeps one runaway response from eating the whole
-// ModelByteBudget. 32KB matches the spike, well above any reasonable single
-// JSON envelope.
+// agenticToolBudget caps bytes returned to the model by any single tool
+// call. Keeps one runaway response from eating the whole ModelByteBudget.
+// 32 KB matches the spike, well above any reasonable JSON envelope.
 const agenticToolBudget = 32 * 1024
 
-// critiqueRetryIters is the per-retry budget granted to the agentic loop
-// when a critique re-prompt is appended. Generous enough to cover the
-// expected response shape (1-2 follow-up tool calls + the new tools-free
-// final) plus a little slack. Tighter values (e.g. 1) starve retries
-// where the model elects to do more investigation before re-emitting —
-// caught by the L.4 Step 2 rubber-duck review.
+// critiqueRetryIters is the per-retry budget granted when a critique
+// re-prompt is appended. Generous enough for 1-2 follow-up tool calls
+// plus the new tools-free final plus slack. Tighter values starve the
+// retry where the model elects to investigate before re-emitting.
 const critiqueRetryIters = 3
 
-// critiqueMissingEvidenceBonusCap is the maximum number of extra iters
-// granted on top of critiqueRetryIters for a single missing-evidence
-// retry. Sized to absorb realistic recipes with 3-4 evidence groups
-// (1 iter to read each, 1 iter to reflect + re-emit) without giving
-// pathological recipes (say, 10 groups) unbounded budget. Rubber-duck
-// review of Step 3 design pointed out that the fixed critiqueRetryIters
-// was sized for "fix your draft" not "go read 3 more files", and a
-// dynamic extension proportional to the number of missing groups is
-// the smallest change that fixes the worst case without affecting the
-// punt-only / hallucination retry budgets. (L.4 Step 3)
+// critiqueMissingEvidenceBonusCap caps the extra iters granted on top of
+// critiqueRetryIters for a single missing-evidence retry. Sized to absorb
+// realistic recipes with 3-4 evidence groups (1 iter to read each + 1 to
+// re-emit) without giving 10-group recipes unbounded budget.
 const critiqueMissingEvidenceBonusCap = 6
 
 // ---------- Chat protocol (parallel to ai.go's single-shot types) ----------
@@ -166,12 +140,11 @@ func strPtr(s string) *string { return &s }
 
 // ---------- Tool documentation appended to the system prompt ----------
 
-// agToolDocs is the tool-usage strategy section appended to the system prompt
-// by the agentic loop. Tool names + descriptions are already conveyed to the
-// model via the schema array in each chat request, so this section focuses
-// on investigation strategy: drill into specifics, don't punt to the user,
-// and stop only when evidence is genuinely exhausted (not when the first
-// plausible symptom is found).
+// agToolDocs is the tool-usage strategy section appended to the system
+// prompt by the agentic loop. Tool names + descriptions reach the model
+// via the schema array; this section adds investigation strategy: drill
+// into specifics, don't punt to the user, stop only when evidence is
+// genuinely exhausted (not at the first plausible symptom).
 const agToolDocs = `
 
 ## Tool usage strategy
@@ -205,13 +178,8 @@ continuing to investigate.`
 
 // formatFloorsNudge builds the user message appended after a tools-free
 // model response when one or both per-project floors are unmet. Mentions
-// only the axes that are actually unmet so a project that only configures
-// MinToolCalls doesn't see a misleading "0 KB" complaint, and vice versa.
-//
-// The operational guidance below is general enough to apply to any prow
-// project (k8s-sigs CAPI providers, kubelet sig-node, etc.); examples of
-// "downstream symptoms" are flagged as examples rather than rules to
-// avoid over-anchoring the model on the CAPZ cases that motivated this.
+// only the axes that are actually unmet so a project configuring only
+// MinToolCalls doesn't see a misleading "0 KB" complaint.
 func formatFloorsNudge(state *agentState, opts AgenticOptions) string {
 	var unmet []string
 	if state.calls < opts.MinToolCalls {
@@ -232,12 +200,10 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 }
 
 // agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
-// the raw model response (analysisResponse) and tags it with the per-analysis
-// telemetry (tool-call count + cost) so that cache reads can re-stamp the
-// published AIAnalysis and re-validate against the project's current
-// MinToolCalls / MinGCSBytes floors. Backward compat: pre-L.3 cache entries
-// have no telemetry keys and unmarshal with zero values, so any non-zero
-// floor invalidates them on read and re-analyzes them on the next run.
+// the raw model response and tags it with per-analysis telemetry so cache
+// reads can re-stamp the published AIAnalysis and re-validate against the
+// project's current floors. Pre-floor cache entries have no telemetry keys
+// and unmarshal with zero values, so any non-zero floor invalidates them.
 type agenticCacheData struct {
 	analysisResponse
 	ToolCalls       int  `json:"tool_calls,omitempty"`
@@ -245,30 +211,26 @@ type agenticCacheData struct {
 	GCSBytes        int  `json:"gcs_bytes,omitempty"`
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 
-	// CritiquePassed is set only when the L.4 Step 2 critique gate
-	// ran against this draft and passed. Defaults to false on cache
-	// reads of pre-Step-2 entries (no critique ran) and on entries
-	// written while critique was disabled. Used by the cache-read
-	// gate to invalidate uncritiqued entries when a consumer enables
-	// critique (mirrors the L.3 raised-floor invalidation pattern).
+	// CritiquePassed marks entries that cleared the critique gate.
+	// Defaults to false on pre-critique entries and on entries written
+	// while critique was disabled. The cache-read gate uses this to
+	// invalidate uncritiqued entries when a consumer later enables
+	// critique.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
-	// CritiqueVersion records which contract version this draft passed
-	// critique under. L.4 Step 2 wrote no version (deserializes as 0);
-	// L.4 Step 2.5 sets currentCritiqueVersion=2. The cache-read gate
-	// requires the cached version to be at least the current version
-	// when critique is enabled, so strengthening the gate (e.g. adding
-	// the hallucination check) properly invalidates entries that
-	// passed under the weaker contract. Bumped only on material
-	// strengthenings to keep cache churn proportional.
+	// CritiqueVersion records which contract version the draft passed
+	// critique under. The cache-read gate requires the cached version
+	// to be at least currentCritiqueVersion when critique is enabled,
+	// so strengthening the gate invalidates entries that passed under
+	// the weaker contract.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
 	// SkillSetHash is the fingerprint of the consumer's loaded skill
-	// set at the time this draft was accepted. Empty when skills
-	// were disabled or no recipes were loaded. Used independently of
+	// set at the time this draft was accepted. Empty when skills were
+	// disabled or no recipes were loaded. Used independently of
 	// CritiqueVersion to invalidate cached entries when the consumer
-	// edits recipes (engine-side contract version unchanged, but the
-	// effective evidence requirements drifted). (L.4 Step 3)
+	// edits recipes (engine-side contract unchanged, but the effective
+	// evidence requirements drifted).
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 }
 
@@ -282,10 +244,8 @@ type floorStatus struct {
 
 func (fs floorStatus) anyUnmet() bool { return fs.callsUnmet || fs.gcsUnmet }
 
-// evalFloors returns which of the per-project floors the current agent
-// state fails to meet. A floor configured as 0 (the default) is never
-// reported as unmet, preserving pre-L.3 behavior for consumers that
-// don't opt in.
+// evalFloors returns which per-project floors the current agent state
+// fails to meet. A floor configured as 0 is never reported as unmet.
 func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 	return floorStatus{
 		callsUnmet: state.calls < opts.MinToolCalls,
@@ -308,49 +268,40 @@ type agentState struct {
 	calls           int
 	budgetExhausted bool
 
-	// critiquePassed records whether the final accepted answer cleared
-	// the L.4 Step 2 critique gate. Stamped onto the published
-	// AIAnalysis so the build-level shouldReanalyze gate can invalidate
-	// uncritiqued entries when a consumer later enables critique.
-	// Meaningful only when opts.CritiqueEnabled.
+	// critiquePassed records whether the accepted answer cleared the
+	// critique gate. Stamped onto the published AIAnalysis so the
+	// build-level shouldReanalyze gate can invalidate uncritiqued
+	// entries when critique is enabled later. Meaningful only when
+	// opts.CritiqueEnabled.
 	critiquePassed bool
 
-	// readArtifactsFull / readArtifactsBase track which artifacts the
-	// agent has successfully fetched via read_artifact / tail_artifact
-	// / grep_artifact. Used by the L.4 Step 2.5 hallucination check in
-	// critiqueDraft to flag prose citations of files the agent never
-	// actually opened. Keys are lowercased, slash-normalized; "full"
-	// keeps the directory prefix (catches cross-machine basename
-	// collisions where two clusters both have a boot.log), "base" is
-	// just path.Base (matches the model's bare-basename citations).
-	// Populated only after a successful tool dispatch (no error in the
-	// returned payload) so failed reads don't silently satisfy the
-	// gate. Both maps stay nil until first use to keep the no-critique
-	// path zero-allocation.
+	// readArtifactsFull / readArtifactsBase track artifacts the agent
+	// successfully fetched via read_artifact / tail_artifact /
+	// grep_artifact. Used by the critique gate to flag prose citations
+	// of files the agent never opened. "full" keeps the directory
+	// prefix (catches cross-machine basename collisions); "base" is
+	// just path.Base (matches bare-basename citations). Populated only
+	// after a successful tool dispatch. Both maps stay nil when
+	// critique is disabled to keep the common path zero-allocation.
 	readArtifactsFull map[string]bool
 	readArtifactsBase map[string]bool
 
 	// skillSet is the loaded recipe set (project-scoped). nil when
-	// skills are disabled or no recipes are configured. Held on
-	// state so the in-loop critique and post-loop critique both
-	// match against the same set, and so cacheAcceptedAnalysis can
-	// stamp the hash without re-threading it through every call.
-	// (L.4 Step 3)
+	// skills are disabled or no recipes are configured. Held on state
+	// so in-loop and post-loop critique paths both consult the same
+	// set, and so cacheAcceptedAnalysis / stampAgenticTelemetry can
+	// stamp the hash without re-threading it.
 	skillSet *skills.Set
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
 func (s *agentState) gcsRemaining() int   { return s.opts.GCSByteBudget - s.gcsBytes }
 
-// stampTelemetry copies the per-call counters onto the returned AIAnalysis so
-// the published JSON exposes per-failure cost. Called at every successful
-// agentic exit point (cache hit, normal finish, finalize-round finish,
-// synthesized fallback). Mode is set here too so we can't accidentally
-// publish an agentic-produced analysis tagged with the curator mode.
-//
-// An empty mode argument defaults to AgenticMode for back-compat (existing
-// call sites pre-L.2 didn't pass one); the universal path passes
-// UniversalMode explicitly.
+// stampAgenticTelemetry copies per-call counters onto the AIAnalysis so the
+// published JSON exposes per-failure cost. Called at every successful exit
+// point (cache hit, normal finish, finalize-round finish, synthesized
+// fallback). An empty mode defaults to AgenticMode; UniversalMode is passed
+// explicitly by the universal path.
 func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode string, cacheHit bool, start time.Time) {
 	if analysis == nil {
 		return
@@ -380,15 +331,13 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 
 // AgenticInputs bundles the per-failure context required by the agentic loop.
 // Lifetime notes:
-//   - Browser, Cache, and WebURLBase are scoped to one build (shared across
-//     all failures of that build).
+//   - Browser, Cache, and WebURLBase are scoped to one build.
 //   - Registry and EnabledTools are scoped to one Service (built once per
 //     project at fetcher startup).
-//   - Opts is per-project.
-//   - Mode is the value to stamp on the returned AIAnalysis. Empty defaults
-//     to AgenticMode; UniversalMode flags results produced via the
-//     use_universal_path flow so cache invalidation kicks in when consumers
-//     flip the switch.
+//   - Opts and Skills are per-project.
+//   - Mode is the value stamped on the returned AIAnalysis (defaults to
+//     AgenticMode; UniversalMode is passed by the universal path so cache
+//     invalidation kicks in when consumers flip the switch).
 type AgenticInputs struct {
 	Browser      artifacts.Browser
 	Opts         AgenticOptions
@@ -398,28 +347,25 @@ type AgenticInputs struct {
 	WebURLBase   string
 	Mode         string
 
-	// Skills is the consumer's loaded recipe set, scoped to the
-	// project. Constructed once at fetcher startup via
-	// skills.Load(project_dir) and reused across all failures.
-	// nil disables skill matching entirely (also the case when
-	// Opts.SkillsEnabled is false). Skills.Hash() is stamped onto
-	// cached entries so consumer-side recipe edits invalidate
-	// cache without an engine version bump. (L.4 Step 3)
+	// Skills is the consumer's loaded recipe set. nil disables skill
+	// matching entirely (also the case when Opts.SkillsEnabled is false).
+	// Skills.Hash() is stamped onto cached entries so consumer-side
+	// recipe edits invalidate cache without an engine version bump.
 	Skills *skills.Set
 }
 
-// doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
-// same (summary, analysis) pair as doAnalyze so callers can treat both
+// doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns
+// the same (summary, analysis) pair as doAnalyze so callers can treat both
 // pipelines uniformly.
 //
 // The caller is responsible for constructing a fresh Browser per failure
 // (typically via artifacts.Factory.ForBuild) and for choosing the cache key
-// (which MUST encode build+failure so two builds of the same test never share
-// an agentic cache entry).
+// (which MUST encode build+failure so two builds of the same test never
+// share an agentic cache entry).
 //
 // Returns ErrToolsUnsupported wrapped on the first API call if the endpoint
-// rejects function-calling. The caller should fall back to doAnalyze for that
-// failure.
+// rejects function-calling. The caller should fall back to doAnalyze for
+// that failure.
 func (c *Client) doAnalyzeAgentic(
 	ctx context.Context,
 	in AgenticInputs,
@@ -429,39 +375,12 @@ func (c *Client) doAnalyzeAgentic(
 	if raw, ok := c.cache.Get(cacheKey); ok {
 		var cached agenticCacheData
 		if json.Unmarshal(raw, &cached) == nil {
-			// Cache hit, but re-validate against the current floors.
-			// Pre-L.3 entries default to ToolCalls=0 and GCSBytes=0 and
-			// are invalidated by any non-zero floor. Post-L.3 entries
-			// must satisfy whichever floors the project currently
-			// configures (raising either field invalidates entries
-			// that fell below it on a prior run).
-			//
-			// L.4 Step 2: also invalidate entries that weren't
-			// critique-checked when critique is now enabled. Pre-Step-2
-			// entries and entries written while critique was disabled
-			// both have CritiquePassed=false; entries that passed
-			// critique have CritiquePassed=true. When critique stays
-			// off, the check is skipped entirely.
-			//
-			// L.4 Step 2.5: also require CritiqueVersion to be at
-			// least the current contract version. Step-2 entries
-			// (CritiqueVersion=0) failed under the punt-only gate
-			// without ever seeing the hallucination check, so they
-			// must be re-analyzed when 2.5 is in effect. The check
-			// is no-op when critique is off (consumers who never
-			// enabled critique are unaffected).
+			// Re-validate the cache hit against the current floors and
+			// critique contract. Raising any floor, enabling critique,
+			// bumping currentCritiqueVersion, or editing the recipe set
+			// all invalidate previously cached entries on read.
 			critiqueOK := !in.Opts.CritiqueEnabled ||
 				(cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion)
-			// L.4 Step 3: when skills are enabled, also require the
-			// cached SkillSetHash to match the currently-loaded set.
-			// Consumer recipe edits invalidate cache without bumping
-			// the engine-side currentCritiqueVersion (which is reserved
-			// for engine-side contract strengthenings). When skills are
-			// disabled, this check is a no-op so consumers who never
-			// authored recipes are unaffected. wantHash="" matches a
-			// cache entry written with no recipes (or with skills off
-			// after the v4 bump), which is intentional: no recipes
-			// loaded means no recipe-driven invalidation.
 			if in.Opts.SkillsEnabled {
 				wantHash := ""
 				if in.Skills != nil {
@@ -474,11 +393,10 @@ func (c *Client) doAnalyzeAgentic(
 			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
-				// Restore the recorded per-analysis telemetry from the
-				// cache so the published JSON keeps its tool-call /
-				// cost / budget-exhausted signals across cache hits.
-				// Without this, cache hits would publish ToolCalls=0 and
-				// the build-level shouldReanalyze gate would re-trigger
+				// Restore the recorded per-analysis telemetry so the
+				// published JSON keeps its tool-call/cost/budget-exhausted
+				// signals across cache hits; without this, hits would
+				// publish ToolCalls=0 and shouldReanalyze would re-trigger
 				// reanalysis on every run.
 				analysis.ToolCalls = cached.ToolCalls
 				analysis.ModelBytes = cached.ModelBytes
@@ -501,21 +419,13 @@ func (c *Client) doAnalyzeAgentic(
 		webURLBase:   in.WebURLBase,
 		startTime:    time.Now(),
 	}
-	// L.4 Step 3: hold the loaded skill set on state so the in-loop
-	// and post-loop critique paths both consult the same set, and so
-	// cacheAcceptedAnalysis / stampAgenticTelemetry can stamp the
-	// hash without re-threading it through every call. nil when
-	// skills are disabled OR no recipes are loaded; the agentic loop
-	// treats both cases identically (no skill matching, empty hash).
 	if in.Opts.SkillsEnabled {
 		state.skillSet = in.Skills
 	}
-	// L.4 Step 2.5: when critique is enabled, pre-init the read-tracking
-	// maps so findUnreadArtifactCitations runs the check even when the
-	// model has made zero successful reads (otherwise its nil-disables
-	// contract would silently skip the worst-case hallucination scenario).
-	// Pre-init unconditionally would waste an allocation per run for the
-	// common critique-disabled path; conditionally is cheap.
+	// Pre-init the read-tracking maps when critique is enabled so
+	// findUnreadArtifactCitations runs the check even when the model has
+	// made zero successful reads (otherwise its nil-disables contract
+	// would silently skip the worst-case hallucination scenario).
 	if in.Opts.CritiqueEnabled {
 		state.readArtifactsFull = map[string]bool{}
 		state.readArtifactsBase = map[string]bool{}
@@ -536,30 +446,16 @@ func (c *Client) doAnalyzeAgentic(
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
-	// back tools-free without progressing on the floor we're complaining
-	// about gets its answer accepted (but not cached) so the loop doesn't
-	// burn iterations on a refusing model. Sentinel -1 ensures the very
-	// first iteration's zero-state always counts as progress.
+	// back tools-free without progressing gets accepted (but not cached)
+	// so the loop doesn't burn iterations on a refusing model. Sentinel
+	// -1 ensures the very first iteration's zero-state counts as progress.
 	nudgedAtCalls := -1
 	nudgedAtGCSBytes := -1
 
-	// L.4 Step 2: critique state. state.critiquePassed records whether
-	// the accepted final answer cleared the critique gate, used by the
-	// cache-write decision below and stamped onto the published
-	// AIAnalysis so the build-level shouldReanalyze gate can invalidate
-	// uncritiqued entries when critique is enabled later. Stored on
-	// state (not local) so stampAgenticTelemetry picks it up via the
-	// same path as ToolCalls / GCSBytes / BudgetExhausted. Starts false;
-	// set to true only when critique actually runs and passes (so when
-	// critique is disabled, it stays false and the cache write logic
-	// correctly ignores it via the CritiqueEnabled gate).
-	// critiqueRetriesUsed bounds the number of re-prompt rounds per
-	// analysis. Each retry extends maxIters by critiqueRetryIters so the
-	// model has room to do follow-up tool calls (responding to critique
-	// feedback by reading more artifacts is the desired behavior) plus
-	// re-emit. Bumping by 1 was too tight: the rubber-duck pass caught
-	// that a model reacting to feedback with even one tool call would
-	// fall off the end of the loop and end up in runFinalizeRound.
+	// critiqueRetriesUsed bounds the re-prompt rounds per analysis. Each
+	// retry extends maxIters by critiqueRetryIters (plus a bonus when
+	// the retry is satisfying missing skill evidence) so the model has
+	// room to do follow-up tool calls plus re-emit.
 	critiqueRetriesUsed := 0
 	maxIters := in.Opts.MaxIters
 
@@ -587,15 +483,12 @@ func (c *Client) doAnalyzeAgentic(
 			// Enforce per-project floors by nudging the model to
 			// investigate further before accepting its final answer.
 			// Skip the nudge when: (a) no floor is unmet, (b) budgets
-			// are already exhausted (a nudge would fight the tool-side
-			// "budget exhausted; finalize now" signal), or (c) the
-			// model has not made progress on any unmet floor since the
-			// last nudge (avoid no-progress loops). The per-axis
-			// progress check (rather than calls-only) covers the
-			// pathological list-only loop a bytes-floor enables:
-			// a model that calls list_artifacts repeatedly raises
-			// calls but never gcsBytes, and used to get re-nudged
-			// every iteration despite making no real progress.
+			// are exhausted (would fight the tool-side "finalize now"
+			// signal), or (c) the model has not progressed on any unmet
+			// floor since the last nudge. The per-axis progress check
+			// covers the pathological list-only loop: a model calling
+			// list_artifacts repeatedly raises calls but never gcsBytes
+			// and would otherwise be re-nudged every iteration.
 			floors := evalFloors(state, in.Opts)
 			if floors.anyUnmet() && !state.budgetExhausted {
 				progressed := false
@@ -622,18 +515,11 @@ func (c *Client) doAnalyzeAgentic(
 				}
 			}
 
-			// L.4 Step 2: critique gate. Catches punt-shaped finals
-			// (suggested_fix that's a diagnostic TODO list instead of
-			// a concrete remediation) that the prompt rules alone
-			// don't catch in weaker models. Mirrors the floor-nudge
-			// pattern: re-prompt with feedback, give the model one
-			// more iteration to do the work it should have done, and
-			// bound by CritiqueMaxRetries to avoid runaway. Only
-			// applies when critique is enabled AND the candidate
-			// parses cleanly; unparseable finals fall through to the
-			// existing finalize-round path below and bypass critique
-			// in v1 (rare; can be revisited if shadow A/B data shows
-			// post-finalize punts are common).
+			// Critique gate. Re-prompts the model with targeted feedback
+			// when the draft punts, hallucinates, fabricates an import
+			// path, or fails recipe-driven evidence. Only fires on
+			// parseable candidates; unparseable finals fall through to
+			// runFinalizeRound below.
 			if in.Opts.CritiqueEnabled {
 				if parsed, ok := tryParseAnalysis(candidate); ok {
 					matchedSkills := matchSkillsForDraft(state, parsed)
@@ -650,16 +536,12 @@ func (c *Client) doAnalyzeAgentic(
 							Content: strPtr(out.Feedback),
 						})
 						critiqueRetriesUsed++
-						// L.4 Step 3: extend the retry budget
-						// proportional to the number of missing
-						// evidence groups. Plain critique re-prompts
-						// stay at critiqueRetryIters; skill-driven
-						// re-prompts get a bonus so the model can
-						// satisfy multiple missing groups in one
-						// retry (typically 1 tool call per group +
-						// 1 reflection / re-emit). Capped to prevent
-						// pathological recipes from unbounding the
-						// loop. Rubber-duck #3.
+						// Extend the retry budget proportional to the
+						// number of missing evidence groups. Plain
+						// re-prompts stay at critiqueRetryIters; skill-
+						// driven re-prompts get a bonus capped at
+						// critiqueMissingEvidenceBonusCap so 10-group
+						// recipes don't unbound the loop.
 						extra := critiqueRetryIters
 						if missing := out.MissingEvidenceCount(); missing > 0 {
 							bonus := 1 + 2*missing
@@ -723,18 +605,13 @@ func (c *Client) doAnalyzeAgentic(
 		return summary, analysis, nil
 	}
 
-	// L.4 Step 2 fix (rubber-duck #1): also critique post-loop parsed
-	// answers when the in-loop path didn't already mark critique as
-	// passed. The in-loop critique only fires on tools-free responses
-	// that parse on the spot; outputs from runFinalizeRound (loop maxed
-	// out without tools-free) and slow-parse outputs bypass it. Without
-	// this check, a punt-shaped finalize-round result publishes-but-
-	// never-caches → re-analyzed on every fetcher run → unbounded cost.
-	// With it, a passing finalize-round caches normally; a failing one
-	// continues the L.3 anti-thrash "publish, don't cache, retry next
-	// run" pattern. No retry here: retries are an in-loop concept, and
-	// re-entering the loop post-finalize would require a larger refactor
-	// that v1 defers.
+	// Also critique post-loop parsed answers when the in-loop path didn't
+	// already mark critique as passed. The in-loop critique only fires on
+	// tools-free responses that parse on the spot; outputs from
+	// runFinalizeRound and slow-parse outputs would otherwise bypass it
+	// and publish-but-never-cache forever. No retry here: retries are an
+	// in-loop concept, and re-entering the loop post-finalize would
+	// require a larger refactor.
 	if in.Opts.CritiqueEnabled && !state.critiquePassed {
 		matchedSkills := matchSkillsForDraft(state, parsed)
 		if out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills); out.Passed {
@@ -751,37 +628,23 @@ func (c *Client) doAnalyzeAgentic(
 	return summary, analysis, nil
 }
 
-// matchSkillsForDraft joins the candidate draft's prose fields and
-// matches them against the loaded recipe set. Returns nil if skills
-// are disabled or no recipes are loaded (so the critique gate sees an
-// empty matched list and skips the missing-evidence section). Used by
-// both the in-loop critique and the post-loop critique so both paths
-// match against the same draft text and the same recipe set.
-// (L.4 Step 3)
+// matchSkillsForDraft joins the candidate draft's prose fields and matches
+// them against the loaded recipe set. Returns nil if skills are disabled or
+// no recipes are loaded. Used by both the in-loop and post-loop critique so
+// both paths match against the same draft text.
 func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Skill {
 	if state == nil || state.skillSet == nil {
 		return nil
 	}
-	// Join all prose fields plus the relevant_files list with newlines
-	// so the regex engine sees each on its own line. A recipe's trigger
-	// might appear in any of them; sharing the join across all three
-	// is intentional, matching the critique gate's own approach.
-	parts := []string{parsed.RootCause, parsed.Summary, parsed.SuggestedFix}
-	parts = append(parts, parsed.RelevantFiles...)
-	return state.skillSet.Match(strings.Join(parts, "\n"))
+	return state.skillSet.Match(strings.Join(parsed.proseFields(), "\n"))
 }
 
-// cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if the
-// agent met every per-project quality gate. v1 floors: MinToolCalls AND
-// MinGCSBytes. v2 (L.4 Step 2) adds the critique gate: when CritiqueEnabled,
-// the draft must have passed critique (critiquePassed=true). Below-floor or
-// critique-failing finals are still published to the dashboard for this run
-// (so triage always has something to show) but are NOT cached, so the next
-// fetcher run re-attempts the analysis rather than serving the under-
-// investigated or punt-shaped answer.
-//
-// critiquePassed is meaningful only when opts.CritiqueEnabled; when critique
-// is off, its value is ignored.
+// cacheAcceptedAnalysis writes a parsed analysis to the cache, but only if
+// the agent met every per-project quality gate (floors + critique). Below-
+// floor or critique-failing finals are still published to the dashboard for
+// this run (so triage always has something to show) but are NOT cached, so
+// the next run re-attempts them. critiquePassed is ignored when
+// opts.CritiqueEnabled is false.
 func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse, state *agentState, opts AgenticOptions, critiquePassed bool) {
 	if evalFloors(state, opts).anyUnmet() {
 		return
@@ -938,13 +801,11 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) stri
 		result.Payload = map[string]interface{}{}
 	}
 
-	// L.4 Step 2.5: record successful artifact reads so critiqueDraft
-	// can flag prose citations of files the agent never opened. Only
-	// counts read_artifact / tail_artifact / grep_artifact (the
-	// content-fetching tools); list/find/discover tools are exempt
-	// because they don't justify claims about file contents. The
-	// payload "error" key check (rubber-duck #1) ensures a failed
-	// read can't silently satisfy the hallucination gate.
+	// Record successful artifact reads so critiqueDraft can flag prose
+	// citations of files the agent never opened. Only content-fetching
+	// tools count; list/find tools don't justify content claims. The
+	// "error" key check prevents a failed read from silently satisfying
+	// the hallucination gate.
 	if isContentFetchingTool(tc.Function.Name) {
 		if _, hasErr := result.Payload["error"]; !hasErr {
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
@@ -956,11 +817,9 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) stri
 	return toolEnvelopeJSON(s, result.Payload)
 }
 
-// isContentFetchingTool reports whether a tool name corresponds to one
-// of the three filesystem read primitives that actually return file
-// bytes. Listing tools (list_artifacts, find_artifacts) are excluded:
-// seeing a filename in a directory listing does not justify claims
-// about the file's contents.
+// isContentFetchingTool reports whether a tool name is one of the three
+// filesystem read primitives that actually return file bytes. Listing
+// tools are excluded: a directory listing doesn't justify content claims.
 func isContentFetchingTool(name string) bool {
 	switch name {
 	case "read_artifact", "tail_artifact", "grep_artifact":
@@ -969,10 +828,9 @@ func isContentFetchingTool(name string) bool {
 	return false
 }
 
-// extractToolPathArg pulls the "path" field out of a content-fetching
-// tool's args. Returns "" on parse error or missing field; callers
-// treat empty as "don't record". All three content-fetching tools use
-// the same `{"path": "..."}` arg shape (see tools/filesystem.go).
+// extractToolPathArg pulls the "path" field out of a content-fetching tool's
+// args. Returns "" on parse error or missing field. All three content-
+// fetching tools use the same `{"path": "..."}` arg shape.
 func extractToolPathArg(raw string) string {
 	if raw == "" {
 		return ""
@@ -986,14 +844,10 @@ func extractToolPathArg(raw string) string {
 	return strings.TrimSpace(args.Path)
 }
 
-// recordSuccessfulRead normalizes a successfully-read path and adds it
-// to both the full-path and basename indices. When critique is disabled
-// the maps remain nil so this function silently no-ops (zero allocation
-// on the common path); when critique is enabled doAnalyzeAgentic
-// pre-allocates the maps so the hallucination check runs even on runs
-// with zero successful reads. See critique.go for normalizeArtifactCitation;
-// using the same normalizer here keeps the writer (this function) and
-// reader (findUnreadArtifactCitations) trivially consistent.
+// recordSuccessfulRead normalizes a successfully-read path and adds it to
+// both the full-path and basename indices. Silent no-op when critique is
+// disabled (maps are nil). Uses the same normalizeArtifactCitation as
+// findUnreadArtifactCitations so writer and reader stay consistent.
 func (s *agentState) recordSuccessfulRead(rawPath string) {
 	if s.readArtifactsFull == nil && s.readArtifactsBase == nil {
 		return

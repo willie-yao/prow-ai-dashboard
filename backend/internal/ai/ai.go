@@ -117,6 +117,18 @@ type analysisResponse struct {
 	RelevantFiles []string `json:"relevant_files"`
 }
 
+// proseFields returns the model's prose + relevant_files in a single slice,
+// for callers that want to scan or join across every textual field of the
+// draft (skills matching, hallucinated-import scan, unread-citation scan).
+// Centralizing the field list keeps those call sites from silently
+// disagreeing when a new prose field is added.
+func (r analysisResponse) proseFields() []string {
+	out := make([]string, 0, 3+len(r.RelevantFiles))
+	out = append(out, r.RootCause, r.Summary, r.SuggestedFix)
+	out = append(out, r.RelevantFiles...)
+	return out
+}
+
 // doAnalyze runs a single chat completion, parses the JSON response, and caches
 // it. Returns both the brief AISummary (for the list view) and the deep
 // AIAnalysis (for the detail page), derived from the same model output.
