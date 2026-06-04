@@ -68,17 +68,18 @@ and confirm the category rules you intend to declare.
    ```
 2. Write a throwaway `project.yaml` with the minimum fields:
    `testgrid.dashboard`, `gcs.bucket`, `branding.*`, `artifacts.collector`,
-   `ai.module`. Job discovery is fully automatic, the engine asks GitHub
-   code search for every YAML under `kubernetes/test-infra/config/jobs/`
-   that mentions your dashboard, so you do not enumerate paths or filename
-   prefixes. Skip the categories block (the engine will use a sensible
-   default).
-3. Run a sweep (`GITHUB_TOKEN` is required so code search works):
+   `ai.module`. Job discovery is fully automatic, the engine lists every
+   YAML under `kubernetes/test-infra/config/jobs/` at the current `master`
+   commit and keeps the jobs whose `testgrid-dashboards` annotation matches
+   yours, so you do not enumerate paths or filename prefixes. Skip the
+   categories block (the engine will use a sensible default).
+3. Run a sweep (`GITHUB_TOKEN` is optional but recommended, anonymous
+   GitHub API quota is only 60/hr per IP):
    ```
    mkdir -p /tmp/sweep && cd /tmp/sweep
    cp /path/to/throwaway/project.yaml .
    echo "# placeholder" > prompts/system.md   # mandatory; empty fails
-   export GITHUB_TOKEN=<your-pat>
+   export GITHUB_TOKEN=<your-pat>  # optional but recommended
    /tmp/fetcher -project-dir=. -ai=false -builds=1
    python3 -c "import json; d=json.load(open('data/dashboard.json')); \
      print(len(d['jobs']), 'jobs'); \
@@ -100,11 +101,13 @@ trip people up.
 
 ### `testgrid.dashboard`
 
-A single dashboard name. The engine uses GitHub code search to find every
-YAML under `kubernetes/test-infra/config/jobs/` that mentions it, then
-keeps the jobs whose `testgrid-dashboards` annotation contains it. That
-single string is the source of truth, jobs are discovered no matter which
-directory or filename convention they live under (e.g. CAPZ's
+A single dashboard name. The engine resolves `kubernetes/test-infra`'s
+current `master` commit, lists every YAML under `config/jobs/` in that
+commit's tree, downloads each in parallel from `raw.githubusercontent.com`
+(pinned to the same SHA so the snapshot stays consistent), and keeps the
+jobs whose `testgrid-dashboards` annotation contains your dashboard. That
+single annotation is the source of truth, jobs are discovered no matter
+which directory or filename convention they live under (e.g. CAPZ's
 `config/jobs/kubernetes/sig-scalability/sig-scalability-periodic-azure.yaml`
 is picked up alongside the canonical
 `config/jobs/kubernetes-sigs/cluster-api-provider-azure/...` files).

@@ -15,10 +15,9 @@ name: "Example Kubernetes Project"
 short_name: "EXAMPLE"
 
 # Optional source-side knobs. Job discovery itself is fully automatic:
-# the fetcher asks GitHub code search for every YAML under
-# kubernetes/test-infra/config/jobs/ that mentions your testgrid.dashboard,
-# then keeps the jobs whose testgrid-dashboards annotation matches exactly.
-# No paths or filename prefixes to maintain.
+# the engine lists every YAML under kubernetes/test-infra/config/jobs/ at
+# the current master commit and keeps jobs whose testgrid-dashboards
+# annotation matches yours. No paths or filename prefixes to maintain.
 source:
   # Include presubmit jobs in addition to periodics. ORed with the
   # workflow's include-presubmits input. Default false (periodics only).
