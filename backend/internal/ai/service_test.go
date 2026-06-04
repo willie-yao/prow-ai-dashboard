@@ -26,7 +26,7 @@ type stubModule struct {
 	preferReason  string
 }
 
-func (m *stubModule) Name() string                 { return m.name }
+func (m *stubModule) Name() string { return m.name }
 func (m *stubModule) IsKnownTransient(msg string) string {
 	if msg != "" && msg == m.transientFor {
 		return m.transientWith
@@ -273,7 +273,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 	}
 }
 
-// TestService_ShouldReanalyze_FloorTable covers the L.3 build-level cache
+// TestService_ShouldReanalyze_FloorTable covers the build-level cache
 // invalidation: when a cached agentic-mode analysis records fewer tool calls
 // than the current MinToolCalls floor OR fewer GCS bytes than the current
 // MinGCSBytes floor, the build cache must NOT be trusted (shouldReanalyze

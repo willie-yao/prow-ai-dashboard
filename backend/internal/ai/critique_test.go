@@ -20,8 +20,8 @@ func TestPuntRE_SanityTable(t *testing.T) {
 		wantPunt bool
 	}{
 		{
-			name: "KCP HA punt example (pre-L.4)",
-			text: "Investigate Azure VM provisioning failures for the third control plane node. Check AzureMachine resource status conditions and ensure proper DNS configuration. Verify Azure quotas and network security rules allowing SSH access.",
+			name:     "KCP HA punt example",
+			text:     "Investigate Azure VM provisioning failures for the third control plane node. Check AzureMachine resource status conditions and ensure proper DNS configuration. Verify Azure quotas and network security rules allowing SSH access.",
 			wantPunt: true,
 		},
 		{
@@ -172,7 +172,7 @@ func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
 	}
 }
 
-// --- L.4 Step 2.5: hallucination + import-path checks ---
+// --- Hallucination + import-path checks ---
 
 // TestNormalizeArtifactCitation pins the cleaning rules: line-number
 // suffixes are stripped, OS-style backslashes are normalized to slashes,
@@ -383,7 +383,7 @@ func TestCritiqueDraft_FabricatedImportOnly(t *testing.T) {
 	}
 }
 
-// TestArtifactCitationRE_BroadenedCoverage pins the rubber-duck-#1/#2
+// TestArtifactCitationRE_BroadenedCoverage pins the broadened-coverage
 // rebuilds: artifact-shaped .txt / .json paths are flagged when
 // qualified with a directory (so source-file false positives are
 // minimized) and junit filenames using ".", "-" or "_" separators are
@@ -421,10 +421,9 @@ func TestArtifactCitationRE_BroadenedCoverage(t *testing.T) {
 	}
 }
 
-// TestFindHallucinatedImportPaths_ScansProse covers rubber-duck #6:
+// TestFindHallucinatedImportPaths_ScansProse covers prose scanning:
 // import-path prefixes appearing in root_cause / suggested_fix prose
-// must be flagged too, not just in relevant_files. The L.4 Step 2
-// Case 1 hallucination embedded sigs.k8s.io/... in root_cause.
+// must be flagged too, not just in relevant_files.
 func TestFindHallucinatedImportPaths_ScansProse(t *testing.T) {
 	t.Run("prose token with sigs.k8s.io flagged", func(t *testing.T) {
 		got := findHallucinatedImportPaths([]string{
@@ -452,7 +451,7 @@ func TestFindHallucinatedImportPaths_ScansProse(t *testing.T) {
 		}
 	})
 
-	// L.4 Step 2.5.1: two escape variants observed in shadow data
+	// Two escape variants the start-anchor missed:
 	// when the regex was anchored with `^`. Each token is a single
 	// whitespace-separated field (typical for relevant_files entries
 	// and for inline references in prose).
@@ -482,7 +481,7 @@ func TestFindHallucinatedImportPaths_ScansProse(t *testing.T) {
 	})
 }
 
-// ---------- L.4 Step 3: skill-driven missing-evidence tests ----------
+// ---------- Skill-driven missing-evidence tests ----------
 
 // loadSkillsForTest writes the given recipes into a temp dir and loads
 // them via skills.Load. Returns the loaded set; fails the test on any
@@ -542,7 +541,7 @@ required_evidence:
 }
 
 // TestCritiqueDraft_SkillMatchMissingEvidence_FailsAndQuotesProcedure
-// covers the central Step 3 invariant: when a recipe matches but the
+// covers the central invariant: when a recipe matches but the
 // agent hasn't read the required evidence, critique fails with a
 // feedback block that names the recipe, lists the missing groups,
 // and quotes the procedure.
@@ -595,7 +594,7 @@ procedure: |
 		"webhook-tls-failure", "Webhook TLS failure",
 		"cert-config", "webhook-secret",
 		"cert-manager Certificate config", "webhook server cert secret contents",
-		"List cert-manager Certificate objects", // procedure body
+		"List cert-manager Certificate objects",              // procedure body
 		"consumer-authored guidance, not engine instruction", // disclaimer wrapper
 		"Do NOT rewrite your answer yet",                     // tool-first directive
 		"call read_artifact",                                 // explicit tool call
@@ -648,7 +647,7 @@ required_evidence:
 // TestCritiqueDraft_NilSkillsBackwardCompatible verifies the pre-
 // Step-3 contract: passing nil for matchedSkills disables the check
 // entirely, even if the draft would otherwise have matched a recipe.
-// Existing call sites that pre-date Step 3 rely on this.
+// Existing legacy call sites rely on this.
 func TestCritiqueDraft_NilSkillsBackwardCompatible(t *testing.T) {
 	parsed := analysisResponse{
 		RootCause:    "Webhook x509 failure.",
@@ -752,9 +751,9 @@ required_evidence:
 
 	// All four sections should appear in feedback.
 	for _, marker := range []string{
-		"diagnostic / information-gathering",   // punt section
-		"tool log shows no read_artifact",      // unread section
-		"Go-import-style prefixes",             // fabricated import section
+		"diagnostic / information-gathering",     // punt section
+		"tool log shows no read_artifact",        // unread section
+		"Go-import-style prefixes",               // fabricated import section
 		"matches one or more diagnostic recipes", // skill section header
 	} {
 		if !strings.Contains(out.Feedback, marker) {

@@ -319,8 +319,8 @@ required_evidence:
 		{"first pattern hit", map[string]bool{"config/certmanager/issuer.yaml": true}, true},
 		{"second pattern hit", map[string]bool{"foo/my-certificate.yml": true}, true},
 		{"both reads, one hits", map[string]bool{
-			"random.log":               true,
-			"foo/my-certificate.yaml":  true,
+			"random.log":              true,
+			"foo/my-certificate.yaml": true,
 		}, true},
 	}
 	for _, tc := range cases {

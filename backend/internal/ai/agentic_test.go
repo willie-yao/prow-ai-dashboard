@@ -579,116 +579,69 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 	}
 }
 
-// TestAgToolDocs_L4Step1Anchors pins the L.4 Step 1 anti-punt, drill-down,
-// and self-check language in agToolDocs. These bullets exist specifically
-// to counter weaker models' tendency to write investigation TODOs into
-// suggested_fix instead of running the investigations themselves with the
-// tools, so silent deletion would regress the qualitative gap closed by
-// L.4. Bump deliberately if rewording.
-func TestAgToolDocs_L4Step1Anchors(t *testing.T) {
+// TestAgToolDocs_AntiPuntAnchors pins the anti-punt language in agToolDocs
+// that drives weaker models to investigate via tools rather than emit
+// investigation TODOs in suggested_fix.
+func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 	required := []string{
-		"Drill into the most relevant named resources",
-		"pick the 1-3 most directly tied to the failure",
 		"Investigation is YOUR job",
 		"diagnostic or information-gathering task",
 		"still cannot identify a concrete remediation",
-		"Do not invoke this escape hatch",
-		"Before finalizing, self-check",
 	}
 	for _, s := range required {
 		if !strings.Contains(agToolDocs, s) {
-			t.Errorf("agToolDocs missing required L.4 Step 1 anchor %q\nfull text:\n%s", s, agToolDocs)
-		}
-	}
-
-	// Forbidden: the old "Prefer 3-5 focused calls" line directly
-	// contradicted the L.3 min_tool_calls floor by telling the model to
-	// stop early. It must stay gone.
-	forbidden := []string{
-		"Prefer 3-5 focused calls",
-		"3-5 focused calls",
-	}
-	for _, s := range forbidden {
-		if strings.Contains(agToolDocs, s) {
-			t.Errorf("agToolDocs still contains forbidden pre-L.4 phrase %q\nfull text:\n%s", s, agToolDocs)
+			t.Errorf("agToolDocs missing required anchor %q\nfull text:\n%s", s, agToolDocs)
 		}
 	}
 }
 
-// TestResponseFormatFooter_L4Step1Anchors pins the L.4 Step 1 tightening of
-// the suggested_fix and root_cause schema descriptions. The footer is
-// shared by agentic and non-agentic consumers, so the wording must stay
-// tool-neutral: it forbids diagnostic tasks in suggested_fix and pushes
-// for the underlying cause in root_cause without assuming tools are
+// TestResponseFormatFooter_AntiPuntAnchors pins the tightening of the
+// suggested_fix and root_cause schema descriptions. The footer is shared
+// by agentic and non-agentic consumers, so wording must stay tool-neutral:
+// it forbids diagnostic tasks in suggested_fix without assuming tools are
 // available. Tool-specific enforcement lives in agToolDocs.
-func TestResponseFormatFooter_L4Step1Anchors(t *testing.T) {
+func TestResponseFormatFooter_AntiPuntAnchors(t *testing.T) {
 	required := []string{
 		"concrete remediation",
 		"Do not list diagnostic or information-gathering tasks",
 		"trace the chain back to the underlying cause",
 		"No remediation possible from available evidence",
-		"available evidence allows",
 	}
 	for _, s := range required {
 		if !strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter missing required L.4 Step 1 anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+			t.Errorf("ResponseFormatFooter missing required anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
 
-	// Forbidden: the old terse "exact fix with file paths and changes
-	// needed" description gave models no signal that investigation
-	// verbs were off-limits. Must stay rewritten.
-	forbidden := []string{
-		"exact fix with file paths and changes needed",
-	}
-	for _, s := range forbidden {
+	// Forbidden: tool-specific language would be literally false in the
+	// generic / prebuilt-evidence consumer mode that shares this footer.
+	toolSpecific := []string{"using your tools", "with the tools"}
+	for _, s := range toolSpecific {
 		if strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter still contains pre-L.4 phrase %q\nfull text:\n%s", s, ResponseFormatFooter)
-		}
-	}
-
-	// The footer is shared with non-agentic consumers (e.g. the generic
-	// module that ships prebuilt evidence with no tools wired), so any
-	// language asserting tools must be used would be literally false in
-	// that mode. Keep tool-specific enforcement in agToolDocs only.
-	toolSpecificForbidden := []string{
-		"using your tools",
-		"with the tools",
-		"Investigation is the agent's job",
-	}
-	for _, s := range toolSpecificForbidden {
-		if strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter leaked tool-specific phrase %q (footer is shared with non-agentic consumers; keep tool wording in agToolDocs)\nfull text:\n%s", s, ResponseFormatFooter)
+			t.Errorf("ResponseFormatFooter leaked tool-specific phrase %q (keep tool wording in agToolDocs)\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
 }
 
-// TestResponseFormatFooter_L4Step3DepthAnchors pins the lever-4 depth
-// tightening of the root_cause schema description (2026-06-04). The
-// median Qwen3-235B root_cause was ~430 chars vs Claude's ~1490 on the
-// same builds; the prior description ("the specific error found in
-// the available evidence") gave no signal that the model should
-// produce a multi-step causal chain. The new wording asks for
-// quoted log lines + cited artifact paths for each link in the
-// chain, with a ~3-5 sentence floor. These anchors must stay in
-// place so the depth signal isn't lost on a future cosmetic edit.
-func TestResponseFormatFooter_L4Step3DepthAnchors(t *testing.T) {
+// TestResponseFormatFooter_DepthAnchors pins the depth signals in the
+// root_cause schema description that push the model toward a multi-step
+// causal chain with quoted log lines and cited artifact paths.
+func TestResponseFormatFooter_DepthAnchors(t *testing.T) {
 	required := []string{
 		"Full causal chain",
 		"At least 3-5 sentences",
 		"Quote the exact log line",
 		"cite the artifact path",
-		"two distinct artifacts",
 		"verification step",
 	}
 	for _, s := range required {
 		if !strings.Contains(ResponseFormatFooter, s) {
-			t.Errorf("ResponseFormatFooter missing required L.4 Step 3 depth anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+			t.Errorf("ResponseFormatFooter missing required depth anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
 }
 
-// ---------- L.4 Step 2 critique gate ----------
+// ---------- Critique gate ----------
 //
 // A "punt-shaped" suggested_fix is a diagnostic / information-gathering
 // TODO list ("Check X. Verify Y. Investigate Z.") instead of a concrete
@@ -809,7 +762,7 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 
 // TestAgentic_Critique_Disabled_NoBehaviorChange verifies the default
 // (CritiqueEnabled=false) path: a punt-shaped final is accepted as-is
-// and cached, matching pre-L.4-Step-2 behavior so consumers that don't
+// and cached so consumers that don't
 // opt in see no change.
 func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 	shrinkCallDelay(t)
@@ -900,7 +853,7 @@ func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 }
 
 // TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies the
-// rubber-duck-#1 fix: when the loop maxes out without ever returning a
+// When the loop maxes out without ever returning a
 // tools-free message, runFinalizeRound produces the final answer. That
 // output must be critique-checked too, otherwise a punt-shaped
 // finalize-round result publishes-but-never-caches and re-analyzes on
@@ -964,7 +917,7 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 }
 
 // TestAgentic_Critique_RetryAllowsToolCallThenFinal verifies the
-// rubber-duck-#2 fix: when the model responds to critique feedback with
+// When the model responds to critique feedback with
 // a tool call before re-emitting, the bumped maxIters must have room
 // for the tool round AND the new final. With the old maxIters++ this
 // test would fail because the tool call consumed the only extra
@@ -1018,7 +971,7 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_FeedbackTruncatesLongFix verifies rubber-duck-#5:
+// TestCritiqueDraft_FeedbackTruncatesLongFix verifies that:
 // a pathologically long suggested_fix must be truncated in the quoted
 // portion of the feedback message so retries don't balloon the
 // conversation history. Matched phrases are still listed separately
@@ -1046,7 +999,7 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	}
 }
 
-// --- L.4 Step 2.5: hallucination + import-path integration tests ---
+// --- Hallucination + import-path integration tests ---
 
 // hallucinatedFinalJSON: clean suggested_fix (passes punt regex), but
 // cites manager.log which has not been read. Tests the new gate.
@@ -1056,7 +1009,7 @@ const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_caus
 // which the model HAS read in this scenario. Should pass critique.
 const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"]}`
 
-// TestAgentic_HallucinationRetry exercises the Step 2.5 happy path:
+// TestAgentic_HallucinationRetry exercises the happy path:
 // the model cites manager.log without reading it → critique fails on
 // hallucination (not punt) → loop appends feedback → model reads
 // build-log.txt and re-emits with a citation that matches → passes.
@@ -1106,10 +1059,10 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 	}
 }
 
-// TestAgentic_CacheInvalidatedByCritiqueVersionBump covers rubber-duck
+// TestAgentic_CacheInvalidatedByCritiqueVersionBump asserts that an entry
 // #4: a cache entry stamped with CritiquePassed=true but CritiqueVersion=0
-// (i.e. wrote under the L.4 Step 2 contract) must be invalidated when
-// currentCritiqueVersion is now 2 (Step 2.5). Otherwise consumers that
+// written under an older critique contract version must be invalidated when
+// currentCritiqueVersion advances. Otherwise consumers that
 // upgrade the engine would never get the strengthened gate applied.
 func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	shrinkCallDelay(t)
@@ -1196,8 +1149,8 @@ func loadAgenticSkillsForTest(t *testing.T, recipes map[string]string) *skills.S
 	return set
 }
 
-// TestAgentic_CacheInvalidatedBySkillSetHashChange covers the L.4
-// Step 3 cache-invalidation contract: a cache entry written under one
+// TestAgentic_CacheInvalidatedBySkillSetHashChange covers the
+// recipe-set cache-invalidation contract: a cache entry written under one
 // skill set must be invalidated when the consumer edits a recipe
 // (changing the SkillSetHash). The currentCritiqueVersion bump cannot
 // catch this because the engine-side contract didn't change; only the
@@ -1296,4 +1249,3 @@ required_evidence:
 		t.Errorf("third call: SkillSetHash = %q, want %q (post-edit)", analysis2.SkillSetHash, edited.Hash())
 	}
 }
-

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
 )
 
 // ---------- Cache tests ----------
