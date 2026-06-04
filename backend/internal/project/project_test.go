@@ -732,7 +732,7 @@ func TestAgentic_Effective(t *testing.T) {
 	})
 	t.Run("Critique.MaxRetries passes through when set", func(t *testing.T) {
 		got := (&Agentic{
-			Enabled: true,
+			Enabled:  true,
 			Critique: AgenticCritique{Enabled: true, MaxRetries: 5},
 		}).EffectiveAgentic()
 		if got.Critique.MaxRetries != 5 {
@@ -756,7 +756,7 @@ func agenticEqual(a, b Agentic) bool {
 		equalStrings(a.Tools, b.Tools)
 }
 
-// ---------- L.2: use_universal_path semantics ----------
+// ---------- use_universal_path semantics ----------
 
 func TestValidate_UniversalModuleRequiresUniversalPath(t *testing.T) {
 	c := validConfig()

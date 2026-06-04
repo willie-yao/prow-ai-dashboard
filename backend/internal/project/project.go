@@ -268,31 +268,21 @@ type Agentic struct {
 	// invalidated on the next read.
 	MinGCSBytes int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
 
-	// Critique configures the L.4 Step 2 critique gate: after the
-	// agentic loop produces a parseable tools-free final, run a
-	// deterministic regex check on suggested_fix. If it punts (i.e.
-	// the model emits a diagnostic / information-gathering TODO list
-	// instead of a concrete remediation), append targeted feedback
-	// asking the model to either drill in further OR use the strict
-	// no-remediation escape hatch, then re-prompt up to MaxRetries
-	// times. Drafts that still punt after retries are published but
-	// not cached (mirrors MinToolCalls / MinGCSBytes anti-thrash).
+	// Critique configures the critique gate: after the agentic loop
+	// produces a parseable tools-free final, run a deterministic regex
+	// check on suggested_fix. If it punts, append targeted feedback
+	// and re-prompt up to MaxRetries times. Drafts that still punt
+	// after retries are published but not cached.
 	//
-	// Defaults to disabled. Recommended for weaker open-weights
-	// models (e.g. Qwen3-235B at 80% punt rate post-Step-1) where
-	// the prompt-only L.4 Step 1 fixes proved insufficient. Strong
-	// tool-using models (e.g. Claude Opus at 40% punt rate on the
-	// same cases) benefit too but the cost/benefit trade-off is
-	// per-consumer.
+	// Defaults to disabled. Recommended for weaker tool-using models
+	// where the prompt rules alone don't reliably prevent punt-shaped
+	// answers.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
-	// Skills configures the L.4 Step 3 recipe-driven evidence
-	// layer. Only meaningful when Critique.Enabled is also true.
-	// Recipes themselves live under <project_dir>/skills/*.yaml
-	// and are loaded by the engine's skills package; this field
-	// controls whether the loaded set is consulted by the critique
-	// gate. See the AgenticSkills doc-comment for the on/off
-	// semantics.
+	// Skills configures the recipe-driven evidence layer. Only
+	// meaningful when Critique.Enabled is also true. Recipes live under
+	// <project_dir>/skills/*.yaml; this field controls whether the
+	// loaded set is consulted by the critique gate.
 	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
 
 	// Tools selects which registered tool groups (e.g. "filesystem",
@@ -307,40 +297,30 @@ type Agentic struct {
 // AgenticCritique is the per-project critique-gate config. See
 // Agentic.Critique for the operational semantics.
 type AgenticCritique struct {
-	// Enabled turns the critique gate on for this consumer. When
-	// false (the default), the agentic loop's tools-free final is
-	// accepted as-is and cached normally; behavior matches
-	// pre-L.4-Step-2.
+	// Enabled turns the critique gate on for this consumer. When false
+	// (the default), the agentic loop's tools-free final is accepted
+	// as-is and cached normally.
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 
 	// MaxRetries caps the number of extra re-prompt rounds the loop
-	// spends per analysis when critique fails. Each retry consumes
-	// one extra agentic iteration on top of the configured MaxIters.
-	// Defaults to 2 when Enabled is true and MaxRetries is left at
-	// 0; an explicit non-zero value overrides the default. Setting
-	// max_retries: 0 in YAML therefore yields the engine default
-	// (2), not "no retries"; this is consistent with the
-	// MinToolCalls / MinGCSBytes "0 = use default" convention used
-	// throughout this struct.
+	// spends per analysis when critique fails. Each retry consumes one
+	// extra agentic iteration on top of MaxIters. Defaults to 2 when
+	// Enabled is true and MaxRetries is 0 (consistent with the "0 =
+	// use default" convention).
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
-// AgenticSkills is the per-project skill-set config (L.4 Step 3).
-// Consumer-owned diagnostic recipes live under <project_dir>/skills/
-// and feed the critique gate's evidence checks.
+// AgenticSkills is the per-project skill-set config. Consumer-owned
+// diagnostic recipes live under <project_dir>/skills/ and feed the
+// critique gate's evidence checks.
 type AgenticSkills struct {
-	// Enabled turns the L.4 Step 3 skills layer on for this
-	// consumer. When false (the default), recipes under
-	// <project_dir>/skills/ are still loaded and validated at
-	// startup but the critique gate ignores them; behavior matches
-	// pre-Step-3. When true, matched recipes inject their
-	// procedure + required-evidence checks into the critique gate
-	// and may extend the retry budget to give the agent room to
-	// satisfy the missing evidence.
-	//
-	// Skills are only meaningful when Critique.Enabled is also true
-	// (they extend the critique gate). With critique off, this flag
-	// is a no-op.
+	// Enabled turns the skills layer on for this consumer. When false
+	// (the default), recipes under <project_dir>/skills/ are still
+	// loaded and validated at startup but the critique gate ignores
+	// them. When true, matched recipes inject their procedure +
+	// required-evidence checks into the critique gate and may extend
+	// the retry budget. Only meaningful when Critique.Enabled is also
+	// true; otherwise a no-op.
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 

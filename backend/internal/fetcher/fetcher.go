@@ -96,13 +96,9 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
 
-		// L.4 Step 3: load consumer-owned recipes from
-		// <project_dir>/skills/*.yaml. Missing directory or no
-		// recipes returns an empty Set (skills are opt-in). Any
-		// parse / regex compile error is a hard startup error so
-		// the fetcher refuses to run on a broken recipe rather than
-		// silently dropping it; mirrors the prompts/system.md
-		// contract.
+		// Load consumer-owned recipes from <project_dir>/skills/*.yaml.
+		// A missing directory returns an empty Set (recipes are opt-in).
+		// Parse or regex compile errors are hard startup errors.
 		set, err := skills.Load(opts.ProjectDir)
 		if err != nil {
 			return fmt.Errorf("loading AI skills: %w", err)
@@ -480,9 +476,8 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					CritiqueMaxRetries: eff.Critique.MaxRetries,
 					SkillsEnabled:      eff.Skills.Enabled,
 				}, factory, registry, enabled, eff.Always, useUniversal)
-				// L.4 Step 3: hand the loaded recipe set to the
-				// service. nil-safe; with no recipes the service
-				// behaves as pre-Step-3.
+				// Hand the loaded recipe set to the service. nil-safe;
+				// with no recipes the service skips skill matching.
 				service.SetSkills(skillSet)
 				critiqueLog := "off"
 				if eff.Critique.Enabled {

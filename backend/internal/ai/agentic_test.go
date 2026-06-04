@@ -806,10 +806,9 @@ func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 }
 
 // TestAgentic_Critique_CacheInvalidatesUncritiqued verifies the cache
-// invalidation path: an entry cached while critique was disabled (or
-// pre-Step-2) has CritiquePassed=false. When a consumer later enables
-// critique, that entry must be treated as a cache miss and re-analyzed.
-// Mirrors TestAgentic_MinToolCalls_CacheInvalidatesBelowFloor for floors.
+// invalidation path: an entry cached while critique was disabled has
+// CritiquePassed=false. When a consumer later enables critique, that
+// entry must be treated as a cache miss and re-analyzed.
 func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
