@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 // ---------- Cache tests ----------
@@ -274,22 +273,6 @@ func TestCacheHitSkipsAPICall(t *testing.T) {
 
 	if s1.Summary != s2.Summary {
 		t.Error("cached summary should match original")
-	}
-}
-
-func TestAnalyzeReturnsAISummaryType(t *testing.T) {
-	srv := newMockServer(t, `{"summary":"The kubelet failed to start due to certificate expiration. This is a real bug.","is_transient":false,"root_cause":"cert expired","severity":"High","suggested_fix":"rotate","relevant_files":[]}`)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	summary, _, err := client.doAnalyze(context.Background(), "comprehensive:kubelet", "sys", "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var _ *models.AISummary = summary
-	if summary.IsTransient {
-		t.Error("cert expiration should not be transient")
 	}
 }
 

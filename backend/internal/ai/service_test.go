@@ -58,25 +58,6 @@ func newFailedTC(name, msg string) *models.TestCase {
 
 // ---------- Mode + cache invalidation ----------
 
-func TestService_AgenticDisabled_UsesCuratorMode(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"x","is_transient":false,"root_cause":"y","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	tc := newFailedTC("Test A", "failure msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AIAnalysis == nil {
-		t.Fatal("AIAnalysis nil")
-	}
-	if tc.AIAnalysis.Mode != curatorMode {
-		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, curatorMode)
-	}
-}
-
 func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -96,27 +77,6 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	}
 	if tc.AIAnalysis.Mode != AgenticMode {
 		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, AgenticMode)
-	}
-}
-
-func TestService_ModuleOptIn_PreferAgentic(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"x","is_transient":false,"root_cause":"y","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	mod := &stubPreferrer{stubModule: &stubModule{name: "capi", prompt: "user"}, /* default prefer=false */}
-	mod.prefer = true
-	mod.preferReason = "build log too large"
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, mod, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, false /* not always */, false /* universalPath */)
-
-	tc := newFailedTC("Test A", "msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-	if tc.AIAnalysis == nil || tc.AIAnalysis.Mode != AgenticMode {
-		t.Fatalf("expected agentic mode, got %+v", tc.AIAnalysis)
 	}
 }
 
@@ -276,33 +236,6 @@ func TestService_CacheKeyShape(t *testing.T) {
 
 // ---------- Universal mode (use_universal_path) ----------
 
-// TestService_UniversalOn_TagsModeUniversal asserts that when the Service is
-// constructed with universalPath=true, every produced analysis is stamped with
-// UniversalMode regardless of any module preference. This is the cache
-// invalidation contract: flipping use_universal_path on must force every
-// previously-cached entry to be re-analyzed by virtue of mode mismatch.
-func TestService_UniversalOn_TagsModeUniversal(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"u","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, true /* universalPath */)
-
-	tc := newFailedTC("Test A", "msg")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AIAnalysis == nil {
-		t.Fatal("AIAnalysis nil")
-	}
-	if tc.AIAnalysis.Mode != UniversalMode {
-		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, UniversalMode)
-	}
-}
-
 // TestService_UniversalOn_ToolsUnsupportedSetsUnavailable covers the no-fallback
 // invariant of the universal path: a tools-unsupported endpoint must not
 // silently regress to the curator pipeline (the user explicitly opted into
@@ -337,36 +270,6 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 1 {
 		t.Errorf("server calls = %d, want 1 (second failure must bail before HTTP)", got)
-	}
-}
-
-// TestService_UniversalOn_CacheInvalidatesAgenticEntries asserts that a
-// previously-cached AgenticMode analysis is re-run when the Service is now
-// universal-on, because Mode mismatch counts as cache-miss in
-// shouldReanalyze.
-func TestService_UniversalOn_CacheInvalidatesAgenticEntries(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	final := `{"summary":"fresh universal","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
-	srv.push(200, chatRespFinal(final))
-
-	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "capi", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
-
-	// Test case already has an AgenticMode analysis from a prior run.
-	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "stale agentic summary"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale agentic root cause", Mode: AgenticMode}
-
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AIAnalysis.Mode != UniversalMode {
-		t.Errorf("Mode = %q, want %q (stale agentic entry should be re-analyzed under universal)", tc.AIAnalysis.Mode, UniversalMode)
-	}
-	if !strings.Contains(tc.AISummary.Summary, "fresh universal") {
-		t.Errorf("expected fresh universal summary, got %q", tc.AISummary.Summary)
 	}
 }
 

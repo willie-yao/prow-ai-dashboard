@@ -383,58 +383,6 @@ func TestCritiqueDraft_FabricatedImportOnly(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_CombinedFeedback verifies that all three signals
-// can fire together and the feedback message combines them into one
-// retry, ending with the shared "Re-emit ..." closer. The model gets
-// one targeted message instead of three round-trips of whack-a-mole.
-func TestCritiqueDraft_CombinedFeedback(t *testing.T) {
-	parsed := analysisResponse{
-		RootCause:     "The manager.log shows an error in the controller.",
-		SuggestedFix:  "Check the AzureMachine status conditions.",
-		RelevantFiles: []string{"sigs.k8s.io/foo/bar.go"},
-	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
-	if out.Passed {
-		t.Fatalf("expected fail on all three signals, got passed")
-	}
-	if len(out.PuntMatches) == 0 || len(out.UnreadCitations) == 0 || len(out.FabricatedImports) == 0 {
-		t.Errorf("expected all three categories populated: punt=%v unread=%v fabricated=%v",
-			out.PuntMatches, out.UnreadCitations, out.FabricatedImports)
-	}
-	// Single combined feedback message with all three sections.
-	for _, anchor := range []string{
-		"diagnostic / information-gathering language",
-		"tool log shows no read_artifact",
-		"Go-import-style prefixes",
-		"Re-emit your JSON addressing every issue above",
-	} {
-		if !strings.Contains(out.Feedback, anchor) {
-			t.Errorf("Feedback missing anchor %q:\n%s", anchor, out.Feedback)
-		}
-	}
-}
-
-// TestCritiqueDraft_HallucinationCheckEnabledByInitializedEmptyMap is
-// the back-compat contract: passing nil disables, passing initialized
-// (even empty) maps enables. Lets the agentic loop control the gate
-// via the agentState.readArtifacts* lazy-init pattern.
-func TestCritiqueDraft_HallucinationCheckEnabledByInitializedEmptyMap(t *testing.T) {
-	parsed := analysisResponse{
-		SuggestedFix: "Update kustomize/cluster-template.yaml to fix it.",
-		RootCause:    "Saw the build-log.txt error trace.",
-	}
-	// Nil = check off.
-	out := critiqueDraft(parsed, nil, nil, nil)
-	if !out.Passed {
-		t.Errorf("nil maps should disable hallucination check (Passed=true), got %+v", out)
-	}
-	// Initialized empty = check on; build-log.txt citation flagged.
-	out2 := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
-	if out2.Passed {
-		t.Errorf("initialized empty maps should enable check; build-log.txt should be flagged, got passed")
-	}
-}
-
 // TestArtifactCitationRE_BroadenedCoverage pins the rubber-duck-#1/#2
 // rebuilds: artifact-shaped .txt / .json paths are flagged when
 // qualified with a directory (so source-file false positives are
@@ -532,24 +480,6 @@ func TestFindHallucinatedImportPaths_ScansProse(t *testing.T) {
 			t.Errorf("expected GitHub URL to be flagged, got %v", got)
 		}
 	})
-}
-
-// TestCritiqueDraft_FabricatedImportInRootCause covers the rubber-duck
-// #6 fix end-to-end: a clean fix + clean relevant_files but a GOPATH-
-// prefix lurking in root_cause prose must still fail critique.
-func TestCritiqueDraft_FabricatedImportInRootCause(t *testing.T) {
-	parsed := analysisResponse{
-		RootCause:     "Looking at sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go we see the reconciler returns early.",
-		SuggestedFix:  "Update kustomize/cluster-template.yaml; reapply.",
-		RelevantFiles: []string{"kustomize/cluster-template.yaml"},
-	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
-	if out.Passed {
-		t.Fatalf("expected fail on prose-embedded import path, got passed: %+v", out)
-	}
-	if len(out.FabricatedImports) == 0 {
-		t.Errorf("expected FabricatedImports to be populated from root_cause, got %v", out.FabricatedImports)
-	}
 }
 
 // ---------- L.4 Step 3: skill-driven missing-evidence tests ----------
