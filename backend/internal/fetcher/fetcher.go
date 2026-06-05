@@ -475,6 +475,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					ModelByteBudget:    eff.ModelByteBudget,
 					GCSByteBudget:      eff.GCSByteBudget,
 					WallClock:          eff.WallClock,
+					ContextByteBudget:  eff.ContextByteBudget,
 					MinToolCalls:       eff.MinToolCalls,
 					MinGCSBytes:        eff.MinGCSBytes,
 					CritiqueEnabled:    eff.Critique.Enabled,

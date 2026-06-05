@@ -45,6 +45,15 @@ type AgenticOptions struct {
 	GCSByteBudget   int
 	WallClock       time.Duration
 
+	// ContextByteBudget caps the estimated serialized request size (system
+	// prompt + task + accumulated tool results + reasoning + tool schemas).
+	// When the conversation approaches it, the oldest tool-result bodies are
+	// elided to a stub so a small-context model does not overflow its window
+	// mid-loop. 0 disables compaction (the default; large-context models need
+	// no help). Set it to roughly the model's context window in bytes
+	// (~3.5-4 bytes/token).
+	ContextByteBudget int
+
 	// MinToolCalls is the minimum number of tool calls before a tools-free
 	// final answer is accepted as cacheable. Defaults to 0 (no floor). The
 	// loop nudges the model with a "you haven't investigated enough" user
@@ -352,6 +361,123 @@ type AgenticInputs struct {
 	Skills *skills.Set
 }
 
+// ---------- Context-window compaction ----------
+
+const (
+	// compactionTargetRatio is the fraction of ContextByteBudget compaction
+	// drives toward once triggered, leaving headroom so it does not re-fire
+	// every iteration.
+	compactionTargetRatio = 0.7
+	// compactionKeepRecentTools tool results are kept at full content when
+	// possible so the model always has its latest evidence verbatim.
+	compactionKeepRecentTools = 3
+	// compactionStubHead is how many leading bytes of an elided tool result
+	// are retained as a hint (usually the envelope head with the artifact
+	// path/status) before the elision note.
+	compactionStubHead = 160
+	// compactionMsgOverhead approximates per-message JSON framing bytes.
+	compactionMsgOverhead = 48
+)
+
+// elisionMarker tags a stubbed message so compaction is idempotent across
+// iterations and tests can detect elision.
+const elisionMarker = "bytes elided to fit context"
+
+func isStubbed(c *string) bool {
+	return c != nil && strings.Contains(*c, elisionMarker)
+}
+
+// stubContent keeps a short head of the original tool result plus an elision
+// note that tells the model how to recover the evidence.
+func stubContent(orig string) string {
+	head := orig
+	if len(head) > compactionStubHead {
+		head = head[:compactionStubHead]
+	}
+	return fmt.Sprintf("%s\n...[%d %s; re-call the tool if you need this evidence again]",
+		head, len(orig)-len(head), elisionMarker)
+}
+
+// schemaPayloadBytes is the serialized size of the tool schemas sent on every
+// loop call. Computed once per loop and added to the size estimate so
+// compaction accounts for the fixed schema cost, not just message content.
+func schemaPayloadBytes(schemas []tools.Schema) int {
+	if len(schemas) == 0 {
+		return 0
+	}
+	b, err := json.Marshal(schemas)
+	if err != nil {
+		return 0
+	}
+	return len(b)
+}
+
+// requestSizeEstimate approximates the serialized chat-request size in bytes:
+// message content + tool-call arguments + per-message framing + the fixed
+// schema payload.
+func requestSizeEstimate(messages []agChatMessage, schemaBytes int) int {
+	total := schemaBytes + 64 // request framing
+	for i := range messages {
+		total += compactionMsgOverhead
+		if messages[i].Content != nil {
+			total += len(*messages[i].Content)
+		}
+		for _, tc := range messages[i].ToolCalls {
+			total += len(tc.Function.Name) + len(tc.Function.Arguments) + 32
+		}
+	}
+	return total
+}
+
+// compactMessages elides accumulated tool-result (and, if still over budget,
+// assistant-reasoning) content so the estimated request stays under
+// budgetBytes, preventing context-window overflow on small-context models.
+// Disabled when budgetBytes <= 0. Preserves the system prompt (index 0) and
+// the task (index 1), and never reorders messages or rewrites tool_call_id
+// wiring, so the OpenAI tool-call pairing stays valid. Returns the slice and
+// the number of messages elided this call.
+func compactMessages(messages []agChatMessage, schemaBytes, budgetBytes int) ([]agChatMessage, int) {
+	if budgetBytes <= 0 || requestSizeEstimate(messages, schemaBytes) <= budgetBytes {
+		return messages, 0
+	}
+	target := int(float64(budgetBytes) * compactionTargetRatio)
+	elided := 0
+
+	// Tool-result messages, oldest first, that are not already stubbed.
+	var toolIdx []int
+	for i := 2; i < len(messages); i++ {
+		if messages[i].Role == "tool" && messages[i].Content != nil && !isStubbed(messages[i].Content) {
+			toolIdx = append(toolIdx, i)
+		}
+	}
+	stub := func(i int) {
+		messages[i].Content = strPtr(stubContent(*messages[i].Content))
+		elided++
+	}
+	// Stage 1: stub older tool results, preferring to keep the most recent
+	// compactionKeepRecentTools verbatim.
+	keepFrom := len(toolIdx) - compactionKeepRecentTools
+	for p := 0; p < keepFrom && requestSizeEstimate(messages, schemaBytes) > target; p++ {
+		stub(toolIdx[p])
+	}
+	// Stage 2: still over target, so stub the recent tool results too.
+	for p := 0; p < len(toolIdx) && requestSizeEstimate(messages, schemaBytes) > target; p++ {
+		if !isStubbed(messages[toolIdx[p]].Content) {
+			stub(toolIdx[p])
+		}
+	}
+	// Stage 3: still over target, so stub older assistant reasoning, keeping
+	// the tool_calls wiring intact.
+	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; i++ {
+		m := &messages[i]
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.Content != nil &&
+			!isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
+			stub(i)
+		}
+	}
+	return messages, elided
+}
+
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns
 // the same (summary, analysis) pair as doAnalyze so callers can treat both
 // pipelines uniformly.
@@ -457,7 +583,18 @@ func (c *Client) doAnalyzeAgentic(
 	critiqueRetriesUsed := 0
 	maxIters := in.Opts.MaxIters
 
+	// Fixed schema cost added to every size estimate so compaction budgets
+	// against the real request, not just message content.
+	schemaBytes := schemaPayloadBytes(schemas)
+
 	for iter := 0; iter < maxIters && !done; iter++ {
+		if in.Opts.ContextByteBudget > 0 {
+			var elided int
+			messages, elided = compactMessages(messages, schemaBytes, in.Opts.ContextByteBudget)
+			if elided > 0 {
+				log.Printf("  ✂ context compaction: elided %d message(s) to fit ~%d-byte window", elided, in.Opts.ContextByteBudget)
+			}
+		}
 		resp, err := c.callChatWithTools(loopCtx, messages, schemas)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
@@ -585,7 +722,7 @@ func (c *Client) doAnalyzeAgentic(
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
 	if !ok {
-		finalContent = c.runFinalizeRound(loopCtx, messages)
+		finalContent = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
 	if !ok {
@@ -674,8 +811,13 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 // just the final JSON. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns the raw content (which may itself be
 // unparseable; callers handle that).
-func (c *Client) runFinalizeRound(ctx context.Context, messages []agChatMessage) string {
+func (c *Client) runFinalizeRound(ctx context.Context, messages []agChatMessage, contextByteBudget int) string {
 	messages = append(messages, agChatMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+	if contextByteBudget > 0 {
+		// The finalize round sends no tool schemas, so estimate against
+		// messages alone.
+		messages, _ = compactMessages(messages, 0, contextByteBudget)
+	}
 	resp, err := c.callChatWithTools(ctx, messages, nil)
 	if err != nil {
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)

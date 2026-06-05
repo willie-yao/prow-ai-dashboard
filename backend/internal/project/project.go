@@ -176,6 +176,13 @@ type Agentic struct {
 	// tool calls) per failure. Defaults to DefaultAgentic.GCSByteBudget.
 	GCSByteBudget int `yaml:"gcs_byte_budget,omitempty" json:"gcs_byte_budget,omitempty"`
 
+	// ContextByteBudget caps the estimated serialized request size so the
+	// agentic loop compacts old tool-result bodies before a small-context
+	// model overflows its window mid-investigation. 0 (the default) disables
+	// compaction. Set it to roughly the model context window in bytes
+	// (~3.5-4 bytes/token); only needed for models with a small window.
+	ContextByteBudget int `yaml:"context_byte_budget,omitempty" json:"context_byte_budget,omitempty"`
+
 	// WallClock caps the total time spent in the agentic loop per
 	// failure. Defaults to DefaultAgentic.WallClock.
 	WallClock time.Duration `yaml:"wall_clock,omitempty" json:"wall_clock,omitempty"`
@@ -297,6 +304,9 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	if a.MinGCSBytes > 0 {
 		out.MinGCSBytes = a.MinGCSBytes
+	}
+	if a.ContextByteBudget > 0 {
+		out.ContextByteBudget = a.ContextByteBudget
 	}
 	out.Critique.Enabled = a.Critique.Enabled
 	if a.Critique.MaxRetries > 0 {

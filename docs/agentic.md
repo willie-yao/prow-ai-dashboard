@@ -52,6 +52,7 @@ ai:
     max_iters: 15                 # tool-call rounds per failure
     model_byte_budget: 300000     # total bytes of tool output sent to the model
     gcs_byte_budget: 1000000000   # total bytes fetched from GCS
+    context_byte_budget: 0        # 0 = off; cap total request size to fit a small model window
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
@@ -67,6 +68,18 @@ Defaults match the spike that validated the design and are conservative
 enough that you almost never need to tune them. Lower `max_iters` first
 if you see the model loop without converging; raise `gcs_byte_budget` if
 your builds have very large logs and grep is being cut short.
+
+`context_byte_budget` is off by default and only matters for models with
+a small context window. When set, the loop estimates each request's
+serialized size (system prompt + task + accumulated tool results +
+reasoning + tool schemas) and, before it would exceed the budget, elides
+the oldest tool-result bodies to a short stub (head + a "re-call the tool
+if you need this" note). This keeps a long, critique-heavy investigation
+from overflowing the window mid-loop and failing with an empty analysis.
+Set it to roughly the model's context window in bytes (~3 bytes/token is
+a safe ratio for dense CI logs), staying under the hard token limit so
+the trigger fires before an overflow.
+
 
 ### `min_tool_calls`
 
