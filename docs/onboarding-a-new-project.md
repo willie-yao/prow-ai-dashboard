@@ -58,7 +58,7 @@ periodic and presubmit GCS paths automatically.
 ## Step 0: sweep the jobs first
 
 Before writing `project.yaml`, prove the engine can discover your jobs
-and confirm the category rules you intend to declare.
+so you know what you're working with.
 
 1. Check out the engine repo.
    ```
@@ -71,8 +71,9 @@ and confirm the category rules you intend to declare.
    `ai.module`. Job discovery is fully automatic, the engine lists every
    YAML under `kubernetes/test-infra/config/jobs/` at the current `master`
    commit and keeps the jobs whose `testgrid-dashboards` annotation matches
-   yours, so you do not enumerate paths or filename prefixes. Skip the
-   categories block (the engine will use a sensible default).
+   yours, so you do not enumerate paths or filename prefixes. Leave the
+   `categories` block out for now (jobs render in a single flat grid by
+   default; you can add grouping later).
 3. Run a sweep (`GITHUB_TOKEN` is optional but recommended, anonymous
    GitHub API quota is only 60/hr per IP):
    ```
@@ -82,12 +83,12 @@ and confirm the category rules you intend to declare.
    export GITHUB_TOKEN=<your-pat>  # optional but recommended
    /tmp/fetcher -project-dir=. -ai=false -builds=1
    python3 -c "import json; d=json.load(open('data/dashboard.json')); \
-     print(len(d['jobs']), 'jobs'); \
-     from collections import Counter; \
-     print(Counter(j.get('category','none') for j in d['jobs']))"
+     print(len(d['jobs']), 'jobs')"
    ```
-4. Read the job list. Adjust your category rules so the bucket
-   distribution matches your team's mental model. Re-run until happy.
+4. Read the job list. If the dashboard has more than a screenful of
+   jobs and they fall into obvious buckets, sketch a `categories:` block
+   and re-run; the sweep is where you confirm your rules match the right
+   jobs.
 
 This is the step the CAPI onboarding caught a hidden engine bug
 (`interval:` vs `minimum_interval:`): jobs use a variety of schedule
@@ -114,16 +115,19 @@ is picked up alongside the canonical
 Release-branch periodics typically advertise different dashboards
 (e.g. `cluster-api-core-1.13`) and are filtered out automatically.
 
-### `categories`
+### `categories` (optional)
 
-Ordered list of `{match, id, label}` triples. Rules are evaluated in
-order; first lowercase substring match against the job name wins. Order
-specific rules before broad ones (e.g. put `mink8s` before `e2e` so
-`periodic-...-mink8s-main` lands in the mink8s lane rather than the
-catch-all).
+Optional. When omitted (the default), every job renders in a single
+flat grid. Declare an ordered list of `{match, id, label}` triples to
+bucket jobs into per-section headings on the dashboard. Rules are
+evaluated in order; first lowercase substring match against the job
+name wins. Order specific rules before broad ones (e.g. put `mink8s`
+before `e2e` so `periodic-...-mink8s-main` lands in the mink8s lane
+rather than the catch-all). Jobs that match no rule go in `"other"`.
 
-The optional `category_display_order` lets you order sections in the UI
-independently of match precedence.
+The optional `category_display_order` lets you order sections in the
+UI independently of match precedence. Only meaningful when
+`categories:` is declared.
 
 ### `ai.module` (optional)
 

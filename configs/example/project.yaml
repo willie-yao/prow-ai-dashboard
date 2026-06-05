@@ -31,17 +31,20 @@ testgrid:
 gcs:
   bucket: "kubernetes-ci-logs"
 
-# Job grouping. Rules are evaluated in order; first lowercase substring
-# match wins. Jobs with no match go in "other".
-categories:
-  - match: "conformance"
-    id: "conformance"
-    label: "Conformance"
-  - match: "e2e"
-    id: "e2e"
-    label: "E2E"
+# Optional job grouping. When omitted (the default), the dashboard renders
+# every job in a single flat grid. Declare rules to bucket jobs into
+# labeled sections. Rules are evaluated in order; first lowercase
+# substring match wins. Jobs with no match go in "other".
+# categories:
+#   - match: "conformance"
+#     id: "conformance"
+#     label: "Conformance"
+#   - match: "e2e"
+#     id: "e2e"
+#     label: "E2E"
 
 # Optional display order for category sections on the landing page.
+# Only meaningful when `categories:` is declared above.
 # category_display_order:
 #   - e2e
 #   - conformance

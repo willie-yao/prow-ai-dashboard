@@ -67,6 +67,7 @@ export function DashboardPage() {
   }, [data, statusFilter, branchFilter]);
 
   const grouped = useMemo(() => groupByCategory(filtered), [filtered]);
+  const hasCategories = (manifest.categories?.length ?? 0) > 0;
 
   if (loading) {
     return (
@@ -193,10 +194,17 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Job grid grouped by category */}
-      {sortedCategories.length === 0 ? (
+      {/* Job grid: flat when the consumer hasn't declared categories,
+          grouped by category section otherwise. */}
+      {filtered.length === 0 ? (
         <div className="py-16 text-center">
           <p className="text-on-surface-variant">No jobs match filters</p>
+        </div>
+      ) : !hasCategories ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {filtered.map((job) => (
+            <JobCard key={job.name} job={job} />
+          ))}
         </div>
       ) : (
         sortedCategories.map((category) => (

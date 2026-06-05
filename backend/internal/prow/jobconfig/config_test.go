@@ -11,6 +11,19 @@ import (
 
 const testDashboard = "sig-cluster-lifecycle-cluster-api-provider-azure"
 
+// exampleRules is the canonical project-neutral rule set the engine used to
+// ship as exampleRules. It's intentionally kept here so the
+// parser tests still cover non-trivial categorization without re-coupling
+// the production engine to a fixed rule set.
+var exampleRules = []project.CategoryRule{
+	{Match: "conformance", ID: "conformance", Label: "Conformance"},
+	{Match: "capi-e2e", ID: "capi-e2e", Label: "CAPI E2E"},
+	{Match: "upgrade", ID: "upgrade", Label: "Upgrade"},
+	{Match: "coverage", ID: "coverage", Label: "Coverage"},
+	{Match: "scalability", ID: "scalability", Label: "Scalability"},
+	{Match: "e2e", ID: "e2e", Label: "E2E"},
+}
+
 func loadTestdata(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
@@ -22,7 +35,7 @@ func loadTestdata(t *testing.T, name string) []byte {
 
 func TestParsePeriodics(t *testing.T) {
 	data := loadTestdata(t, "periodics.yaml")
-	jobs, err := ParseJobConfig(data, "periodics.yaml", testDashboard, project.DefaultCategories)
+	jobs, err := ParseJobConfig(data, "periodics.yaml", testDashboard, exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -57,7 +70,7 @@ func TestParsePeriodics(t *testing.T) {
 
 func TestParsePresubmits(t *testing.T) {
 	data := loadTestdata(t, "presubmits.yaml")
-	jobs, err := ParseJobConfig(data, "presubmits.yaml", testDashboard, project.DefaultCategories)
+	jobs, err := ParseJobConfig(data, "presubmits.yaml", testDashboard, exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -101,7 +114,7 @@ func TestCategorize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := categorize(tc.name, project.DefaultCategories)
+			got := categorize(tc.name, exampleRules)
 			if got != tc.expected {
 				t.Errorf("categorize(%q) = %q, want %q", tc.name, got, tc.expected)
 			}
@@ -143,7 +156,7 @@ periodics:
   annotations:
     testgrid-dashboards: sig-other
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -159,7 +172,7 @@ periodics:
   decoration_config:
     timeout: 1h
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -177,7 +190,7 @@ periodics:
     testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
     testgrid-tab-name: capz-no-refs
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", testDashboard, exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -194,7 +207,7 @@ periodics:
 }
 
 func TestEmptyInput(t *testing.T) {
-	jobs, err := ParseJobConfig([]byte("{}"), "empty.yaml", testDashboard, project.DefaultCategories)
+	jobs, err := ParseJobConfig([]byte("{}"), "empty.yaml", testDashboard, exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -222,7 +235,7 @@ periodics:
   annotations:
     testgrid-dashboards: cluster-api-core-main
 `)
-	jobs, err := ParseJobConfig(yaml, "test.yaml", "cluster-api-core-main", project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "test.yaml", "cluster-api-core-main", exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -258,7 +271,7 @@ presubmits:
     annotations:
       testgrid-dashboards: mixed-dashboard
 `)
-	jobs, err := ParseJobConfig(yaml, "mixed.yaml", "mixed-dashboard", project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "mixed.yaml", "mixed-dashboard", exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -291,7 +304,7 @@ presubmits:
     annotations:
       testgrid-dashboards: multi-repo-dashboard
 `)
-	jobs, err := ParseJobConfig(yaml, "multi.yaml", "multi-repo-dashboard", project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "multi.yaml", "multi-repo-dashboard", exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
@@ -341,7 +354,7 @@ presubmits:
     annotations:
       testgrid-dashboards: d
 `)
-	jobs, err := ParseJobConfig(yaml, "mixed.yaml", "d", project.DefaultCategories)
+	jobs, err := ParseJobConfig(yaml, "mixed.yaml", "d", exampleRules)
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}

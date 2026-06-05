@@ -58,24 +58,12 @@ type CategoryRule struct {
 	Label string `yaml:"label" json:"label"`
 }
 
-// DefaultCategories is the project-neutral category set used when a consumer
-// project.yaml does not declare its own categories.
-var DefaultCategories = []CategoryRule{
-	{Match: "conformance", ID: "conformance", Label: "Conformance"},
-	{Match: "capi-e2e", ID: "capi-e2e", Label: "CAPI E2E"},
-	{Match: "upgrade", ID: "upgrade", Label: "Upgrade"},
-	{Match: "coverage", ID: "coverage", Label: "Coverage"},
-	{Match: "scalability", ID: "scalability", Label: "Scalability"},
-	{Match: "e2e", ID: "e2e", Label: "E2E"},
-}
-
-// EffectiveCategories returns the consumer's rules when present, otherwise
-// the engine defaults.
+// EffectiveCategories returns the consumer's category rules. Categories are
+// opt-in: when c.Categories is empty, the dashboard renders ungrouped (a
+// single flat grid) and categorize() leaves every job's Category empty.
+// Consumers who want a per-section layout declare rules in project.yaml.
 func (c *Config) EffectiveCategories() []CategoryRule {
-	if len(c.Categories) > 0 {
-		return c.Categories
-	}
-	return DefaultCategories
+	return c.Categories
 }
 
 // Source controls how the fetcher behaves when discovering Prow jobs from
@@ -430,9 +418,6 @@ func (c *Config) Validate() error {
 	if len(c.CategoryDisplayOrder) > 0 {
 		known := map[string]struct{}{"other": {}}
 		for _, r := range c.Categories {
-			known[r.ID] = struct{}{}
-		}
-		for _, r := range DefaultCategories {
 			known[r.ID] = struct{}{}
 		}
 		for i, id := range c.CategoryDisplayOrder {
