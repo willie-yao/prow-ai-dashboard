@@ -134,12 +134,6 @@ export interface TestFlakiness {
     count: number;
     example_message: string;
   }[];
-  duration_history?: {
-    build_id: string;
-    timestamp: string;
-    duration: number;
-    passed: boolean;
-  }[];
 }
 
 export interface FlakinessReport {

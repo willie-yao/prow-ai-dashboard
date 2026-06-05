@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { formatPercent, shortJobName, timeAgo } from "../lib/utils";
-import { DurationChart } from "../components/DurationChart";
 import type { TestFlakiness } from "../types/dashboard";
 import { HiFaceSmile, HiChevronRight } from "react-icons/hi2";
 
@@ -170,11 +169,6 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
                 ))}
               </div>
             </div>
-          )}
-
-          {/* Duration chart */}
-          {item.duration_history && item.duration_history.length > 0 && (
-            <DurationChart history={item.duration_history} />
           )}
         </div>
       )}
