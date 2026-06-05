@@ -239,16 +239,16 @@ func TestValidate_CategoryDisplayOrder(t *testing.T) {
 		wantSub string
 	}{
 		{"unknown id rejected", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "e2e", ID: "e2e", Label: "E2E"}}
 			c.CategoryDisplayOrder = []string{"e2e", "made-up"}
 		}, `"made-up" is not a declared category id`},
 		{"empty entry rejected", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "e2e", ID: "e2e", Label: "E2E"}}
 			c.CategoryDisplayOrder = []string{"e2e", ""}
 		}, "is empty"},
 		{"other is allowed", func(c *Config) {
+			c.Categories = []CategoryRule{{Match: "e2e", ID: "e2e", Label: "E2E"}}
 			c.CategoryDisplayOrder = []string{"e2e", "other"}
-		}, ""},
-		{"default category ids are honored", func(c *Config) {
-			c.CategoryDisplayOrder = []string{"conformance", "e2e"}
 		}, ""},
 		{"consumer ids are honored", func(c *Config) {
 			c.Categories = []CategoryRule{
@@ -269,8 +269,8 @@ func TestValidate_CategoryDisplayOrder(t *testing.T) {
 
 func TestEffectiveCategories(t *testing.T) {
 	c := validConfig()
-	if got := c.EffectiveCategories(); len(got) != len(DefaultCategories) {
-		t.Errorf("expected %d default rules, got %d", len(DefaultCategories), len(got))
+	if got := c.EffectiveCategories(); len(got) != 0 {
+		t.Errorf("expected no rules when consumer omits categories, got %d (%+v)", len(got), got)
 	}
 	c.Categories = []CategoryRule{{Match: "x", ID: "x", Label: "X"}}
 	got := c.EffectiveCategories()

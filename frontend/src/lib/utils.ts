@@ -77,32 +77,14 @@ export function groupByBranch(
 }
 
 /**
- * Default category rules used when the manifest does not declare any.
- * Mirrors backend project.DefaultCategories so the frontend renders the
- * same generic labels and order the backend assigned.
+ * Build a category-id -> label map, deduplicating by id. Returns just the
+ * implicit "Other" entry when the manifest declares no rules.
  */
-const defaultCategoryRules: CategoryRule[] = [
-  { match: "conformance", id: "conformance", label: "Conformance" },
-  { match: "capi-e2e", id: "capi-e2e", label: "CAPI E2E" },
-  { match: "upgrade", id: "upgrade", label: "Upgrade" },
-  { match: "coverage", id: "coverage", label: "Coverage" },
-  { match: "scalability", id: "scalability", label: "Scalability" },
-  { match: "e2e", id: "e2e", label: "E2E" },
-];
-
-/** Returns the rules from the manifest, falling back to engine defaults. */
-export function effectiveCategoryRules(
-  rules: CategoryRule[] | undefined
-): CategoryRule[] {
-  return rules && rules.length > 0 ? rules : defaultCategoryRules;
-}
-
-/** Build a category-id -> label map, deduplicating by id. */
 export function categoryLabelsFromRules(
   rules: CategoryRule[] | undefined
 ): Record<string, string> {
   const out: Record<string, string> = { other: "Other" };
-  for (const r of effectiveCategoryRules(rules)) {
+  for (const r of rules ?? []) {
     if (r.id && !(r.id in out)) out[r.id] = r.label || r.id;
   }
   return out;
@@ -114,7 +96,7 @@ export function categoryOrderFromRules(
 ): string[] {
   const seen = new Set<string>();
   const order: string[] = [];
-  for (const r of effectiveCategoryRules(rules)) {
+  for (const r of rules ?? []) {
     if (r.id && !seen.has(r.id)) {
       seen.add(r.id);
       order.push(r.id);

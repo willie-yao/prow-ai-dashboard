@@ -132,8 +132,13 @@ func convertJob(r rawJob, filename, jobType, repo string, categories []project.C
 }
 
 // categorize returns the ID of the first CategoryRule whose Match substring
-// appears in the lowercased job name. Returns "other" when nothing matches.
+// appears in the lowercased job name. Returns "other" when rules exist but
+// nothing matches, and "" when the consumer has not declared any rules at
+// all (ungrouped mode, the engine's default for new projects).
 func categorize(name string, rules []project.CategoryRule) string {
+	if len(rules) == 0 {
+		return ""
+	}
 	lower := strings.ToLower(name)
 	for _, r := range rules {
 		if r.Match == "" || r.ID == "" {
