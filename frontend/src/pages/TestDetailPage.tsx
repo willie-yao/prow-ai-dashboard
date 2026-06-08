@@ -13,7 +13,7 @@ import {
   HiServerStack,
   HiMapPin,
   HiChevronRight,
-} from "react-icons/hi2";
+} from "../lib/icons";
 
 /** Strip numbers and hex strings to normalize error messages for grouping. */
 function normalizeMessage(msg: string): string {

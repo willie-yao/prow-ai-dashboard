@@ -4,7 +4,7 @@ import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { formatPercent, shortJobName, timeAgo } from "../lib/utils";
 import type { TestFlakiness } from "../types/dashboard";
-import { HiFaceSmile, HiChevronRight } from "react-icons/hi2";
+import { HiFaceSmile, HiChevronRight } from "../lib/icons";
 
 type Tab = "most_flaky" | "persistent" | "recently_broken";
 

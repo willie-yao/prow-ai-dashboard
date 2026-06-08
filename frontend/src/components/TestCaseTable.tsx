@@ -29,7 +29,7 @@ import {
   HiServerStack,
   HiMapPin,
   HiChevronRight,
-} from "react-icons/hi2";
+} from "../lib/icons";
 
 function statusIcon(status: string) {
   switch (status) {

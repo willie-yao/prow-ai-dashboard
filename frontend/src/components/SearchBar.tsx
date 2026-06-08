@@ -4,7 +4,7 @@ import Fuse from "fuse.js";
 import { useSearchIndex } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { shortJobName, shortTestName } from "../lib/utils";
-import { HiMagnifyingGlass } from "react-icons/hi2";
+import { HiMagnifyingGlass } from "../lib/icons";
 import type { SearchEntry } from "../types/dashboard";
 
 export function SearchBar() {

@@ -11,7 +11,7 @@ import type { BuildResult, TestCase } from "../types/dashboard";
 import { RunTimeline } from "../components/RunTimeline";
 import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
-import { HiChevronRight } from "react-icons/hi2";
+import { HiChevronRight } from "../lib/icons";
 
 export function JobDetailPage() {
   const { jobName: jobID } = useParams<{ jobName: string }>();

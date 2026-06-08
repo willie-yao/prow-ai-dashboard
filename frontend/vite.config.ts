@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
 
 // base path is set at build time via VITE_BASE_PATH so the same engine repo
 // can build for multiple consumer projects (each deployed under its own
@@ -8,7 +7,7 @@ import tailwindcss from '@tailwindcss/vite'
 const basePath = process.env.VITE_BASE_PATH || '/'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   base: basePath,
   server: {
     strictPort: false,
