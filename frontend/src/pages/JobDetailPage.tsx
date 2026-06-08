@@ -78,7 +78,7 @@ export function JobDetailPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: 4 } }}>
-      <Breadcrumbs separator="›" sx={{ color: "text.secondary" }}>
+      <Breadcrumbs separator="›" sx={{ color: "text.secondary", fontSize: "0.875rem" }}>
         <Link
           component={RouterLink}
           to="/"
@@ -87,7 +87,7 @@ export function JobDetailPage() {
         >
           Dashboard
         </Link>
-        <Typography variant="body2" color="text.primary">
+        <Typography variant="inherit" color="text.primary">
           {displayName}
         </Typography>
       </Breadcrumbs>

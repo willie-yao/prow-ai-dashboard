@@ -257,7 +257,7 @@ export function TestDetailPage() {
           >
             {displayName}
           </Link>
-          <Typography color="text.primary" noWrap>
+          <Typography variant="inherit" color="text.primary" noWrap>
             {testName}
           </Typography>
         </Breadcrumbs>
@@ -305,7 +305,7 @@ export function TestDetailPage() {
         >
           {displayName}
         </Link>
-        <Typography color="text.primary" noWrap sx={{ maxWidth: 360 }} title={testName}>
+        <Typography variant="inherit" color="text.primary" noWrap sx={{ maxWidth: 360 }} title={testName}>
           {testName}
         </Typography>
       </Breadcrumbs>
