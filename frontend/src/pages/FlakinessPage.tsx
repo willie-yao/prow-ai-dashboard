@@ -204,7 +204,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
                 sx={{
                   bgcolor: (theme) =>
                     classificationColor === "default"
-                      ? theme.palette.action.selected
+                      ? (theme.vars ?? theme).palette.action.selected
                       : soft(theme, classificationColor, 0.18),
                   color:
                     classificationColor === "default"
@@ -381,7 +381,7 @@ export function FlakinessPage() {
             "& .MuiTabs-flexContainer": { gap: 0.5 },
             "& .MuiTabs-indicator": { display: "none" },
             "& .MuiTab-root": {
-              bgcolor: (theme) => theme.palette.surface.container,
+              bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
               borderRadius: 999,
               color: "text.secondary",
               fontSize: "0.75rem",
@@ -393,7 +393,7 @@ export function FlakinessPage() {
               textTransform: "none",
               transition: "background-color 150ms ease, color 150ms ease",
               "&:hover": {
-                bgcolor: (theme) => theme.palette.surface.containerHigh,
+                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
               },
               "&.Mui-selected": {
                 bgcolor: "primary.main",

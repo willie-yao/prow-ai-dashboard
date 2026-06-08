@@ -355,13 +355,14 @@ export function TestDetailPage() {
           selectedBuildId={effectiveSelectedId ?? undefined}
           onSelect={setSelectedBuildId}
           colorFn={(run) => {
+            const p = (theme.vars ?? theme).palette;
             const tc = (run.test_cases ?? []).find((t) => t.name === testName);
-            if (!tc) return theme.palette.text.disabled;
+            if (!tc) return p.text.disabled;
             return tc.status === "passed"
-              ? theme.palette.success.main
+              ? p.success.main
               : tc.status === "failed"
-                ? theme.palette.error.main
-                : theme.palette.text.secondary;
+                ? p.error.main
+                : p.text.secondary;
           }}
           tooltipFn={(run) => {
             const tc = (run.test_cases ?? []).find((t) => t.name === testName);
@@ -560,7 +561,7 @@ export function TestDetailPage() {
                   borderRadius: "8px",
                   border: 1,
                   borderColor: "divider",
-                  bgcolor: (t) => t.palette.surface.container,
+                  bgcolor: (t) => (t.vars ?? t).palette.surface.container,
                   p: 1.5,
                 }}
               >
@@ -788,7 +789,7 @@ export function TestDetailPage() {
                 sx={{
                   alignItems: "flex-start",
                   borderRadius: "8px",
-                  bgcolor: (t) => t.palette.surface.container,
+                  bgcolor: (t) => (t.vars ?? t).palette.surface.container,
                   p: 1.5,
                 }}
               >

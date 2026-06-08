@@ -133,7 +133,7 @@ export function SearchBar() {
                 gap: 1,
                 height: 64,
                 px: 2,
-                bgcolor: (theme) => theme.palette.surface.container,
+                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
                 borderBottom: "1px solid",
                 borderColor: "divider",
               }
@@ -172,7 +172,7 @@ export function SearchBar() {
                         border: "1px solid",
                         borderColor: "divider",
                         borderRadius: 1,
-                        bgcolor: (theme) => theme.palette.surface.main,
+                        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.main,
                         px: 0.75,
                         py: 0.25,
                         typography: "label",
@@ -190,7 +190,7 @@ export function SearchBar() {
               "& .MuiOutlinedInput-root": {
                 height: 36,
                 borderRadius: "8px",
-                bgcolor: (theme) => theme.palette.surface.container,
+                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
                 color: "text.primary",
                 fontSize: "0.875rem",
                 "& fieldset": { borderColor: "divider" },
@@ -256,7 +256,7 @@ export function SearchBar() {
                         position: "sticky",
                         top: 0,
                         zIndex: 1,
-                        bgcolor: (theme) => theme.palette.surface.container,
+                        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
                         borderBottom: "1px solid",
                         borderColor: "divider",
                         px: 1.5,
@@ -286,7 +286,7 @@ export function SearchBar() {
                           color: "text.primary",
                           textAlign: "left",
                           transition: "background-color 150ms ease",
-                          "&:hover": { bgcolor: (theme) => theme.palette.surface.containerHigh },
+                          "&:hover": { bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh },
                         }}
                       >
                         {r.item.kind === "job" ? (

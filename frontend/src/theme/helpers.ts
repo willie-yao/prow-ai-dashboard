@@ -50,6 +50,7 @@ export function dotColorFor(
   passed: boolean,
   result?: string,
 ): string {
-  if (result === "PENDING") return theme.palette.warning.main;
-  return passed ? theme.palette.success.main : theme.palette.error.main;
+  const p = (theme.vars ?? theme).palette;
+  if (result === "PENDING") return p.warning.main;
+  return passed ? p.success.main : p.error.main;
 }

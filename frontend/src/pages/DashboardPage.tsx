@@ -46,10 +46,10 @@ const toggleButtonSx: SxProps<Theme> = {
   typography: "label",
   textTransform: "none",
   color: "text.secondary",
-  bgcolor: (theme) => theme.palette.surface.container,
+  bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
   transition: "background-color 160ms ease, color 160ms ease",
   "&:hover": {
-    bgcolor: (theme) => theme.palette.surface.containerHigh,
+    bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
   },
   "&.Mui-selected": {
     color: "primary.contrastText",

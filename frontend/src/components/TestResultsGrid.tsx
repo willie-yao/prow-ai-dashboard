@@ -111,7 +111,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
           display: { xs: "none", md: "block" },
           borderRadius: 3,
           overflow: "hidden",
-          bgcolor: (t) => t.palette.surface.main,
+          bgcolor: (t) => (t.vars ?? t).palette.surface.main,
         }}
       >
         <Box sx={{ display: "flex" }}>
@@ -130,7 +130,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                   <Box
                     component="th"
                     sx={{
-                      bgcolor: (t) => t.palette.surface.main,
+                      bgcolor: (t) => (t.vars ?? t).palette.surface.main,
                       px: 1.5,
                       textAlign: "left",
                       typography: "label",
@@ -153,11 +153,11 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                       height: 28,
                       transition: (t) => t.transitions.create("background-color"),
                       "&:hover td": {
-                        bgcolor: (t) => t.palette.surface.containerHigh,
+                        bgcolor: (t) => (t.vars ?? t).palette.surface.containerHigh,
                       },
                     }}
                   >
-                    <Box component="td" sx={{ bgcolor: (t) => t.palette.surface.main, p: 0 }}>
+                    <Box component="td" sx={{ bgcolor: (t) => (t.vars ?? t).palette.surface.main, p: 0 }}>
                       <Link
                         component={RouterLink}
                         to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(row.testName)}`}
@@ -213,7 +213,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                       height: 28,
                       transition: (t) => t.transitions.create("background-color"),
                       "&:hover td": {
-                        bgcolor: (t) => t.palette.surface.containerHigh,
+                        bgcolor: (t) => (t.vars ?? t).palette.surface.containerHigh,
                       },
                     }}
                   >

@@ -28,7 +28,7 @@ export function Layout() {
         color="transparent"
         elevation={0}
         sx={{
-          bgcolor: (theme) => theme.palette.surface.glass,
+          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.glass,
           backgroundImage: "none",
           backdropFilter: "blur(12px)",
           WebkitBackdropFilter: "blur(12px)",

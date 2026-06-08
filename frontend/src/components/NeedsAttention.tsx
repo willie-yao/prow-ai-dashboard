@@ -113,7 +113,7 @@ export function NeedsAttention() {
                   color: "inherit",
                   textDecoration: "none",
                   "&:hover": {
-                    bgcolor: (theme) => theme.palette.surface.containerHigh,
+                    bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
                   },
                 }}
               >

@@ -129,7 +129,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 96px" },
             borderBottom: 1,
             borderColor: "divider",
-            bgcolor: (t) => t.palette.surface.container,
+            bgcolor: (t) => (t.vars ?? t).palette.surface.container,
           }}
         >
           <Box sx={{ px: 1.5, py: 1.25 }} />
@@ -381,7 +381,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         sx={{
                           borderRadius: 2,
                           p: 1.5,
-                          bgcolor: (t) => t.palette.surface.container,
+                          bgcolor: (t) => (t.vars ?? t).palette.surface.container,
                           display: "flex",
                           flexDirection: "column",
                           gap: 1,

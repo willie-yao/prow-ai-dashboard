@@ -64,14 +64,14 @@ export function RunTimeline({
                   outlineColor: isSelected ? "primary.main" : "transparent",
                   outlineOffset: 2,
                   boxShadow: isSelected
-                    ? (t) => `0 0 0 4px ${t.palette.surface.main}`
+                    ? (t) => `0 0 0 4px ${(t.vars ?? t).palette.surface.main}`
                     : "none",
                   "&:hover": {
                     filter: "brightness(1.18)",
                   },
                   "&.Mui-focusVisible": {
                     outlineColor: "primary.main",
-                    boxShadow: (t) => `0 0 0 4px ${t.palette.surface.main}`,
+                    boxShadow: (t) => `0 0 0 4px ${(t.vars ?? t).palette.surface.main}`,
                   },
                 }}
               />

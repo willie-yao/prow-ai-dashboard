@@ -32,7 +32,7 @@ export function JobCard({ job }: JobCardProps) {
       sx={{
         height: "100%",
         borderRadius: "16px",
-        bgcolor: (theme) => theme.palette.surface.glass,
+        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.glass,
         backdropFilter: "blur(12px)",
         WebkitBackdropFilter: "blur(12px)",
         border: "1px solid",
