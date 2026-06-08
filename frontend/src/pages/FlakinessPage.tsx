@@ -257,7 +257,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
                     bgcolor: (theme) => soft(theme, "error", 0.05),
                     borderRadius: "8px",
                     color: "error.main",
-                    fontFamily: (theme) => theme.typography.label.fontFamily,
+                    fontFamily: "monospace",
                     fontSize: "0.75rem",
                     lineHeight: 1.6,
                     m: 0,

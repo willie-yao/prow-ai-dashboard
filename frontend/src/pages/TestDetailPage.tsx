@@ -108,7 +108,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const preSx = {
   whiteSpace: "pre-wrap",
-  fontFamily: '"Space Grotesk", sans-serif',
+  fontFamily: "monospace",
   fontSize: "0.75rem",
   lineHeight: 1.6,
   m: 0,

@@ -87,7 +87,7 @@ const typography = {
     letterSpacing: "-0.01em",
   },
   label: {
-    fontFamily: '"Space Grotesk", "Inter", sans-serif',
+    fontFamily: '"Inter", sans-serif',
     fontWeight: 500,
     fontSize: "0.75rem",
     letterSpacing: "0.04em",
