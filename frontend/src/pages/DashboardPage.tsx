@@ -1,3 +1,8 @@
+import Box from "@mui/material/Box";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Typography from "@mui/material/Typography";
+import type { SxProps, Theme } from "@mui/material/styles";
 import { useMemo, useState } from "react";
 import { useDashboard } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
@@ -11,6 +16,8 @@ import type { JobSummary } from "../types/dashboard";
 import { SummaryBar } from "../components/SummaryBar";
 import { NeedsAttention } from "../components/NeedsAttention";
 import { JobCard } from "../components/JobCard";
+import { LoadingState } from "../components/LoadingState";
+import { ErrorState } from "../components/ErrorState";
 
 type StatusFilter = "ALL" | "PASSING" | "FLAKY" | "FAILING";
 
@@ -20,6 +27,36 @@ const statusFilters: { label: string; value: StatusFilter }[] = [
   { label: "Flaky", value: "FLAKY" },
   { label: "Failing", value: "FAILING" },
 ];
+
+const toggleGroupSx: SxProps<Theme> = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 0.75,
+  "& .MuiToggleButtonGroup-grouped": {
+    border: 0,
+    borderRadius: "999px !important",
+    mx: 0,
+  },
+};
+
+const toggleButtonSx: SxProps<Theme> = {
+  px: 1.5,
+  py: 0.5,
+  minHeight: 0,
+  typography: "label",
+  textTransform: "none",
+  color: "text.secondary",
+  bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+  transition: "background-color 160ms ease, color 160ms ease",
+  "&:hover": {
+    bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
+  },
+  "&.Mui-selected": {
+    color: "primary.contrastText",
+    bgcolor: "primary.main",
+    "&:hover": { bgcolor: "primary.dark" },
+  },
+};
 
 export function DashboardPage() {
   const { data, loading, error } = useDashboard();
@@ -47,8 +84,10 @@ export function DashboardPage() {
       const aMatch = a.match(/(\d+)\.(\d+)/);
       const bMatch = b.match(/(\d+)\.(\d+)/);
       if (aMatch && bMatch) {
-        const aMajor = Number(aMatch[1]), aMinor = Number(aMatch[2]);
-        const bMajor = Number(bMatch[1]), bMinor = Number(bMatch[2]);
+        const aMajor = Number(aMatch[1]),
+          aMinor = Number(aMatch[2]);
+        const bMajor = Number(bMatch[1]),
+          bMinor = Number(bMatch[2]);
         if (aMajor !== bMajor) return bMajor - aMajor;
         return bMinor - aMinor;
       }
@@ -70,45 +109,11 @@ export function DashboardPage() {
   const hasCategories = (manifest.categories?.length ?? 0) > 0;
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <svg
-          className="h-8 w-8 animate-spin text-primary"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32 text-center">
-        <p className="text-error text-lg">Failed to load dashboard</p>
-        <p className="text-on-surface-variant text-sm">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-dim"
-        >
-          Retry
-        </button>
-      </div>
-    );
+    return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   }
 
   if (!data) return null;
@@ -120,107 +125,124 @@ export function DashboardPage() {
   });
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="font-headline text-3xl font-bold text-on-surface">
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <Box>
+        <Typography variant="h4" component="h1">
           Test Health Overview
-        </h1>
-        <p className="mt-1 text-sm text-on-surface-variant">
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Last updated: {timeAgo(data.generated_at)}
-        </p>
-      </div>
+        </Typography>
+      </Box>
 
-      {/* Needs attention */}
       <NeedsAttention />
 
-      {/* Summary bar */}
-      <SummaryBar jobs={data.jobs} onFilterClick={(s) => setStatusFilter(s as StatusFilter)} activeFilter={statusFilter} />
+      <SummaryBar
+        jobs={data.jobs}
+        onFilterClick={(s) => setStatusFilter(s as StatusFilter)}
+        activeFilter={statusFilter}
+      />
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-6">
-        {/* Status filter */}
-        <div className="flex items-center gap-2">
-          <span className="font-label text-xs tracking-wide text-on-surface-variant">
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+        <Box
+          sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}
+        >
+          <Typography variant="label" color="text.secondary">
             Status
-          </span>
-          <div className="flex gap-1">
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            value={statusFilter}
+            onChange={(_, value: StatusFilter | null) => {
+              if (value) setStatusFilter(value);
+            }}
+            aria-label="Status filter"
+            sx={toggleGroupSx}
+          >
             {statusFilters.map((f) => (
-              <button
-                key={f.value}
-                onClick={() => setStatusFilter(f.value)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                  statusFilter === f.value
-                    ? "bg-primary text-on-primary"
-                    : "bg-surface-container text-on-surface-variant hover:bg-surface-container-high"
-                }`}
-              >
+              <ToggleButton key={f.value} value={f.value} sx={toggleButtonSx}>
                 {f.label}
-              </button>
+              </ToggleButton>
             ))}
-          </div>
-        </div>
+          </ToggleButtonGroup>
+        </Box>
 
-        {/* Branch filter */}
-        <div className="flex items-center gap-2">
-          <span className="font-label text-xs tracking-wide text-on-surface-variant">
+        <Box
+          sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}
+        >
+          <Typography variant="label" color="text.secondary">
             Branch
-          </span>
-          <div className="flex gap-1">
-            <button
-              onClick={() => setBranchFilter("ALL")}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                branchFilter === "ALL"
-                  ? "bg-primary text-on-primary"
-                  : "bg-surface-container text-on-surface-variant hover:bg-surface-container-high"
-              }`}
-            >
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            value={branchFilter}
+            onChange={(_, value: string | null) => {
+              if (value) setBranchFilter(value);
+            }}
+            aria-label="Branch filter"
+            sx={toggleGroupSx}
+          >
+            <ToggleButton value="ALL" sx={toggleButtonSx}>
               All
-            </button>
+            </ToggleButton>
             {branches.map((b) => (
-              <button
-                key={b}
-                onClick={() => setBranchFilter(b)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                  branchFilter === b
-                    ? "bg-primary text-on-primary"
-                    : "bg-surface-container text-on-surface-variant hover:bg-surface-container-high"
-                }`}
-              >
+              <ToggleButton key={b} value={b} sx={toggleButtonSx}>
                 {b}
-              </button>
+              </ToggleButton>
             ))}
-          </div>
-        </div>
-      </div>
+          </ToggleButtonGroup>
+        </Box>
+      </Box>
 
-      {/* Job grid: flat when the consumer hasn't declared categories,
-          grouped by category section otherwise. */}
       {filtered.length === 0 ? (
-        <div className="py-16 text-center">
-          <p className="text-on-surface-variant">No jobs match filters</p>
-        </div>
+        <Box sx={{ py: 8, textAlign: "center" }}>
+          <Typography color="text.secondary">No jobs match filters</Typography>
+        </Box>
       ) : !hasCategories ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: {
+              xs: "1fr",
+              md: "1fr 1fr",
+              lg: "repeat(3, 1fr)",
+            },
+            gap: 2,
+          }}
+        >
           {filtered.map((job) => (
             <JobCard key={job.name} job={job} />
           ))}
-        </div>
+        </Box>
       ) : (
         sortedCategories.map((category) => (
-          <section key={category}>
-            <h2 className="font-headline mb-4 text-xl font-semibold text-on-surface">
+          <Box key={category} component="section">
+            <Typography
+              variant="headline"
+              component="h2"
+              sx={{ mb: 2, fontSize: "1.25rem" }}
+            >
               {categoryLabels[category] ??
                 category.charAt(0).toUpperCase() + category.slice(1)}
-            </h2>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            </Typography>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  md: "1fr 1fr",
+                  lg: "repeat(3, 1fr)",
+                },
+                gap: 2,
+              }}
+            >
               {grouped[category].map((job) => (
                 <JobCard key={job.name} job={job} />
               ))}
-            </div>
-          </section>
+            </Box>
+          </Box>
         ))
       )}
-    </div>
+    </Box>
   );
 }

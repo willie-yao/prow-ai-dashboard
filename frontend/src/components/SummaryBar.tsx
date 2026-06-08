@@ -1,3 +1,8 @@
+import Box from "@mui/material/Box";
+import ButtonBase from "@mui/material/ButtonBase";
+import Typography from "@mui/material/Typography";
+import { Panel } from "./Panel";
+import { soft, type SoftColor } from "../theme";
 import type { JobSummary } from "../types/dashboard";
 
 interface SummaryBarProps {
@@ -11,32 +16,76 @@ export function SummaryBar({ jobs, onFilterClick, activeFilter }: SummaryBarProp
   const flaky = jobs.filter((j) => j.overall_status === "FLAKY").length;
   const failing = jobs.filter((j) => j.overall_status === "FAILING").length;
 
-  const cards = [
-    { label: "Passing", status: "PASSING", count: passing, text: "text-secondary", bg: "bg-secondary/10", ring: "ring-secondary" },
-    { label: "Flaky", status: "FLAKY", count: flaky, text: "text-tertiary", bg: "bg-tertiary/10", ring: "ring-tertiary" },
-    { label: "Failing", status: "FAILING", count: failing, text: "text-error", bg: "bg-error/10", ring: "ring-error" },
-  ] as const;
+  const cards: {
+    label: string;
+    status: "PASSING" | "FLAKY" | "FAILING";
+    count: number;
+    color: Extract<SoftColor, "success" | "warning" | "error">;
+  }[] = [
+    { label: "Passing", status: "PASSING", count: passing, color: "success" },
+    { label: "Flaky", status: "FLAKY", count: flaky, color: "warning" },
+    { label: "Failing", status: "FAILING", count: failing, color: "error" },
+  ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "1fr", sm: "repeat(3, 1fr)" },
+        gap: 2,
+      }}
+    >
       {cards.map((card) => {
         const isActive = activeFilter === card.status;
         return (
-          <button
+          <Panel
             key={card.label}
-            type="button"
-            onClick={() => onFilterClick?.(isActive ? "ALL" : card.status)}
-            className={`glass flex flex-col items-center justify-center gap-1 rounded-2xl border border-outline-variant px-4 py-5 transition-all hover:brightness-110 cursor-pointer ${card.bg} ${isActive ? `ring-2 ${card.ring}` : ""}`}
+            elevation={0}
+            sx={{
+              borderRadius: "16px",
+              overflow: "hidden",
+              bgcolor: (theme) => soft(theme, card.color, 0.1),
+              boxShadow: (theme) =>
+                isActive ? `0 0 0 2px ${theme.palette[card.color].main}` : "none",
+            }}
           >
-            <span className={`text-3xl font-bold ${card.text}`}>
-              {card.count}
-            </span>
-            <span className="font-label text-xs uppercase tracking-wider text-on-surface-variant">
-              {card.label}
-            </span>
-          </button>
+            <ButtonBase
+              onClick={() => onFilterClick?.(isActive ? "ALL" : card.status)}
+              disabled={!onFilterClick}
+              sx={{
+                width: "100%",
+                px: 4,
+                py: 2.5,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 0.5,
+                cursor: onFilterClick ? "pointer" : "default",
+                transition: "filter 160ms ease, background-color 160ms ease",
+                "&:hover": {
+                  filter: onFilterClick ? "brightness(1.08)" : "none",
+                },
+              }}
+            >
+              <Typography
+                variant="h4"
+                component="span"
+                sx={{ fontWeight: 700, color: `${card.color}.main` }}
+              >
+                {card.count}
+              </Typography>
+              <Typography
+                variant="label"
+                component="span"
+                sx={{ textTransform: "uppercase", color: "text.secondary" }}
+              >
+                {card.label}
+              </Typography>
+            </ButtonBase>
+          </Panel>
         );
       })}
-    </div>
+    </Box>
   );
 }

@@ -1,17 +1,29 @@
 import { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import Box from "@mui/material/Box";
+import Breadcrumbs from "@mui/material/Breadcrumbs";
+import Button from "@mui/material/Button";
+import Chip from "@mui/material/Chip";
+import Collapse from "@mui/material/Collapse";
+import Link from "@mui/material/Link";
+import Typography from "@mui/material/Typography";
+import { ChevronRight, OpenInNew } from "@mui/icons-material";
+import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
-import {
-  formatDuration,
-  formatPercent,
-  timeAgo,
-  statusBg,
-} from "../lib/utils";
+import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
 import type { BuildResult, TestCase } from "../types/dashboard";
 import { RunTimeline } from "../components/RunTimeline";
 import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
-import { HiChevronRight } from "react-icons/hi2";
+import { Panel } from "../components/Panel";
+import { LoadingState } from "../components/LoadingState";
+import { ErrorState } from "../components/ErrorState";
+import { dotColorFor, soft } from "../theme";
+
+function passRateColor(rate: number): "success" | "warning" | "error" {
+  if (rate >= 0.9) return "success";
+  if (rate >= 0.7) return "warning";
+  return "error";
+}
 
 export function JobDetailPage() {
   const { jobName: jobID } = useParams<{ jobName: string }>();
@@ -36,7 +48,7 @@ export function JobDetailPage() {
     if (runs.length === 0) return null;
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const recent = runs.filter(
-      (r) => new Date(r.started).getTime() >= cutoff
+      (r) => new Date(r.started).getTime() >= cutoff,
     );
     if (recent.length === 0) return null;
     return recent.filter((r) => r.passed).length / recent.length;
@@ -47,44 +59,16 @@ export function JobDetailPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <svg
-          className="h-8 w-8 animate-spin text-primary"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32 text-center">
-        <p className="text-error text-lg">Failed to load job details</p>
-        <p className="text-on-surface-variant text-sm">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-dim"
-        >
-          Retry
-        </button>
-      </div>
+      <ErrorState
+        title="Failed to load job details"
+        message={error}
+        onRetry={() => window.location.reload()}
+      />
     );
   }
 
@@ -93,195 +77,238 @@ export function JobDetailPage() {
   const lastRun = runs[0] ?? null;
 
   return (
-    <div className="space-y-6 sm:space-y-8">
-      {/* Breadcrumb */}
-      <nav className="font-label flex items-center gap-2 text-sm text-on-surface-variant">
-        <Link to="/" className="transition-colors hover:text-primary">
+    <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: 4 } }}>
+      <Breadcrumbs separator="›" sx={{ color: "text.secondary", fontSize: "0.875rem" }}>
+        <Link
+          component={RouterLink}
+          to="/"
+          underline="none"
+          sx={{ color: "text.secondary", "&:hover": { color: "primary.main" } }}
+        >
           Dashboard
         </Link>
-        <span>›</span>
-        <span className="text-on-surface">{displayName}</span>
-      </nav>
-
-      {/* Job header */}
-      <div>
-        <h1 className="font-headline text-xl sm:text-2xl font-bold text-on-surface">
+        <Typography variant="inherit" color="text.primary">
           {displayName}
-        </h1>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          {passRate7d !== null && (
-            <span
-              className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                passRate7d >= 0.9
-                  ? "bg-secondary/20 text-secondary"
-                  : passRate7d >= 0.7
-                    ? "bg-tertiary/20 text-tertiary"
-                    : "bg-error/20 text-error"
-              }`}
-            >
-              {formatPercent(passRate7d)} pass rate (7d)
-            </span>
-          )}
-          <span className="text-sm text-on-surface-variant">
-            {runs.length} total run{runs.length !== 1 && "s"}
-          </span>
-          {lastRun && (
-            <span className="text-sm text-on-surface-variant">
-              Last run {timeAgo(lastRun.started)}
-            </span>
-          )}
-        </div>
-      </div>
+        </Typography>
+      </Breadcrumbs>
 
-      {/* Run timeline */}
+      <Box>
+        <Typography
+          variant="h5"
+          component="h1"
+          sx={{ fontWeight: 700, color: "text.primary", fontSize: { xs: "1.25rem", sm: "1.5rem" } }}
+        >
+          {displayName}
+        </Typography>
+        <Box sx={{ mt: 1.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5 }}>
+          {passRate7d !== null && (() => {
+            const color = passRateColor(passRate7d);
+            return (
+              <Chip
+                size="small"
+                label={`${formatPercent(passRate7d)} pass rate (7d)`}
+                sx={{
+                  bgcolor: (t) => soft(t, color, 0.15),
+                  color: `${color}.main`,
+                  fontWeight: 600,
+                }}
+              />
+            );
+          })()}
+          <Typography variant="body2" color="text.secondary">
+            {runs.length} total run{runs.length !== 1 && "s"}
+          </Typography>
+          {lastRun && (
+            <Typography variant="body2" color="text.secondary">
+              Last run {timeAgo(lastRun.started)}
+            </Typography>
+          )}
+        </Box>
+      </Box>
+
       {runs.length === 0 ? (
-        <div className="glass rounded-xl p-8 text-center">
-          <p className="text-on-surface-variant">No runs found</p>
-        </div>
+        <Panel sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
+          <Typography color="text.secondary">No runs found</Typography>
+        </Panel>
       ) : (
         <>
-          <section>
-            <h2 className="font-headline mb-3 text-lg font-semibold text-on-surface">
+          <Box component="section">
+            <Typography variant="headline" component="h2" sx={{ mb: 1.5 }}>
               Run History
-            </h2>
+            </Typography>
             <RunTimeline
               runs={runs}
               selectedBuildId={selectedBuildId}
               onSelect={handleSelectRun}
             />
-          </section>
+          </Box>
 
-          {/* Test results grid — collapsible */}
-          <section>
-            <button
+          <Box component="section">
+            <Button
               type="button"
+              variant="text"
               onClick={() => setGridOpen(!gridOpen)}
-              className="flex items-center gap-2 font-headline text-lg font-semibold text-on-surface hover:text-primary transition-colors"
+              sx={{
+                minWidth: 0,
+                p: 0,
+                color: "text.primary",
+                textTransform: "none",
+                gap: 1,
+                "&:hover": { color: "primary.main", bgcolor: "transparent" },
+              }}
             >
-              <span className={`inline-block transition-transform duration-200 ${gridOpen ? "rotate-90" : ""}`}><HiChevronRight className="h-5 w-5" /></span>
-              Test Results Grid
-            </button>
-            <div
-              className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${gridOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
-            >
-              <div className="overflow-hidden">
-                <div className="pt-3">
-                  <TestResultsGrid runs={runs} jobID={jobID!} />
-                </div>
-              </div>
-            </div>
-          </section>
+              <ChevronRight
+                sx={{
+                  fontSize: 22,
+                  transition: (t) => t.transitions.create("transform", { duration: t.transitions.duration.short }),
+                  transform: gridOpen ? "rotate(90deg)" : "rotate(0deg)",
+                }}
+              />
+              <Typography variant="headline" component="span">
+                Test Results Grid
+              </Typography>
+            </Button>
+            <Collapse in={gridOpen} timeout="auto" unmountOnExit>
+              <Box sx={{ pt: 1.5 }}>
+                <TestResultsGrid runs={runs} jobID={jobID!} />
+              </Box>
+            </Collapse>
+          </Box>
 
-          {/* Selected run details */}
           {selectedRun && (
-            <section className="glass rounded-xl p-4 sm:p-6">
-              <div className="mb-4 flex items-center gap-3">
-                <h3 className="font-headline text-base font-semibold text-on-surface">
+            <Panel component="section" sx={{ borderRadius: 3, p: { xs: 2, sm: 3 } }}>
+              <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5 }}>
+                <Typography variant="headline" component="h3" sx={{ fontSize: "1rem" }}>
                   Run Details
-                </h3>
+                </Typography>
                 {selectedRun.result === "PENDING" ? (
-                  <span className="rounded-full bg-primary/20 px-2.5 py-0.5 font-label text-xs font-medium text-primary">
-                    In Progress
-                  </span>
+                  <Chip
+                    size="small"
+                    label="In Progress"
+                    sx={{
+                      bgcolor: (t) => soft(t, "primary", 0.15),
+                      color: "primary.main",
+                      fontWeight: 600,
+                    }}
+                  />
                 ) : (
-                  <span
-                    className={`inline-block h-2.5 w-2.5 rounded-full ${statusBg(selectedRun.passed ? "PASSING" : "FAILING")}`}
+                  <Box
+                    sx={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: "50%",
+                      bgcolor: (t) => dotColorFor(t, selectedRun.passed, selectedRun.result),
+                    }}
                   />
                 )}
-              </div>
+              </Box>
 
-              <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-                <div>
-                  <span className="font-label text-xs text-on-surface-variant">
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(3, minmax(0, 1fr))" },
+                  columnGap: 4,
+                  rowGap: 1.5,
+                }}
+              >
+                <Box>
+                  <Typography variant="label" color="text.secondary">
                     Build ID
-                  </span>
-                  <p className="text-on-surface">{selectedRun.build_id}</p>
-                </div>
-                <div>
-                  <span className="font-label text-xs text-on-surface-variant">
+                  </Typography>
+                  <Typography variant="body2" color="text.primary">
+                    {selectedRun.build_id}
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="label" color="text.secondary">
                     Started
-                  </span>
-                  <p className="text-on-surface">
+                  </Typography>
+                  <Typography variant="body2" color="text.primary">
                     {new Date(selectedRun.started).toLocaleString()}
-                  </p>
-                </div>
-                <div>
-                  <span className="font-label text-xs text-on-surface-variant">
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="label" color="text.secondary">
                     Finished
-                  </span>
-                  <p className="text-on-surface">
+                  </Typography>
+                  <Typography variant="body2" color="text.primary">
                     {selectedRun.result === "PENDING"
                       ? "Still running…"
                       : new Date(selectedRun.finished).toLocaleString()}
-                  </p>
-                </div>
-                <div>
-                  <span className="font-label text-xs text-on-surface-variant">
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="label" color="text.secondary">
                     Duration
-                  </span>
-                  <p className="text-on-surface">
+                  </Typography>
+                  <Typography variant="body2" color="text.primary">
                     {selectedRun.result === "PENDING"
                       ? "—"
                       : formatDuration(selectedRun.duration_seconds)}
-                  </p>
-                </div>
-                <div>
-                  <span className="font-label text-xs text-on-surface-variant">
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="label" color="text.secondary">
                     Commit
-                  </span>
-                  <p className="font-mono text-on-surface">
+                  </Typography>
+                  <Typography variant="body2" color="text.primary" sx={{ fontFamily: "monospace" }}>
                     {selectedRun.commit
                       ? selectedRun.commit.slice(0, 8)
                       : "—"}
-                  </p>
-                </div>
-                <div className="flex items-end gap-3">
+                  </Typography>
+                </Box>
+                <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1.5, flexWrap: "wrap" }}>
                   {selectedRun.prow_url && (
-                    <a
+                    <Link
                       href={selectedRun.prow_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-primary transition-colors hover:text-primary-dim"
+                      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main" }}
                     >
-                      View in Prow ↗
-                    </a>
+                      View in Prow <OpenInNew sx={{ fontSize: 16 }} />
+                    </Link>
                   )}
                   {selectedRun.build_log_url && (
-                    <a
+                    <Link
                       href={selectedRun.build_log_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-primary transition-colors hover:text-primary-dim"
+                      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main" }}
                     >
-                      Build Log ↗
-                    </a>
+                      Build Log <OpenInNew sx={{ fontSize: 16 }} />
+                    </Link>
                   )}
-                </div>
-              </div>
-            </section>
+                </Box>
+              </Box>
+            </Panel>
           )}
 
-          {/* Test cases */}
           {selectedRun && testCases.length > 0 && (
-            <section>
-              <h2 className="font-headline mb-3 text-lg font-semibold text-on-surface">
+            <Box component="section">
+              <Typography variant="headline" component="h2" sx={{ mb: 1.5 }}>
                 Test Cases
-              </h2>
-              <TestCaseTable testCases={testCases} jobID={jobID} buildId={selectedRun?.build_id} buildLogUrl={selectedRun?.build_log_url} webUrl={selectedRun?.web_url} />
-            </section>
+              </Typography>
+              <TestCaseTable
+                testCases={testCases}
+                jobID={jobID}
+                buildId={selectedRun?.build_id}
+                buildLogUrl={selectedRun?.build_log_url}
+                webUrl={selectedRun?.web_url}
+              />
+            </Box>
           )}
 
           {selectedRun && testCases.length === 0 && (
-            <section className="glass rounded-xl p-8 text-center">
-              <p className="text-on-surface-variant">
+            <Panel component="section" sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
+              <Typography color="text.secondary">
                 {selectedRun.result === "PENDING"
                   ? "⏳ This build is still running — test results will appear when it completes."
                   : "No test cases available for this run."}
-              </p>
-            </section>
+              </Typography>
+            </Panel>
           )}
         </>
       )}
-    </div>
+    </Box>
   );
 }

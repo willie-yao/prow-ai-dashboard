@@ -1,37 +1,6 @@
 import type { JobSummary } from "../types/dashboard";
 import type { CategoryRule } from "../types/manifest";
 
-export function statusColor(status: string): string {
-  switch (status) {
-    case "PASSING":
-      return "text-secondary";
-    case "FAILING":
-      return "text-error";
-    case "FLAKY":
-      return "text-tertiary";
-    default:
-      return "text-on-surface-variant";
-  }
-}
-
-export function statusBg(status: string): string {
-  switch (status) {
-    case "PASSING":
-      return "bg-secondary";
-    case "FAILING":
-      return "bg-error";
-    case "FLAKY":
-      return "bg-tertiary";
-    default:
-      return "bg-on-surface-variant";
-  }
-}
-
-export function dotColor(passed: boolean, result?: string): string {
-  if (result === "PENDING") return "bg-tertiary";
-  return passed ? "bg-secondary" : "bg-error";
-}
-
 export function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
@@ -152,7 +121,7 @@ export function formatSteps(text: string): string {
 
 /** Strip common verbose prefixes from test names for compact display. */
 export function shortTestName(name: string): string {
-  let short = name
+  const short = name
     .replace(/^\[It\]\s+/, "")
     .replace(/^Workload cluster creation\s+Creating\s+(a\s+)?/, "")
     .replace(/^Running the Cluster API E2E tests\s+/, "CAPI: ")

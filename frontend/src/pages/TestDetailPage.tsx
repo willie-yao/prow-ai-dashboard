@@ -1,19 +1,42 @@
 import React, { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
+import {
+  Box,
+  Typography,
+  Breadcrumbs,
+  Link,
+  Chip,
+  Stack,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+} from "@mui/material";
+import { useTheme } from "@mui/material/styles";
+import {
+  AutoAwesome,
+  Assignment,
+  Inventory2,
+  Cloud,
+  Dns,
+  Place,
+  ExpandMore,
+  OpenInNew,
+} from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
-import { formatDuration, timeAgo, fileToUrl, fileSortKey, formatSteps } from "../lib/utils";
-import { RunTimeline } from "../components/RunTimeline";
-import type { BuildResult, TestCase } from "../types/dashboard";
 import {
-  HiSparkles,
-  HiClipboardDocumentList,
-  HiArchiveBox,
-  HiCloud,
-  HiServerStack,
-  HiMapPin,
-  HiChevronRight,
-} from "react-icons/hi2";
+  formatDuration,
+  timeAgo,
+  fileToUrl,
+  fileSortKey,
+  formatSteps,
+} from "../lib/utils";
+import { RunTimeline } from "../components/RunTimeline";
+import { Panel } from "../components/Panel";
+import { LoadingState } from "../components/LoadingState";
+import { ErrorState } from "../components/ErrorState";
+import { soft } from "../theme";
+import type { BuildResult, TestCase } from "../types/dashboard";
 
 /** Strip numbers and hex strings to normalize error messages for grouping. */
 function normalizeMessage(msg: string): string {
@@ -39,9 +62,9 @@ function highlightStackTrace(body: string): (string | React.ReactElement)[] {
       parts.push(body.slice(lastIndex, match.index));
     }
     parts.push(
-      <span key={key++} className="text-primary">
+      <Box component="span" key={key++} sx={{ color: "primary.main" }}>
         {match[1]}
-      </span>
+      </Box>
     );
     lastIndex = match.index + match[0].length;
   }
@@ -62,7 +85,45 @@ interface FailureGroup {
   count: number;
 }
 
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** MUI color name for a test-case status, or undefined for skipped/absent. */
+function statusColorName(status: string): "success" | "error" | undefined {
+  return status === "passed" ? "success" : status === "failed" ? "error" : undefined;
+}
+
+const sectionTitleSx = { fontSize: "1.125rem", mb: 1.5 } as const;
+
+/** A labelled value used in the run-detail grid. */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Box>
+      <Typography variant="label" color="text.secondary" sx={{ display: "block" }}>
+        {label}
+      </Typography>
+      <Typography variant="body2">{children}</Typography>
+    </Box>
+  );
+}
+
+const preSx = {
+  whiteSpace: "pre-wrap",
+  fontFamily: "monospace",
+  fontSize: "0.75rem",
+  lineHeight: 1.6,
+  m: 0,
+  overflowX: "auto",
+} as const;
+
+const artifactLinkSx = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.5,
+  fontSize: "0.75rem",
+} as const;
+
 export function TestDetailPage() {
+  const theme = useTheme();
   const manifest = useManifest();
   const sourceRepo = manifest.branding.source_repo;
   const { jobName: jobID, testName: encodedTestName } = useParams<{
@@ -166,45 +227,15 @@ export function TestDetailPage() {
     );
   }, [occurrences, effectiveSelectedId]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <svg
-          className="h-8 w-8 animate-spin text-primary"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState />;
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32 text-center">
-        <p className="text-error text-lg">Failed to load job details</p>
-        <p className="text-on-surface-variant text-sm">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-dim"
-        >
-          Retry
-        </button>
-      </div>
+      <ErrorState
+        title="Failed to load job details"
+        message={error}
+        onRetry={() => window.location.reload()}
+      />
     );
   }
 
@@ -213,413 +244,576 @@ export function TestDetailPage() {
   const testFound = occurrences.some((o) => o.testCase !== null);
   if (!testFound) {
     return (
-      <div className="space-y-8">
-        <nav className="font-label flex items-center gap-2 text-sm text-on-surface-variant">
-          <Link to="/" className="transition-colors hover:text-primary">
+      <Stack spacing={4}>
+        <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
+          <Link component={RouterLink} to="/" underline="hover" color="text.secondary">
             Dashboard
           </Link>
-          <span>›</span>
           <Link
+            component={RouterLink}
             to={`/job/${encodeURIComponent(jobID ?? "")}`}
-            className="transition-colors hover:text-primary"
+            underline="hover"
+            color="text.secondary"
           >
             {displayName}
           </Link>
-          <span>›</span>
-          <span className="text-on-surface truncate">{testName}</span>
-        </nav>
-        <div className="glass rounded-xl p-8 text-center">
-          <p className="text-on-surface-variant">
+          <Typography variant="inherit" color="text.primary" noWrap>
+            {testName}
+          </Typography>
+        </Breadcrumbs>
+        <Panel sx={{ borderRadius: "12px", p: 4, textAlign: "center" }}>
+          <Typography color="text.secondary">
             Test not found in any run of this job.
-          </p>
-        </div>
-      </div>
+          </Typography>
+        </Panel>
+      </Stack>
     );
   }
 
   const selectedTc = selectedOccurrence?.testCase ?? null;
   const selectedRun = selectedOccurrence?.run ?? null;
-  const displayStatus = selectedTc?.status ?? latestOccurrence?.testCase?.status ?? "skipped";
+  const displayStatus =
+    selectedTc?.status ?? latestOccurrence?.testCase?.status ?? "skipped";
+  const dispColor = statusColorName(displayStatus);
+  const clsColor = classification
+    ? classification.startsWith("Persistent")
+      ? "error"
+      : classification === "Flaky"
+        ? "warning"
+        : undefined
+    : undefined;
+
+  const fileCtx = (run: BuildResult | null, tc: TestCase) => ({
+    buildLogUrl: run?.build_log_url,
+    clusterArtifacts: tc.cluster_artifacts,
+    sourceRepo,
+    webUrl: run?.web_url,
+  });
 
   return (
-    <div className="space-y-6 sm:space-y-8">
+    <Stack spacing={{ xs: 3, sm: 4 }}>
       {/* Breadcrumb */}
-      <nav className="font-label flex items-center gap-2 text-sm text-on-surface-variant">
-        <Link to="/" className="transition-colors hover:text-primary">
+      <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
+        <Link component={RouterLink} to="/" underline="hover" color="text.secondary">
           Dashboard
         </Link>
-        <span>›</span>
         <Link
+          component={RouterLink}
           to={`/job/${encodeURIComponent(jobID ?? "")}${effectiveSelectedId ? `?run=${effectiveSelectedId}` : ""}`}
-          className="transition-colors hover:text-primary"
+          underline="hover"
+          color="text.secondary"
         >
           {displayName}
         </Link>
-        <span>›</span>
-        <span className="text-on-surface truncate max-w-md" title={testName}>
+        <Typography variant="inherit" color="text.primary" noWrap sx={{ maxWidth: 360 }} title={testName}>
           {testName}
-        </span>
-      </nav>
+        </Typography>
+      </Breadcrumbs>
 
       {/* Test header */}
-      <div>
-        <h1 className="font-headline text-xl sm:text-2xl font-bold text-on-surface break-all">
+      <Box>
+        <Typography
+          variant="headline"
+          component="h1"
+          sx={{ fontSize: { xs: "1.25rem", sm: "1.5rem" }, wordBreak: "break-all" }}
+        >
           {testName}
-        </h1>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <span
-            className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              displayStatus === "passed"
-                ? "bg-secondary/20 text-secondary"
-                : displayStatus === "failed"
-                  ? "bg-error/20 text-error"
-                  : "bg-on-surface-variant/20 text-on-surface-variant"
-            }`}
-          >
-            {displayStatus.charAt(0).toUpperCase() + displayStatus.slice(1)}
-          </span>
+        </Typography>
+        <Stack direction="row" spacing={1.5} sx={{ mt: 1.5, flexWrap: "wrap" }}>
+          <Chip
+            size="small"
+            label={cap(displayStatus)}
+            sx={{
+              fontWeight: 600,
+              ...(dispColor
+                ? { bgcolor: (t) => soft(t, dispColor, 0.2), color: `${dispColor}.main` }
+                : { bgcolor: "action.selected", color: "text.secondary" }),
+            }}
+          />
           {classification && (
-            <span
-              className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                classification.startsWith("Persistent")
-                  ? "bg-error/20 text-error"
-                  : classification === "Flaky"
-                    ? "bg-tertiary/20 text-tertiary"
-                    : "bg-on-surface-variant/20 text-on-surface-variant"
-              }`}
-            >
-              {classification}
-            </span>
+            <Chip
+              size="small"
+              label={classification}
+              sx={{
+                fontWeight: 600,
+                ...(clsColor
+                  ? { bgcolor: (t) => soft(t, clsColor, 0.2), color: `${clsColor}.main` }
+                  : { bgcolor: "action.selected", color: "text.secondary" }),
+              }}
+            />
           )}
-        </div>
-      </div>
+        </Stack>
+      </Box>
 
       {/* Pass/fail history bar */}
-      <section>
-        <h2 className="font-headline mb-3 text-lg font-semibold text-on-surface">
+      <Box component="section">
+        <Typography variant="headline" sx={sectionTitleSx}>
           History
-        </h2>
+        </Typography>
         <RunTimeline
           runs={data?.runs ?? []}
           selectedBuildId={effectiveSelectedId ?? undefined}
           onSelect={setSelectedBuildId}
           colorFn={(run) => {
+            const p = (theme.vars ?? theme).palette;
             const tc = (run.test_cases ?? []).find((t) => t.name === testName);
-            if (!tc) return "bg-on-surface-variant/30";
+            if (!tc) return p.text.disabled;
             return tc.status === "passed"
-              ? "bg-secondary"
+              ? p.success.main
               : tc.status === "failed"
-                ? "bg-error"
-                : "bg-on-surface-variant";
+                ? p.error.main
+                : p.text.secondary;
           }}
           tooltipFn={(run) => {
             const tc = (run.test_cases ?? []).find((t) => t.name === testName);
             return tc
-              ? `#${run.build_id} — ${tc.status.charAt(0).toUpperCase() + tc.status.slice(1)}`
+              ? `#${run.build_id} — ${cap(tc.status)}`
               : `#${run.build_id} — Absent`;
           }}
         />
-      </section>
+      </Box>
 
       {/* Failure pattern grouping */}
       {failureGroups.length > 0 && (
-        <section>
-          <h2 className="font-headline mb-3 text-lg font-semibold text-on-surface">
+        <Box component="section">
+          <Typography variant="headline" sx={sectionTitleSx}>
             Failure Patterns
-          </h2>
-          <div className="glass rounded-xl p-4 space-y-2">
-            {failureGroups.map((group, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-3 text-sm"
-              >
-                <span className="shrink-0 rounded-full bg-error/20 px-2 py-0.5 font-label text-xs font-medium text-error">
-                  {group.count} of {totalFailures}
-                </span>
-                <p className="min-w-0 truncate text-on-surface-variant" title={group.sampleMessage}>
-                  {group.sampleMessage.length > 120
-                    ? group.sampleMessage.slice(0, 120) + "…"
-                    : group.sampleMessage}
-                </p>
-              </div>
-            ))}
-          </div>
-        </section>
+          </Typography>
+          <Panel sx={{ borderRadius: "12px", p: 2 }}>
+            <Stack spacing={1}>
+              {failureGroups.map((group, i) => (
+                <Stack key={i} direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
+                  <Chip
+                    size="small"
+                    label={`${group.count} of ${totalFailures}`}
+                    sx={{
+                      flexShrink: 0,
+                      fontWeight: 600,
+                      bgcolor: (t) => soft(t, "error", 0.2),
+                      color: "error.main",
+                    }}
+                  />
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    noWrap
+                    title={group.sampleMessage}
+                  >
+                    {group.sampleMessage.length > 120
+                      ? group.sampleMessage.slice(0, 120) + "…"
+                      : group.sampleMessage}
+                  </Typography>
+                </Stack>
+              ))}
+            </Stack>
+          </Panel>
+        </Box>
       )}
 
       {/* Selected failure detail */}
       {selectedRun && selectedTc && (
-        <section className="glass rounded-xl p-4 sm:p-6 space-y-5">
-          <div className="flex items-center gap-3">
-            <h3 className="font-headline text-base font-semibold text-on-surface">
-              Run Detail
-            </h3>
-            <span
-              className={`inline-block h-2.5 w-2.5 rounded-full ${
-                selectedTc.status === "passed"
-                  ? "bg-secondary"
-                  : selectedTc.status === "failed"
-                    ? "bg-error"
-                    : "bg-on-surface-variant"
-              }`}
-            />
-          </div>
+        <Panel
+          component="section"
+          sx={{ borderRadius: "12px", p: { xs: 2, sm: 3 } }}
+        >
+          <Stack spacing={2.5}>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+              <Typography variant="headline" sx={{ fontSize: "1rem" }}>
+                Run Detail
+              </Typography>
+              <Box
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  bgcolor:
+                    selectedTc.status === "passed"
+                      ? "success.main"
+                      : selectedTc.status === "failed"
+                        ? "error.main"
+                        : "text.secondary",
+                }}
+              />
+            </Stack>
 
-          <div className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-            <div>
-              <span className="font-label text-xs text-on-surface-variant">
-                Build ID
-              </span>
-              <p className="text-on-surface">{selectedRun.build_id}</p>
-            </div>
-            <div>
-              <span className="font-label text-xs text-on-surface-variant">
-                Started
-              </span>
-              <p className="text-on-surface">
+            <Box
+              sx={{
+                display: "grid",
+                columnGap: 4,
+                rowGap: 1.5,
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  sm: "1fr 1fr",
+                  lg: "repeat(3, 1fr)",
+                },
+              }}
+            >
+              <Field label="Build ID">{selectedRun.build_id}</Field>
+              <Field label="Started">
                 {new Date(selectedRun.started).toLocaleString()}
-              </p>
-            </div>
-            <div>
-              <span className="font-label text-xs text-on-surface-variant">
-                Duration
-              </span>
-              <p className="text-on-surface">
+              </Field>
+              <Field label="Duration">
                 {formatDuration(selectedTc.duration_seconds)}
-              </p>
-            </div>
-            <div>
-              <span className="font-label text-xs text-on-surface-variant">
-                Run finished
-              </span>
-              <p className="text-on-surface">
-                {timeAgo(selectedRun.finished)}
-              </p>
-            </div>
-            <div className="flex items-end gap-3">
-              {selectedRun.prow_url && (
-                <a
-                  href={selectedRun.prow_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary transition-colors hover:text-primary-dim"
-                >
-                  View in Prow ↗
-                </a>
-              )}
-              {selectedRun.build_log_url && (
-                <a
-                  href={selectedRun.build_log_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary transition-colors hover:text-primary-dim"
-                >
-                  Build Log ↗
-                </a>
-              )}
-            </div>
-          </div>
-
-          {/* Failure message */}
-          {selectedTc.failure_message && (
-            <pre className="whitespace-pre-wrap rounded-lg bg-error/5 p-4 font-label text-xs leading-relaxed text-error">
-              {selectedTc.failure_message}
-            </pre>
-          )}
-
-          {/* Full stack trace */}
-          {selectedTc.failure_body && (
-            <details className="group/trace [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
-              <summary className="cursor-pointer font-label text-xs text-on-surface-variant transition-colors hover:text-on-surface">
-                <HiChevronRight className="h-4 w-4 inline-block transition-transform duration-200 group-open/trace:rotate-90" /> Stack Trace
-              </summary>
-              <pre className="mt-2 whitespace-pre-wrap font-label text-xs leading-relaxed text-on-surface-variant">
-                {highlightStackTrace(selectedTc.failure_body)}
-              </pre>
-            </details>
-          )}
-
-          {/* Source location */}
-          {selectedTc.failure_location && (
-            <div className="flex items-center gap-2 text-xs">
-              <HiMapPin className="h-4 w-4 text-on-surface-variant" />
-              {selectedTc.failure_location_url ? (
-                <a
-                  href={selectedTc.failure_location_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-primary hover:underline"
-                >
-                  {selectedTc.failure_location}
-                </a>
-              ) : (
-                <span className="font-mono text-on-surface-variant">
-                  {selectedTc.failure_location}
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Cluster artifacts */}
-          {selectedTc.cluster_artifacts && (
-            <div className="rounded-lg border border-outline-variant bg-surface-container p-3 space-y-2">
-              <p className="font-label text-sm font-semibold text-on-surface">
-                Debug Artifacts — {selectedTc.cluster_artifacts.cluster_name}
-              </p>
-
-              <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
-                {selectedTc.cluster_artifacts.provider_activity_log && (
-                  <a
-                    href={selectedTc.cluster_artifacts.provider_activity_log}
+              </Field>
+              <Field label="Run finished">{timeAgo(selectedRun.finished)}</Field>
+              <Box sx={{ display: "flex", alignItems: "flex-end", gap: 2 }}>
+                {selectedRun.prow_url && (
+                  <Link
+                    href={selectedRun.prow_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                    underline="hover"
+                    sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
                   >
-                    <HiCloud className="h-3.5 w-3.5 shrink-0" /> Provider Activity Log
-                  </a>
+                    View in Prow <OpenInNew sx={{ fontSize: 14 }} />
+                  </Link>
                 )}
-                {selectedTc.cluster_artifacts.bootstrap_resources_url && (
-                  <a
-                    href={selectedTc.cluster_artifacts.bootstrap_resources_url}
+                {selectedRun.build_log_url && (
+                  <Link
+                    href={selectedRun.build_log_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:underline"
+                    underline="hover"
+                    sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
                   >
-                    <HiClipboardDocumentList className="h-3.5 w-3.5 shrink-0" /> Cluster Resources
-                  </a>
+                    Build Log <OpenInNew sx={{ fontSize: 14 }} />
+                  </Link>
                 )}
-                {selectedTc.cluster_artifacts.pod_log_dirs && Object.entries(selectedTc.cluster_artifacts.pod_log_dirs).map(([dir, url]) => (
-                  <a
-                    key={dir}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:underline"
-                  >
-                    <HiArchiveBox className="h-3.5 w-3.5 shrink-0" /> {dir}
-                  </a>
-                ))}
-                {selectedRun?.web_url && (
-                  <a
-                    href={`${selectedRun.web_url}artifacts/clusters/bootstrap/logs/`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-primary hover:underline"
-                  >
-                    <HiServerStack className="h-3.5 w-3.5 shrink-0" /> Controller Logs
-                  </a>
-                )}
-              </div>
+              </Box>
+            </Box>
 
-              {selectedTc.cluster_artifacts.machines &&
-                selectedTc.cluster_artifacts.machines.length > 0 && (
-                  <details className="group/machines [&>summary]:list-none [&>summary::-webkit-details-marker]:hidden">
-                    <summary className="cursor-pointer font-label text-xs text-on-surface-variant transition-colors hover:text-on-surface inline-flex items-center gap-1">
-                      <HiChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform duration-200 group-open/machines:rotate-90" />
-                      <HiServerStack className="h-3.5 w-3.5 shrink-0" /> Machine Logs (
-                      {selectedTc.cluster_artifacts.machines.length} machines)
-                    </summary>
-                    <div className="mt-2 space-y-2">
-                      {selectedTc.cluster_artifacts.machines.map((m) => (
-                        <div key={m.name} className="pl-4">
-                          <p className="font-mono text-xs text-on-surface-variant">
-                            {m.name}
-                          </p>
-                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                            {Object.entries(m.logs).map(([logType, url]) => (
-                              <a
-                                key={logType}
-                                href={url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-label text-[11px] text-primary hover:underline"
+            {/* Failure message */}
+            {selectedTc.failure_message && (
+              <Box
+                component="pre"
+                sx={{
+                  ...preSx,
+                  borderRadius: "8px",
+                  p: 2,
+                  bgcolor: (t) => soft(t, "error", 0.05),
+                  color: "error.main",
+                }}
+              >
+                {selectedTc.failure_message}
+              </Box>
+            )}
+
+            {/* Full stack trace */}
+            {selectedTc.failure_body && (
+              <Accordion
+                disableGutters
+                elevation={0}
+                square
+                sx={{
+                  bgcolor: "transparent",
+                  "&:before": { display: "none" },
+                }}
+              >
+                <AccordionSummary
+                  expandIcon={<ExpandMore />}
+                  sx={{
+                    px: 0,
+                    minHeight: 0,
+                    "& .MuiAccordionSummary-content": { my: 0 },
+                  }}
+                >
+                  <Typography variant="label" color="text.secondary">
+                    Stack Trace
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ px: 0 }}>
+                  <Box component="pre" sx={{ ...preSx, color: "text.secondary" }}>
+                    {highlightStackTrace(selectedTc.failure_body)}
+                  </Box>
+                </AccordionDetails>
+              </Accordion>
+            )}
+
+            {/* Source location */}
+            {selectedTc.failure_location && (
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                <Place sx={{ fontSize: 16, color: "text.secondary" }} />
+                {selectedTc.failure_location_url ? (
+                  <Link
+                    href={selectedTc.failure_location_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    underline="hover"
+                    sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
+                  >
+                    {selectedTc.failure_location}
+                  </Link>
+                ) : (
+                  <Typography
+                    sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
+                    color="text.secondary"
+                  >
+                    {selectedTc.failure_location}
+                  </Typography>
+                )}
+              </Stack>
+            )}
+
+            {/* Cluster artifacts */}
+            {selectedTc.cluster_artifacts && (
+              <Box
+                sx={{
+                  borderRadius: "8px",
+                  border: 1,
+                  borderColor: "divider",
+                  bgcolor: (t) => (t.vars ?? t).palette.surface.container,
+                  p: 1.5,
+                }}
+              >
+                <Typography variant="label" sx={{ fontWeight: 600 }}>
+                  Debug Artifacts — {selectedTc.cluster_artifacts.cluster_name}
+                </Typography>
+
+                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 1 }}>
+                  {selectedTc.cluster_artifacts.provider_activity_log && (
+                    <Link
+                      href={selectedTc.cluster_artifacts.provider_activity_log}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      underline="hover"
+                      sx={artifactLinkSx}
+                    >
+                      <Cloud sx={{ fontSize: 14 }} /> Provider Activity Log
+                    </Link>
+                  )}
+                  {selectedTc.cluster_artifacts.bootstrap_resources_url && (
+                    <Link
+                      href={selectedTc.cluster_artifacts.bootstrap_resources_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      underline="hover"
+                      sx={artifactLinkSx}
+                    >
+                      <Assignment sx={{ fontSize: 14 }} /> Cluster Resources
+                    </Link>
+                  )}
+                  {selectedTc.cluster_artifacts.pod_log_dirs &&
+                    Object.entries(selectedTc.cluster_artifacts.pod_log_dirs).map(
+                      ([dir, url]) => (
+                        <Link
+                          key={dir}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          underline="hover"
+                          sx={artifactLinkSx}
+                        >
+                          <Inventory2 sx={{ fontSize: 14 }} /> {dir}
+                        </Link>
+                      )
+                    )}
+                  {selectedRun?.web_url && (
+                    <Link
+                      href={`${selectedRun.web_url}artifacts/clusters/bootstrap/logs/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      underline="hover"
+                      sx={artifactLinkSx}
+                    >
+                      <Dns sx={{ fontSize: 14 }} /> Controller Logs
+                    </Link>
+                  )}
+                </Box>
+
+                {selectedTc.cluster_artifacts.machines &&
+                  selectedTc.cluster_artifacts.machines.length > 0 && (
+                    <Accordion
+                      disableGutters
+                      elevation={0}
+                      square
+                      sx={{
+                        bgcolor: "transparent",
+                        mt: 1,
+                        "&:before": { display: "none" },
+                      }}
+                    >
+                      <AccordionSummary
+                        expandIcon={<ExpandMore />}
+                        sx={{
+                          px: 0,
+                          minHeight: 0,
+                          "& .MuiAccordionSummary-content": { my: 0, alignItems: "center", gap: 0.5 },
+                        }}
+                      >
+                        <Dns sx={{ fontSize: 14, color: "text.secondary" }} />
+                        <Typography variant="label" color="text.secondary">
+                          Machine Logs ({selectedTc.cluster_artifacts.machines.length} machines)
+                        </Typography>
+                      </AccordionSummary>
+                      <AccordionDetails sx={{ px: 0 }}>
+                        <Stack spacing={1}>
+                          {selectedTc.cluster_artifacts.machines.map((m) => (
+                            <Box key={m.name} sx={{ pl: 2 }}>
+                              <Typography
+                                sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
+                                color="text.secondary"
                               >
-                                {logType}
-                              </a>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                )}
-            </div>
-          )}
+                                {m.name}
+                              </Typography>
+                              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 0.5 }}>
+                                {Object.entries(m.logs).map(([logType, url]) => (
+                                  <Link
+                                    key={logType}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    underline="hover"
+                                    sx={{ fontSize: "0.6875rem" }}
+                                  >
+                                    {logType}
+                                  </Link>
+                                ))}
+                              </Box>
+                            </Box>
+                          ))}
+                        </Stack>
+                      </AccordionDetails>
+                    </Accordion>
+                  )}
+              </Box>
+            )}
 
-          {/* AI analysis panel */}
-          {selectedTc.ai_analysis && (
-            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 sm:p-5 space-y-4">
-              <div className="flex items-center gap-2">
-                <HiSparkles className="h-5 w-5 text-primary" />
-                <span className="font-label text-sm font-semibold text-primary">
-                  AI Analysis
-                </span>
-                <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                  selectedTc.ai_analysis.severity === "Critical" || selectedTc.ai_analysis.severity === "High"
-                    ? "bg-error/20 text-error"
-                    : selectedTc.ai_analysis.severity === "Medium"
-                      ? "bg-tertiary/20 text-tertiary"
-                      : "bg-on-surface-variant/20 text-on-surface-variant"
-                }`}>
-                  Severity: {selectedTc.ai_analysis.severity}
-                </span>
-              </div>
-              <div>
-                <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Root Cause</p>
-                <p className="text-sm text-on-surface leading-relaxed whitespace-pre-line">
-                  {formatSteps(selectedTc.ai_analysis.root_cause)}
-                </p>
-              </div>
-              <div>
-                <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Suggested Fix</p>
-                <p className="text-sm text-on-surface leading-relaxed whitespace-pre-line">
-                  {formatSteps(selectedTc.ai_analysis.suggested_fix)}
-                </p>
-              </div>
-              {selectedTc.ai_analysis.relevant_files && selectedTc.ai_analysis.relevant_files.length > 0 && (
-                <div>
-                  <p className="font-label text-xs font-semibold text-on-surface-variant mb-1">Files to Check</p>
-                  <ul className="list-disc list-inside text-sm text-on-surface space-y-0.5">
-                    {[...selectedTc.ai_analysis.relevant_files]
-                      .sort((a, b) => fileSortKey(a, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo, webUrl: selectedRun?.web_url }) - fileSortKey(b, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo, webUrl: selectedRun?.web_url }))
-                      .map((f, i) => {
-                      const url = fileToUrl(f, { buildLogUrl: selectedRun?.build_log_url, clusterArtifacts: selectedTc.cluster_artifacts, sourceRepo, webUrl: selectedRun?.web_url });
+            {/* AI analysis panel */}
+            {selectedTc.ai_analysis && (
+              <Box
+                sx={{
+                  borderRadius: "8px",
+                  border: 1,
+                  borderColor: (t) => soft(t, "primary", 0.3),
+                  bgcolor: (t) => soft(t, "primary", 0.05),
+                  p: { xs: 1.5, sm: 2.5 },
+                }}
+              >
+                <Stack spacing={2}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                    <AutoAwesome sx={{ fontSize: 20, color: "primary.main" }} />
+                    <Typography variant="label" sx={{ fontWeight: 600 }} color="primary.main">
+                      AI Analysis
+                    </Typography>
+                    {(() => {
+                      const sev = selectedTc.ai_analysis.severity;
+                      const sevColor =
+                        sev === "Critical" || sev === "High"
+                          ? "error"
+                          : sev === "Medium"
+                            ? "warning"
+                            : undefined;
                       return (
-                        <li key={i} className="font-mono text-xs">
-                          {url ? (
-                            <a href={url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{f}</a>
-                          ) : (
-                            <span className="text-on-surface-variant">{f}</span>
-                          )}
-                        </li>
+                        <Chip
+                          size="small"
+                          label={`Severity: ${sev}`}
+                          sx={{
+                            fontWeight: 600,
+                            ...(sevColor
+                              ? { bgcolor: (t) => soft(t, sevColor, 0.2), color: `${sevColor}.main` }
+                              : { bgcolor: "action.selected", color: "text.secondary" }),
+                          }}
+                        />
                       );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+                    })()}
+                  </Stack>
+                  <Box>
+                    <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+                      Root Cause
+                    </Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+                      {formatSteps(selectedTc.ai_analysis.root_cause)}
+                    </Typography>
+                  </Box>
+                  <Box>
+                    <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+                      Suggested Fix
+                    </Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+                      {formatSteps(selectedTc.ai_analysis.suggested_fix)}
+                    </Typography>
+                  </Box>
+                  {selectedTc.ai_analysis.relevant_files &&
+                    selectedTc.ai_analysis.relevant_files.length > 0 && (
+                      <Box>
+                        <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+                          Files to Check
+                        </Typography>
+                        <Box
+                          component="ul"
+                          sx={{ listStyle: "disc inside", m: 0, pl: 0 }}
+                        >
+                          {[...selectedTc.ai_analysis.relevant_files]
+                            .sort(
+                              (a, b) =>
+                                fileSortKey(a, fileCtx(selectedRun, selectedTc)) -
+                                fileSortKey(b, fileCtx(selectedRun, selectedTc))
+                            )
+                            .map((f, i) => {
+                              const url = fileToUrl(f, fileCtx(selectedRun, selectedTc));
+                              return (
+                                <Box
+                                  component="li"
+                                  key={i}
+                                  sx={{ fontFamily: "monospace", fontSize: "0.75rem" }}
+                                >
+                                  {url ? (
+                                    <Link
+                                      href={url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      underline="hover"
+                                    >
+                                      {f}
+                                    </Link>
+                                  ) : (
+                                    <Box component="span" sx={{ color: "text.secondary" }}>
+                                      {f}
+                                    </Box>
+                                  )}
+                                </Box>
+                              );
+                            })}
+                        </Box>
+                      </Box>
+                    )}
+                </Stack>
+              </Box>
+            )}
 
-          {/* AI summary (if no deep analysis) */}
-          {selectedTc.ai_summary && !selectedTc.ai_analysis && (
-            <div className="flex items-start gap-2 rounded-lg bg-surface-container p-3">
-              <HiSparkles className="h-4 w-4 shrink-0 text-primary" />
-              <span className={`text-xs ${selectedTc.ai_summary.is_transient ? "text-on-surface-variant" : "text-tertiary"}`}>
-                {selectedTc.ai_summary.summary}
-              </span>
-            </div>
-          )}
-        </section>
+            {/* AI summary (if no deep analysis) */}
+            {selectedTc.ai_summary && !selectedTc.ai_analysis && (
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: "flex-start",
+                  borderRadius: "8px",
+                  bgcolor: (t) => (t.vars ?? t).palette.surface.container,
+                  p: 1.5,
+                }}
+              >
+                <AutoAwesome sx={{ fontSize: 16, color: "primary.main", mt: "2px" }} />
+                <Typography
+                  variant="caption"
+                  color={selectedTc.ai_summary.is_transient ? "text.secondary" : "warning.main"}
+                >
+                  {selectedTc.ai_summary.summary}
+                </Typography>
+              </Stack>
+            )}
+          </Stack>
+        </Panel>
       )}
 
       {/* When a run is selected but the test wasn't present */}
       {selectedRun && !selectedTc && (
-        <section className="glass rounded-xl p-8 text-center">
-          <p className="text-on-surface-variant">
+        <Panel component="section" sx={{ borderRadius: "12px", p: 4, textAlign: "center" }}>
+          <Typography color="text.secondary">
             This test was not present in build #{selectedRun.build_id}.
-          </p>
-        </section>
+          </Typography>
+        </Panel>
       )}
-    </div>
+    </Stack>
   );
 }

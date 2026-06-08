@@ -1,4 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
+import Box from "@mui/material/Box";
+import Typography from "@mui/material/Typography";
 import { ManifestContext } from "../hooks/useManifest";
 import type { Manifest } from "../types/manifest";
 
@@ -24,15 +26,30 @@ export function ManifestProvider({ children }: { children: ReactNode }) {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background text-on-background p-6">
-        <div className="max-w-md text-center">
-          <h1 className="text-lg font-semibold mb-2">Failed to load dashboard config</h1>
-          <p className="text-sm text-on-surface-variant">{error}</p>
-          <p className="text-sm text-on-surface-variant mt-2">
-            Expected file: <code>data/manifest.json</code>
-          </p>
-        </div>
-      </div>
+      <Box
+        sx={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          p: 3,
+        }}
+      >
+        <Box sx={{ maxWidth: 420, textAlign: "center" }}>
+          <Typography variant="h6" gutterBottom>
+            Failed to load dashboard config
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {error}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Expected file:{" "}
+            <Box component="code" sx={{ fontFamily: "monospace" }}>
+              data/manifest.json
+            </Box>
+          </Typography>
+        </Box>
+      </Box>
     );
   }
 

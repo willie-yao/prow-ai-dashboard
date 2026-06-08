@@ -1,10 +1,22 @@
+import Search from "@mui/icons-material/Search";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Chip from "@mui/material/Chip";
+import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
+import List from "@mui/material/List";
+import ListItemButton from "@mui/material/ListItemButton";
+import ListSubheader from "@mui/material/ListSubheader";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import Fuse from "fuse.js";
 import { useSearchIndex } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { shortJobName, shortTestName } from "../lib/utils";
-import { HiMagnifyingGlass } from "react-icons/hi2";
+import { soft } from "../theme";
+import { Panel } from "./Panel";
 import type { SearchEntry } from "../types/dashboard";
 
 export function SearchBar() {
@@ -94,26 +106,43 @@ export function SearchBar() {
   }
 
   return (
-    <div ref={containerRef} className="relative flex items-center">
-      {/* Mobile: magnifying glass toggle */}
-      <button
+    <Box ref={containerRef} sx={{ position: "relative", display: "flex", alignItems: "center" }}>
+      <IconButton
         type="button"
-        className="md:hidden flex items-center justify-center p-1.5 text-on-surface-variant hover:text-on-surface transition-colors"
         onClick={() => {
           setMobileExpanded(true);
           setTimeout(() => inputRef.current?.focus(), 50);
         }}
         aria-label="Search"
+        size="small"
+        sx={{ display: { xs: "inline-flex", md: "none" }, color: "text.secondary" }}
       >
-        <HiMagnifyingGlass className="h-5 w-5" />
-      </button>
+        <Search sx={{ fontSize: 20 }} />
+      </IconButton>
 
-      {/* Desktop input (always visible) / Mobile input (expandable) */}
-      <div className={`${mobileExpanded ? "fixed inset-x-0 top-0 z-[60] flex items-center gap-2 bg-surface-container px-4 h-16 border-b border-outline-variant" : "hidden md:block"}`}>
-        <div className="relative w-full md:w-64 lg:w-80">
-          <HiMagnifyingGlass className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-on-surface-variant" />
-          <input
-            ref={inputRef}
+      <Box
+        sx={[
+          mobileExpanded
+            ? {
+                position: "fixed",
+                insetInline: 0,
+                top: 0,
+                zIndex: (theme) => theme.zIndex.modal,
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                height: 64,
+                px: 2,
+                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+                borderBottom: "1px solid",
+                borderColor: "divider",
+              }
+            : { display: { xs: "none", md: "block" } },
+        ]}
+      >
+        <Box sx={{ flex: 1, width: { xs: "100%", md: 256, lg: 320 } }}>
+          <TextField
+            inputRef={inputRef}
             type="text"
             value={query}
             onChange={(e) => {
@@ -122,83 +151,206 @@ export function SearchBar() {
             }}
             onFocus={() => setOpen(true)}
             placeholder="Search tests…"
-            className="w-full bg-surface-container border border-outline-variant rounded-lg pl-8 pr-12 py-1.5 text-sm text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:ring-1 focus:ring-primary"
+            size="small"
+            variant="outlined"
+            fullWidth
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search sx={{ fontSize: 18, color: "text.secondary" }} />
+                  </InputAdornment>
+                ),
+                endAdornment: (
+                  <InputAdornment position="end" sx={{ display: { xs: "none", sm: "flex" } }}>
+                    <Box
+                      component="kbd"
+                      sx={{
+                        pointerEvents: "none",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        border: "1px solid",
+                        borderColor: "divider",
+                        borderRadius: 1,
+                        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.main,
+                        px: 0.75,
+                        py: 0.25,
+                        typography: "label",
+                        fontSize: 10,
+                        color: "text.secondary",
+                      }}
+                    >
+                      ⌘K
+                    </Box>
+                  </InputAdornment>
+                ),
+              },
+            }}
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                height: 36,
+                borderRadius: "8px",
+                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+                color: "text.primary",
+                fontSize: "0.875rem",
+                "& fieldset": { borderColor: "divider" },
+                "&:hover fieldset": { borderColor: "text.secondary" },
+                "&.Mui-focused fieldset": { borderColor: "primary.main", borderWidth: 1 },
+              },
+              "& .MuiInputBase-input::placeholder": { color: "text.secondary", opacity: 0.6 },
+            }}
           />
-          <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-0.5 rounded border border-outline-variant bg-surface px-1.5 py-0.5 font-label text-[10px] text-on-surface-variant">
-            ⌘K
-          </kbd>
-        </div>
+        </Box>
         {mobileExpanded && (
-          <button
+          <Button
             type="button"
-            className="md:hidden shrink-0 text-sm text-on-surface-variant hover:text-on-surface"
+            variant="text"
             onClick={() => {
               setMobileExpanded(false);
               setOpen(false);
               setQuery("");
             }}
+            sx={{
+              display: { xs: "inline-flex", md: "none" },
+              flexShrink: 0,
+              minWidth: 0,
+              px: 0.5,
+              color: "text.secondary",
+              textTransform: "none",
+              "&:hover": { color: "text.primary" },
+            }}
           >
             Cancel
-          </button>
+          </Button>
         )}
-      </div>
+      </Box>
 
-      {/* Dropdown results */}
       {open && query.trim() && (
-        <div className={`absolute top-full mt-2 glass rounded-lg border border-outline-variant shadow-xl overflow-hidden ${mobileExpanded ? "fixed left-4 right-4 top-16 mt-0 z-[60]" : "right-0 md:left-0 w-[28rem]"}`}>
-          <div className="max-h-[400px] overflow-y-auto">
+        <Panel
+          elevation={8}
+          sx={{
+            position: mobileExpanded ? "fixed" : "absolute",
+            top: mobileExpanded ? 64 : "calc(100% + 8px)",
+            left: mobileExpanded ? 16 : { md: 0 },
+            right: mobileExpanded ? 16 : { xs: 0, md: "auto" },
+            width: mobileExpanded ? "auto" : { xs: "min(28rem, calc(100vw - 32px))", md: "28rem" },
+            borderRadius: "8px",
+            overflow: "hidden",
+            zIndex: (theme) => theme.zIndex.modal,
+          }}
+        >
+          <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
             {results.length === 0 ? (
-              <div className="px-4 py-6 text-center text-sm text-on-surface-variant">
-                No results
-              </div>
+              <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
+                <Typography variant="body2" color="text.secondary">
+                  No results
+                </Typography>
+              </Box>
             ) : (
-              Array.from(grouped.entries()).map(([jobID, group]) => (
-                <div key={jobID}>
-                  <div className="sticky top-0 bg-surface-container px-3 py-1.5 font-label text-xs font-medium text-on-surface-variant border-b border-outline-variant">
-                    {shortJobName(group.jobName, filePrefix)}
-                  </div>
-                  {group.items.map((r) => (
-                    <button
-                      key={`${r.item.kind}:${r.item.job_id}/${r.item.test_name}`}
-                      type="button"
-                      onClick={() => handleSelect(r.item)}
-                      className="flex w-full items-center gap-3 px-3 py-2 text-sm text-on-surface hover:bg-surface-container-high transition-colors text-left"
+              <List disablePadding dense>
+                {Array.from(grouped.entries()).map(([jobID, group]) => (
+                  <Box key={jobID} component="li" sx={{ listStyle: "none" }}>
+                    <ListSubheader
+                      component="div"
+                      sx={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 1,
+                        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+                        borderBottom: "1px solid",
+                        borderColor: "divider",
+                        px: 1.5,
+                        py: 0.75,
+                        lineHeight: 1.4,
+                        typography: "label",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: "text.secondary",
+                      }}
                     >
-                      {r.item.kind === "job" ? (
-                        <>
-                          <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-primary" />
-                          <span className="min-w-0 flex-1 truncate font-medium">
-                            {r.item.tab_name || shortJobName(r.item.job_name, filePrefix)}
-                          </span>
-                          <span className="shrink-0 font-label text-xs text-on-surface-variant">
-                            {r.item.branch}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span
-                            className={`inline-block h-2 w-2 shrink-0 rounded-full ${
-                              r.item.status === "passed" ? "bg-secondary" : "bg-error"
-                            }`}
-                          />
-                          <span className="min-w-0 flex-1 truncate">
-                            {shortTestName(r.item.test_name)}
-                          </span>
-                          {r.item.fail_rate > 0 && (
-                            <span className="shrink-0 rounded-full bg-error/20 px-2 py-0.5 text-xs font-medium text-error">
-                              {Math.round(r.item.fail_rate * 100)}%
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              ))
+                      {shortJobName(group.jobName, filePrefix)}
+                    </ListSubheader>
+                    {group.items.map((r) => (
+                      <ListItemButton
+                        key={`${r.item.kind}:${r.item.job_id}/${r.item.test_name}`}
+                        component="button"
+                        type="button"
+                        onClick={() => handleSelect(r.item)}
+                        sx={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1.5,
+                          px: 1.5,
+                          py: 1,
+                          color: "text.primary",
+                          textAlign: "left",
+                          transition: "background-color 150ms ease",
+                          "&:hover": { bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh },
+                        }}
+                      >
+                        {r.item.kind === "job" ? (
+                          <>
+                            <Box
+                              sx={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: "50%",
+                                flexShrink: 0,
+                                bgcolor: "primary.main",
+                              }}
+                            />
+                            <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1, fontWeight: 600 }}>
+                              {r.item.tab_name || shortJobName(r.item.job_name, filePrefix)}
+                            </Typography>
+                            <Typography
+                              variant="label"
+                              noWrap
+                              sx={{ flexShrink: 0, fontSize: 12, color: "text.secondary" }}
+                            >
+                              {r.item.branch}
+                            </Typography>
+                          </>
+                        ) : (
+                          <>
+                            <Box
+                              sx={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: "50%",
+                                flexShrink: 0,
+                                bgcolor: r.item.status === "passed" ? "success.main" : "error.main",
+                              }}
+                            />
+                            <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>
+                              {shortTestName(r.item.test_name)}
+                            </Typography>
+                            {r.item.fail_rate > 0 && (
+                              <Chip
+                                size="small"
+                                color="error"
+                                label={`${Math.round(r.item.fail_rate * 100)}%`}
+                                sx={{
+                                  flexShrink: 0,
+                                  height: 22,
+                                  bgcolor: (theme) => soft(theme, "error", 0.18),
+                                  color: "error.main",
+                                  fontWeight: 600,
+                                  "& .MuiChip-label": { px: 1 },
+                                }}
+                              />
+                            )}
+                          </>
+                        )}
+                      </ListItemButton>
+                    ))}
+                  </Box>
+                ))}
+              </List>
             )}
-          </div>
-        </div>
+          </Box>
+        </Panel>
       )}
-    </div>
+    </Box>
   );
 }

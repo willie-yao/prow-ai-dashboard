@@ -1,7 +1,11 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
+import Box from "@mui/material/Box";
+import Link from "@mui/material/Link";
+import Typography from "@mui/material/Typography";
+import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult } from "../types/dashboard";
 import { shortTestName } from "../lib/utils";
+import { Panel } from "./Panel";
 
 interface TestResultsGridProps {
   runs: BuildResult[];
@@ -77,110 +81,188 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
 
   if (runs.length === 0 || gridRows.length === 0) {
     return (
-      <div className="glass rounded-xl p-6 text-center">
-        <p className="text-sm text-on-surface-variant">
+      <Panel sx={{ borderRadius: 3, p: 3, textAlign: "center" }}>
+        <Typography variant="body2" color="text.secondary">
           {runs.length === 0
             ? "No runs available."
             : "All tests passed across all runs — nothing to display."}
-        </p>
-      </div>
+        </Typography>
+      </Panel>
     );
   }
 
   return (
     <>
-      {/* Mobile message */}
-      <div className="md:hidden glass rounded-xl p-6 text-center">
-        <p className="text-sm text-on-surface-variant">
+      <Panel
+        sx={{
+          display: { xs: "block", md: "none" },
+          borderRadius: 3,
+          p: 3,
+          textAlign: "center",
+        }}
+      >
+        <Typography variant="body2" color="text.secondary">
           View on desktop for full test results grid
-        </p>
-      </div>
-      {/* Desktop grid */}
-      <div className="hidden md:block rounded-xl border border-outline-variant bg-surface">
-      <div className="flex">
-        {/* Test name column — fixed width, horizontally scrollable */}
-        <div className="w-[300px] shrink-0 overflow-x-auto border-r border-outline-variant">
-          <table className="border-collapse w-full">
-            <thead>
-              <tr className="h-8">
-                <th className="bg-surface px-3 text-left font-label text-[10px] font-normal text-on-surface-variant whitespace-nowrap">
-                  Test
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {gridRows.map((row) => (
-                <tr key={row.testName} className="h-7 group hover:brightness-110">
-                  <td className="bg-surface group-hover:brightness-110">
-                    <Link
-                      to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(row.testName)}`}
-                      className="block whitespace-nowrap px-3 text-xs text-on-surface transition-colors hover:text-primary"
-                      title={row.testName}
-                    >
-                      {shortTestName(row.testName)}
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        </Typography>
+      </Panel>
 
-        {/* Results grid — scrollable horizontally */}
-        <div className="overflow-x-auto">
-          <table className="border-collapse">
-            <thead>
-              <tr className="h-8">
-                {sortedRuns.map((run) => (
-                  <th
-                    key={run.build_id}
-                    className="px-1 font-label text-[10px] font-normal text-on-surface-variant"
+      <Panel
+        sx={{
+          display: { xs: "none", md: "block" },
+          borderRadius: 3,
+          overflow: "hidden",
+          bgcolor: (t) => (t.vars ?? t).palette.surface.main,
+        }}
+      >
+        <Box sx={{ display: "flex" }}>
+          <Box
+            sx={{
+              width: 300,
+              flexShrink: 0,
+              overflowX: "auto",
+              borderRight: 1,
+              borderColor: "divider",
+            }}
+          >
+            <Box component="table" sx={{ width: "100%", borderCollapse: "collapse" }}>
+              <Box component="thead">
+                <Box component="tr" sx={{ height: 32 }}>
+                  <Box
+                    component="th"
+                    sx={{
+                      bgcolor: (t) => (t.vars ?? t).palette.surface.main,
+                      px: 1.5,
+                      textAlign: "left",
+                      typography: "label",
+                      fontSize: "0.625rem",
+                      fontWeight: 400,
+                      color: "text.secondary",
+                      whiteSpace: "nowrap",
+                    }}
                   >
-                    {shortDate(run.started)}
-                  </th>
+                    Test
+                  </Box>
+                </Box>
+              </Box>
+              <Box component="tbody">
+                {gridRows.map((row) => (
+                  <Box
+                    component="tr"
+                    key={row.testName}
+                    sx={{
+                      height: 28,
+                      transition: (t) => t.transitions.create("background-color"),
+                      "&:hover td": {
+                        bgcolor: (t) => (t.vars ?? t).palette.surface.containerHigh,
+                      },
+                    }}
+                  >
+                    <Box component="td" sx={{ bgcolor: (t) => (t.vars ?? t).palette.surface.main, p: 0 }}>
+                      <Link
+                        component={RouterLink}
+                        to={`/job/${encodeURIComponent(jobID)}/test/${encodeURIComponent(row.testName)}`}
+                        underline="none"
+                        title={row.testName}
+                        sx={{
+                          display: "block",
+                          px: 1.5,
+                          py: 0.5,
+                          color: "text.primary",
+                          fontSize: "0.75rem",
+                          whiteSpace: "nowrap",
+                          transition: (t) => t.transitions.create("color"),
+                          "&:hover": { color: "primary.main" },
+                        }}
+                      >
+                        {shortTestName(row.testName)}
+                      </Link>
+                    </Box>
+                  </Box>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {gridRows.map((row) => (
-                <tr key={row.testName} className="h-7 group hover:brightness-110">
-                  {row.cells.map((status, colIdx) => {
-                    const run = sortedRuns[colIdx];
-                    const cellColor =
-                      status === "passed"
-                        ? "bg-secondary"
-                        : status === "failed"
-                          ? "bg-error"
-                          : "bg-on-surface-variant/30";
+              </Box>
+            </Box>
+          </Box>
 
-                    const cell = (
-                      <div
-                        className={`mx-auto h-5 w-12 rounded-[2px] ${cellColor}`}
-                        title={`${shortTestName(row.testName)}\n#${run.build_id} — ${status}`}
-                      />
-                    );
+          <Box sx={{ overflowX: "auto" }}>
+            <Box component="table" sx={{ borderCollapse: "collapse" }}>
+              <Box component="thead">
+                <Box component="tr" sx={{ height: 32 }}>
+                  {sortedRuns.map((run) => (
+                    <Box
+                      component="th"
+                      key={run.build_id}
+                      sx={{
+                        px: 0.5,
+                        typography: "label",
+                        fontSize: "0.625rem",
+                        fontWeight: 400,
+                        color: "text.secondary",
+                      }}
+                    >
+                      {shortDate(run.started)}
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+              <Box component="tbody">
+                {gridRows.map((row) => (
+                  <Box
+                    component="tr"
+                    key={row.testName}
+                    sx={{
+                      height: 28,
+                      transition: (t) => t.transitions.create("background-color"),
+                      "&:hover td": {
+                        bgcolor: (t) => (t.vars ?? t).palette.surface.containerHigh,
+                      },
+                    }}
+                  >
+                    {row.cells.map((status, colIdx) => {
+                      const run = sortedRuns[colIdx];
+                      const cellColor =
+                        status === "passed"
+                          ? "success.main"
+                          : status === "failed"
+                            ? "error.main"
+                            : "action.disabledBackground";
 
-                    return (
-                      <td key={run.build_id} className="px-1 py-0.5">
-                        {status !== "absent" ? (
-                          <Link
-                            to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
-                          >
-                            {cell}
-                          </Link>
-                        ) : (
-                          cell
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        </div>
-      </div>
+                      const cell = (
+                        <Box
+                          title={`${shortTestName(row.testName)}\n#${run.build_id} — ${status}`}
+                          sx={{
+                            mx: "auto",
+                            height: 20,
+                            width: 48,
+                            borderRadius: "2px",
+                            bgcolor: cellColor,
+                          }}
+                        />
+                      );
+
+                      return (
+                        <Box component="td" key={run.build_id} sx={{ px: 0.5, py: 0.25 }}>
+                          {status !== "absent" ? (
+                            <Link
+                              component={RouterLink}
+                              to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
+                              underline="none"
+                              sx={{ display: "block" }}
+                            >
+                              {cell}
+                            </Link>
+                          ) : (
+                            cell
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          </Box>
+        </Box>
+      </Panel>
     </>
   );
 }

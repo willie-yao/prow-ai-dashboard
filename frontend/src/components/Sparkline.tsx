@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import Box from "@mui/material/Box";
+import Tooltip from "@mui/material/Tooltip";
+import { Link as RouterLink } from "react-router-dom";
 import type { RunSummary } from "../types/dashboard";
-import { dotColor } from "../lib/utils";
+import { dotColorFor } from "../theme";
 
 interface SparklineProps {
   runs: RunSummary[];
@@ -9,30 +10,45 @@ interface SparklineProps {
 }
 
 export function Sparkline({ runs, jobID }: SparklineProps) {
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   // Show newest on the right: recent_runs is newest-first, so take first 8 and reverse
   const recent = runs.slice(0, 8).reverse();
 
   return (
-    <div className="relative flex items-center gap-1.5">
-      {recent.map((run, i) => (
-        <Link
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+      {recent.map((run) => (
+        <Tooltip
           key={run.build_id}
-          to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
-          className="group relative"
-          onMouseEnter={() => setHoveredIdx(i)}
-          onMouseLeave={() => setHoveredIdx(null)}
+          title={`#${run.build_id} — ${run.passed ? "Passed" : "Failed"}`}
         >
-          <span
-            className={`block h-2.5 w-2.5 rounded-full transition-transform group-hover:scale-125 ${dotColor(run.passed)}`}
-          />
-          {hoveredIdx === i && (
-            <span className="absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded bg-surface-container-highest px-2 py-1 font-label text-[10px] text-on-surface shadow-lg">
-              #{run.build_id} — {run.passed ? "Passed" : "Failed"}
-            </span>
-          )}
-        </Link>
+          <Box
+            component={RouterLink}
+            to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
+            aria-label={`Run ${run.build_id} ${run.passed ? "passed" : "failed"}`}
+            onClick={(event) => event.stopPropagation()}
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              p: 0.5,
+              m: -0.5,
+              borderRadius: "50%",
+              "&:hover > span": { transform: "scale(1.25)" },
+            }}
+          >
+            <Box
+              component="span"
+              sx={{
+                display: "block",
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                bgcolor: (theme) => dotColorFor(theme, run.passed),
+                transition: "transform 140ms ease",
+              }}
+            />
+          </Box>
+        </Tooltip>
       ))}
-    </div>
+    </Box>
   );
 }

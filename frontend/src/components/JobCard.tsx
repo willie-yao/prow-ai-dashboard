@@ -1,7 +1,12 @@
-import { Link } from "react-router-dom";
+import Box from "@mui/material/Box";
+import Card from "@mui/material/Card";
+import CardActionArea from "@mui/material/CardActionArea";
+import CardContent from "@mui/material/CardContent";
+import Typography from "@mui/material/Typography";
+import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
 import { formatPercent, timeAgo, formatDuration } from "../lib/utils";
-import { StatusBadge } from "./StatusBadge";
+import { StatusChip } from "./StatusChip";
 import { Sparkline } from "./Sparkline";
 
 interface JobCardProps {
@@ -15,42 +20,112 @@ export function JobCard({ job }: JobCardProps) {
       ? formatDuration(job.last_run.duration_seconds)
       : "—";
 
+  const footerItems = [
+    { label: "Pass", value: formatPercent(job.pass_rate_7d) },
+    { label: "Last", value: lastRunTime },
+    { label: "Dur", value: lastDuration },
+  ];
+
   return (
-    <Link
-      to={`/job/${encodeURIComponent(job.job_id)}`}
-      className="glass group flex flex-col gap-3 rounded-2xl border border-outline-variant p-4 transition-all hover:brightness-125"
+    <Card
+      elevation={0}
+      sx={{
+        height: "100%",
+        borderRadius: "16px",
+        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.glass,
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        border: "1px solid",
+        borderColor: "divider",
+        backgroundImage: "none",
+        transition: "filter 160ms ease, border-color 160ms ease",
+        "&:hover": {
+          filter: "brightness(1.08)",
+          borderColor: "primary.main",
+        },
+      }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="font-headline text-sm font-semibold leading-snug text-on-surface group-hover:text-primary">
-          {job.tab_name}
-        </h3>
-        <StatusBadge status={job.overall_status} />
-      </div>
+      <CardActionArea
+        component={RouterLink}
+        to={`/job/${encodeURIComponent(job.job_id)}`}
+        sx={{ height: "100%", display: "flex", alignItems: "stretch" }}
+      >
+        <CardContent
+          sx={{
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: 1.5,
+            p: 2,
+            "&:last-child": { pb: 2 },
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5 }}>
+            <Typography
+              variant="headline"
+              component="h3"
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: "0.875rem",
+                lineHeight: 1.35,
+                color: "text.primary",
+                transition: "color 160ms ease",
+                ".MuiCardActionArea-root:hover &": { color: "primary.main" },
+              }}
+            >
+              {job.tab_name}
+            </Typography>
+            <StatusChip status={job.overall_status} />
+          </Box>
 
-      {job.description && (
-        <p className="line-clamp-2 text-xs leading-relaxed text-on-surface-variant">
-          {job.description}
-        </p>
-      )}
+          {job.description && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                lineHeight: 1.6,
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {job.description}
+            </Typography>
+          )}
 
-      <Sparkline runs={job.recent_runs} jobID={job.job_id} />
+          <Sparkline runs={job.recent_runs} jobID={job.job_id} />
 
-      <div className="mt-auto flex items-center gap-4 border-t border-outline-variant pt-3 font-label text-[11px] tracking-wide text-on-surface-variant">
-        <span>
-          Pass{" "}
-          <span className="text-on-surface">
-            {formatPercent(job.pass_rate_7d)}
-          </span>
-        </span>
-        <span>
-          Last{" "}
-          <span className="text-on-surface">{lastRunTime}</span>
-        </span>
-        <span>
-          Dur{" "}
-          <span className="text-on-surface">{lastDuration}</span>
-        </span>
-      </div>
-    </Link>
+          <Box
+            sx={{
+              mt: "auto",
+              pt: 1.5,
+              borderTop: "1px solid",
+              borderColor: "divider",
+              display: "flex",
+              alignItems: "center",
+              gap: 2.5,
+              flexWrap: "wrap",
+            }}
+          >
+            {footerItems.map((item) => (
+              <Typography
+                key={item.label}
+                variant="label"
+                component="span"
+                color="text.secondary"
+                sx={{ fontSize: "0.6875rem" }}
+              >
+                {item.label}{" "}
+                <Box component="span" sx={{ color: "text.primary" }}>
+                  {item.value}
+                </Box>
+              </Typography>
+            ))}
+          </Box>
+        </CardContent>
+      </CardActionArea>
+    </Card>
   );
 }
