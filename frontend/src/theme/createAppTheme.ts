@@ -64,19 +64,26 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
 
 const typography = {
   fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
-  // Root font-size is 17px (see index.css); keep MUI's px<->rem math in sync.
-  htmlFontSize: 17,
+  // The root html font-size is 17px (see index.css). Keep MUI's default
+  // htmlFontSize of 16 so its rem-based variants scale by 17/16, matching the
+  // sizes the old Tailwind UI rendered on the same 17px root.
+  htmlFontSize: 16,
   h1: { fontWeight: 800, letterSpacing: "-0.02em" },
   h2: { fontWeight: 700, letterSpacing: "-0.01em" },
   h3: { fontWeight: 700, letterSpacing: "-0.01em" },
-  h4: { fontWeight: 700 },
+  // Page titles and stat counts (old `text-3xl`).
+  h4: { fontWeight: 700, fontSize: "1.875rem" },
   h5: { fontWeight: 600 },
-  h6: { fontWeight: 600 },
+  // Sub-section headings and empty/error titles (old `text-lg`).
+  h6: { fontWeight: 600, fontSize: "1.125rem" },
   button: { fontWeight: 600 },
   // Custom variants mirroring the old `font-headline` / `font-label` utilities.
+  // headline defaults to the common section-heading size (old `text-lg`); call
+  // sites override fontSize via `sx` for larger titles or smaller card titles.
   headline: {
     fontFamily: '"Inter", sans-serif',
     fontWeight: 700,
+    fontSize: "1.125rem",
     letterSpacing: "-0.01em",
   },
   label: {

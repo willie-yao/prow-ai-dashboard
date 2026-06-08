@@ -93,7 +93,11 @@ export function JobDetailPage() {
       </Breadcrumbs>
 
       <Box>
-        <Typography variant="h5" component="h1" sx={{ fontWeight: 700, color: "text.primary" }}>
+        <Typography
+          variant="h5"
+          component="h1"
+          sx={{ fontWeight: 700, color: "text.primary", fontSize: { xs: "1.25rem", sm: "1.5rem" } }}
+        >
           {displayName}
         </Typography>
         <Box sx={{ mt: 1.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5 }}>
@@ -174,7 +178,7 @@ export function JobDetailPage() {
           {selectedRun && (
             <Panel component="section" sx={{ borderRadius: 3, p: { xs: 2, sm: 3 } }}>
               <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5 }}>
-                <Typography variant="headline" component="h3">
+                <Typography variant="headline" component="h3" sx={{ fontSize: "1rem" }}>
                   Run Details
                 </Typography>
                 {selectedRun.result === "PENDING" ? (
