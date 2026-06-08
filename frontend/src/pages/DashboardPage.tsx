@@ -130,7 +130,7 @@ export function DashboardPage() {
         <Typography variant="h4" component="h1">
           Test Health Overview
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Last updated: {timeAgo(data.generated_at)}
         </Typography>
       </Box>

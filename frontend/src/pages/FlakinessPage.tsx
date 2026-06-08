@@ -364,7 +364,7 @@ export function FlakinessPage() {
         <Typography variant="h4" component="h1">
           Test Analysis
         </Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="body2" color="text.secondary">
           Last updated: {timeAgo(data.generated_at)}
         </Typography>
       </Stack>
