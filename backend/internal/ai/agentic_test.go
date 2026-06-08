@@ -595,6 +595,45 @@ func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 	}
 }
 
+// TestAgToolDocs_TransientTriageAnchors pins the transient-triage step that
+// tells the agent to honor the project's known-transient classes and stop
+// before drilling, so the anti-punt / deep-investigation framing does not
+// override the consumer's transient rules and flag infra flake as a real bug.
+func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
+	required := []string{
+		"Triage for a known transient FIRST",
+		"set is_transient=true and stop",
+		"manufacture a remediation for infrastructure flake",
+		"rule out a known-transient class",
+	}
+	for _, s := range required {
+		if !strings.Contains(agToolDocs, s) {
+			t.Errorf("agToolDocs missing transient-triage anchor %q\nfull text:\n%s", s, agToolDocs)
+		}
+	}
+}
+
+// TestResponseFormatFooter_TransientAnchors pins the transient guidance so
+// it defers to the project's named transient classes rather than blanket-
+// biasing toward is_transient=false (which buried the consumer's rules).
+func TestResponseFormatFooter_TransientAnchors(t *testing.T) {
+	required := []string{
+		"even if you could keep digging",
+		"infrastructure flake is not a code bug",
+	}
+	for _, s := range required {
+		if !strings.Contains(ResponseFormatFooter, s) {
+			t.Errorf("ResponseFormatFooter missing transient anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
+		}
+	}
+	// The old blanket bias must not creep back: it overrode the consumer's
+	// explicit transient list and produced false "real bug" verdicts.
+	forbidden := "When in doubt, set is_transient=false"
+	if strings.Contains(ResponseFormatFooter, forbidden) {
+		t.Errorf("ResponseFormatFooter reintroduced the blanket bias %q", forbidden)
+	}
+}
+
 // TestResponseFormatFooter_AntiPuntAnchors pins the tightening of the
 // suggested_fix and root_cause schema descriptions. The footer is shared
 // by agentic and non-agentic consumers, so wording must stay tool-neutral:

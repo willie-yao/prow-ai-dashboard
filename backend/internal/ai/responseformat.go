@@ -22,8 +22,11 @@ Always respond with a single JSON object matching this schema:
   "relevant_files": ["file1.go", "file2.yaml"]
 }
 
-Set is_transient=true only when the root cause is a known transient infra
+Set is_transient=true when the root cause is a transient infrastructure
 issue (throttling, quota exhaustion, intermittent DNS, image-pull backoff,
-disk pressure, etcd leader election) rather than a real bug in the code
-under test. When in doubt, set is_transient=false so the failure stays
-visible.`
+disk pressure, etcd leader election, API server or node still coming up)
+rather than a real bug in the code under test. If the failure matches a
+transient class the project-specific knowledge calls out, set
+is_transient=true even if you could keep digging for a deeper chain;
+infrastructure flake is not a code bug. Reserve is_transient=false for
+failures that are a genuine defect or that match no known transient class.`
