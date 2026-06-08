@@ -1,12 +1,30 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
+import Box from "@mui/material/Box";
+import Chip from "@mui/material/Chip";
+import LinearProgress from "@mui/material/LinearProgress";
+import Link from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import Tooltip from "@mui/material/Tooltip";
+import Typography from "@mui/material/Typography";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
+import { Link as RouterLink } from "react-router-dom";
+import { ErrorState } from "../components/ErrorState";
+import { LoadingState } from "../components/LoadingState";
+import { Panel } from "../components/Panel";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
-import { formatPercent, shortJobName, timeAgo } from "../lib/utils";
+import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
+import { soft } from "../theme";
 import type { TestFlakiness } from "../types/dashboard";
-import { HiFaceSmile, HiChevronRight } from "../lib/icons";
 
 type Tab = "most_flaky" | "persistent" | "recently_broken";
+type ClassificationColor = "error" | "warning" | "default";
 
 const tabs: { label: string; value: Tab; tooltip: string }[] = [
   { label: "Most Flaky", value: "most_flaky", tooltip: "Tests that alternate between passing and failing. Sorted by flip rate — the percentage of runs where the result changed from the previous run." },
@@ -14,14 +32,14 @@ const tabs: { label: string; value: Tab; tooltip: string }[] = [
   { label: "Recently Broken", value: "recently_broken", tooltip: "Tests that started a new failure streak within the last 48 hours. These are likely new regressions." },
 ];
 
-function classificationStyle(c: TestFlakiness["classification"]): string {
+function classificationStyle(c: TestFlakiness["classification"]): ClassificationColor {
   switch (c) {
     case "persistent":
-      return "bg-error/20 text-error";
+      return "error";
     case "flaky":
-      return "bg-tertiary/20 text-tertiary";
+      return "warning";
     case "one-off":
-      return "bg-on-surface-variant/20 text-on-surface-variant";
+      return "default";
   }
 }
 
@@ -56,123 +74,264 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: Tab }) {
   const filePrefix = manifest.short_name_prefix ?? "";
   const [expanded, setExpanded] = useState(false);
   const failPct = Math.round(item.fail_rate * 100);
+  const progressValue = Math.min(100, Math.max(0, failPct));
+  const classificationColor = classificationStyle(item.classification);
+  const lastFailureMessage = item.last_failure?.failure_message;
 
   return (
-    <div className="glass rounded-xl">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 sm:px-4 py-3 text-left"
+    <Panel sx={{ borderRadius: "12px", overflow: "hidden" }}>
+      <Accordion
+        disableGutters
+        elevation={0}
+        expanded={expanded}
+        onChange={(_, nextExpanded) => setExpanded(nextExpanded)}
+        square={false}
+        sx={{
+          bgcolor: "transparent",
+          backgroundImage: "none",
+          boxShadow: "none",
+          "&:before": { display: "none" },
+          "&.Mui-expanded": { m: 0 },
+        }}
       >
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-4">
-          {/* Test Name */}
-          <div className="min-w-0 flex-1">
-            <Link
-              to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
-              onClick={(e) => e.stopPropagation()}
-              className="block truncate text-sm font-medium text-on-surface hover:text-primary transition-colors"
-              title={item.test_name}
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon fontSize="small" />}
+          sx={{
+            minHeight: 0,
+            px: { xs: 1.5, sm: 2 },
+            py: 1,
+            "&.Mui-expanded": { minHeight: 0 },
+            "& .MuiAccordionSummary-content": {
+              minWidth: 0,
+              my: 0,
+            },
+            "& .MuiAccordionSummary-content.Mui-expanded": { my: 0 },
+            "& .MuiAccordionSummary-expandIconWrapper": {
+              color: "text.secondary",
+            },
+          }}
+        >
+          <Stack spacing={1} sx={{ minWidth: 0, width: "100%" }}>
+            <Box
+              sx={{
+                alignItems: "center",
+                display: "flex",
+                flexWrap: { xs: "wrap", sm: "nowrap" },
+                gap: { xs: 1.5, sm: 2 },
+                minWidth: 0,
+                width: "100%",
+              }}
             >
-              {item.test_name}
-            </Link>
-            <Link
-              to={`/job/${encodeURIComponent(item.job_id)}`}
-              onClick={(e) => e.stopPropagation()}
-              className="font-label text-xs text-on-surface-variant hover:text-primary transition-colors"
-            >
-              {shortJobName(item.job_name, filePrefix)}
-            </Link>
-          </div>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Link
+                  component={RouterLink}
+                  to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
+                  onClick={(e) => e.stopPropagation()}
+                  underline="none"
+                  title={item.test_name}
+                  sx={{
+                    color: "text.primary",
+                    display: "block",
+                    fontSize: "0.875rem",
+                    fontWeight: 600,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    transition: "color 150ms ease",
+                    whiteSpace: "nowrap",
+                    "&:hover": { color: "primary.main" },
+                  }}
+                >
+                  {shortTestName(item.test_name)}
+                </Link>
+                <Link
+                  component={RouterLink}
+                  to={`/job/${encodeURIComponent(item.job_id)}`}
+                  onClick={(e) => e.stopPropagation()}
+                  underline="none"
+                  title={item.job_name}
+                  variant="label"
+                  sx={{
+                    color: "text.secondary",
+                    display: "inline-block",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    transition: "color 150ms ease",
+                    whiteSpace: "nowrap",
+                    "&:hover": { color: "primary.main" },
+                  }}
+                >
+                  {shortJobName(item.job_name, filePrefix)}
+                </Link>
+              </Box>
 
-          {/* Metric */}
-          <div className="shrink-0 text-right w-16">
-            <p className="font-label text-xs text-on-surface-variant">
-              {metricLabel(tab)}
-            </p>
-            <p className="text-sm font-semibold text-on-surface">
-              {metricValue(tab, item)}
-            </p>
-          </div>
+              <Box
+                sx={{
+                  flexShrink: 0,
+                  textAlign: { xs: "left", sm: "right" },
+                  width: { xs: 72, sm: 64 },
+                }}
+              >
+                <Typography variant="label" color="text.secondary">
+                  {metricLabel(tab)}
+                </Typography>
+                <Typography variant="body2" color="text.primary" sx={{ fontWeight: 700 }}>
+                  {metricValue(tab, item)}
+                </Typography>
+              </Box>
 
-          {/* Fail Rate Bar */}
-          <div className="shrink-0 w-24">
-            <p className="font-label text-xs text-on-surface-variant mb-1">
-              Fail {failPct}%
-            </p>
-            <div className="h-2 w-full rounded-full bg-on-surface-variant/20">
-              <div
-                className="h-2 rounded-full bg-error"
-                style={{ width: `${failPct}%` }}
+              <Box sx={{ flexShrink: 0, width: { xs: 120, sm: 96 } }}>
+                <Typography variant="label" color="text.secondary" sx={{ mb: 0.5 }}>
+                  Fail {failPct}%
+                </Typography>
+                <LinearProgress
+                  variant="determinate"
+                  value={progressValue}
+                  color="error"
+                  sx={{
+                    bgcolor: (theme) => soft(theme, "error", 0.14),
+                    borderRadius: 999,
+                    height: 8,
+                    "& .MuiLinearProgress-bar": { borderRadius: 999 },
+                  }}
+                />
+              </Box>
+
+              <Chip
+                size="small"
+                label={classificationLabel(item.classification)}
+                color={classificationColor}
+                sx={{
+                  bgcolor: (theme) =>
+                    classificationColor === "default"
+                      ? theme.palette.action.selected
+                      : soft(theme, classificationColor, 0.18),
+                  color:
+                    classificationColor === "default"
+                      ? "text.secondary"
+                      : `${classificationColor}.main`,
+                  flexShrink: 0,
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  height: 24,
+                  px: 0.5,
+                }}
               />
-            </div>
-          </div>
+            </Box>
 
-          {/* Classification badge */}
-          <span
-            className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${classificationStyle(item.classification)}`}
-          >
-            {classificationLabel(item.classification)}
-          </span>
+            {lastFailureMessage && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                title={lastFailureMessage}
+                noWrap
+                sx={{ display: "block" }}
+              >
+                {lastFailureMessage}
+              </Typography>
+            )}
+          </Stack>
+        </AccordionSummary>
 
-          {/* Expand indicator */}
-          <span
-            className={`shrink-0 text-on-surface-variant transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
-          >
-            <HiChevronRight className="h-4 w-4" />
-          </span>
-        </div>
+        <AccordionDetails
+          sx={{
+            borderTop: "1px solid",
+            borderColor: "divider",
+            px: 2,
+            py: 2,
+          }}
+        >
+          <Stack spacing={2}>
+            {lastFailureMessage && (
+              <Box>
+                <Typography
+                  variant="label"
+                  color="text.secondary"
+                  sx={{ display: "block", mb: 0.75 }}
+                >
+                  Last Error
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: (theme) => soft(theme, "error", 0.05),
+                    borderRadius: "8px",
+                    color: "error.main",
+                    fontFamily: (theme) => theme.typography.label.fontFamily,
+                    fontSize: "0.75rem",
+                    lineHeight: 1.6,
+                    m: 0,
+                    overflowX: "auto",
+                    p: 1.5,
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {lastFailureMessage}
+                </Box>
+              </Box>
+            )}
 
-        {/* Last Error (truncated) */}
-        {item.last_failure?.failure_message && (
-          <p className="mt-2 truncate text-xs text-on-surface-variant">
-            {item.last_failure.failure_message}
-          </p>
-        )}
-      </button>
-
-      {/* Expanded content */}
-      {expanded && (
-        <div className="border-t border-outline-variant px-4 py-4 space-y-4">
-          {/* Last error full message */}
-          {item.last_failure?.failure_message && (
-            <div>
-              <p className="font-label text-xs text-on-surface-variant mb-1">
-                Last Error
-              </p>
-              <pre className="whitespace-pre-wrap rounded-lg bg-error/5 p-3 font-label text-xs leading-relaxed text-error">
-                {item.last_failure.failure_message}
-              </pre>
-            </div>
-          )}
-
-          {/* Error patterns */}
-          {item.error_patterns && item.error_patterns.length > 0 && (
-            <div>
-              <p className="font-label text-xs text-on-surface-variant mb-2">
-                Error Patterns
-              </p>
-              <div className="space-y-2">
-                {item.error_patterns.map((pat, i) => (
-                  <div key={i} className="flex items-start gap-3 text-sm">
-                    <span className="shrink-0 rounded-full bg-error/20 px-2 py-0.5 font-label text-xs font-medium text-error">
-                      {pat.count}×
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-xs text-on-surface-variant" title={pat.normalized_message}>
-                        {pat.normalized_message}
-                      </p>
-                      <p className="mt-0.5 truncate text-xs text-on-surface-variant/60" title={pat.example_message}>
-                        e.g. {pat.example_message}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+            {item.error_patterns && item.error_patterns.length > 0 && (
+              <Box>
+                <Typography
+                  variant="label"
+                  color="text.secondary"
+                  sx={{ display: "block", mb: 1 }}
+                >
+                  Error Patterns
+                </Typography>
+                <Stack spacing={1}>
+                  {item.error_patterns.map((pat, i) => (
+                    <Box
+                      key={`${pat.error_hash}-${i}`}
+                      sx={{
+                        alignItems: "flex-start",
+                        display: "flex",
+                        gap: 1.5,
+                        minWidth: 0,
+                      }}
+                    >
+                      <Chip
+                        size="small"
+                        label={`${pat.count}×`}
+                        sx={{
+                          bgcolor: (theme) => soft(theme, "error", 0.18),
+                          color: "error.main",
+                          flexShrink: 0,
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          height: 22,
+                        }}
+                      />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          title={pat.normalized_message}
+                          noWrap
+                          sx={{ display: "block" }}
+                        >
+                          {pat.normalized_message}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          title={pat.example_message}
+                          noWrap
+                          sx={{ display: "block", opacity: 0.65 }}
+                        >
+                          e.g. {pat.example_message}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+          </Stack>
+        </AccordionDetails>
+      </Accordion>
+    </Panel>
   );
 }
 
@@ -181,45 +340,11 @@ export function FlakinessPage() {
   const [activeTab, setActiveTab] = useState<Tab>("most_flaky");
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <svg
-          className="h-8 w-8 animate-spin text-primary"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32 text-center">
-        <p className="text-error text-lg">Failed to load test analysis</p>
-        <p className="text-on-surface-variant text-sm">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-dim"
-        >
-          Retry
-        </button>
-      </div>
-    );
+    return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   }
 
   if (!data) return null;
@@ -231,51 +356,85 @@ export function FlakinessPage() {
   };
 
   const items = listMap[activeTab] ?? [];
+  const activeDescription = tabs.find((t) => t.value === activeTab)?.tooltip;
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="font-headline text-3xl font-bold text-on-surface">
+    <Stack spacing={4}>
+      <Stack spacing={0.5}>
+        <Typography variant="h4" component="h1">
           Test Analysis
-        </h1>
-        <p className="mt-1 text-sm text-on-surface-variant">
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
           Last updated: {timeAgo(data.generated_at)}
-        </p>
-      </div>
+        </Typography>
+      </Stack>
 
-      {/* Tabs */}
-      <div className="flex flex-wrap gap-1">
-        {tabs.map((t) => (
-          <button
-            key={t.value}
-            onClick={() => setActiveTab(t.value)}
-            title={t.tooltip}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-              activeTab === t.value
-                ? "bg-primary text-on-primary"
-                : "bg-surface-container text-on-surface-variant hover:bg-surface-container-high"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Stack spacing={1.5}>
+        <Tabs
+          value={activeTab}
+          onChange={(_, value: Tab) => setActiveTab(value)}
+          variant="scrollable"
+          scrollButtons="auto"
+          aria-label="Test analysis categories"
+          sx={{
+            minHeight: 34,
+            "& .MuiTabs-flexContainer": { gap: 0.5 },
+            "& .MuiTabs-indicator": { display: "none" },
+            "& .MuiTab-root": {
+              bgcolor: (theme) => theme.palette.surface.container,
+              borderRadius: 999,
+              color: "text.secondary",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              minHeight: 34,
+              minWidth: 0,
+              px: 1.5,
+              py: 0.5,
+              textTransform: "none",
+              transition: "background-color 150ms ease, color 150ms ease",
+              "&:hover": {
+                bgcolor: (theme) => theme.palette.surface.containerHigh,
+              },
+              "&.Mui-selected": {
+                bgcolor: "primary.main",
+                color: "primary.contrastText",
+              },
+            },
+          }}
+        >
+          {tabs.map((t) => (
+            <Tab
+              key={t.value}
+              value={t.value}
+              label={
+                <Tooltip title={t.tooltip} enterDelay={400}>
+                  <Box component="span">{t.label}</Box>
+                </Tooltip>
+              }
+            />
+          ))}
+        </Tabs>
 
-      {/* Tab description */}
-      <p className="text-sm text-on-surface-variant -mt-4">
-        {tabs.find((t) => t.value === activeTab)?.tooltip}
-      </p>
+        <Typography variant="body2" color="text.secondary">
+          {activeDescription}
+        </Typography>
+      </Stack>
 
-      {/* Content */}
       {items.length === 0 ? (
-        <div className="glass rounded-xl py-16 text-center">
-          <p className="text-on-surface-variant text-lg flex items-center justify-center gap-2">
-            No tests match this category <HiFaceSmile className="h-5 w-5" />
-          </p>
-        </div>
+        <Panel sx={{ borderRadius: "12px", px: 2, py: 8, textAlign: "center" }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "center", justifyContent: "center", color: "text.secondary" }}
+          >
+            <Typography variant="h6" color="inherit">
+              No tests match this category
+            </Typography>
+            <SentimentSatisfiedAltIcon fontSize="small" />
+          </Stack>
+        </Panel>
       ) : (
-        <div className="space-y-3">
+        <Stack spacing={1.5}>
           {items.map((item) => (
             <TestRow
               key={`${item.job_id}/${item.test_name}`}
@@ -283,8 +442,8 @@ export function FlakinessPage() {
               tab={activeTab}
             />
           ))}
-        </div>
+        </Stack>
       )}
-    </div>
+    </Stack>
   );
 }

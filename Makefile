@@ -69,9 +69,11 @@ dev: fe-install
 fe-build: fe-install
 	cd frontend && npm run build
 
-# TypeScript type check
+# TypeScript type check. Use `tsc -b` (build mode): the root tsconfig.json is a
+# solution file (files: [], project references), so `tsc --noEmit` against it
+# checks nothing. `tsc -b` walks the referenced app/node projects.
 fe-check:
-	cd frontend && npx tsc --noEmit
+	cd frontend && npx tsc -b
 
 ## ─── Full Pipeline ────────────────────────────────────────────
 
