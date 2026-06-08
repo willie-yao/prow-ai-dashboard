@@ -21,8 +21,8 @@ import { dotColorFor, soft } from "../theme";
 
 function passRateColor(rate: number): "success" | "warning" | "error" {
   if (rate >= 0.9) return "success";
-  if (rate >= 0.7) return "warning";
-  return "error";
+  if (rate <= 0.3) return "error";
+  return "warning";
 }
 
 export function JobDetailPage() {
@@ -44,13 +44,11 @@ export function JobDetailPage() {
 
   const testCases: TestCase[] = selectedRun?.test_cases ?? [];
 
-  const passRate7d = useMemo(() => {
+  // Pass rate over the most recent runs (Prow-style, last 10), matching the
+  // landing page metric rather than a wall-clock window.
+  const passRateRecent = useMemo(() => {
     if (runs.length === 0) return null;
-    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const recent = runs.filter(
-      (r) => new Date(r.started).getTime() >= cutoff,
-    );
-    if (recent.length === 0) return null;
+    const recent = runs.slice(0, 10);
     return recent.filter((r) => r.passed).length / recent.length;
   }, [runs]);
 
@@ -101,12 +99,12 @@ export function JobDetailPage() {
           {displayName}
         </Typography>
         <Box sx={{ mt: 1.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5 }}>
-          {passRate7d !== null && (() => {
-            const color = passRateColor(passRate7d);
+          {passRateRecent !== null && (() => {
+            const color = passRateColor(passRateRecent);
             return (
               <Chip
                 size="small"
-                label={`${formatPercent(passRate7d)} pass rate (7d)`}
+                label={`${formatPercent(passRateRecent)} pass rate (last 10 runs)`}
                 sx={{
                   bgcolor: (t) => soft(t, color, 0.15),
                   color: `${color}.main`,

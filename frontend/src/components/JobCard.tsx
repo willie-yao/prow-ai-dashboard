@@ -2,6 +2,7 @@ import Box from "@mui/material/Box";
 import Card from "@mui/material/Card";
 import CardActionArea from "@mui/material/CardActionArea";
 import CardContent from "@mui/material/CardContent";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
@@ -21,7 +22,7 @@ export function JobCard({ job }: JobCardProps) {
       : "—";
 
   const footerItems = [
-    { label: "Pass", value: formatPercent(job.pass_rate_7d) },
+    { label: "Pass", value: formatPercent(job.pass_rate_7d), tooltip: "Pass rate over the last 10 runs" },
     { label: "Last", value: lastRunTime },
     { label: "Dur", value: lastDuration },
   ];
@@ -109,20 +110,29 @@ export function JobCard({ job }: JobCardProps) {
               flexWrap: "wrap",
             }}
           >
-            {footerItems.map((item) => (
-              <Typography
-                key={item.label}
-                variant="label"
-                component="span"
-                color="text.secondary"
-                sx={{ fontSize: "0.6875rem" }}
-              >
-                {item.label}{" "}
-                <Box component="span" sx={{ color: "text.primary" }}>
-                  {item.value}
-                </Box>
-              </Typography>
-            ))}
+            {footerItems.map((item) => {
+              const content = (
+                <Typography
+                  key={item.label}
+                  variant="label"
+                  component="span"
+                  color="text.secondary"
+                  sx={{ fontSize: "0.6875rem" }}
+                >
+                  {item.label}{" "}
+                  <Box component="span" sx={{ color: "text.primary" }}>
+                    {item.value}
+                  </Box>
+                </Typography>
+              );
+              return item.tooltip ? (
+                <Tooltip key={item.label} title={item.tooltip}>
+                  {content}
+                </Tooltip>
+              ) : (
+                content
+              );
+            })}
           </Box>
         </CardContent>
       </CardActionArea>

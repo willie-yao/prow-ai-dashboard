@@ -24,7 +24,6 @@ func sampleDashboard() models.Dashboard {
 				},
 				OverallStatus: "PASSING",
 				PassRate7d:    0.95,
-				PassRate30d:   0.90,
 				RecentRuns: []models.RunSummary{
 					{BuildID: "100", Passed: true, Timestamp: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)},
 				},
