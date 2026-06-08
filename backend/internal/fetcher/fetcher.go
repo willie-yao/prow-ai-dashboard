@@ -211,7 +211,7 @@ func Run(ctx context.Context, opts Options) error {
 		if r.job.Name == "" {
 			continue // skipped due to fetch error
 		}
-		dashboard.Jobs = append(dashboard.Jobs, aggregator.ComputeJobSummary(r.job, r.runs, now))
+		dashboard.Jobs = append(dashboard.Jobs, aggregator.ComputeJobSummary(r.job, r.runs))
 		details = append(details, models.JobDetail{
 			Name:    r.job.Name,
 			JobID:   r.job.JobID,

@@ -26,8 +26,8 @@ export interface JobSummary {
   overall_status: "PASSING" | "FAILING" | "FLAKY";
   last_run: RunSummary | null;
   recent_runs: RunSummary[];
-  pass_rate_7d: number;
-  pass_rate_30d: number;
+  // Fraction of passing runs over the most recent runs.
+  pass_rate_recent: number;
 }
 
 export interface Dashboard {

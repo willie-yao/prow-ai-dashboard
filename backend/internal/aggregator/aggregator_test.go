@@ -65,7 +65,7 @@ func TestComputeJobSummary_AllPassing(t *testing.T) {
 		makeBuild("2", hoursAgo(4), true, nil),
 	}
 
-	s := ComputeJobSummary(job, runs, baseTime)
+	s := ComputeJobSummary(job, runs)
 
 	if s.OverallStatus != "PASSING" {
 		t.Errorf("expected PASSING, got %s", s.OverallStatus)
@@ -86,7 +86,7 @@ func TestComputeJobSummary_AllFailing(t *testing.T) {
 		makeBuild("1", hoursAgo(3), false, nil),
 	}
 
-	s := ComputeJobSummary(job, runs, baseTime)
+	s := ComputeJobSummary(job, runs)
 
 	if s.OverallStatus != "FAILING" {
 		t.Errorf("expected FAILING, got %s", s.OverallStatus)
@@ -101,7 +101,7 @@ func TestComputeJobSummary_Mixed(t *testing.T) {
 		makeBuild("1", hoursAgo(3), true, nil),
 	}
 
-	s := ComputeJobSummary(job, runs, baseTime)
+	s := ComputeJobSummary(job, runs)
 
 	if s.OverallStatus != "FLAKY" {
 		t.Errorf("expected FLAKY, got %s", s.OverallStatus)
@@ -110,7 +110,7 @@ func TestComputeJobSummary_Mixed(t *testing.T) {
 
 func TestComputeJobSummary_EmptyRuns(t *testing.T) {
 	job := models.ProwJob{Name: "job-empty"}
-	s := ComputeJobSummary(job, nil, baseTime)
+	s := ComputeJobSummary(job, nil)
 
 	if s.LastRun != nil {
 		t.Error("expected nil LastRun for empty runs")
@@ -118,8 +118,8 @@ func TestComputeJobSummary_EmptyRuns(t *testing.T) {
 	if len(s.RecentRuns) != 0 {
 		t.Errorf("expected 0 recent runs, got %d", len(s.RecentRuns))
 	}
-	if s.PassRate7d != 0 || s.PassRate30d != 0 {
-		t.Errorf("expected 0 pass rates, got 7d=%.2f 30d=%.2f", s.PassRate7d, s.PassRate30d)
+	if s.PassRateRecent != 0 {
+		t.Errorf("expected 0 pass rate, got %.2f", s.PassRateRecent)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestComputeJobSummary_FewerThan3Runs_AllPass(t *testing.T) {
 		makeBuild("1", hoursAgo(2), true, nil),
 	}
 
-	s := ComputeJobSummary(job, runs, baseTime)
+	s := ComputeJobSummary(job, runs)
 
 	if s.OverallStatus != "PASSING" {
 		t.Errorf("expected PASSING with 2 passing runs, got %s", s.OverallStatus)
@@ -143,9 +143,9 @@ func TestComputeJobSummary_FewerThan3Runs_OneFail(t *testing.T) {
 		makeBuild("1", hoursAgo(1), false, nil),
 	}
 
-	s := ComputeJobSummary(job, runs, baseTime)
+	s := ComputeJobSummary(job, runs)
 
-	// With only 1 run that failed, all checked runs fail → FAILING.
+	// With only 1 run that failed, the recent pass rate is 0 → FAILING.
 	if s.OverallStatus != "FAILING" {
 		t.Errorf("expected FAILING with single failed run, got %s", s.OverallStatus)
 	}
@@ -153,28 +153,69 @@ func TestComputeJobSummary_FewerThan3Runs_OneFail(t *testing.T) {
 
 func TestComputeJobSummary_PassRates(t *testing.T) {
 	job := models.ProwJob{Name: "job-rates"}
-	now := baseTime
-	runs := []models.BuildResult{
-		// Within 7 days: 3 runs, 2 pass
-		makeBuild("6", now.Add(-1*24*time.Hour), true, nil),
-		makeBuild("5", now.Add(-2*24*time.Hour), false, nil),
-		makeBuild("4", now.Add(-5*24*time.Hour), true, nil),
-		// Within 30 days but outside 7 days: 2 runs, 1 pass
-		makeBuild("3", now.Add(-10*24*time.Hour), false, nil),
-		makeBuild("2", now.Add(-20*24*time.Hour), true, nil),
-		// Outside 30 days
-		makeBuild("1", now.Add(-60*24*time.Hour), true, nil),
+	// 12 runs newest-first. The last 10 hold 8 passes and 2 fails (0.8). The two
+	// oldest runs fail but fall outside the 10-run window and must be excluded.
+	runs := make([]models.BuildResult, 0, 12)
+	for i := 0; i < 12; i++ {
+		pass := i != 2 && i != 5 && i != 10 && i != 11
+		runs = append(runs, makeBuild(fmt.Sprintf("%d", 12-i), hoursAgo(i), pass, nil))
 	}
 
-	s := ComputeJobSummary(job, runs, now)
+	s := ComputeJobSummary(job, runs)
 
-	// 7d: 2/3 ≈ 0.6667
-	if s.PassRate7d < 0.66 || s.PassRate7d > 0.67 {
-		t.Errorf("expected PassRate7d ~0.6667, got %.4f", s.PassRate7d)
+	// Last 10 runs: 8 pass / 10 = 0.8 (the two failing tail runs are ignored).
+	if s.PassRateRecent < 0.79 || s.PassRateRecent > 0.81 {
+		t.Errorf("expected PassRateRecent ~0.8 over the last 10 runs, got %.4f", s.PassRateRecent)
 	}
-	// 30d: 3 pass / 5 total = 0.6
-	if s.PassRate30d < 0.59 || s.PassRate30d > 0.61 {
-		t.Errorf("expected PassRate30d ~0.6, got %.4f", s.PassRate30d)
+	// 0.8 is between the thresholds → FLAKY.
+	if s.OverallStatus != "FLAKY" {
+		t.Errorf("expected FLAKY at 0.8 pass rate, got %s", s.OverallStatus)
+	}
+}
+
+func TestComputeOverallStatus_Thresholds(t *testing.T) {
+	// passes is the number of passing runs among 10; the rest fail.
+	cases := []struct {
+		name   string
+		passes int
+		want   string
+	}{
+		{"all pass", 10, "PASSING"},
+		{"one fail still passing", 9, "PASSING"},
+		{"two fail is flaky", 8, "FLAKY"},
+		{"four pass is flaky", 4, "FLAKY"},
+		{"three pass is failing", 3, "FAILING"},
+		{"all fail", 0, "FAILING"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := make([]models.BuildResult, 10)
+			for i := range runs {
+				runs[i] = makeBuild(fmt.Sprintf("%d", 10-i), hoursAgo(i), i < tc.passes, nil)
+			}
+			if got := computeOverallStatus(runs); got != tc.want {
+				t.Errorf("%d/10 passing: expected %s, got %s", tc.passes, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestRecentPassRate_LimitsToN(t *testing.T) {
+	// 15 runs where only the most recent 10 pass; older ones fail. Rate is 1.0.
+	runs := make([]models.BuildResult, 15)
+	for i := range runs {
+		runs[i] = makeBuild(fmt.Sprintf("%d", 15-i), hoursAgo(i), i < 10, nil)
+	}
+	if got := recentPassRate(runs, passRateRecentRuns); got != 1.0 {
+		t.Errorf("expected 1.0 over the most recent 10 runs, got %.4f", got)
+	}
+	// Fewer runs than the window: average over what exists.
+	short := []models.BuildResult{
+		makeBuild("2", hoursAgo(1), true, nil),
+		makeBuild("1", hoursAgo(2), false, nil),
+	}
+	if got := recentPassRate(short, passRateRecentRuns); got != 0.5 {
+		t.Errorf("expected 0.5 over 2 runs, got %.4f", got)
 	}
 }
 
@@ -190,7 +231,7 @@ func TestComputeJobSummary_RecentRunsCapped(t *testing.T) {
 		)
 	}
 
-	s := ComputeJobSummary(job, runs, baseTime)
+	s := ComputeJobSummary(job, runs)
 
 	if len(s.RecentRuns) != 20 {
 		t.Errorf("expected 20 recent runs (capped), got %d", len(s.RecentRuns))
@@ -222,10 +263,10 @@ func TestBuildRunSummary(t *testing.T) {
 
 func makeTestCase(name, status, failMsg string) models.TestCase {
 	return models.TestCase{
-		Name:           name,
-		Status:         status,
+		Name:            name,
+		Status:          status,
 		DurationSeconds: 1.0,
-		FailureMessage: failMsg,
+		FailureMessage:  failMsg,
 	}
 }
 

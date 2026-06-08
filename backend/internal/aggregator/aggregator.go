@@ -8,12 +8,17 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 const maxRecentRuns = 20
+
+const (
+	passRateRecentRuns = 10  // number of recent runs the pass rate covers
+	passingThreshold   = 0.9 // recent pass rate at/above this is PASSING
+	failingThreshold   = 0.3 // recent pass rate at/below this is FAILING
+)
 
 // FailureInfo holds the result of classifying a test failure.
 type FailureInfo struct {
@@ -23,8 +28,8 @@ type FailureInfo struct {
 }
 
 // ComputeJobSummary computes an aggregated JobSummary for a ProwJob given its
-// build results (sorted newest-first) and the current time.
-func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult, now time.Time) models.JobSummary {
+// build results (sorted newest-first).
+func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.JobSummary {
 	summary := models.JobSummary{
 		ProwJob:    job,
 		RecentRuns: []models.RunSummary{},
@@ -48,66 +53,49 @@ func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult, now time.T
 		summary.RecentRuns[i] = BuildRunSummary(runs[i])
 	}
 
-	// OverallStatus based on the 3 most recent runs
+	// OverallStatus and pass rate are computed over the most recent runs.
 	summary.OverallStatus = computeOverallStatus(runs)
-
-	// Pass rates
-	summary.PassRate7d = computePassRate(runs, now, 7*24*time.Hour)
-	summary.PassRate30d = computePassRate(runs, now, 30*24*time.Hour)
+	summary.PassRateRecent = recentPassRate(runs, passRateRecentRuns)
 
 	return summary
 }
 
-// computeOverallStatus determines the overall status from the most recent runs.
+// computeOverallStatus classifies a job from its most recent runs using the
+// pass rate over the last passRateRecentRuns runs:
+//   - PASSING when the recent pass rate is at least passingThreshold
+//   - FAILING when it is at or below failingThreshold
+//   - FLAKY otherwise (a mix of passes and failures)
 func computeOverallStatus(runs []models.BuildResult) string {
-	n := len(runs)
-	if n == 0 {
+	if len(runs) == 0 {
 		return "FLAKY"
 	}
-
-	check := 3
-	if n < check {
-		check = n
-	}
-
-	allPass := true
-	allFail := true
-	for i := 0; i < check; i++ {
-		if runs[i].Passed {
-			allFail = false
-		} else {
-			allPass = false
-		}
-	}
-
+	rate := recentPassRate(runs, passRateRecentRuns)
 	switch {
-	case allFail:
-		return "FAILING"
-	case allPass:
+	case rate >= passingThreshold:
 		return "PASSING"
+	case rate <= failingThreshold:
+		return "FAILING"
 	default:
 		return "FLAKY"
 	}
 }
 
-// computePassRate calculates the fraction of passing runs within the given
-// time window before now. Returns 0 if no runs fall within the window.
-func computePassRate(runs []models.BuildResult, now time.Time, window time.Duration) float64 {
-	cutoff := now.Add(-window)
-	total := 0
-	passed := 0
-	for _, r := range runs {
-		if r.Started.After(cutoff) || r.Started.Equal(cutoff) {
-			total++
-			if r.Passed {
-				passed++
-			}
-		}
-	}
-	if total == 0 {
+// recentPassRate calculates the fraction of passing runs among the most recent
+// n runs. Runs are expected newest-first. Returns 0 when there are no runs.
+func recentPassRate(runs []models.BuildResult, n int) float64 {
+	if len(runs) == 0 {
 		return 0
 	}
-	return float64(passed) / float64(total)
+	if n > len(runs) {
+		n = len(runs)
+	}
+	passed := 0
+	for i := 0; i < n; i++ {
+		if runs[i].Passed {
+			passed++
+		}
+	}
+	return float64(passed) / float64(n)
 }
 
 // BuildRunSummary converts a BuildResult into a compact RunSummary.
