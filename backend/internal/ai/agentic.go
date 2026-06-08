@@ -89,6 +89,15 @@ type AgenticOptions struct {
 	// evidence group is not satisfied by the agent's read set; the retry
 	// budget is extended dynamically to fit the missing-group count.
 	SkillsEnabled bool
+
+	// BuildLogTriage opts the run into a build-log triage pre-pass: before
+	// the main agentic loop, a single scoped LLM call reads the tail of
+	// build-log.txt and distills the top-level error plus a suggested
+	// direction, which is injected into the loop's seed prompt. Gives a
+	// small-context model a head start without growing the main
+	// conversation. Defaults to false. Degrades gracefully (skips the
+	// pre-pass) if build-log.txt is missing or the call fails.
+	BuildLogTriage bool
 }
 
 // agenticToolBudget caps bytes returned to the model by any single tool
@@ -558,6 +567,11 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	fullSysPrompt := sysPrompt + agToolDocs
+	if in.Opts.BuildLogTriage {
+		if triage := c.runBuildLogTriage(ctx, in.Browser); triage != "" {
+			userPrompt = withTriageSeed(userPrompt, triage)
+		}
+	}
 	messages := []agChatMessage{
 		{Role: "system", Content: strPtr(fullSysPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},

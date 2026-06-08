@@ -218,6 +218,14 @@ type Agentic struct {
 	// loaded set is consulted by the critique gate.
 	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
 
+	// BuildLogTriage enables a triage pre-pass: before the main agentic
+	// loop, a single scoped LLM call reads the tail of build-log.txt and
+	// distills the top-level error plus a suggested direction into the
+	// loop's seed prompt. Useful for small-context models, where it gives
+	// the investigation a head start without growing the main
+	// conversation. Defaults to false.
+	BuildLogTriage bool `yaml:"build_log_triage,omitempty" json:"build_log_triage,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -313,6 +321,7 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 		out.Critique.MaxRetries = a.Critique.MaxRetries
 	}
 	out.Skills.Enabled = a.Skills.Enabled
+	out.BuildLogTriage = a.BuildLogTriage
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
 	}

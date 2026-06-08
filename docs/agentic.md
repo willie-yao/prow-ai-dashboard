@@ -53,6 +53,7 @@ ai:
     model_byte_budget: 300000     # total bytes of tool output sent to the model
     gcs_byte_budget: 1000000000   # total bytes fetched from GCS
     context_byte_budget: 0        # 0 = off; cap total request size to fit a small model window
+    build_log_triage: false       # opt into a build-log.txt triage pre-pass (one scoped LLM call)
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
@@ -79,6 +80,17 @@ from overflowing the window mid-loop and failing with an empty analysis.
 Set it to roughly the model's context window in bytes (~3 bytes/token is
 a safe ratio for dense CI logs), staying under the hard token limit so
 the trigger fires before an overflow.
+
+`build_log_triage` is off by default. When enabled, a triage pre-pass runs
+before the main agentic loop: the engine deterministically tails
+`build-log.txt` and makes one scoped LLM call (no tools) to distill the
+top-level error plus a suggested direction, then injects that summary into
+the loop's seed prompt. The investigation starts already knowing the error
+instead of spending early iterations (and context budget) rediscovering it,
+which helps most on small-context models. The pre-pass is a separate, small
+conversation that never grows, and it degrades to a no-op if `build-log.txt`
+is missing or the call fails (the loop just proceeds with its normal seed).
+It adds one cheap LLM call per uncached failure.
 
 
 ### `min_tool_calls`
