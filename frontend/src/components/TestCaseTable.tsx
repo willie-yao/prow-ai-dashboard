@@ -126,7 +126,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
         <Box
           sx={{
             display: "grid",
-            gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 96px" },
+            gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 116px" },
             borderBottom: 1,
             borderColor: "divider",
             bgcolor: (t) => (t.vars ?? t).palette.surface.container,
@@ -151,7 +151,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             component="div"
             sx={{
               display: { xs: "none", sm: "block" },
-              px: 1.5,
+              pl: 1.5,
+              pr: 2.5,
               py: 1.25,
               color: "text.secondary",
               textAlign: "right",
@@ -182,7 +183,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                 }}
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 96px" },
+                  gridTemplateColumns: { xs: "40px minmax(0, 1fr)", sm: "40px minmax(0, 1fr) 116px" },
                   alignItems: "center",
                   bgcolor: stripeBg,
                   cursor: hasFail ? "pointer" : "default",
@@ -241,7 +242,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                   component="div"
                   sx={{
                     display: { xs: "none", sm: "block" },
-                    px: 1.5,
+                    pl: 1.5,
+                    pr: 2.5,
                     py: 1,
                     textAlign: "right",
                     color: "text.secondary",
