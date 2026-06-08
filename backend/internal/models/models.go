@@ -171,10 +171,8 @@ type JobSummary struct {
 	OverallStatus string       `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
 	LastRun       *RunSummary  `json:"last_run,omitempty"`
 	RecentRuns    []RunSummary `json:"recent_runs"`
-	// PassRate7d is the fraction of passing runs over the most recent runs
-	// (Prow-style, last 10), not a 7-day window. The JSON name is kept for
-	// backward compatibility with already-published data.
-	PassRate7d float64 `json:"pass_rate_7d"`
+	// PassRateRecent is the fraction of passing runs over the most recent runs.
+	PassRateRecent float64 `json:"pass_rate_recent"`
 }
 
 // RunSummary is a compact summary of a single build run.

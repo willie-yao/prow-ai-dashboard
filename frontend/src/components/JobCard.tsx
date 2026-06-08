@@ -22,7 +22,7 @@ export function JobCard({ job }: JobCardProps) {
       : "—";
 
   const footerItems = [
-    { label: "Pass", value: formatPercent(job.pass_rate_7d), tooltip: "Pass rate over the last 10 runs" },
+    { label: "Pass", value: formatPercent(job.pass_rate_recent), tooltip: "Pass rate over the last 10 runs" },
     { label: "Last", value: lastRunTime },
     { label: "Dur", value: lastDuration },
   ];

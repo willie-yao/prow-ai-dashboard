@@ -26,9 +26,8 @@ export interface JobSummary {
   overall_status: "PASSING" | "FAILING" | "FLAKY";
   last_run: RunSummary | null;
   recent_runs: RunSummary[];
-  // Pass rate over the most recent runs (Prow-style, last 10). The field name is
-  // kept for backward compatibility with already-published data.
-  pass_rate_7d: number;
+  // Fraction of passing runs over the most recent runs.
+  pass_rate_recent: number;
 }
 
 export interface Dashboard {

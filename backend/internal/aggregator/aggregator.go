@@ -14,8 +14,6 @@ import (
 
 const maxRecentRuns = 20
 
-// Pass rate and overall status are computed over the most recent runs, matching
-// how Prow/TestGrid summarize job health (rather than a wall-clock window).
 const (
 	passRateRecentRuns = 10  // number of recent runs the pass rate covers
 	passingThreshold   = 0.9 // recent pass rate at/above this is PASSING
@@ -55,11 +53,9 @@ func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.Job
 		summary.RecentRuns[i] = BuildRunSummary(runs[i])
 	}
 
-	// OverallStatus and pass rate both reflect the most recent runs (Prow-style)
-	// rather than a wall-clock window, so infrequent jobs are judged on the same
-	// number of runs as frequent ones.
+	// OverallStatus and pass rate are computed over the most recent runs.
 	summary.OverallStatus = computeOverallStatus(runs)
-	summary.PassRate7d = recentPassRate(runs, passRateRecentRuns)
+	summary.PassRateRecent = recentPassRate(runs, passRateRecentRuns)
 
 	return summary
 }

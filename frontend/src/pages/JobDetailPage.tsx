@@ -44,8 +44,7 @@ export function JobDetailPage() {
 
   const testCases: TestCase[] = selectedRun?.test_cases ?? [];
 
-  // Pass rate over the most recent runs (Prow-style, last 10), matching the
-  // landing page metric rather than a wall-clock window.
+  // Pass rate over the most recent runs (up to 10).
   const passRateRecent = useMemo(() => {
     if (runs.length === 0) return null;
     const recent = runs.slice(0, 10);

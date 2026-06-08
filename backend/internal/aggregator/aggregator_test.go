@@ -118,8 +118,8 @@ func TestComputeJobSummary_EmptyRuns(t *testing.T) {
 	if len(s.RecentRuns) != 0 {
 		t.Errorf("expected 0 recent runs, got %d", len(s.RecentRuns))
 	}
-	if s.PassRate7d != 0 {
-		t.Errorf("expected 0 pass rate, got %.2f", s.PassRate7d)
+	if s.PassRateRecent != 0 {
+		t.Errorf("expected 0 pass rate, got %.2f", s.PassRateRecent)
 	}
 }
 
@@ -164,8 +164,8 @@ func TestComputeJobSummary_PassRates(t *testing.T) {
 	s := ComputeJobSummary(job, runs)
 
 	// Last 10 runs: 8 pass / 10 = 0.8 (the two failing tail runs are ignored).
-	if s.PassRate7d < 0.79 || s.PassRate7d > 0.81 {
-		t.Errorf("expected PassRate7d ~0.8 over the last 10 runs, got %.4f", s.PassRate7d)
+	if s.PassRateRecent < 0.79 || s.PassRateRecent > 0.81 {
+		t.Errorf("expected PassRateRecent ~0.8 over the last 10 runs, got %.4f", s.PassRateRecent)
 	}
 	// 0.8 is between the thresholds → FLAKY.
 	if s.OverallStatus != "FLAKY" {
