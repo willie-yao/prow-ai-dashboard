@@ -218,6 +218,17 @@ type Agentic struct {
 	// loaded set is consulted by the critique gate.
 	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
 
+	// SingleToolCall makes the loop send at most one tool call per assistant
+	// turn: when the model returns several tool calls at once, only the first
+	// is executed and echoed into history, and the rest are dropped (the
+	// model can re-request them on a later turn). Required for endpoints whose
+	// chat template rejects multiple tool calls in one assistant message (the
+	// stock Llama 3.x Instruct template raises "This model only supports
+	// single tool-calls at once!"). Defaults to false; leave it off for
+	// providers that support parallel tool calls (Copilot, OpenAI, Claude) so
+	// they keep their round-trip efficiency.
+	SingleToolCall bool `yaml:"single_tool_call,omitempty" json:"single_tool_call,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -313,6 +324,7 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 		out.Critique.MaxRetries = a.Critique.MaxRetries
 	}
 	out.Skills.Enabled = a.Skills.Enabled
+	out.SingleToolCall = a.SingleToolCall
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
 	}

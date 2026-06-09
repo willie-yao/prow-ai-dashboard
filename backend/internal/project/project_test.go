@@ -338,6 +338,14 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("GCSByteBudget = %d, want default %d", got.GCSByteBudget, DefaultAgentic.GCSByteBudget)
 		}
 	})
+	t.Run("SingleToolCall flips through", func(t *testing.T) {
+		if (&Agentic{Enabled: true}).EffectiveAgentic().SingleToolCall {
+			t.Error("SingleToolCall should default to false")
+		}
+		if !(&Agentic{Enabled: true, SingleToolCall: true}).EffectiveAgentic().SingleToolCall {
+			t.Error("SingleToolCall=true should pass through")
+		}
+	})
 	t.Run("Tools list passes through", func(t *testing.T) {
 		in := &Agentic{Tools: []string{"filesystem"}}
 		got := in.EffectiveAgentic()
@@ -422,6 +430,7 @@ func agenticEqual(a, b Agentic) bool {
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
 		a.Critique == b.Critique &&
+		a.SingleToolCall == b.SingleToolCall &&
 		equalStrings(a.Tools, b.Tools)
 }
 

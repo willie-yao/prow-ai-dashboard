@@ -481,6 +481,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					CritiqueEnabled:    eff.Critique.Enabled,
 					CritiqueMaxRetries: eff.Critique.MaxRetries,
 					SkillsEnabled:      eff.Skills.Enabled,
+					SingleToolCall:     eff.SingleToolCall,
 				}, factory, registry, enabled, eff.Always, useUniversal)
 				// Hand the loaded recipe set to the service. nil-safe;
 				// with no recipes the service skips skill matching.
