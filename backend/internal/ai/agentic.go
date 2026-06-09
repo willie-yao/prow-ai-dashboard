@@ -155,6 +155,14 @@ type agChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []agChatMessage `json:"messages"`
 	Tools    []tools.Schema  `json:"tools,omitempty"`
+
+	// ParallelToolCalls is the OpenAI knob requesting at most one tool call
+	// per turn when set to false. Sent only when single_tool_call is on.
+	// Omitted otherwise so providers keep their default (parallel allowed).
+	// Endpoints that honor it let the model pick its single best call;
+	// endpoints that ignore it (e.g. some trtllm builds) still return
+	// several, which the loop's client-side cap then trims.
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
 
 type agChatResponse struct {
@@ -609,6 +617,15 @@ func (c *Client) doAnalyzeAgentic(
 	// against the real request, not just message content.
 	schemaBytes := schemaPayloadBytes(schemas)
 
+	// When single_tool_call is on, request parallel_tool_calls=false so
+	// compliant endpoints emit a single call (the model picks its best one);
+	// the client-side cap below still trims endpoints that ignore the flag.
+	var parallelToolCalls *bool
+	if in.Opts.SingleToolCall {
+		f := false
+		parallelToolCalls = &f
+	}
+
 	for iter := 0; iter < maxIters && !done; iter++ {
 		if in.Opts.ContextByteBudget > 0 {
 			var elided int
@@ -617,7 +634,7 @@ func (c *Client) doAnalyzeAgentic(
 				log.Printf("  ✂ context compaction: elided %d message(s) to fit ~%d-byte window", elided, in.Opts.ContextByteBudget)
 			}
 		}
-		resp, err := c.callChatWithTools(loopCtx, messages, schemas)
+		resp, err := c.callChatWithTools(loopCtx, messages, schemas, parallelToolCalls)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
 			if iter == 0 && isToolsUnsupportedError(err) {
@@ -846,7 +863,7 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []agChatMessage,
 		// messages alone.
 		messages, _ = compactMessages(messages, 0, contextByteBudget)
 	}
-	resp, err := c.callChatWithTools(ctx, messages, nil)
+	resp, err := c.callChatWithTools(ctx, messages, nil, nil)
 	if err != nil {
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
 		return ""
@@ -891,11 +908,13 @@ func isToolsUnsupportedError(err error) bool {
 
 // callChatWithTools sends a chat-completions request with optional tool defs
 // and parses the OpenAI-shaped response. Retries on 429 like the single-shot
-// path. Sleeps the same callDelay between calls to be a good citizen.
-func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage, toolDefs []tools.Schema) (*agChatResponse, error) {
+// path. Sleeps the same callDelay between calls to be a good citizen. When
+// parallelToolCalls is non-nil it is sent as the OpenAI parallel_tool_calls
+// flag (used to request single tool calls on compliant endpoints).
+func (c *Client) callChatWithTools(ctx context.Context, messages []agChatMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*agChatResponse, error) {
 	time.Sleep(callDelay)
 
-	body, err := json.Marshal(agChatRequest{Model: c.model, Messages: messages, Tools: toolDefs})
+	body, err := json.Marshal(agChatRequest{Model: c.model, Messages: messages, Tools: toolDefs, ParallelToolCalls: parallelToolCalls})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}

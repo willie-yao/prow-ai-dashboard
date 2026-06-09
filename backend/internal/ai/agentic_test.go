@@ -1368,6 +1368,11 @@ func TestAgentic_SingleToolCall_EchoesOneToolCall(t *testing.T) {
 	if n := countAssistantToolCalls(t, srv.requests[1]); n != 1 {
 		t.Errorf("echoed history has %d tool_calls in the assistant turn, want 1", n)
 	}
+	// The request should also advertise parallel_tool_calls=false so
+	// compliant endpoints emit a single call at generation time.
+	if ptc := requestParallelToolCalls(t, srv.requests[0]); ptc == nil || *ptc != false {
+		t.Errorf("request parallel_tool_calls = %v, want false", ptc)
+	}
 }
 
 // TestAgentic_ParallelToolCalls_DefaultEchoesBoth confirms the default (off)
@@ -1394,6 +1399,24 @@ func TestAgentic_ParallelToolCalls_DefaultEchoesBoth(t *testing.T) {
 	if n := countAssistantToolCalls(t, srv.requests[1]); n != 2 {
 		t.Errorf("echoed history has %d tool_calls, want 2 by default", n)
 	}
+	// Default must NOT send parallel_tool_calls so parallel-capable
+	// providers keep their default behavior.
+	if ptc := requestParallelToolCalls(t, srv.requests[0]); ptc != nil {
+		t.Errorf("request parallel_tool_calls = %v, want omitted by default", *ptc)
+	}
+}
+
+// requestParallelToolCalls returns the parallel_tool_calls field from a
+// captured chat request body, or nil when the field was omitted.
+func requestParallelToolCalls(t *testing.T, body []byte) *bool {
+	t.Helper()
+	var req struct {
+		ParallelToolCalls *bool `json:"parallel_tool_calls"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	return req.ParallelToolCalls
 }
 
 // countAssistantToolCalls parses a captured chat request body and returns the
