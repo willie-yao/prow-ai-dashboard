@@ -63,6 +63,7 @@ ai:
     skills:
       enabled: false              # opt into the recipe-driven evidence gate
                                   # (loads <project_dir>/skills/*.yaml; see docs/skills.md)
+    evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -307,6 +308,27 @@ trtllm/Dynamo builds accept `parallel_tool_calls: false` but ignore it, which
 is exactly why the client-side cap is also needed.) Leave it off for
 providers that support parallel tool calls (Copilot, OpenAI, Claude) so they
 keep their round-trip efficiency.
+
+### `evidence_injection`
+
+Off by default; requires `critique.enabled`. The critique gate already
+detects when a draft cites an artifact (a `.log`/`.txt`/`.json`/`.xml` path)
+that the agent never actually read, and re-prompts the model to go read it.
+Weak models frequently ignore that instruction and re-emit the same
+ungrounded claim. When `evidence_injection` is on, the engine instead
+**fetches** each cited-but-unread artifact (the model already named the
+path), caps it, and embeds its content directly in the retry feedback:
+"here is what it actually shows; ground your root_cause in it or drop the
+claim." The fetched paths are marked read, so the next critique pass does
+not re-flag them.
+
+This converts an ignored "go read X" loop into "here is X", which is the
+single most common reason drafts fail critique on weaker models (citing
+evidence they never opened). It adds the fetched bytes (up to a few capped
+artifacts per retry) to the conversation, so it is best suited to
+large-context models. Best-effort: a fetch that fails (e.g. a path the
+browser cannot resolve) is skipped and the plain text feedback still
+applies. No cache-version interaction; it only changes the retry prompt.
 
 ### `always: true` vs `always: false`
 

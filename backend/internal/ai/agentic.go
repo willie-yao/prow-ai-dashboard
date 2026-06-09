@@ -98,6 +98,13 @@ type AgenticOptions struct {
 	// the stock Llama 3.x Instruct template). Defaults to false so providers
 	// that support parallel tool calls keep their efficiency.
 	SingleToolCall bool
+
+	// EvidenceInjection makes a critique retry fetch the artifacts the draft
+	// cited but never read and embed their content in the retry feedback,
+	// instead of only asking the model to read them. Only meaningful when
+	// CritiqueEnabled. Adds the fetched bytes to the conversation, so it
+	// suits large-context models.
+	EvidenceInjection bool
 }
 
 // limitToolCalls returns the tool calls the loop should execute and echo this
@@ -111,6 +118,13 @@ func limitToolCalls(calls []agToolCall, single bool) (kept []agToolCall, dropped
 	}
 	return calls, 0
 }
+
+// evidenceInjectionMaxArtifacts caps how many cited-but-unread artifacts are
+// fetched per critique-failure round, bounding the context the injection adds.
+const evidenceInjectionMaxArtifacts = 3
+
+// evidenceInjectionPerArtifactBytes caps the bytes injected per artifact.
+const evidenceInjectionPerArtifactBytes = 8 * 1024
 
 // agenticToolBudget caps bytes returned to the model by any single tool
 // call. Keeps one runaway response from eating the whole ModelByteBudget.
@@ -706,9 +720,20 @@ func (c *Client) doAnalyzeAgentic(
 						if msg.Content != nil {
 							echo.Content = msg.Content
 						}
+						// Evidence injection: fetch the artifacts the draft
+						// cited but never read and append their content to the
+						// feedback, so a model that ignores "go read X" still
+						// gets the bytes. Best-effort; failures fall back to
+						// the plain text feedback.
+						feedback := out.Feedback
+						if in.Opts.EvidenceInjection && len(out.UnreadCitations) > 0 {
+							if inj := c.injectUnreadEvidence(loopCtx, state, out.UnreadCitations); inj != "" {
+								feedback = feedback + "\n\n" + inj
+							}
+						}
 						messages = append(messages, echo, agChatMessage{
 							Role:    "user",
-							Content: strPtr(out.Feedback),
+							Content: strPtr(feedback),
 						})
 						critiqueRetriesUsed++
 						// Extend the retry budget proportional to the
@@ -807,6 +832,40 @@ func (c *Client) doAnalyzeAgentic(
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+// injectUnreadEvidence fetches up to evidenceInjectionMaxArtifacts of the
+// cited-but-unread artifacts, marks them read on state, accumulates their
+// cost, and returns a feedback addendum embedding their (capped) content.
+// Returns "" when nothing could be fetched. Best-effort: a failed fetch for
+// one path is skipped, not fatal. The fetched paths are marked read so the
+// next critique pass does not re-flag them as unread (the engine read them on
+// the model's behalf).
+func (c *Client) injectUnreadEvidence(ctx context.Context, state *agentState, unread []string) string {
+	var sections []string
+	fetched := 0
+	for _, p := range unread {
+		if fetched >= evidenceInjectionMaxArtifacts {
+			break
+		}
+		if state.modelRemaining() <= evidenceInjectionPerArtifactBytes {
+			break
+		}
+		res, err := state.browser.Tail(ctx, p, 200, evidenceInjectionPerArtifactBytes)
+		if err != nil || res == nil || len(res.Content) == 0 {
+			continue
+		}
+		state.gcsBytes += len(res.Content)
+		state.modelBytes += len(res.Content)
+		state.recordSuccessfulRead(p)
+		sections = append(sections, fmt.Sprintf("### %s (tail)\n%s", p, string(res.Content)))
+		fetched++
+	}
+	if fetched == 0 {
+		return ""
+	}
+	log.Printf("  📎 evidence injection: fetched %d cited-but-unread artifact(s) into the retry", fetched)
+	return "The engine fetched the artifact(s) you cited but had not read. Ground your root_cause in what they ACTUALLY show below; correct or drop any claim they do not support.\n\n" + strings.Join(sections, "\n\n")
 }
 
 // matchSkillsForDraft joins the candidate draft's prose fields and matches

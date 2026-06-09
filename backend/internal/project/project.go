@@ -229,6 +229,17 @@ type Agentic struct {
 	// they keep their round-trip efficiency.
 	SingleToolCall bool `yaml:"single_tool_call,omitempty" json:"single_tool_call,omitempty"`
 
+	// EvidenceInjection turns cited-but-unread artifacts into injected
+	// evidence on a critique retry: instead of only re-prompting the model
+	// to go read an artifact it cited but never opened, the engine fetches
+	// that artifact and embeds its (capped) content in the retry feedback,
+	// so a weak model that ignores "go read X" still gets the bytes in
+	// front of it. Only meaningful when Critique.Enabled is also true (it
+	// hooks the critique retry path). Best suited to large-context models,
+	// since it adds the fetched evidence to the conversation. Defaults to
+	// disabled.
+	EvidenceInjection bool `yaml:"evidence_injection,omitempty" json:"evidence_injection,omitempty"`
+
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
 	// exposed to the model. When empty, the fetcher applies its default
@@ -325,6 +336,7 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	out.Skills.Enabled = a.Skills.Enabled
 	out.SingleToolCall = a.SingleToolCall
+	out.EvidenceInjection = a.EvidenceInjection
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
 	}
@@ -458,6 +470,13 @@ func (c *Config) Validate() error {
 	// would fail later with a confusing "unknown ai.module" error.
 	if c.AI != nil && strings.EqualFold(strings.TrimSpace(c.AI.Module), "universal") && !c.AI.UseUniversalPath {
 		return fmt.Errorf(`ai.module: "universal" requires ai.use_universal_path: true`)
+	}
+
+	// Evidence injection hooks the critique retry path, so it is inert
+	// without critique. Reject the misconfiguration at load rather than
+	// silently doing nothing.
+	if c.AI != nil && c.AI.Agentic != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
+		return fmt.Errorf("ai.agentic.evidence_injection requires ai.agentic.critique.enabled: true")
 	}
 	return nil
 }

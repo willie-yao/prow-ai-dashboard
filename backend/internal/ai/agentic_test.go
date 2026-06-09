@@ -1440,3 +1440,83 @@ func countAssistantToolCalls(t *testing.T, body []byte) int {
 	}
 	return n
 }
+
+// ---------- Evidence injection ----------
+
+// TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact verifies that when
+// a critique-failing draft cites an artifact it never read and
+// EvidenceInjection is on, the loop fetches that artifact and embeds its
+// content in the retry request.
+func TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
+	// Round 1: cites an unread artifact; clean fix so only the unread-
+	// citation check fails.
+	round1 := `{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per ` + citePath + `","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	// Round 2: clean draft with no unread citation.
+	round2 := `{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet peering mismatch confirmed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(round1))
+	srv.push(200, chatRespFinal(round2))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		citePath: []byte("boot start\nINJECT_ME_MARKER cloud-init error: vnet peering mismatch\nboot end\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+	}
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2 (draft + injected retry)", got)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) < 2 {
+		t.Fatalf("expected 2 requests, got %d", len(srv.requests))
+	}
+	retry := string(srv.requests[1])
+	if !strings.Contains(retry, "INJECT_ME_MARKER") {
+		t.Errorf("retry request should embed the fetched artifact content")
+	}
+	if !strings.Contains(retry, "engine fetched the artifact") {
+		t.Errorf("retry request should carry the injection header")
+	}
+}
+
+// TestAgentic_EvidenceInjection_OffByDefault confirms the default does not
+// fetch or inject: the retry request carries only the text feedback.
+func TestAgentic_EvidenceInjection_OffByDefault(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
+	round1 := `{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per ` + citePath + `","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	round2 := `{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet mismatch confirmed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(round1))
+	srv.push(200, chatRespFinal(round2))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		citePath: []byte("INJECT_ME_MARKER should not appear\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, // EvidenceInjection off
+	}
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-off", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) >= 2 && strings.Contains(string(srv.requests[1]), "INJECT_ME_MARKER") {
+		t.Errorf("default (injection off) must not embed fetched artifact content")
+	}
+}
