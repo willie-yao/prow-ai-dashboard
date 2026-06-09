@@ -56,6 +56,7 @@ ai:
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
+    single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
     critique:
       enabled: false              # opt into the deterministic critique gate
       max_retries: 2              # re-prompt rounds before accepting a still-failing draft
@@ -286,6 +287,22 @@ on the next run, independently of the engine-side
 
 See [`docs/skills.md`](skills.md) for the full schema, authoring
 guidance, and observability notes.
+
+### `single_tool_call`
+
+Off by default. When enabled, the loop sends at most one tool call per
+assistant turn: if the model returns several tool calls in a single
+response, only the first is executed and echoed into the conversation
+history, and the rest are dropped (the model can re-request them on a later
+turn). Set this for endpoints whose chat template rejects multiple tool
+calls in one assistant message. The stock Llama 3.x Instruct template, for
+example, raises `This model only supports single tool-calls at once!` and
+the provider surfaces it as a 500 once a multi-tool-call assistant turn is
+replayed in history. This is a property of the model's own chat template
+(the Llama tool-calling format is one call per turn), not a provider bug, so
+the fix belongs in the loop. Leave it off for providers that support
+parallel tool calls (Copilot, OpenAI, Claude) so they keep their round-trip
+efficiency.
 
 ### `always: true` vs `always: false`
 

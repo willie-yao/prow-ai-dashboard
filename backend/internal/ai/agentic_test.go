@@ -152,6 +152,7 @@ type scriptedChatServer struct {
 	responses []string
 	statuses  []int
 	calls     int32
+	requests  [][]byte
 }
 
 func newScriptedChatServer(t *testing.T) *scriptedChatServer {
@@ -172,8 +173,10 @@ func newScriptedChatServer(t *testing.T) *scriptedChatServer {
 			status = s.statuses[0]
 			s.statuses = s.statuses[1:]
 		}
-		// Drain request body so the client doesn't hang.
-		_, _ = io.Copy(io.Discard, r.Body)
+		// Capture the request body so tests can assert what the loop sent
+		// (e.g. how many tool_calls the echoed history carries).
+		reqBody, _ := io.ReadAll(r.Body)
+		s.requests = append(s.requests, reqBody)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -202,6 +205,19 @@ func chatRespToolCall(id, name string, args map[string]interface{}) string {
 	return fmt.Sprintf(
 		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":%q,"type":"function","function":{"name":%q,"arguments":%s}}]}}]}`,
 		id, name, aStr,
+	)
+}
+
+// chatRespTwoToolCalls builds a response that invokes two tools in one
+// assistant message (parallel tool calls), used to exercise SingleToolCall.
+func chatRespTwoToolCalls(id1, name1, id2, name2 string) string {
+	mk := func(id, name string) string {
+		args, _ := json.Marshal(`{"path":""}`)
+		return fmt.Sprintf(`{"id":%q,"type":"function","function":{"name":%q,"arguments":%s}}`, id, name, args)
+	}
+	return fmt.Sprintf(
+		`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[%s,%s]}}]}`,
+		mk(id1, name1), mk(id2, name2),
 	)
 }
 
@@ -1286,4 +1302,118 @@ required_evidence:
 	if analysis2.SkillSetHash != edited.Hash() {
 		t.Errorf("third call: SkillSetHash = %q, want %q (post-edit)", analysis2.SkillSetHash, edited.Hash())
 	}
+}
+
+// ---------- SingleToolCall ----------
+
+func TestLimitToolCalls(t *testing.T) {
+	three := []agToolCall{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	t.Run("disabled passes through", func(t *testing.T) {
+		kept, dropped := limitToolCalls(three, false)
+		if len(kept) != 3 || dropped != 0 {
+			t.Errorf("got kept=%d dropped=%d, want 3/0", len(kept), dropped)
+		}
+	})
+	t.Run("enabled keeps first only", func(t *testing.T) {
+		kept, dropped := limitToolCalls(three, true)
+		if len(kept) != 1 || kept[0].ID != "a" || dropped != 2 {
+			t.Errorf("got kept=%v dropped=%d, want [a]/2", kept, dropped)
+		}
+	})
+	t.Run("enabled single call unchanged", func(t *testing.T) {
+		kept, dropped := limitToolCalls(three[:1], true)
+		if len(kept) != 1 || dropped != 0 {
+			t.Errorf("got kept=%d dropped=%d, want 1/0", len(kept), dropped)
+		}
+	})
+	t.Run("empty is safe", func(t *testing.T) {
+		kept, dropped := limitToolCalls(nil, true)
+		if len(kept) != 0 || dropped != 0 {
+			t.Errorf("got kept=%d dropped=%d, want 0/0", len(kept), dropped)
+		}
+	})
+}
+
+// TestAgentic_SingleToolCall_EchoesOneToolCall verifies that when the model
+// returns two parallel tool calls and SingleToolCall is on, the loop executes
+// only the first and the echoed history sent on the next request carries a
+// single tool_call (required by chat templates that reject multiple).
+func TestAgentic_SingleToolCall_EchoesOneToolCall(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	// Round 1: model emits two tool calls at once.
+	srv.push(200, chatRespTwoToolCalls("call_1", "list_artifacts", "call_2", "list_artifacts"))
+	// Round 2: model finalizes.
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, SingleToolCall: true}
+
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:job:1:stc", "system", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	// Only the first tool call should have been dispatched.
+	if analysis.ToolCalls != 1 {
+		t.Errorf("tool_calls = %d, want 1 (second parallel call dropped)", analysis.ToolCalls)
+	}
+	// The second request must carry the echoed assistant message with exactly
+	// one tool_call (not two), so a single-tool-call template would accept it.
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", len(srv.requests))
+	}
+	if n := countAssistantToolCalls(t, srv.requests[1]); n != 1 {
+		t.Errorf("echoed history has %d tool_calls in the assistant turn, want 1", n)
+	}
+}
+
+// TestAgentic_ParallelToolCalls_DefaultEchoesBoth confirms the default (off)
+// behavior is unchanged: both parallel tool calls are executed and echoed.
+func TestAgentic_ParallelToolCalls_DefaultEchoesBoth(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespTwoToolCalls("call_1", "list_artifacts", "call_2", "list_artifacts"))
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:job:1:par", "system", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if analysis.ToolCalls != 2 {
+		t.Errorf("tool_calls = %d, want 2 (both parallel calls executed by default)", analysis.ToolCalls)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if n := countAssistantToolCalls(t, srv.requests[1]); n != 2 {
+		t.Errorf("echoed history has %d tool_calls, want 2 by default", n)
+	}
+}
+
+// countAssistantToolCalls parses a captured chat request body and returns the
+// number of tool_calls on the last assistant message in the conversation.
+func countAssistantToolCalls(t *testing.T, body []byte) int {
+	t.Helper()
+	var req struct {
+		Messages []struct {
+			Role      string        `json:"role"`
+			ToolCalls []interface{} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	n := 0
+	for _, m := range req.Messages {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			n = len(m.ToolCalls)
+		}
+	}
+	return n
 }

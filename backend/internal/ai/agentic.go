@@ -89,6 +89,26 @@ type AgenticOptions struct {
 	// evidence group is not satisfied by the agent's read set; the retry
 	// budget is extended dynamically to fit the missing-group count.
 	SkillsEnabled bool
+
+	// SingleToolCall caps the loop to one tool call per assistant turn:
+	// extra tool calls in a multi-call model response are dropped (only the
+	// first is executed and echoed into history). Needed for endpoints whose
+	// chat template rejects multiple tool calls per assistant message (e.g.
+	// the stock Llama 3.x Instruct template). Defaults to false so providers
+	// that support parallel tool calls keep their efficiency.
+	SingleToolCall bool
+}
+
+// limitToolCalls returns the tool calls the loop should execute and echo this
+// turn. With single=true and more than one call, only the first is kept so the
+// echoed assistant message stays single-tool-call (required by chat templates
+// that reject multiple tool calls per message); the dropped count is returned
+// for logging. The model can re-request the dropped calls on a later turn.
+func limitToolCalls(calls []agToolCall, single bool) (kept []agToolCall, dropped int) {
+	if single && len(calls) > 1 {
+		return calls[:1], len(calls) - 1
+	}
+	return calls, 0
 }
 
 // agenticToolBudget caps bytes returned to the model by any single tool
@@ -703,13 +723,19 @@ func (c *Client) doAnalyzeAgentic(
 			break
 		}
 
-		echo := agChatMessage{Role: "assistant", ToolCalls: msg.ToolCalls}
+		toolCalls, dropped := limitToolCalls(msg.ToolCalls, in.Opts.SingleToolCall)
+		if dropped > 0 {
+			log.Printf("  ⤵ single_tool_call: model returned %d tool calls; executing the first and dropping %d (model may re-request them)",
+				len(msg.ToolCalls), dropped)
+		}
+
+		echo := agChatMessage{Role: "assistant", ToolCalls: toolCalls}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
 		messages = append(messages, echo)
 
-		for _, tc := range msg.ToolCalls {
+		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(loopCtx, state, tc)
 			state.modelBytes += len(result)
 			messages = append(messages, agChatMessage{
