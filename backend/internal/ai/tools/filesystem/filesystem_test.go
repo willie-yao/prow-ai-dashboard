@@ -73,12 +73,12 @@ func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, _, _, 
 func junitTree() *fakeBrowser {
 	return &fakeBrowser{
 		dirs: map[string][]string{
-			"":           {"artifacts/", "build-log.txt"},
-			"artifacts/": {"e2e/", "junit/"},
-			"artifacts/e2e/":   {"clusters/"},
-			"artifacts/e2e/clusters/": {"foo/"},
+			"":                            {"artifacts/", "build-log.txt"},
+			"artifacts/":                  {"e2e/", "junit/"},
+			"artifacts/e2e/":              {"clusters/"},
+			"artifacts/e2e/clusters/":     {"foo/"},
 			"artifacts/e2e/clusters/foo/": {},
-			"artifacts/junit/": {},
+			"artifacts/junit/":            {},
 		},
 		files: map[string][]byte{
 			"artifacts/junit/junit_01.xml":             []byte("<testsuite/>"),
@@ -227,4 +227,34 @@ func TestRegisterEnablesAllFilesystemTools(t *testing.T) {
 			t.Errorf("group enable missed tool %q", n)
 		}
 	}
+}
+
+// TestStringEncodedNumericArgsAreAccepted is the regression for the dominant
+// live failure on weaker models: they encode numeric tool arguments as JSON
+// strings ("5" instead of 5). Before FlexInt, these calls failed with
+// "invalid arguments" and burned the model's investigation budget. Every
+// numeric-arg filesystem tool must now accept both forms.
+func TestStringEncodedNumericArgsAreAccepted(t *testing.T) {
+	b := &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("line1\nERROR boom\nline3\nline4\n"),
+	}}
+	env := &tools.Env{Browser: b}
+	mustNoError := func(t *testing.T, name string, payload map[string]interface{}) {
+		t.Helper()
+		if e, isErr := payload["error"]; isErr {
+			t.Fatalf("%s with string-encoded numeric args should not error: %v", name, e)
+		}
+	}
+
+	raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "lines": "2"})
+	mustNoError(t, "tail_artifact", (&tailTool{}).Dispatch(context.Background(), env, raw).Payload)
+
+	raw, _ = json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "ERROR", "context_lines": "1", "max_matches": "10"})
+	mustNoError(t, "grep_artifact", (&grepTool{}).Dispatch(context.Background(), env, raw).Payload)
+
+	raw, _ = json.Marshal(map[string]interface{}{"path": "build-log.txt", "offset": "0", "length": "5"})
+	mustNoError(t, "read_artifact", (&readTool{}).Dispatch(context.Background(), env, raw).Payload)
+
+	raw, _ = json.Marshal(map[string]interface{}{"pattern": ".*", "max_results": "10", "max_dirs": "50"})
+	mustNoError(t, "find_artifacts", (&findTool{}).Dispatch(context.Background(), env, raw).Payload)
 }

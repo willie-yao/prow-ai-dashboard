@@ -117,20 +117,21 @@ func (*readTool) Schema() tools.Schema {
 
 func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
-		Path   string `json:"path"`
-		Offset int    `json:"offset"`
-		Length int    `json:"length"`
+		Path   string        `json:"path"`
+		Offset tools.FlexInt `json:"offset"`
+		Length tools.FlexInt `json:"length"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
 	}
-	if args.Length <= 0 {
-		args.Length = 8192
+	offset, length := args.Offset.Int(), args.Length.Int()
+	if length <= 0 {
+		length = 8192
 	}
-	if args.Length > 16384 {
-		args.Length = 16384
+	if length > 16384 {
+		length = 16384
 	}
-	data, size, err := env.Browser.Read(ctx, args.Path, args.Offset, args.Length)
+	data, size, err := env.Browser.Read(ctx, args.Path, offset, length)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
@@ -139,7 +140,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		Payload: map[string]interface{}{
 			"path":      args.Path,
 			"file_size": size,
-			"offset":    args.Offset,
+			"offset":    offset,
 			"length":    len(data),
 			"content":   string(data),
 		},
@@ -176,19 +177,20 @@ const tailMaxBytes = 32*1024 - 256
 
 func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
-		Path  string `json:"path"`
-		Lines int    `json:"lines"`
+		Path  string        `json:"path"`
+		Lines tools.FlexInt `json:"lines"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
 	}
-	if args.Lines <= 0 {
-		args.Lines = 500
+	lines := args.Lines.Int()
+	if lines <= 0 {
+		lines = 500
 	}
-	if args.Lines > 2000 {
-		args.Lines = 2000
+	if lines > 2000 {
+		lines = 2000
 	}
-	res, err := env.Browser.Tail(ctx, args.Path, args.Lines, tailMaxBytes)
+	res, err := env.Browser.Tail(ctx, args.Path, lines, tailMaxBytes)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
@@ -231,31 +233,32 @@ func (*grepTool) Schema() tools.Schema {
 
 func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
-		Path         string `json:"path"`
-		Pattern      string `json:"pattern"`
-		ContextLines int    `json:"context_lines"`
-		MaxMatches   int    `json:"max_matches"`
+		Path         string        `json:"path"`
+		Pattern      string        `json:"pattern"`
+		ContextLines tools.FlexInt `json:"context_lines"`
+		MaxMatches   tools.FlexInt `json:"max_matches"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
 	}
-	if args.ContextLines < 0 {
-		args.ContextLines = 0
+	contextLines, maxMatches := args.ContextLines.Int(), args.MaxMatches.Int()
+	if contextLines < 0 {
+		contextLines = 0
 	}
-	if args.ContextLines > 5 {
-		args.ContextLines = 5
+	if contextLines > 5 {
+		contextLines = 5
 	}
-	if args.MaxMatches <= 0 {
-		args.MaxMatches = 30
+	if maxMatches <= 0 {
+		maxMatches = 30
 	}
-	if args.MaxMatches > 100 {
-		args.MaxMatches = 100
+	if maxMatches > 100 {
+		maxMatches = 100
 	}
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
 		return tools.ErrPayload("invalid regex: " + err.Error())
 	}
-	res, err := env.Browser.Grep(ctx, args.Path, re, args.ContextLines, args.MaxMatches, 1000)
+	res, err := env.Browser.Grep(ctx, args.Path, re, contextLines, maxMatches, 1000)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
@@ -310,25 +313,26 @@ var ErrFindTruncated = errors.New("find_artifacts: walk truncated")
 
 func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
-		Pattern    string `json:"pattern"`
-		Root       string `json:"root"`
-		MaxResults int    `json:"max_results"`
-		MaxDirs    int    `json:"max_dirs"`
+		Pattern    string        `json:"pattern"`
+		Root       string        `json:"root"`
+		MaxResults tools.FlexInt `json:"max_results"`
+		MaxDirs    tools.FlexInt `json:"max_dirs"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
 	}
-	if args.MaxResults <= 0 {
-		args.MaxResults = 50
+	maxResults, maxDirs := args.MaxResults.Int(), args.MaxDirs.Int()
+	if maxResults <= 0 {
+		maxResults = 50
 	}
-	if args.MaxResults > 200 {
-		args.MaxResults = 200
+	if maxResults > 200 {
+		maxResults = 200
 	}
-	if args.MaxDirs <= 0 {
-		args.MaxDirs = 200
+	if maxDirs <= 0 {
+		maxDirs = 200
 	}
-	if args.MaxDirs > 1000 {
-		args.MaxDirs = 1000
+	if maxDirs > 1000 {
+		maxDirs = 1000
 	}
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
@@ -347,7 +351,7 @@ func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	type queueItem struct{ dir string }
 	queue := []queueItem{{dir: args.Root}}
 
-	for len(queue) > 0 && len(matches) < args.MaxResults && scanned < args.MaxDirs {
+	for len(queue) > 0 && len(matches) < maxResults && scanned < maxDirs {
 		head := queue[0]
 		queue = queue[1:]
 		scanned++
@@ -365,19 +369,19 @@ func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 				Path: joinPath(listing.Dir, f.Name),
 				Size: f.Size,
 			})
-			if len(matches) >= args.MaxResults {
+			if len(matches) >= maxResults {
 				truncatedByResults = true
 				break
 			}
 		}
-		if len(matches) >= args.MaxResults {
+		if len(matches) >= maxResults {
 			break
 		}
 		for _, sub := range listing.Dirs {
 			queue = append(queue, queueItem{dir: joinPath(listing.Dir, sub)})
 		}
 	}
-	if scanned >= args.MaxDirs && len(queue) > 0 {
+	if scanned >= maxDirs && len(queue) > 0 {
 		truncatedByDirs = true
 	}
 
