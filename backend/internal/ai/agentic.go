@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -954,6 +955,16 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc agToolCall) stri
 				s.recordSuccessfulRead(p)
 			}
 		}
+	}
+
+	// Optional per-tool-call trace for diagnosing investigation behavior.
+	// Off unless AGENTIC_TRACE_TOOLS is set, so production logs stay clean.
+	if os.Getenv("AGENTIC_TRACE_TOOLS") != "" {
+		flag := "ok"
+		if _, hasErr := result.Payload["error"]; hasErr {
+			flag = "ERROR"
+		}
+		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)
 	}
 
 	return toolEnvelopeJSON(s, result.Payload)
