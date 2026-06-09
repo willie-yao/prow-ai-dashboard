@@ -324,8 +324,11 @@ not re-flag them.
 
 This converts an ignored "go read X" loop into "here is X", which is the
 single most common reason drafts fail critique on weaker models (citing
-evidence they never opened). It adds the fetched bytes (up to a few capped
-artifacts per retry) to the conversation, so it is best suited to
+evidence they never opened). It runs on both the in-loop critique retry and
+the post-loop force-finalize path (where weak models most often land after
+exhausting their tool-call budget), in the latter case driving one extra
+finalize round with the injected evidence. It adds the fetched bytes (up to a
+few capped artifacts per retry) to the conversation, so it is best suited to
 large-context models. Best-effort: a fetch that fails (e.g. a path the
 browser cannot resolve) is skipped and the plain text feedback still
 applies. No cache-version interaction; it only changes the retry prompt.

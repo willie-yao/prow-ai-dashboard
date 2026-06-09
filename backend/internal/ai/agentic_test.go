@@ -1520,3 +1520,49 @@ func TestAgentic_EvidenceInjection_OffByDefault(t *testing.T) {
 		t.Errorf("default (injection off) must not embed fetched artifact content")
 	}
 }
+
+// TestAgentic_EvidenceInjection_PostLoopRetry exercises the post-loop path:
+// the model exhausts its iterations on tool calls (never returning a tools-
+// free final), gets force-finalized with a draft citing an unread artifact,
+// and EvidenceInjection drives one finalize retry that embeds the fetched
+// content so the model can re-ground its answer.
+func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
+	// Iter 1: a tool call (keeps the loop from getting a tools-free final).
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Iter 2 (maxIters=2 reached after this): another tool call, so the loop
+	// ends without a tools-free final and force-finalizes.
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Forced finalize: draft cites an unread artifact (clean fix).
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per `+citePath+`","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`))
+	// Injection-driven finalize retry: clean, grounded draft.
+	srv.push(200, chatRespFinal(`{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet mismatch confirmed from the injected log","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		citePath: []byte("POSTLOOP_MARKER cloud-init error: vnet peering mismatch\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-postloop", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	// The last request (the injection-driven finalize) must embed the fetched
+	// artifact content.
+	last := string(srv.requests[len(srv.requests)-1])
+	if !strings.Contains(last, "POSTLOOP_MARKER") {
+		t.Errorf("post-loop injection retry should embed the fetched artifact content")
+	}
+	if analysis.RootCause == "" || !strings.Contains(analysis.RootCause, "vnet mismatch confirmed") {
+		t.Errorf("expected the re-grounded draft to be published, got %q", analysis.RootCause)
+	}
+}

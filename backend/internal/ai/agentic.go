@@ -815,14 +815,38 @@ func (c *Client) doAnalyzeAgentic(
 	// already mark critique as passed. The in-loop critique only fires on
 	// tools-free responses that parse on the spot; outputs from
 	// runFinalizeRound and slow-parse outputs would otherwise bypass it
-	// and publish-but-never-cache forever. No retry here: retries are an
-	// in-loop concept, and re-entering the loop post-finalize would
-	// require a larger refactor.
+	// and publish-but-never-cache forever.
 	if in.Opts.CritiqueEnabled && !state.critiquePassed {
 		matchedSkills := matchSkillsForDraft(state, parsed)
-		if out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills); out.Passed {
+		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
+		switch {
+		case out.Passed:
 			state.critiquePassed = true
-		} else {
+		case in.Opts.EvidenceInjection && len(out.UnreadCitations) > 0:
+			// The force-finalized draft cited artifacts the agent never
+			// read. Fetch them, inject their content, and run one more
+			// finalize round so the model can re-ground its answer. This is
+			// the dominant post-loop failure on weak models.
+			if inj := c.injectUnreadEvidence(loopCtx, state, out.UnreadCitations); inj != "" {
+				messages = append(messages,
+					agChatMessage{Role: "assistant", Content: strPtr(finalContent)},
+					agChatMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + inj)})
+				revised := c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
+				if rp, ok2 := tryParseAnalysis(revised); ok2 {
+					parsed = rp
+					out2 := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed))
+					if out2.Passed {
+						state.critiquePassed = true
+					} else {
+						log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out2.Matches())
+					}
+				} else {
+					log.Printf("  ⚠ agentic critique: post-injection finalize did not parse; keeping prior draft, not caching")
+				}
+			} else {
+				log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
+			}
+		default:
 			log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; accepting but not caching",
 				out.Matches())
 		}
@@ -840,15 +864,15 @@ func (c *Client) doAnalyzeAgentic(
 // Returns "" when nothing could be fetched. Best-effort: a failed fetch for
 // one path is skipped, not fatal. The fetched paths are marked read so the
 // next critique pass does not re-flag them as unread (the engine read them on
-// the model's behalf).
+// the model's behalf). Intentionally not gated on the model byte budget:
+// critique runs after the investigation has spent most of that budget, and
+// the injected evidence is the highest-value content at that moment. The
+// per-artifact and count caps bound the addition to ~24 KB per retry.
 func (c *Client) injectUnreadEvidence(ctx context.Context, state *agentState, unread []string) string {
 	var sections []string
 	fetched := 0
 	for _, p := range unread {
 		if fetched >= evidenceInjectionMaxArtifacts {
-			break
-		}
-		if state.modelRemaining() <= evidenceInjectionPerArtifactBytes {
 			break
 		}
 		res, err := state.browser.Tail(ctx, p, 200, evidenceInjectionPerArtifactBytes)
