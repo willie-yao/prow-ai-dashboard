@@ -119,9 +119,14 @@ func limitToolCalls(calls []agToolCall, single bool) (kept []agToolCall, dropped
 	return calls, 0
 }
 
-// evidenceInjectionMaxArtifacts caps how many cited-but-unread artifacts are
-// fetched per critique-failure round, bounding the context the injection adds.
-const evidenceInjectionMaxArtifacts = 3
+// evidenceInjectionMaxArtifacts caps how many artifacts are fetched per
+// critique-failure round, bounding the context the injection adds.
+const evidenceInjectionMaxArtifacts = 4
+
+// evidenceWalkMaxDirs bounds the single tree walk used to resolve cited
+// basenames and skill-required patterns to real artifact paths, capping the
+// GCS list cost of one injection.
+const evidenceWalkMaxDirs = 80
 
 // evidenceInjectionPerArtifactBytes caps the bytes injected per artifact.
 const evidenceInjectionPerArtifactBytes = 8 * 1024
@@ -720,14 +725,15 @@ func (c *Client) doAnalyzeAgentic(
 						if msg.Content != nil {
 							echo.Content = msg.Content
 						}
-						// Evidence injection: fetch the artifacts the draft
-						// cited but never read and append their content to the
-						// feedback, so a model that ignores "go read X" still
-						// gets the bytes. Best-effort; failures fall back to
-						// the plain text feedback.
+						// Evidence injection: fetch the evidence the draft
+						// cited but never read (and skill-required evidence it
+						// skipped) and append it to the feedback, so a model
+						// that ignores "go read X" still gets the bytes.
+						// Best-effort; failures fall back to the plain text
+						// feedback.
 						feedback := out.Feedback
-						if in.Opts.EvidenceInjection && len(out.UnreadCitations) > 0 {
-							if inj := c.injectUnreadEvidence(loopCtx, state, out.UnreadCitations); inj != "" {
+						if in.Opts.EvidenceInjection {
+							if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
 								feedback = feedback + "\n\n" + inj
 							}
 						}
@@ -822,12 +828,13 @@ func (c *Client) doAnalyzeAgentic(
 		switch {
 		case out.Passed:
 			state.critiquePassed = true
-		case in.Opts.EvidenceInjection && len(out.UnreadCitations) > 0:
-			// The force-finalized draft cited artifacts the agent never
-			// read. Fetch them, inject their content, and run one more
-			// finalize round so the model can re-ground its answer. This is
-			// the dominant post-loop failure on weak models.
-			if inj := c.injectUnreadEvidence(loopCtx, state, out.UnreadCitations); inj != "" {
+		case in.Opts.EvidenceInjection && (len(out.UnreadCitations) > 0 || len(out.MissingSkillEvidence) > 0):
+			// The force-finalized draft cited artifacts the agent never read,
+			// or skipped evidence its claimed failure class requires. Fetch
+			// that evidence, inject it, and run one more finalize round so the
+			// model can re-ground its answer. This is the dominant post-loop
+			// failure on weak models.
+			if inj := c.buildEvidenceInjection(loopCtx, state, out); inj != "" {
 				messages = append(messages,
 					agChatMessage{Role: "assistant", Content: strPtr(finalContent)},
 					agChatMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + inj)})
@@ -858,38 +865,146 @@ func (c *Client) doAnalyzeAgentic(
 	return summary, analysis, nil
 }
 
-// injectUnreadEvidence fetches up to evidenceInjectionMaxArtifacts of the
-// cited-but-unread artifacts, marks them read on state, accumulates their
-// cost, and returns a feedback addendum embedding their (capped) content.
-// Returns "" when nothing could be fetched. Best-effort: a failed fetch for
-// one path is skipped, not fatal. The fetched paths are marked read so the
-// next critique pass does not re-flag them as unread (the engine read them on
-// the model's behalf). Intentionally not gated on the model byte budget:
-// critique runs after the investigation has spent most of that budget, and
-// the injected evidence is the highest-value content at that moment. The
-// per-artifact and count caps bound the addition to ~24 KB per retry.
-func (c *Client) injectUnreadEvidence(ctx context.Context, state *agentState, unread []string) string {
+// buildEvidenceInjection fetches the evidence a critique-failing draft needed
+// but did not read, and returns a feedback addendum embedding it. It covers
+// two buckets: (1) artifacts the draft cited but never read, and (2) evidence
+// a matched skill requires for the claimed failure class. Full-path citations
+// are fetched directly; bare-basename citations and skill-required patterns
+// are resolved to real paths with a single bounded tree walk (so cost does
+// not scale with the number of targets). Fetched paths are marked read so the
+// next critique pass does not re-flag them. Returns "" when nothing could be
+// fetched. Intentionally not gated on the model byte budget: critique runs
+// after the investigation has spent it, and this evidence is the highest-value
+// content at that moment; the per-artifact and count caps bound the addition.
+func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, out critiqueOutcome) string {
 	var sections []string
 	fetched := 0
-	for _, p := range unread {
+	tail := func(p string) string {
 		if fetched >= evidenceInjectionMaxArtifacts {
-			break
+			return ""
 		}
 		res, err := state.browser.Tail(ctx, p, 200, evidenceInjectionPerArtifactBytes)
 		if err != nil || res == nil || len(res.Content) == 0 {
-			continue
+			return ""
 		}
-		state.gcsBytes += len(res.Content)
-		state.modelBytes += len(res.Content)
-		state.recordSuccessfulRead(p)
-		sections = append(sections, fmt.Sprintf("### %s (tail)\n%s", p, string(res.Content)))
+		return string(res.Content)
+	}
+	add := func(realPath, label, content string) {
+		state.gcsBytes += len(content)
+		state.modelBytes += len(content)
+		state.recordSuccessfulRead(realPath)
+		sections = append(sections, fmt.Sprintf("### %s\n%s", label, content))
 		fetched++
 	}
+
+	// walkTarget pairs a path predicate with the label to use when it matches.
+	type walkTarget struct {
+		match func(string) bool
+		label func(real string) string
+	}
+	var targets []walkTarget
+
+	// Bucket 1: cited-but-unread artifacts. Fetch full paths directly; queue
+	// bare basenames (and full paths that fail to fetch) for the walk.
+	for _, cited := range out.UnreadCitations {
+		if strings.Contains(cited, "/") {
+			if content := tail(cited); content != "" {
+				add(cited, cited+" (tail)", content)
+				continue
+			}
+		}
+		base := path.Base(cited)
+		citedCopy := cited
+		targets = append(targets, walkTarget{
+			match: func(p string) bool { return strings.EqualFold(path.Base(p), base) },
+			label: func(real string) string {
+				return fmt.Sprintf("%s (tail; nearest match for cited %q)", real, citedCopy)
+			},
+		})
+	}
+
+	// Bucket 2: skill-required evidence groups the agent did not satisfy.
+	for _, m := range out.MissingSkillEvidence {
+		skillID := m.Skill.ID
+		for _, g := range m.Missing {
+			group := g
+			targets = append(targets, walkTarget{
+				match: func(p string) bool { return group.Satisfied(map[string]bool{strings.ToLower(p): true}) },
+				label: func(real string) string {
+					return fmt.Sprintf("%s (tail; required evidence %q for skill %q)", real, group.ID, skillID)
+				},
+			})
+		}
+	}
+
+	// Single bounded walk resolves every remaining target's first match.
+	if len(targets) > 0 && fetched < evidenceInjectionMaxArtifacts {
+		preds := make([]func(string) bool, len(targets))
+		for i := range targets {
+			preds[i] = targets[i].match
+		}
+		matches := resolveEvidenceByWalk(ctx, state.browser, preds)
+		for i, real := range matches {
+			if real == "" || fetched >= evidenceInjectionMaxArtifacts {
+				continue
+			}
+			if content := tail(real); content != "" {
+				add(real, targets[i].label(real), content)
+			}
+		}
+	}
+
 	if fetched == 0 {
 		return ""
 	}
-	log.Printf("  📎 evidence injection: fetched %d cited-but-unread artifact(s) into the retry", fetched)
-	return "The engine fetched the artifact(s) you cited but had not read. Ground your root_cause in what they ACTUALLY show below; correct or drop any claim they do not support.\n\n" + strings.Join(sections, "\n\n")
+	log.Printf("  📎 evidence injection: fetched %d artifact(s) into the retry", fetched)
+	return "The engine fetched evidence you cited but had not read, and/or evidence required for this failure class. Ground your root_cause in what these artifacts ACTUALLY show below; correct or drop any claim they do not support.\n\n" + strings.Join(sections, "\n\n")
+}
+
+// resolveEvidenceByWalk does ONE bounded breadth-first walk of the artifact
+// tree and returns, for each predicate, the first matching real path (or ""
+// if unmatched). Bounded by evidenceWalkMaxDirs to cap GCS list cost. Stops
+// early once every predicate has a match.
+func resolveEvidenceByWalk(ctx context.Context, browser artifacts.Browser, preds []func(string) bool) []string {
+	found := make([]string, len(preds))
+	remaining := len(preds)
+	scanned := 0
+	queue := []string{""}
+	for len(queue) > 0 && remaining > 0 && scanned < evidenceWalkMaxDirs {
+		dir := queue[0]
+		queue = queue[1:]
+		scanned++
+		listing, err := browser.List(ctx, dir)
+		if err != nil {
+			continue
+		}
+		for _, f := range listing.Files {
+			full := joinArtifactPath(listing.Dir, f.Name)
+			for i, pred := range preds {
+				if found[i] == "" && pred(full) {
+					found[i] = full
+					remaining--
+				}
+			}
+		}
+		for _, sub := range listing.Dirs {
+			queue = append(queue, joinArtifactPath(listing.Dir, sub))
+		}
+	}
+	return found
+}
+
+// joinArtifactPath joins a listing dir with a child name (file or subdir),
+// tolerating a dir with or without a trailing slash so it works against both
+// the real browser (trailing-slashed) and test doubles.
+func joinArtifactPath(dir, name string) string {
+	if dir == "" {
+		return name
+	}
+	if !strings.HasSuffix(dir, "/") {
+		dir += "/"
+	}
+	return dir + name
 }
 
 // matchSkillsForDraft joins the candidate draft's prose fields and matches
