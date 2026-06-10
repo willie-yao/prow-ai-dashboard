@@ -687,6 +687,11 @@ func TestResponseFormatFooter_AntiPuntAnchors(t *testing.T) {
 			t.Errorf("ResponseFormatFooter leaked tool-specific phrase %q (keep tool wording in agToolDocs)\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
+	// The literal fill-in-the-blank example was copied verbatim into
+	// suggested_fix by weaker models, so it must not return.
+	if strings.Contains(ResponseFormatFooter, "X but not Y") {
+		t.Errorf("ResponseFormatFooter reintroduced the copyable 'X but not Y' placeholder")
+	}
 }
 
 // TestResponseFormatFooter_DepthAnchors pins the depth signals in the
