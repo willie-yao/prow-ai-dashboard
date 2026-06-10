@@ -197,25 +197,6 @@ func discoverJUnitURLsAt(ctx context.Context, client *http.Client, apiURL, base,
 	return urls, nil
 }
 
-// queryEscape is a tiny wrapper to keep the listing helpers self-contained
-// without pulling in net/url just for one call site.
-func queryEscape(s string) string {
-	// Only "/" needs encoding for our prefixes; everything else is ASCII
-	// alphanumeric plus "-_./". Use a minimal escape.
-	const hex = "0123456789ABCDEF"
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			c == '-' || c == '_' || c == '.' || c == '~' {
-			out = append(out, c)
-			continue
-		}
-		out = append(out, '%', hex[c>>4], hex[c&0x0f])
-	}
-	return string(out)
-}
-
 // fetchResult holds the result of a single artifact fetch.
 type fetchResult struct {
 	data []byte
