@@ -24,6 +24,13 @@ type Browser interface {
 	// build root. Empty dir lists the build root.
 	List(ctx context.Context, dir string) (*Listing, error)
 
+	// ListTree returns every artifact path under the build, relative to the
+	// build root (no directory prefix), so the paths can be passed straight
+	// to Read/Tail/Grep. Bounded by maxPaths; the returned bool is true when
+	// the listing was truncated at that cap. Lets callers hand the model the
+	// real artifact paths up front instead of having it guess.
+	ListTree(ctx context.Context, maxPaths int) (paths []string, truncated bool, err error)
+
 	// Read fetches a byte range of a file. Returns the bytes plus the
 	// total file size (or -1 if unknown).
 	Read(ctx context.Context, file string, offset, length int) ([]byte, int64, error)

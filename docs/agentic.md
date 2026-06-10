@@ -64,6 +64,7 @@ ai:
       enabled: false              # opt into the recipe-driven evidence gate
                                   # (loads <project_dir>/skills/*.yaml; see docs/skills.md)
     evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
+    seed_artifact_tree: false     # prepend the build's full artifact path list to the prompt
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -337,6 +338,24 @@ artifacts per retry) to the conversation, so it is best suited to
 large-context models. Best-effort: a path that cannot be resolved or fetched
 is skipped and the plain text feedback still applies. No cache-version
 interaction; it only changes the retry prompt.
+
+### `seed_artifact_tree`
+
+Off by default. When enabled, the engine fetches the build's full artifact
+path list (one recursive GCS listing) and prepends it to the analysis prompt,
+so the model starts with the **exact** paths to pass to `read_artifact` /
+`tail_artifact` / `grep_artifact` instead of guessing leaf filenames. On
+weaker models, guessed-and-wrong paths are a leading cause of failed deep
+reads: the model navigates to the right directory but invents a filename that
+does not exist, so it never reaches the controller/machine log holding the
+upstream cause. Seeding the real tree removes the guessing.
+
+The listing is capped (currently 500 paths) to bound prompt size; a build
+with more artifacts is truncated with a note pointing the model at
+`list_artifacts` for the rest. It adds the path list (a few KB to tens of KB)
+to the prompt, so it suits large-context models. Degrades to a no-op if the
+listing is empty or fails (the loop proceeds with its normal prompt). One
+extra listing per uncached failure; no cache-version interaction.
 
 ### `always: true` vs `always: false`
 

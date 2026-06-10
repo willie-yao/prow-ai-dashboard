@@ -20,6 +20,17 @@ type fakeBrowser struct {
 
 func (b *fakeBrowser) BuildRoot() string { return "fake/build/1" }
 
+func (b *fakeBrowser) ListTree(_ context.Context, maxPaths int) ([]string, bool, error) {
+	var out []string
+	for name := range b.files {
+		if len(out) >= maxPaths {
+			return out, true, nil
+		}
+		out = append(out, name)
+	}
+	return out, false, nil
+}
+
 func (b *fakeBrowser) List(_ context.Context, dir string) (*artifacts.Listing, error) {
 	prefix := dir
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {

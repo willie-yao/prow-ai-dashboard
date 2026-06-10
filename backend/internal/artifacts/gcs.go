@@ -159,6 +159,65 @@ func (b *GCSBrowser) List(ctx context.Context, dir string) (*Listing, error) {
 	return out, nil
 }
 
+// ---------- ListTree ----------
+
+// ListTree returns every object under the build prefix, relative to the build
+// root, using a no-delimiter (recursive) listing. Paginates up to maxPaths;
+// truncated is true when more objects exist than the cap allows.
+func (b *GCSBrowser) ListTree(ctx context.Context, maxPaths int) ([]string, bool, error) {
+	if maxPaths <= 0 {
+		return nil, false, nil
+	}
+	var out []string
+	pageToken := ""
+	for {
+		apiURL := fmt.Sprintf("%s?prefix=%s&maxResults=1000", b.listURL, queryEscape(b.prefix))
+		if pageToken != "" {
+			apiURL += "&pageToken=" + queryEscape(pageToken)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		resp, err := b.client.Do(req)
+		if err != nil {
+			return nil, false, fmt.Errorf("list tree: %w", err)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, perCallGCSCap))
+		resp.Body.Close()
+		if err != nil {
+			return nil, false, fmt.Errorf("list tree: read body: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, false, fmt.Errorf("list tree: HTTP %d", resp.StatusCode)
+		}
+		var raw struct {
+			Items []struct {
+				Name string `json:"name"`
+			} `json:"items"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, false, fmt.Errorf("list tree: parse: %w", err)
+		}
+		for _, it := range raw.Items {
+			name := strings.TrimPrefix(it.Name, b.prefix)
+			if name == "" || strings.HasSuffix(name, "/") {
+				continue
+			}
+			out = append(out, name)
+			if len(out) >= maxPaths {
+				return out, true, nil
+			}
+		}
+		pageToken = raw.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	return out, false, nil
+}
+
 // ---------- Read ----------
 
 func (b *GCSBrowser) Read(ctx context.Context, file string, offset, length int) ([]byte, int64, error) {

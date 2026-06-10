@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -105,7 +106,17 @@ type AgenticOptions struct {
 	// CritiqueEnabled. Adds the fetched bytes to the conversation, so it
 	// suits large-context models.
 	EvidenceInjection bool
+
+	// SeedArtifactTree prepends the build's full artifact path list to the
+	// task prompt so the model reads exact paths instead of guessing leaf
+	// filenames. Adds the path list to the prompt, so it suits large-context
+	// models.
+	SeedArtifactTree bool
 }
+
+// artifactTreeMaxPaths caps how many artifact paths the seed lists, bounding
+// the prompt size on builds with very large artifact trees.
+const artifactTreeMaxPaths = 500
 
 // limitToolCalls returns the tool calls the loop should execute and echo this
 // turn. With single=true and more than one call, only the first is kept so the
@@ -606,6 +617,11 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	fullSysPrompt := sysPrompt + agToolDocs
+	if in.Opts.SeedArtifactTree {
+		if seed := c.buildArtifactTreeSeed(ctx, in.Browser); seed != "" {
+			userPrompt = seed + "\n\n---\n\n" + userPrompt
+		}
+	}
 	messages := []agChatMessage{
 		{Role: "system", Content: strPtr(fullSysPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
@@ -863,6 +879,35 @@ func (c *Client) doAnalyzeAgentic(
 	summary, analysis := c.buildOutputs(parsed)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
+}
+
+// buildArtifactTreeSeed returns a prompt addendum listing the build's full
+// artifact path tree (capped), so the model reads exact paths instead of
+// guessing leaf filenames. One recursive listing; degrades to "" if the
+// listing is empty or fails (the loop proceeds with its normal prompt).
+func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser) string {
+	if browser == nil {
+		return ""
+	}
+	paths, truncated, err := browser.ListTree(ctx, artifactTreeMaxPaths)
+	if err != nil || len(paths) == 0 {
+		if err != nil {
+			log.Printf("  ⓘ artifact-tree seed skipped: %v", err)
+		}
+		return ""
+	}
+	sort.Strings(paths)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, copy them from this list:\n", len(paths))
+	for _, p := range paths {
+		b.WriteString(p)
+		b.WriteByte('\n')
+	}
+	if truncated {
+		fmt.Fprintf(&b, "... [list truncated at %d paths; use list_artifacts to explore the rest]\n", artifactTreeMaxPaths)
+	}
+	log.Printf("  🗂 artifact-tree seed: %d path(s) injected", len(paths))
+	return b.String()
 }
 
 // buildEvidenceInjection fetches the evidence a critique-failing draft needed

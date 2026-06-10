@@ -21,6 +21,17 @@ type fakeBrowser struct {
 
 func (b *fakeBrowser) BuildRoot() string { return "fake/build/1" }
 
+func (b *fakeBrowser) ListTree(_ context.Context, maxPaths int) ([]string, bool, error) {
+	var out []string
+	for name := range b.files {
+		if len(out) >= maxPaths {
+			return out, true, nil
+		}
+		out = append(out, name)
+	}
+	return out, false, nil
+}
+
 func (b *fakeBrowser) List(_ context.Context, dir string) (*artifacts.Listing, error) {
 	prefix := dir
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
@@ -75,16 +86,16 @@ func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, _, _, 
 func capiShapedBrowser() *fakeBrowser {
 	return &fakeBrowser{
 		dirs: map[string][]string{
-			"artifacts/clusters/": {"bootstrap/", "capz-e2e-abc123-ha/", "capz-e2e-abc123-ipv6/"},
-			"artifacts/clusters/capz-e2e-abc123-ha/":          {"azure-activity-logs/", "machines/", "kube-system/", "calico-system/"},
-			"artifacts/clusters/capz-e2e-abc123-ha/machines/": {"capz-e2e-abc123-ha-control-plane-jkl42/", "capz-e2e-abc123-ha-md-0-xyz98/"},
-			"artifacts/clusters/capz-e2e-abc123-ipv6/":          {"machines/"},
-			"artifacts/clusters/capz-e2e-abc123-ipv6/machines/": {"capz-e2e-abc123-ipv6-control-plane-aa1/"},
-			"artifacts/clusters/bootstrap/":                              {"logs/"},
-			"artifacts/clusters/bootstrap/logs/":                         {"capz-system/", "capi-system/"},
-			"artifacts/clusters/bootstrap/logs/capz-system/":             {"capz-controller-manager/", "azureserviceoperator-controller-manager/"},
+			"artifacts/clusters/":                                                    {"bootstrap/", "capz-e2e-abc123-ha/", "capz-e2e-abc123-ipv6/"},
+			"artifacts/clusters/capz-e2e-abc123-ha/":                                 {"azure-activity-logs/", "machines/", "kube-system/", "calico-system/"},
+			"artifacts/clusters/capz-e2e-abc123-ha/machines/":                        {"capz-e2e-abc123-ha-control-plane-jkl42/", "capz-e2e-abc123-ha-md-0-xyz98/"},
+			"artifacts/clusters/capz-e2e-abc123-ipv6/":                               {"machines/"},
+			"artifacts/clusters/capz-e2e-abc123-ipv6/machines/":                      {"capz-e2e-abc123-ipv6-control-plane-aa1/"},
+			"artifacts/clusters/bootstrap/":                                          {"logs/"},
+			"artifacts/clusters/bootstrap/logs/":                                     {"capz-system/", "capi-system/"},
+			"artifacts/clusters/bootstrap/logs/capz-system/":                         {"capz-controller-manager/", "azureserviceoperator-controller-manager/"},
 			"artifacts/clusters/bootstrap/logs/capz-system/capz-controller-manager/": {"capz-controller-manager-7d4f5b9c4-xyz12/"},
-			"artifacts/clusters/bootstrap/logs/capi-system/":             {"capi-controller-manager/"},
+			"artifacts/clusters/bootstrap/logs/capi-system/":                         {"capi-controller-manager/"},
 			"artifacts/clusters/bootstrap/logs/capi-system/capi-controller-manager/": {"capi-controller-manager-5f6c8d9b7-abc34/"},
 		},
 		files: map[string][]byte{
@@ -92,8 +103,8 @@ func capiShapedBrowser() *fakeBrowser {
 			"artifacts/clusters/capz-e2e-abc123-ha/machines/capz-e2e-abc123-ha-control-plane-jkl42/kubelet.log": []byte("kubelet output"),
 			"artifacts/clusters/capz-e2e-abc123-ha/machines/capz-e2e-abc123-ha-control-plane-jkl42/journal.log": []byte("journal output"),
 			// cloud-init.log is "present but empty" to verify discovery doesn't filter on size.
-			"artifacts/clusters/capz-e2e-abc123-ha/machines/capz-e2e-abc123-ha-control-plane-jkl42/cloud-init.log": []byte{},
-			"artifacts/clusters/capz-e2e-abc123-ha/machines/capz-e2e-abc123-ha-md-0-xyz98/boot.log":                []byte("worker boot"),
+			"artifacts/clusters/capz-e2e-abc123-ha/machines/capz-e2e-abc123-ha-control-plane-jkl42/cloud-init.log":                      []byte{},
+			"artifacts/clusters/capz-e2e-abc123-ha/machines/capz-e2e-abc123-ha-md-0-xyz98/boot.log":                                     []byte("worker boot"),
 			"artifacts/clusters/bootstrap/logs/capz-system/capz-controller-manager/capz-controller-manager-7d4f5b9c4-xyz12/manager.log": []byte("capz manager log"),
 			"artifacts/clusters/bootstrap/logs/capi-system/capi-controller-manager/capi-controller-manager-5f6c8d9b7-abc34/manager.log": []byte("capi manager log"),
 		},

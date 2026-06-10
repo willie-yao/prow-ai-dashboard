@@ -324,3 +324,53 @@ func TestGrep_Truncation(t *testing.T) {
 		t.Errorf("want Truncated = true")
 	}
 }
+
+func TestListTree(t *testing.T) {
+	files := map[string][]byte{
+		"logs/job1/b1/build-log.txt":                              []byte("top"),
+		"logs/job1/b1/started.json":                               []byte("{}"),
+		"logs/job1/b1/artifacts/junit.xml":                        []byte("<x/>"),
+		"logs/job1/b1/artifacts/clusters/c1/machines/m1/boot.log": []byte("deep"),
+	}
+	b, _, _ := newBrowserWithFake(t, files)
+
+	paths, truncated, err := b.ListTree(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Errorf("should not be truncated under the cap")
+	}
+	if len(paths) != 4 {
+		t.Fatalf("got %d paths, want 4: %v", len(paths), paths)
+	}
+	// Paths must be relative to the build root (prefix stripped), so they can
+	// be passed straight to read/tail/grep.
+	want := map[string]bool{
+		"build-log.txt":       true,
+		"started.json":        true,
+		"artifacts/junit.xml": true,
+		"artifacts/clusters/c1/machines/m1/boot.log": true,
+	}
+	for _, p := range paths {
+		if !want[p] {
+			t.Errorf("unexpected path %q (not build-root-relative?)", p)
+		}
+	}
+}
+
+func TestListTree_TruncatesAtCap(t *testing.T) {
+	files := map[string][]byte{
+		"logs/job1/b1/a.log": []byte("1"),
+		"logs/job1/b1/b.log": []byte("2"),
+		"logs/job1/b1/c.log": []byte("3"),
+	}
+	b, _, _ := newBrowserWithFake(t, files)
+	paths, truncated, err := b.ListTree(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || !truncated {
+		t.Errorf("got %d paths truncated=%v, want 2 truncated=true", len(paths), truncated)
+	}
+}

@@ -354,6 +354,14 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Error("EvidenceInjection=true should pass through")
 		}
 	})
+	t.Run("SeedArtifactTree flips through", func(t *testing.T) {
+		if (&Agentic{Enabled: true}).EffectiveAgentic().SeedArtifactTree {
+			t.Error("SeedArtifactTree should default to false")
+		}
+		if !(&Agentic{Enabled: true, SeedArtifactTree: true}).EffectiveAgentic().SeedArtifactTree {
+			t.Error("SeedArtifactTree=true should pass through")
+		}
+	})
 	t.Run("Tools list passes through", func(t *testing.T) {
 		in := &Agentic{Tools: []string{"filesystem"}}
 		got := in.EffectiveAgentic()
@@ -440,6 +448,7 @@ func agenticEqual(a, b Agentic) bool {
 		a.Critique == b.Critique &&
 		a.SingleToolCall == b.SingleToolCall &&
 		a.EvidenceInjection == b.EvidenceInjection &&
+		a.SeedArtifactTree == b.SeedArtifactTree &&
 		equalStrings(a.Tools, b.Tools)
 }
 
