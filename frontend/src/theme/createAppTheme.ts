@@ -47,6 +47,10 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
       secondary: t.onSurfaceVariant,
     },
     divider: t.outlineVariant,
+    dot: {
+      pass: t.dotPass,
+      fail: t.dotFail,
+    },
     surface: {
       main: t.surface,
       dim: t.surfaceDim,

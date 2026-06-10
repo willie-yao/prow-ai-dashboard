@@ -18,12 +18,21 @@ export interface SurfacePalette {
   glass: string;
 }
 
+// Pass/fail colors for the run-history dot/bar visualizations, kept separate
+// from the semantic success/error palette so they can be brightness-matched.
+export interface DotPalette {
+  pass: string;
+  fail: string;
+}
+
 declare module "@mui/material/styles" {
   interface Palette {
     surface: SurfacePalette;
+    dot: DotPalette;
   }
   interface PaletteOptions {
     surface?: Partial<SurfacePalette>;
+    dot?: Partial<DotPalette>;
   }
 
   interface TypographyVariants {
