@@ -352,10 +352,16 @@ upstream cause. Seeding the real tree removes the guessing.
 
 The listing is capped (currently 500 paths) to bound prompt size; a build
 with more artifacts is truncated with a note pointing the model at
-`list_artifacts` for the rest. It adds the path list (a few KB to tens of KB)
-to the prompt, so it suits large-context models. Degrades to a no-op if the
-listing is empty or fails (the loop proceeds with its normal prompt). One
-extra listing per uncached failure; no cache-version interaction.
+`list_artifacts` for the rest. Before capping, the engine over-fetches and
+drops non-text noise (images and archives such as `.png`, `.svg`, `.gz`,
+`.tar`, `.zip`) the model cannot usefully read, leaving more of the path
+budget for diagnostic logs. The seed header also tells the model to read from
+the list directly and **not** spend tool calls on `list_artifacts` /
+`find_artifacts` rediscovering paths it already has. It adds the path list (a
+few KB to tens of KB) to the prompt, so it suits large-context models.
+Degrades to a no-op if the listing is empty or fails (the loop proceeds with
+its normal prompt). One extra listing per uncached failure; no cache-version
+interaction.
 
 ### `always: true` vs `always: false`
 

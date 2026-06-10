@@ -1700,6 +1700,7 @@ func TestAgentic_SeedArtifactTree_InjectsPaths(t *testing.T) {
 	browser := &fakeBrowser{files: map[string][]byte{
 		"build-log.txt": []byte("x"),
 		"artifacts/clusters/c1/machines/m1/cloud-init-output.log": []byte("y"),
+		"artifacts/junit_01.png":                                  []byte("noise"),
 	}}
 	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, SeedArtifactTree: true}
 
@@ -1711,10 +1712,13 @@ func TestAgentic_SeedArtifactTree_InjectsPaths(t *testing.T) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	req := string(srv.requests[0])
-	for _, want := range []string{"Artifact paths for this build", "artifacts/clusters/c1/machines/m1/cloud-init-output.log", "do NOT guess paths"} {
+	for _, want := range []string{"Artifact paths for this build", "artifacts/clusters/c1/machines/m1/cloud-init-output.log", "do NOT guess paths", "do NOT spend tool calls"} {
 		if !strings.Contains(req, want) {
 			t.Errorf("seeded prompt missing %q", want)
 		}
+	}
+	if strings.Contains(req, "junit_01.png") {
+		t.Errorf("seeded prompt should drop non-text noise (.png) but listed it")
 	}
 }
 

@@ -118,6 +118,14 @@ type AgenticOptions struct {
 // the prompt size on builds with very large artifact trees.
 const artifactTreeMaxPaths = 500
 
+// artifactTreeNoiseExt are file extensions the seed drops before capping:
+// non-text artifacts the model cannot usefully read, so excluding them leaves
+// more of the path budget for diagnostic logs.
+var artifactTreeNoiseExt = map[string]bool{
+	".png": true, ".svg": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".gz": true, ".tar": true, ".tgz": true, ".zip": true, ".bz2": true,
+}
+
 // limitToolCalls returns the tool calls the loop should execute and echo this
 // turn. With single=true and more than one call, only the first is kept so the
 // echoed assistant message stays single-tool-call (required by chat templates
@@ -881,30 +889,50 @@ func (c *Client) doAnalyzeAgentic(
 	return summary, analysis, nil
 }
 
-// buildArtifactTreeSeed returns a prompt addendum listing the build's full
+// buildArtifactTreeSeed returns a prompt addendum listing the build's
 // artifact path tree (capped), so the model reads exact paths instead of
-// guessing leaf filenames. One recursive listing; degrades to "" if the
-// listing is empty or fails (the loop proceeds with its normal prompt).
+// guessing leaf filenames. Over-fetches, drops non-text noise, then caps to
+// artifactTreeMaxPaths so the budget holds diagnostic logs. Tells the model
+// to read from the list directly rather than spend tool calls on
+// list_artifacts / find_artifacts rediscovering paths it already has. One
+// recursive listing; degrades to "" if the listing is empty or fails (the
+// loop proceeds with its normal prompt).
 func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser) string {
 	if browser == nil {
 		return ""
 	}
-	paths, truncated, err := browser.ListTree(ctx, artifactTreeMaxPaths)
-	if err != nil || len(paths) == 0 {
+	// Over-fetch so the noise filter below can reclaim budget for real logs.
+	raw, rawTruncated, err := browser.ListTree(ctx, artifactTreeMaxPaths*2)
+	if err != nil || len(raw) == 0 {
 		if err != nil {
 			log.Printf("  ⓘ artifact-tree seed skipped: %v", err)
 		}
 		return ""
 	}
+	paths := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if artifactTreeNoiseExt[strings.ToLower(path.Ext(p))] {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	if len(paths) == 0 {
+		return ""
+	}
 	sort.Strings(paths)
+	truncated := rawTruncated
+	if len(paths) > artifactTreeMaxPaths {
+		paths = paths[:artifactTreeMaxPaths]
+		truncated = true
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, copy them from this list:\n", len(paths))
+	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, and do NOT spend tool calls on list_artifacts / find_artifacts to rediscover paths that are already listed here. Read the relevant logs directly:\n", len(paths))
 	for _, p := range paths {
 		b.WriteString(p)
 		b.WriteByte('\n')
 	}
 	if truncated {
-		fmt.Fprintf(&b, "... [list truncated at %d paths; use list_artifacts to explore the rest]\n", artifactTreeMaxPaths)
+		fmt.Fprintf(&b, "... [list truncated at %d paths; use list_artifacts only for subtrees not shown above]\n", artifactTreeMaxPaths)
 	}
 	log.Printf("  🗂 artifact-tree seed: %d path(s) injected", len(paths))
 	return b.String()
