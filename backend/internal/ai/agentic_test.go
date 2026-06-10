@@ -63,6 +63,17 @@ type fakeBrowser struct {
 
 func (b *fakeBrowser) BuildRoot() string { return "fake/build/1" }
 
+func (b *fakeBrowser) ListTree(_ context.Context, maxPaths int) ([]string, bool, error) {
+	var out []string
+	for name := range b.files {
+		if len(out) >= maxPaths {
+			return out, true, nil
+		}
+		out = append(out, name)
+	}
+	return out, false, nil
+}
+
 func (b *fakeBrowser) List(_ context.Context, dir string) (*artifacts.Listing, error) {
 	dir = strings.TrimSuffix(dir, "/")
 	res := &artifacts.Listing{Dir: dir}
@@ -1672,5 +1683,59 @@ func TestResolveEvidenceByWalk_BoundedAndMultiTarget(t *testing.T) {
 	}
 	if got[2] != "" {
 		t.Errorf("pred2 (missing) = %q, want empty", got[2])
+	}
+}
+
+// ---------- Artifact-tree seed ----------
+
+// TestAgentic_SeedArtifactTree_InjectsPaths verifies that with SeedArtifactTree
+// on, the build's artifact path list is prepended to the task prompt so the
+// model sees exact paths up front.
+func TestAgentic_SeedArtifactTree_InjectsPaths(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("x"),
+		"artifacts/clusters/c1/machines/m1/cloud-init-output.log": []byte("y"),
+	}}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, SeedArtifactTree: true}
+
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:seed", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	req := string(srv.requests[0])
+	for _, want := range []string{"Artifact paths for this build", "artifacts/clusters/c1/machines/m1/cloud-init-output.log", "do NOT guess paths"} {
+		if !strings.Contains(req, want) {
+			t.Errorf("seeded prompt missing %q", want)
+		}
+	}
+}
+
+// TestAgentic_SeedArtifactTree_OffByDefault confirms the default does not seed
+// the path list into the prompt.
+func TestAgentic_SeedArtifactTree_OffByDefault(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:noseed", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if strings.Contains(string(srv.requests[0]), "Artifact paths for this build") {
+		t.Errorf("default (seed off) must not inject the artifact tree")
 	}
 }
