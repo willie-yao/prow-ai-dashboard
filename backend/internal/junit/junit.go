@@ -180,25 +180,3 @@ func ExtractFailureLocation(failureBody string) (location string, url string) {
 	url = fmt.Sprintf("https://github.com/%s/blob/%s/%s#L%s", ghRepo, ref, fullPath, line)
 	return location, url
 }
-
-// ParseSummary quickly extracts test counts from JUnit XML without building
-// full TestCase objects.
-func ParseSummary(data []byte) (total, passed, failed, skipped int, err error) {
-	cases, err := Parse(data)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-
-	total = len(cases)
-	for _, tc := range cases {
-		switch tc.Status {
-		case "passed":
-			passed++
-		case "failed":
-			failed++
-		case "skipped":
-			skipped++
-		}
-	}
-	return total, passed, failed, skipped, nil
-}

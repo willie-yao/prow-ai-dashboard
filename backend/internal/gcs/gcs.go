@@ -65,55 +65,6 @@ type listObjectsResponse struct {
 	NextPageToken string `json:"nextPageToken"`
 }
 
-// ListObjects returns every object name under the given prefix using the GCS
-// JSON API, paginating through all pages. No delimiter is used, so the
-// result is a flat list of full object names (not directory-like prefixes).
-// The Bucket's ListAPIURL provides the endpoint.
-//
-// Used by collectors that walk artifact trees of unknown shape (e.g. the
-// CAPI collector's controller-log discovery, which can't predict how many
-// deployments or pods exist under a namespace).
-func ListObjects(ctx context.Context, client *http.Client, apiURL, prefix string) ([]string, error) {
-	var all []string
-	pageToken := ""
-	for {
-		params := url.Values{
-			"prefix":     {prefix},
-			"maxResults": {"1000"},
-		}
-		if pageToken != "" {
-			params.Set("pageToken", pageToken)
-		}
-		u := apiURL + "?" + params.Encode()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating request: %w", err)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("fetching %s: %w", u, err)
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
-			return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, u)
-		}
-		var r listObjectsResponse
-		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("decoding GCS response: %w", err)
-		}
-		resp.Body.Close()
-		for _, it := range r.Items {
-			all = append(all, it.Name)
-		}
-		if r.NextPageToken == "" {
-			break
-		}
-		pageToken = r.NextPageToken
-	}
-	return all, nil
-}
-
 // junitFileRe matches JUnit XML filenames produced by the test frameworks
 // we've seen: ginkgo (junit.e2e_suite.1.xml, junit.foo.42.xml), ginkgo's
 // "runner" report (junit_runner.xml), and gotest/k8s e2e_node sharded

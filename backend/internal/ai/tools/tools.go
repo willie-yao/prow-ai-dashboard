@@ -146,8 +146,7 @@ func (r *Registry) Enable(entries []string) ([]string, error) {
 		}
 		// Individual tool name (always contains "."): "k8s.discover_clusters"
 		if strings.Contains(e, ".") {
-			parts := strings.SplitN(e, ".", 2)
-			name := parts[1]
+			_, name, _ := strings.Cut(e, ".")
 			if _, ok := r.tools[name]; !ok {
 				return nil, fmt.Errorf("unknown tool: %q", e)
 			}
@@ -196,11 +195,4 @@ func (r *Registry) Dispatch(ctx context.Context, env *Env, name string, args jso
 		return ErrPayload("unknown tool: " + name)
 	}
 	return t.Dispatch(ctx, env, args)
-}
-
-// ErrJSON marshals an error message into the {"error": "..."} envelope.
-// Retained as a convenience for callers that build their own JSON strings.
-func ErrJSON(msg string) string {
-	b, _ := json.Marshal(map[string]string{"error": msg})
-	return string(b)
 }

@@ -330,18 +330,6 @@ func normalizeError(msg string) string {
 	return strings.TrimSpace(s)
 }
 
-// detectTransient checks if the AI summary text indicates a transient failure.
-func detectTransient(text string) bool {
-	lower := strings.ToLower(text)
-	keywords := []string{"transient", "flake", "flaky", "temporary", "throttling", "intermittent", "retry"}
-	for _, kw := range keywords {
-		if strings.Contains(lower, kw) {
-			return true
-		}
-	}
-	return false
-}
-
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
