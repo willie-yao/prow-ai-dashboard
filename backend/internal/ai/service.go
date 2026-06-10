@@ -99,9 +99,6 @@ func (s *Service) SetSkills(set *skills.Set) {
 	s.skillSet = set
 }
 
-// Module returns the underlying Module (mainly for logging).
-func (s *Service) Module() Module { return s.module }
-
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case.
 // Skips if already analyzed under the current mode; short-circuits on known
 // transients; runs agentic when enabled and applicable, else curator. On API

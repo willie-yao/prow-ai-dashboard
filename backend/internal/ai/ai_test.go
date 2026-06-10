@@ -96,27 +96,6 @@ func TestCacheSaveAndReload(t *testing.T) {
 
 // ---------- Helper tests ----------
 
-func TestDetectTransient(t *testing.T) {
-	cases := []struct {
-		text string
-		want bool
-	}{
-		{"This is a transient Azure throttling error.", true},
-		{"Looks like a flaky DNS issue.", true},
-		{"The test consistently fails due to a missing CRD.", false},
-		{"Temporary quota exceeded, should auto-resolve.", true},
-		{"Intermittent connection reset.", true},
-		{"kubelet certificate expired.", false},
-		{"Failed after retry due to timeout.", true},
-	}
-	for _, tc := range cases {
-		got := detectTransient(tc.text)
-		if got != tc.want {
-			t.Errorf("detectTransient(%q) = %v, want %v", tc.text, got, tc.want)
-		}
-	}
-}
-
 func TestNormalizeError(t *testing.T) {
 	input := "error at 0xDEADBEEF with id 12345678-1234-1234-1234-123456789abc foo"
 	got := normalizeError(input)

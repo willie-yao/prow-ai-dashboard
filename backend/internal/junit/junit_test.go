@@ -134,26 +134,6 @@ func TestExtractFailureLocation_NoMatch(t *testing.T) {
 	}
 }
 
-func TestParseSummary(t *testing.T) {
-	data := loadFixture(t)
-	total, passed, failed, skipped, err := ParseSummary(data)
-	if err != nil {
-		t.Fatalf("ParseSummary returned error: %v", err)
-	}
-	if total != 5 {
-		t.Errorf("total = %d, want 5", total)
-	}
-	if passed != 2 {
-		t.Errorf("passed = %d, want 2", passed)
-	}
-	if failed != 1 {
-		t.Errorf("failed = %d, want 1", failed)
-	}
-	if skipped != 2 {
-		t.Errorf("skipped = %d, want 2", skipped)
-	}
-}
-
 func TestParse_EmptyXML(t *testing.T) {
 	_, err := Parse([]byte(""))
 	if err == nil {

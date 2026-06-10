@@ -142,10 +142,10 @@ func limitToolCalls(calls []agToolCall, single bool) (kept []agToolCall, dropped
 // critique-failure round, bounding the context the injection adds.
 const evidenceInjectionMaxArtifacts = 4
 
-// evidenceWalkMaxDirs bounds the single tree walk used to resolve cited
-// basenames and skill-required patterns to real artifact paths, capping the
-// GCS list cost of one injection.
-const evidenceWalkMaxDirs = 80
+// evidenceTreeMaxPaths bounds the single recursive listing used to resolve
+// cited basenames and skill-required patterns to real artifact paths, capping
+// the GCS list cost of one injection.
+const evidenceTreeMaxPaths = 1000
 
 // evidenceInjectionPerArtifactBytes caps the bytes injected per artifact.
 const evidenceInjectionPerArtifactBytes = 8 * 1024
@@ -1034,50 +1034,29 @@ func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, 
 	return "The engine fetched evidence you cited but had not read, and/or evidence required for this failure class. Ground your root_cause in what these artifacts ACTUALLY show below; correct or drop any claim they do not support.\n\n" + strings.Join(sections, "\n\n")
 }
 
-// resolveEvidenceByWalk does ONE bounded breadth-first walk of the artifact
-// tree and returns, for each predicate, the first matching real path (or ""
-// if unmatched). Bounded by evidenceWalkMaxDirs to cap GCS list cost. Stops
+// resolveEvidenceByWalk lists the build's artifact tree once (recursive, no
+// delimiter) and returns, for each predicate, the first matching real path (or
+// "" if unmatched). Bounded by evidenceTreeMaxPaths to cap GCS list cost. Stops
 // early once every predicate has a match.
 func resolveEvidenceByWalk(ctx context.Context, browser artifacts.Browser, preds []func(string) bool) []string {
 	found := make([]string, len(preds))
 	remaining := len(preds)
-	scanned := 0
-	queue := []string{""}
-	for len(queue) > 0 && remaining > 0 && scanned < evidenceWalkMaxDirs {
-		dir := queue[0]
-		queue = queue[1:]
-		scanned++
-		listing, err := browser.List(ctx, dir)
-		if err != nil {
-			continue
+	paths, _, err := browser.ListTree(ctx, evidenceTreeMaxPaths)
+	if err != nil {
+		return found
+	}
+	for _, p := range paths {
+		if remaining == 0 {
+			break
 		}
-		for _, f := range listing.Files {
-			full := joinArtifactPath(listing.Dir, f.Name)
-			for i, pred := range preds {
-				if found[i] == "" && pred(full) {
-					found[i] = full
-					remaining--
-				}
+		for i, pred := range preds {
+			if found[i] == "" && pred(p) {
+				found[i] = p
+				remaining--
 			}
-		}
-		for _, sub := range listing.Dirs {
-			queue = append(queue, joinArtifactPath(listing.Dir, sub))
 		}
 	}
 	return found
-}
-
-// joinArtifactPath joins a listing dir with a child name (file or subdir),
-// tolerating a dir with or without a trailing slash so it works against both
-// the real browser (trailing-slashed) and test doubles.
-func joinArtifactPath(dir, name string) string {
-	if dir == "" {
-		return name
-	}
-	if !strings.HasSuffix(dir, "/") {
-		dir += "/"
-	}
-	return dir + name
 }
 
 // matchSkillsForDraft joins the candidate draft's prose fields and matches

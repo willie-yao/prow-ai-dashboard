@@ -1659,8 +1659,9 @@ required_evidence:
 	}
 }
 
-// TestResolveEvidenceByWalk_BoundedAndMultiTarget unit-tests the walk: it
-// resolves multiple predicates in one pass and respects the dir bound.
+// TestResolveEvidenceByWalk_BoundedAndMultiTarget unit-tests the resolver: it
+// resolves multiple predicates from one recursive listing and leaves unmatched
+// predicates empty.
 func TestResolveEvidenceByWalk_BoundedAndMultiTarget(t *testing.T) {
 	browser := &fakeBrowser{
 		files: map[string][]byte{
