@@ -39,6 +39,12 @@ export interface ColorTokens {
   errorContainer: string;
   onError: string;
 
+  // Pass/fail dot colors for the run visualizations. Tuned to equal perceived
+  // brightness so neither dot appears larger than the other on dark surfaces
+  // (a bright dot blooms; see dotColorFor).
+  dotPass: string;
+  dotFail: string;
+
   outline: string;
   outlineVariant: string;
 
@@ -84,6 +90,11 @@ export const darkTokens: ColorTokens = {
   errorContainer: "#9f0519",
   onError: "#490006",
 
+  // Brightness-matched against the bright mint pass color so a lone failed dot
+  // among passes (e.g. a flaky run) doesn't read as smaller/higher.
+  dotPass: "#45c78f",
+  dotFail: "#ff8e89",
+
   outline: "#777575",
   outlineVariant: "#494847",
 
@@ -126,6 +137,11 @@ export const lightTokens: ColorTokens = {
   errorDim: "#93000a",
   errorContainer: "#ffdad6",
   onError: "#ffffff",
+
+  // Light scheme renders dark dots on a light surface, so no bloom mismatch;
+  // keep the semantic pass/fail hues.
+  dotPass: "#006c49",
+  dotFail: "#ba1a1a",
 
   outline: "#74777f",
   outlineVariant: "#c4c6cf",
