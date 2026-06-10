@@ -1440,3 +1440,237 @@ func countAssistantToolCalls(t *testing.T, body []byte) int {
 	}
 	return n
 }
+
+// ---------- Evidence injection ----------
+
+// TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact verifies that when
+// a critique-failing draft cites an artifact it never read and
+// EvidenceInjection is on, the loop fetches that artifact and embeds its
+// content in the retry request.
+func TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
+	// Round 1: cites an unread artifact; clean fix so only the unread-
+	// citation check fails.
+	round1 := `{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per ` + citePath + `","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	// Round 2: clean draft with no unread citation.
+	round2 := `{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet peering mismatch confirmed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(round1))
+	srv.push(200, chatRespFinal(round2))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		citePath: []byte("boot start\nINJECT_ME_MARKER cloud-init error: vnet peering mismatch\nboot end\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+	}
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2 (draft + injected retry)", got)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) < 2 {
+		t.Fatalf("expected 2 requests, got %d", len(srv.requests))
+	}
+	retry := string(srv.requests[1])
+	if !strings.Contains(retry, "INJECT_ME_MARKER") {
+		t.Errorf("retry request should embed the fetched artifact content")
+	}
+	if !strings.Contains(retry, "engine fetched evidence") {
+		t.Errorf("retry request should carry the injection header")
+	}
+}
+
+// TestAgentic_EvidenceInjection_OffByDefault confirms the default does not
+// fetch or inject: the retry request carries only the text feedback.
+func TestAgentic_EvidenceInjection_OffByDefault(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
+	round1 := `{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per ` + citePath + `","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	round2 := `{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet mismatch confirmed","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 10; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(round1))
+	srv.push(200, chatRespFinal(round2))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		citePath: []byte("INJECT_ME_MARKER should not appear\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, // EvidenceInjection off
+	}
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-off", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) >= 2 && strings.Contains(string(srv.requests[1]), "INJECT_ME_MARKER") {
+		t.Errorf("default (injection off) must not embed fetched artifact content")
+	}
+}
+
+// TestAgentic_EvidenceInjection_PostLoopRetry exercises the post-loop path:
+// the model exhausts its iterations on tool calls (never returning a tools-
+// free final), gets force-finalized with a draft citing an unread artifact,
+// and EvidenceInjection drives one finalize retry that embeds the fetched
+// content so the model can re-ground its answer.
+func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+
+	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
+	// Iter 1: a tool call (keeps the loop from getting a tools-free final).
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Iter 2 (maxIters=2 reached after this): another tool call, so the loop
+	// ends without a tools-free final and force-finalizes.
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	// Forced finalize: draft cites an unread artifact (clean fix).
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per `+citePath+`","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`))
+	// Injection-driven finalize retry: clean, grounded draft.
+	srv.push(200, chatRespFinal(`{"summary":"deep","is_transient":false,"root_cause":"cloud-init failed; vnet mismatch confirmed from the injected log","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{files: map[string][]byte{
+		citePath: []byte("POSTLOOP_MARKER cloud-init error: vnet peering mismatch\n"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-postloop", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	// The last request (the injection-driven finalize) must embed the fetched
+	// artifact content.
+	last := string(srv.requests[len(srv.requests)-1])
+	if !strings.Contains(last, "POSTLOOP_MARKER") {
+		t.Errorf("post-loop injection retry should embed the fetched artifact content")
+	}
+	if analysis.RootCause == "" || !strings.Contains(analysis.RootCause, "vnet mismatch confirmed") {
+		t.Errorf("expected the re-grounded draft to be published, got %q", analysis.RootCause)
+	}
+}
+
+// TestAgentic_EvidenceInjection_ResolvesBareBasename verifies Phase 2 basename
+// resolution: a draft cites a bare basename (no directory) that the agent
+// never read; the engine walks the tree, resolves the basename to a real path,
+// fetches it, and injects the content.
+func TestAgentic_EvidenceInjection_ResolvesBareBasename(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	// Round 1: cites a BARE basename (no slash) with a clean fix.
+	round1 := `{"summary":"s","is_transient":false,"root_cause":"failure visible in controller-manager.log","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
+	round2 := `{"summary":"deep","is_transient":false,"root_cause":"reconcile error confirmed; vnet mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(round1))
+	srv.push(200, chatRespFinal(round2))
+
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{
+			"artifacts/controller-manager.log": []byte("WALKED_MARKER reconcile error: vnet peering mismatch\n"),
+		},
+		dirs: map[string][]string{"": {"artifacts/"}},
+	}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
+	}
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:ei-basename", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) < 2 || !strings.Contains(string(srv.requests[1]), "WALKED_MARKER") {
+		t.Errorf("retry should embed the walk-resolved artifact content")
+	}
+}
+
+// TestAgentic_EvidenceInjection_PrefetchesSkillEvidence verifies Phase 2 skill
+// pre-fetch: a matched skill requires evidence the agent never read; the engine
+// resolves the skill's required-evidence pattern to a real path, fetches it,
+// and injects it on the retry.
+func TestAgentic_EvidenceInjection_PrefetchesSkillEvidence(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	// Draft triggers the skill (mentions "x509") but reads no evidence.
+	round1 := `{"summary":"s","is_transient":false,"root_cause":"x509 webhook failure","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
+	round2 := `{"summary":"deep","is_transient":false,"root_cause":"x509 webhook failure grounded in the cert-manager config","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(round1))
+	srv.push(200, chatRespFinal(round2))
+
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["issuer\\.yaml"]
+`,
+	})
+	client := newAgenticTestClient(t, srv.URL)
+	browser := &fakeBrowser{
+		files: map[string][]byte{
+			"artifacts/cert-manager/issuer.yaml": []byte("SKILL_MARKER kind: Issuer\n"),
+		},
+		dirs: map[string][]string{"": {"artifacts/"}, "artifacts": {"cert-manager/"}},
+	}
+	in := newTestAgenticInputs(t, browser, AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, SkillsEnabled: true, EvidenceInjection: true,
+	})
+	in.Skills = set
+	_, _, err := client.doAnalyzeAgentic(context.Background(), in, "agentic:test:ei-skill", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.requests) < 2 || !strings.Contains(string(srv.requests[1]), "SKILL_MARKER") {
+		t.Errorf("retry should embed the skill-required evidence content")
+	}
+}
+
+// TestResolveEvidenceByWalk_BoundedAndMultiTarget unit-tests the walk: it
+// resolves multiple predicates in one pass and respects the dir bound.
+func TestResolveEvidenceByWalk_BoundedAndMultiTarget(t *testing.T) {
+	browser := &fakeBrowser{
+		files: map[string][]byte{
+			"artifacts/a/foo.log": []byte("x"),
+			"artifacts/b/bar.log": []byte("y"),
+		},
+		dirs: map[string][]string{"": {"artifacts/"}, "artifacts": {"a/", "b/"}},
+	}
+	preds := []func(string) bool{
+		func(p string) bool { return strings.HasSuffix(p, "foo.log") },
+		func(p string) bool { return strings.HasSuffix(p, "bar.log") },
+		func(p string) bool { return strings.HasSuffix(p, "missing.log") },
+	}
+	got := resolveEvidenceByWalk(context.Background(), browser, preds)
+	if got[0] != "artifacts/a/foo.log" {
+		t.Errorf("pred0 = %q, want artifacts/a/foo.log", got[0])
+	}
+	if got[1] != "artifacts/b/bar.log" {
+		t.Errorf("pred1 = %q, want artifacts/b/bar.log", got[1])
+	}
+	if got[2] != "" {
+		t.Errorf("pred2 (missing) = %q, want empty", got[2])
+	}
+}

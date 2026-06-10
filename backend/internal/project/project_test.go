@@ -346,6 +346,14 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Error("SingleToolCall=true should pass through")
 		}
 	})
+	t.Run("EvidenceInjection flips through", func(t *testing.T) {
+		if (&Agentic{Enabled: true}).EffectiveAgentic().EvidenceInjection {
+			t.Error("EvidenceInjection should default to false")
+		}
+		if !(&Agentic{Enabled: true, EvidenceInjection: true}).EffectiveAgentic().EvidenceInjection {
+			t.Error("EvidenceInjection=true should pass through")
+		}
+	})
 	t.Run("Tools list passes through", func(t *testing.T) {
 		in := &Agentic{Tools: []string{"filesystem"}}
 		got := in.EffectiveAgentic()
@@ -431,6 +439,7 @@ func agenticEqual(a, b Agentic) bool {
 		a.MinGCSBytes == b.MinGCSBytes &&
 		a.Critique == b.Critique &&
 		a.SingleToolCall == b.SingleToolCall &&
+		a.EvidenceInjection == b.EvidenceInjection &&
 		equalStrings(a.Tools, b.Tools)
 }
 
@@ -453,6 +462,23 @@ func TestValidate_UniversalModuleWithFlagPasses(t *testing.T) {
 	c.AI = &AI{Module: "universal", UseUniversalPath: true}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("validation should pass when use_universal_path is true: %v", err)
+	}
+}
+
+func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{Agentic: &Agentic{Enabled: true, EvidenceInjection: true}}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error when evidence_injection without critique.enabled")
+	}
+	if !strings.Contains(err.Error(), "critique.enabled") {
+		t.Errorf("error %q should mention critique.enabled", err.Error())
+	}
+	// With critique enabled the same config validates.
+	c.AI.Agentic.Critique.Enabled = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("validation should pass when critique is enabled alongside injection: %v", err)
 	}
 }
 
