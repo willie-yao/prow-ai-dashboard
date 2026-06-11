@@ -250,13 +250,9 @@ type Agentic struct {
 	// disabled.
 	EvidenceInjection bool `yaml:"evidence_injection,omitempty" json:"evidence_injection,omitempty"`
 
-	// SeedArtifactTree prepends the build's full artifact path list to the
-	// analysis prompt, so the model starts knowing the EXACT paths to read
-	// instead of guessing leaf filenames (the dominant cause of failed deep
-	// reads on weaker models). One recursive GCS listing per uncached
-	// failure, capped. Adds the path list to the prompt, so it suits
-	// large-context models. Defaults to disabled.
-	SeedArtifactTree bool `yaml:"seed_artifact_tree,omitempty" json:"seed_artifact_tree,omitempty"`
+	// NOTE: artifact-tree seeding (prepending the build's exact artifact
+	// path list to the prompt) is always on and not configurable. It is
+	// deterministic, capped, and a no-op when the listing is empty.
 
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
@@ -345,7 +341,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	out.Skills.Enabled = a.Skills.Enabled
 	out.SingleToolCall = a.SingleToolCall
 	out.EvidenceInjection = a.EvidenceInjection
-	out.SeedArtifactTree = a.SeedArtifactTree
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
 	}

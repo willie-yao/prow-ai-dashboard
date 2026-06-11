@@ -106,12 +106,6 @@ type AgenticOptions struct {
 	// CritiqueEnabled. Adds the fetched bytes to the conversation, so it
 	// suits large-context models.
 	EvidenceInjection bool
-
-	// SeedArtifactTree prepends the build's full artifact path list to the
-	// task prompt so the model reads exact paths instead of guessing leaf
-	// filenames. Adds the path list to the prompt, so it suits large-context
-	// models.
-	SeedArtifactTree bool
 }
 
 // artifactTreeMaxPaths caps how many artifact paths the seed lists, bounding
@@ -671,10 +665,12 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	fullSysPrompt := sysPrompt + agToolDocs
-	if in.Opts.SeedArtifactTree {
-		if seed := c.buildArtifactTreeSeed(ctx, in.Browser); seed != "" {
-			userPrompt = seed + "\n\n---\n\n" + userPrompt
-		}
+	// Always seed the build's artifact path list into the prompt so the
+	// model reads exact paths instead of guessing leaf filenames (the
+	// dominant cause of failed deep reads). Deterministic, capped, and a
+	// no-op when the listing is empty or fails.
+	if seed := c.buildArtifactTreeSeed(ctx, in.Browser); seed != "" {
+		userPrompt = seed + "\n\n---\n\n" + userPrompt
 	}
 	messages := []agChatMessage{
 		{Role: "system", Content: strPtr(fullSysPrompt)},
