@@ -420,6 +420,13 @@ const (
 	// historical default. The compaction guard stays off (0) in that case,
 	// which is safe for large-window models and the only prior behavior.
 	fallbackModelByteBudget = 300_000
+
+	// gcsByteBudget is the fixed aggregate ceiling on bytes fetched from GCS
+	// across one analysis. Not configurable: it's a runaway-fetch safety cap,
+	// not a tuning knob (per-call fetches are already capped at 64 MB, and
+	// max_iters + wall_clock bound the loop). Rarely approached in practice
+	// (~MBs per analysis).
+	gcsByteBudget = 1_000_000_000
 )
 
 // analyzeFailuresWithAI runs AI analysis on every failed test case.
@@ -506,7 +513,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 				service.EnableAgentic(ai.AgenticOptions{
 					MaxIters:           eff.MaxIters,
 					ModelByteBudget:    modelByteBudget,
-					GCSByteBudget:      eff.GCSByteBudget,
+					GCSByteBudget:      gcsByteBudget,
 					WallClock:          eff.WallClock,
 					ContextByteBudget:  contextByteBudget,
 					MinToolCalls:       eff.MinToolCalls,
@@ -535,14 +542,14 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 				}
 				if useUniversal {
 					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						eff.MaxIters, modelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+						eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
 					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						mode, eff.MaxIters, modelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+						mode, eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				}
 			}
 		}

@@ -187,14 +187,10 @@ type Agentic struct {
 	// to DefaultAgentic.MaxIters.
 	MaxIters int `yaml:"max_iters,omitempty" json:"max_iters,omitempty"`
 
-	// GCSByteBudget caps the total bytes fetched from GCS (across all
-	// tool calls) per failure. Defaults to DefaultAgentic.GCSByteBudget.
-	GCSByteBudget int `yaml:"gcs_byte_budget,omitempty" json:"gcs_byte_budget,omitempty"`
-
-	// NOTE: the model-output and context (compaction) byte budgets are NOT
-	// configurable. The engine derives them from the endpoint's reported
-	// context window at startup (see fetcher auto-sizing), so they don't
-	// need per-deployment tuning.
+	// NOTE: the model-output, context (compaction), and GCS byte budgets are
+	// NOT configurable. The model-output and context budgets are derived from
+	// the endpoint's reported context window; the GCS fetch ceiling is a fixed
+	// engine safety cap. See the fetcher's agentic wiring.
 
 	// WallClock caps the total time spent in the agentic loop per
 	// failure. Defaults to DefaultAgentic.WallClock.
@@ -306,13 +302,12 @@ type AgenticSkills struct {
 // of model bytes keeps prompts well under context limits, 1GB of GCS bytes
 // covers even very large build logs, and 5 minutes is the wall-clock cap.
 var DefaultAgentic = Agentic{
-	Enabled:       false,
-	Always:        false,
-	MaxIters:      15,
-	GCSByteBudget: 1_000_000_000,
-	WallClock:     5 * time.Minute,
-	MinToolCalls:  0,
-	MinGCSBytes:   0,
+	Enabled:      false,
+	Always:       false,
+	MaxIters:     15,
+	WallClock:    5 * time.Minute,
+	MinToolCalls: 0,
+	MinGCSBytes:  0,
 	Critique: AgenticCritique{
 		Enabled:    false,
 		MaxRetries: 2,
@@ -331,9 +326,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	out.Always = a.Always
 	if a.MaxIters > 0 {
 		out.MaxIters = a.MaxIters
-	}
-	if a.GCSByteBudget > 0 {
-		out.GCSByteBudget = a.GCSByteBudget
 	}
 	if a.WallClock > 0 {
 		out.WallClock = a.WallClock

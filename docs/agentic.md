@@ -50,7 +50,6 @@ ai:
     enabled: true                 # required even under use_universal_path
     always: false                 # if true, run agentic on every failure
     max_iters: 15                 # tool-call rounds per failure
-    gcs_byte_budget: 1000000000   # total bytes fetched from GCS
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
@@ -67,8 +66,10 @@ ai:
 
 Defaults match the spike that validated the design and are conservative
 enough that you almost never need to tune them. Lower `max_iters` first
-if you see the model loop without converging; raise `gcs_byte_budget` if
-your builds have very large logs and grep is being cut short.
+if you see the model loop without converging. The byte budgets (model
+output, compaction, and the GCS fetch ceiling) are not configurable: the
+first two auto-size from the endpoint's context window and the GCS ceiling
+is a fixed engine safety cap.
 
 ### Automatic budget sizing
 
@@ -146,10 +147,10 @@ returning 13 KB total, then a fabricated "no specific error found"
 root cause on a failure where Claude (same build) found the actual
 webhook x509 cert mismatch from 9 MB of logs.
 
-The byte counter is the same `gcs_bytes` counter the engine already
-uses for cost capping (`gcs_byte_budget`), so the floor is measured
-against bytes actually pulled from GCS by `read_artifact`,
-`tail_artifact`, and `grep_artifact`. `list_artifacts` contributes 0.
+The byte counter is the same `gcs_bytes` counter the engine uses for
+its internal GCS fetch ceiling, so the floor is measured against bytes
+actually pulled from GCS by `read_artifact`, `tail_artifact`, and
+`grep_artifact`. `list_artifacts` contributes 0.
 
 Default is `0` — no floor. A reasonable starting value for weaker
 models is `200000` (200 KB); raise gradually if the model keeps

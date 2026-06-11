@@ -330,9 +330,6 @@ func TestAgentic_Effective(t *testing.T) {
 		if got.WallClock != 30*time.Second {
 			t.Errorf("WallClock = %v, want 30s", got.WallClock)
 		}
-		if got.GCSByteBudget != DefaultAgentic.GCSByteBudget {
-			t.Errorf("GCSByteBudget = %d, want default %d", got.GCSByteBudget, DefaultAgentic.GCSByteBudget)
-		}
 	})
 	t.Run("SingleToolCall flips through", func(t *testing.T) {
 		if (&Agentic{Enabled: true}).EffectiveAgentic().SingleToolCall {
@@ -436,7 +433,6 @@ func agenticEqual(a, b Agentic) bool {
 	return a.Enabled == b.Enabled &&
 		a.Always == b.Always &&
 		a.MaxIters == b.MaxIters &&
-		a.GCSByteBudget == b.GCSByteBudget &&
 		a.WallClock == b.WallClock &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
