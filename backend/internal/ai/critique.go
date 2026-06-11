@@ -10,11 +10,10 @@ import (
 )
 
 // Package ai's critique gate runs a deterministic regex pass on the model's
-// final answer and rejects four classes of failure that pure prompt rules
+// final answer and rejects three classes of failure that pure prompt rules
 // don't reliably catch on weaker models:
 //   - punt-shaped suggested_fix (diagnostic imperatives like "check X");
 //   - artifact citations the agent never actually read;
-//   - Go-import-style paths in relevant_files (sigs.k8s.io/...);
 //   - matched-recipe evidence the agent didn't fetch (see skills package).
 //
 // Rejected drafts are re-prompted with targeted feedback. Drafts that still
@@ -130,18 +129,6 @@ var artifactCitationRE = regexp.MustCompile(
 		`)`,
 )
 
-// hallucinatedImportPathRE catches Go-import-style prefixes (sigs.k8s.io/,
-// github.com/, k8s.io/) anywhere in a token. These are GOPATH paths, not
-// repo-relative source paths; in observed cases they accompany fabricated
-// filenames. The pattern is intentionally NOT start-anchored to also catch
-// embedded variants like `/home/prow/go/pkg/mod/sigs.k8s.io/...` (Prow's
-// GOPATH mod-cache layout) and `https://github.com/.../blob/main/...`
-// (GitHub blob URLs). Requiring a trailing `/` after the prefix preserves
-// the `sigs.k8s.iolib` false-positive guard.
-var hallucinatedImportPathRE = regexp.MustCompile(
-	`(?i)(?:sigs\.k8s\.io|github\.com|k8s\.io|golang\.org|google\.golang\.org)/`,
-)
-
 // citationStripRE removes line-number and column suffixes the model often
 // appends to artifact citations ("build-log.txt:1720", "manager.log#L42-L50")
 // so the basename matches the form the tool arg actually had.
@@ -242,32 +229,6 @@ func dedupLower(in []string) []string {
 	return out
 }
 
-// findHallucinatedImportPaths flags Go-import-style prefixes
-// (sigs.k8s.io/foo, github.com/bar). These are GOPATH paths, not
-// repo-relative source paths, and accompany fabricated filenames in
-// observed cases. Scans an arbitrary set of strings so a hallucinated
-// GOPATH-shaped citation is caught wherever the model puts it.
-func findHallucinatedImportPaths(candidates []string) []string {
-	if len(candidates) == 0 {
-		return nil
-	}
-	var hits []string
-	for _, c := range candidates {
-		// relevant_files entries are one token; prose contains many,
-		// so split on whitespace before applying the import-path regex.
-		for _, tok := range strings.Fields(c) {
-			s := strings.Trim(tok, "`'\"(),;:")
-			if s == "" {
-				continue
-			}
-			if hallucinatedImportPathRE.MatchString(s) {
-				hits = append(hits, s)
-			}
-		}
-	}
-	return dedupLower(hits)
-}
-
 // critiqueOutcome is returned by critiqueDraft. Passed=true means the
 // draft is accepted as-is; Passed=false means the agent should re-loop
 // with Feedback appended as a user-role message.
@@ -283,10 +244,6 @@ type critiqueOutcome struct {
 	// UnreadCitations lists artifact-path tokens the model cited without
 	// ever fetching via a read/tail/grep tool.
 	UnreadCitations []string
-
-	// FabricatedImports lists tokens that look like Go import paths
-	// rather than repo-relative paths.
-	FabricatedImports []string
 
 	// MissingSkillEvidence pairs each matched recipe with the evidence
 	// groups it still requires the agent to satisfy.
@@ -304,14 +261,13 @@ type skillEvidenceMiss struct {
 // Matches is the flat union of all triggered checks, for log lines and
 // for callers that just want "what tripped the gate".
 func (o critiqueOutcome) Matches() []string {
-	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.FabricatedImports) + len(o.MissingSkillEvidence)
+	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.MissingSkillEvidence)
 	if n == 0 {
 		return nil
 	}
 	out := make([]string, 0, n)
 	out = append(out, o.PuntMatches...)
 	out = append(out, o.UnreadCitations...)
-	out = append(out, o.FabricatedImports...)
 	for _, m := range o.MissingSkillEvidence {
 		// "skill:<id>(missing:g1,g2)" so the log line stays one short token per miss.
 		ids := make([]string, 0, len(m.Missing))
@@ -334,10 +290,10 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 }
 
 // critiqueDraft inspects a parsed final answer against the critique contract
-// (punt regex + hallucination + import-path + recipe-driven missing-evidence).
-// Returns Passed=true only when every check passes; on failure, Feedback
-// combines all triggered checks into one message so the model fixes
-// everything in a single retry rather than playing whack-a-mole.
+// (punt regex + unread-citation + recipe-driven missing-evidence). Returns
+// Passed=true only when every check passes; on failure, Feedback combines all
+// triggered checks into one message so the model fixes everything in a single
+// retry rather than playing whack-a-mole.
 //
 // readsFull / readsBase are the agent's actually-fetched artifact paths
 // (full and basename). matchedSkills is the recipe subset whose triggers
@@ -346,8 +302,7 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 	puntMatches := findPunts(parsed.SuggestedFix)
 
 	// Scan every prose field plus each relevant_files entry: the model
-	// may cite an unread artifact in any of them, and may bury a
-	// fabricated import path anywhere too.
+	// may cite an unread artifact in any of them.
 	fields := parsed.proseFields()
 
 	var unread []string
@@ -361,8 +316,6 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 			unread = append(unread, u)
 		}
 	}
-
-	fabricated := findHallucinatedImportPaths(fields)
 
 	// For each matched recipe, check whether every required-evidence group
 	// is satisfied by the agent's read set. A group is satisfied iff any
@@ -386,10 +339,9 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 	out := critiqueOutcome{
 		PuntMatches:          puntMatches,
 		UnreadCitations:      unread,
-		FabricatedImports:    fabricated,
 		MissingSkillEvidence: missingSkillEv,
 	}
-	if len(puntMatches) == 0 && len(unread) == 0 && len(fabricated) == 0 && len(missingSkillEv) == 0 {
+	if len(puntMatches) == 0 && len(unread) == 0 && len(missingSkillEv) == 0 {
 		out.Passed = true
 		return out
 	}
@@ -409,9 +361,6 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	}
 	if len(out.UnreadCitations) > 0 {
 		sections = append(sections, formatUnreadSection(out.UnreadCitations))
-	}
-	if len(out.FabricatedImports) > 0 {
-		sections = append(sections, formatFabricatedImportSection(out.FabricatedImports))
 	}
 	if len(out.MissingSkillEvidence) > 0 {
 		sections = append(sections, formatSkillEvidenceSection(out.MissingSkillEvidence))
@@ -471,22 +420,6 @@ Either you fabricated these citations or you inferred from a directory listing; 
 1. In ONE assistant turn, batch read_artifact / tail_artifact / grep_artifact calls for every cited artifact you have not yet fetched. If a file is large, prefer tail_artifact or grep_artifact with wide context over read_artifact.
 2. If a file does not exist, the tool will return an error; in that case remove the citation from your draft and re-emit using only evidence the tools actually returned.
 3. Claim only facts supported by the bytes the tool actually returned. Do not paraphrase a grep_artifact match into a claim about the rest of the file you did not see.`,
-		strings.Join(quoted, "\n"))
-}
-
-// formatFabricatedImportSection is the import-path heuristic feedback.
-// relevant_files must hold repo-relative source paths, not Go import
-// paths like sigs.k8s.io/foo/bar.go.
-func formatFabricatedImportSection(fabricated []string) string {
-	var quoted []string
-	for _, f := range fabricated {
-		quoted = append(quoted, fmt.Sprintf("  - %s", f))
-	}
-	return fmt.Sprintf(`Your draft relevant_files contains paths that use Go-import-style prefixes (sigs.k8s.io/, github.com/, k8s.io/, golang.org/):
-
-%s
-
-relevant_files must contain REPO-RELATIVE source paths (e.g. "controllers/azuremachine_controller.go", "config/webhook/manifests.yaml"), not Go import paths. In observed failure cases the import-path-shaped entries point at files that do not exist. Re-emit with either the correct repo-relative path, or omit the entry entirely if you cannot identify the file precisely.`,
 		strings.Join(quoted, "\n"))
 }
 

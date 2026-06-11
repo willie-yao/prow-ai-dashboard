@@ -212,15 +212,15 @@ finalize-round result publishes, doesn't cache, and re-analyzes
 on the next fetcher run (same anti-thrash trade-off as the floor
 gates).
 
-#### L.4 Step 2.5 strengthening: hallucinated citations + fabricated import paths
+#### L.4 Step 2.5 strengthening: hallucinated citations
 
 L.4 Step 2 dropped Qwen3-235B's punt rate from 80% to 0% on CAPZ
 but exposed a new failure mode (Case 1 of the Step 2 A/B): a
 draft that passes the punt regex with high confidence but cites
 an artifact it never read (`actuators.go` it never opened),
-emitting a wrong-but-fluent root cause. Step 2.5 adds two
-deterministic checks that run alongside the punt regex and
-combine into one retry message:
+emitting a wrong-but-fluent root cause. Step 2.5 adds a
+deterministic check that runs alongside the punt regex and
+combines into one retry message:
 
 1. **Hallucinated artifact citations.** The agentic loop records
    the path of every successful `read_artifact` / `tail_artifact`
@@ -239,14 +239,15 @@ combine into one retry message:
    basename. Failed reads (tool returned `{"error": ...}`)
    do NOT count as reads, so a model cannot launder a citation
    by reading a non-existent file.
-2. **Fabricated Go-import paths in `relevant_files`.** Entries
-   prefixed with `sigs.k8s.io/`, `github.com/`, `k8s.io/`,
-   `golang.org/`, or `google.golang.org/` are flagged: that field
-   is supposed to hold repo-relative source paths, and the L.4
-   Step 2 Case 1 hallucination used a GOPATH-shaped prefix on a
-   file that didn't exist. The check rejects the format; the
-   model is asked to re-emit with the correct repo-relative
-   path or omit the entry.
+
+> A second Step 2.5 check (a regex that flagged Go-import-style
+> prefixes such as `sigs.k8s.io/` or `github.com/` in
+> `relevant_files`/prose as "fabricated import paths") was later
+> removed: with the artifact-tree seed and a stronger model it
+> caught zero real fabrications and instead misfired on legitimate
+> upstream URLs the model cited for provenance (e.g. the clusterctl
+> `core-components.yaml` release asset), which needlessly failed
+> grounded analyses and collapsed the agentic cache rate.
 
 When the agentic loop runs with `critique.enabled: true`, the
 read-tracking maps are pre-allocated even before the first

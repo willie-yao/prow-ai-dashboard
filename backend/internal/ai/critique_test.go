@@ -279,63 +279,6 @@ func TestFindUnreadArtifactCitations(t *testing.T) {
 
 // TestFindHallucinatedImportPaths pins the import-path heuristic: GOPATH-
 // shaped prefixes are flagged, repo-relative paths pass.
-func TestFindHallucinatedImportPaths(t *testing.T) {
-	t.Run("sigs.k8s.io prefix flagged", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{
-			"sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go",
-		})
-		if len(got) != 1 {
-			t.Errorf("expected 1 flagged, got %v", got)
-		}
-	})
-
-	t.Run("github.com prefix flagged", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{"github.com/foo/bar/main.go"})
-		if len(got) != 1 {
-			t.Errorf("expected 1 flagged, got %v", got)
-		}
-	})
-
-	t.Run("repo-relative passes", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{
-			"controllers/azuremachine_controller.go",
-			"config/webhook/manifests.yaml",
-			"kustomize/cluster-template.yaml",
-		})
-		if len(got) != 0 {
-			t.Errorf("repo-relative should pass, got %v", got)
-		}
-	})
-
-	t.Run("mixed input only flags GOPATH entries", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{
-			"controllers/azuremachine_controller.go",
-			"sigs.k8s.io/cluster-api/util/conditions.go",
-			"config/webhook/manifests.yaml",
-		})
-		if len(got) != 1 {
-			t.Errorf("expected only the sigs.k8s.io entry, got %v", got)
-		}
-	})
-
-	t.Run("empty / whitespace entries skipped", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{"", "  "})
-		if len(got) != 0 {
-			t.Errorf("expected no flags for empty entries, got %v", got)
-		}
-	})
-
-	t.Run("dedup repeated GOPATH entries", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{
-			"sigs.k8s.io/foo.go",
-			"SIGS.K8S.IO/foo.go",
-		})
-		if len(got) != 1 {
-			t.Errorf("expected dedup case-insensitively, got %v", got)
-		}
-	})
-}
-
 // TestCritiqueDraft_HallucinationOnly verifies that a clean-fix
 // answer that nonetheless cites an unread artifact still fails critique.
 // Both signals must be clean for Passed=true.
@@ -360,26 +303,6 @@ func TestCritiqueDraft_HallucinationOnly(t *testing.T) {
 	}
 	if !strings.Contains(out.Feedback, "Do NOT re-emit the same draft") {
 		t.Errorf("Feedback missing closing instruction")
-	}
-}
-
-// TestCritiqueDraft_FabricatedImportOnly: clean fix + clean prose, but
-// relevant_files contains a GOPATH-style entry. Critique should fail.
-func TestCritiqueDraft_FabricatedImportOnly(t *testing.T) {
-	parsed := analysisResponse{
-		RootCause:     "vnet peering misconfigured.",
-		SuggestedFix:  "Update kustomize/cluster-template.yaml; reapply.",
-		RelevantFiles: []string{"sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go"},
-	}
-	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
-	if out.Passed {
-		t.Fatalf("expected fail on fabricated import path, got passed: %+v", out)
-	}
-	if len(out.FabricatedImports) != 1 {
-		t.Errorf("expected 1 fabricated import, got %v", out.FabricatedImports)
-	}
-	if !strings.Contains(out.Feedback, "Go-import-style prefixes") {
-		t.Errorf("Feedback missing fabrication anchor:\n%s", out.Feedback)
 	}
 }
 
@@ -421,64 +344,21 @@ func TestArtifactCitationRE_BroadenedCoverage(t *testing.T) {
 	}
 }
 
-// TestFindHallucinatedImportPaths_ScansProse covers prose scanning:
-// import-path prefixes appearing in root_cause / suggested_fix prose
-// must be flagged too, not just in relevant_files.
-func TestFindHallucinatedImportPaths_ScansProse(t *testing.T) {
-	t.Run("prose token with sigs.k8s.io flagged", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{
-			"the bug is in sigs.k8s.io/cluster-api-provider-azure/controllers/azuremachine/actuators.go around line 200",
-		})
-		if len(got) != 1 {
-			t.Errorf("expected the embedded GOPATH-prefix to be flagged, got %v", got)
-		}
-	})
-	t.Run("prose without import path passes", func(t *testing.T) {
-		got := findHallucinatedImportPaths([]string{
-			"the bug is in controllers/azuremachine_controller.go around line 200",
-		})
-		if len(got) != 0 {
-			t.Errorf("repo-relative prose should pass, got %v", got)
-		}
-	})
-	t.Run("prefix mid-word not flagged", func(t *testing.T) {
-		// Sentence-ending punctuation around a non-GOPATH word.
-		got := findHallucinatedImportPaths([]string{
-			"the sigs.k8s.iolib was loaded successfully", // No '/' after the prefix.
-		})
-		if len(got) != 0 {
-			t.Errorf("non-GOPATH word should not be flagged, got %v", got)
-		}
-	})
-
-	// Two escape variants the start-anchor missed:
-	// when the regex was anchored with `^`. Each token is a single
-	// whitespace-separated field (typical for relevant_files entries
-	// and for inline references in prose).
-	t.Run("GOPATH prefix inside Prow mod-cache absolute path flagged", func(t *testing.T) {
-		// Shadow build 2061015253067501568. Whole string is one
-		// whitespace-separated token; the embedded `sigs.k8s.io/...`
-		// prefix is the fabrication signal even though the leading
-		// `/home/prow/...` would defeat a `^`-anchored regex.
-		got := findHallucinatedImportPaths([]string{
-			"/home/prow/go/pkg/mod/sigs.k8s.io/cluster-api/test@v1.13.2/framework/clusterctl/client.go",
-		})
-		if len(got) != 1 {
-			t.Errorf("expected GOPATH-in-modcache path to be flagged, got %v", got)
-		}
-	})
-	t.Run("GitHub blob URL flagged", func(t *testing.T) {
-		// Shadow build 2061015253067501568. relevant_files entry
-		// pointing at an external GitHub URL is not a repo-relative
-		// path and per se invalid, regardless of whether the URL
-		// happens to resolve.
-		got := findHallucinatedImportPaths([]string{
-			"https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/test/e2e/clusterctl/client.go",
-		})
-		if len(got) != 1 {
-			t.Errorf("expected GitHub URL to be flagged, got %v", got)
-		}
-	})
+// TestCritiqueDraft_CitesRealReleaseURL_Passes guards against the
+// regression this check's removal fixed: the model legitimately cites a
+// real upstream release asset (e.g. the clusterctl core-components.yaml
+// download) in prose for provenance. The old import-path heuristic flagged
+// that real URL as a fabricated import and rejected otherwise-grounded
+// analyses, which collapsed the agentic cache rate. Such a draft must pass.
+func TestCritiqueDraft_CitesRealReleaseURL_Passes(t *testing.T) {
+	parsed := analysisResponse{
+		RootCause:    "clusterctl failed to apply https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.11.11/core-components.yaml because the management cluster could not reach the registry.",
+		SuggestedFix: "Re-run the job; the registry pull is transient.",
+	}
+	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
+	if !out.Passed {
+		t.Fatalf("draft citing a real release URL should pass, got: %+v", out)
+	}
 }
 
 // ---------- Skill-driven missing-evidence tests ----------
@@ -706,11 +586,10 @@ required_evidence:
 }
 
 // TestCritiqueDraft_SkillCombinesWithPuntAndHallucination verifies
-// the multi-section feedback contract: all four critique categories
-// (punt, unread citations, fabricated imports, missing skill evidence)
-// can fire together and each produces its own section. Ensures the
-// model gets one combined feedback message rather than playing
-// whack-a-mole across rounds.
+// the multi-section feedback contract: the three remaining critique
+// categories (punt, unread citations, missing skill evidence) can fire
+// together and each produces its own section. Ensures the model gets one
+// combined feedback message rather than playing whack-a-mole across rounds.
 func TestCritiqueDraft_SkillCombinesWithPuntAndHallucination(t *testing.T) {
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
@@ -726,15 +605,14 @@ required_evidence:
 		SuggestedFix: "Check the cert and verify the webhook secret.", // bare-imperative punt
 	}
 	// build-log.txt is read; machine-foo/boot.log is NOT read → unread
-	// citation. Also fabricated import in relevant_files.
-	parsed.RelevantFiles = []string{"sigs.k8s.io/some-pkg/x.go"}
+	// citation.
 	out := critiqueDraft(parsed,
 		map[string]bool{"build-log.txt": true},
 		map[string]bool{"build-log.txt": true},
 		set.Match("x509"))
 
 	if out.Passed {
-		t.Fatalf("expected fail with all four issues firing, got passed: %+v", out)
+		t.Fatalf("expected fail with all issues firing, got passed: %+v", out)
 	}
 	if len(out.PuntMatches) == 0 {
 		t.Errorf("expected PuntMatches non-empty")
@@ -742,18 +620,14 @@ required_evidence:
 	if len(out.UnreadCitations) == 0 {
 		t.Errorf("expected UnreadCitations non-empty (machine-foo/boot.log)")
 	}
-	if len(out.FabricatedImports) == 0 {
-		t.Errorf("expected FabricatedImports non-empty (sigs.k8s.io prefix)")
-	}
 	if len(out.MissingSkillEvidence) == 0 {
 		t.Errorf("expected MissingSkillEvidence non-empty (cert-config unread)")
 	}
 
-	// All four sections should appear in feedback.
+	// All three sections should appear in feedback.
 	for _, marker := range []string{
 		"diagnostic / information-gathering",     // punt section
 		"tool log shows no read_artifact",        // unread section
-		"Go-import-style prefixes",               // fabricated import section
 		"matches one or more diagnostic recipes", // skill section header
 	} {
 		if !strings.Contains(out.Feedback, marker) {
