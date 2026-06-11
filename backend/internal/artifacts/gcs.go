@@ -83,8 +83,30 @@ type GCSBrowser struct {
 
 	// cache stores fully-fetched small files keyed by relative path. Only
 	// files at or below smallFileCacheCap are eligible. Hits are reused
-	// by Read and Tail when the file is already resident.
-	cache map[string][]byte
+	// by Read and Tail when the file is already resident. cacheMu guards
+	// it: a single GCSBrowser is shared by all failures in one build
+	// (see GCSFactory.ForBuild), which may be analyzed concurrently when
+	// ai.concurrency > 1. The lock is held only for the map get/put, never
+	// across the HTTP fetch, so concurrent reads of different files still
+	// proceed in parallel (at worst two goroutines redundantly fetch the
+	// same file once, which is idempotent).
+	cacheMu sync.Mutex
+	cache   map[string][]byte
+}
+
+// cacheGet returns a cached file body if resident.
+func (b *GCSBrowser) cacheGet(key string) ([]byte, bool) {
+	b.cacheMu.Lock()
+	defer b.cacheMu.Unlock()
+	data, ok := b.cache[key]
+	return data, ok
+}
+
+// cachePut stores a defensive copy of a fetched file body.
+func (b *GCSBrowser) cachePut(key string, body []byte) {
+	b.cacheMu.Lock()
+	defer b.cacheMu.Unlock()
+	b.cache[key] = append([]byte(nil), body...)
 }
 
 // Per-file cache cap. Files larger than this are never loaded whole; the
@@ -239,7 +261,7 @@ func (b *GCSBrowser) Read(ctx context.Context, file string, offset, length int) 
 	}
 
 	// Cache hit: slice from memory.
-	if data, ok := b.cache[clean]; ok {
+	if data, ok := b.cacheGet(clean); ok {
 		return sliceCached(data, offset, length), int64(len(data)), nil
 	}
 
@@ -269,7 +291,7 @@ func (b *GCSBrowser) Read(ctx context.Context, file string, offset, length int) 
 		// Server ignored Range and returned the whole file: opportunistic
 		// cache if it fits.
 		if int64(len(body)) <= smallFileCacheCap {
-			b.cache[clean] = append([]byte(nil), body...)
+			b.cachePut(clean, body)
 		}
 		totalSize = int64(len(body))
 	}
@@ -327,7 +349,7 @@ func (b *GCSBrowser) Tail(ctx context.Context, file string, lines, maxBytes int)
 		maxBytes = perCallGCSCap
 	}
 
-	if data, ok := b.cache[clean]; ok {
+	if data, ok := b.cacheGet(clean); ok {
 		return tailFromBytes(data, int64(len(data)), lines, maxBytes), nil
 	}
 
@@ -383,7 +405,7 @@ func (b *GCSBrowser) Tail(ctx context.Context, file string, lines, maxBytes int)
 
 	// Cache opportunistically if the whole file fits.
 	if totalFileSize >= 0 && int64(len(accumulated)) >= totalFileSize && totalFileSize <= smallFileCacheCap {
-		b.cache[clean] = append([]byte(nil), accumulated...)
+		b.cachePut(clean, accumulated)
 	}
 
 	return tailFromBytes(accumulated, totalFileSize, lines, maxBytes), nil
@@ -435,7 +457,7 @@ func (b *GCSBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, c
 		maxLineLen = 1000
 	}
 
-	if data, ok := b.cache[clean]; ok {
+	if data, ok := b.cacheGet(clean); ok {
 		return grepStream(bytes.NewReader(data), int64(len(data)), int64(len(data)), re, contextLines, maxMatches, maxLineLen), nil
 	}
 

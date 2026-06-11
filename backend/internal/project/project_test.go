@@ -452,6 +452,35 @@ func agenticEqual(a, b Agentic) bool {
 		equalStrings(a.Tools, b.Tools)
 }
 
+// ---------- analysis concurrency ----------
+
+func TestAnalysisConcurrency_DefaultsToOne(t *testing.T) {
+	c := validConfig()
+	if got := c.AnalysisConcurrency(); got != 1 {
+		t.Errorf("nil AI: AnalysisConcurrency = %d, want 1", got)
+	}
+	c.AI = &AI{}
+	if got := c.AnalysisConcurrency(); got != 1 {
+		t.Errorf("unset concurrency: AnalysisConcurrency = %d, want 1", got)
+	}
+	c.AI = &AI{Concurrency: 0}
+	if got := c.AnalysisConcurrency(); got != 1 {
+		t.Errorf("zero concurrency: AnalysisConcurrency = %d, want 1", got)
+	}
+	c.AI = &AI{Concurrency: -3}
+	if got := c.AnalysisConcurrency(); got != 1 {
+		t.Errorf("negative concurrency: AnalysisConcurrency = %d, want 1 (clamped)", got)
+	}
+}
+
+func TestAnalysisConcurrency_HonorsConfiguredValue(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{Concurrency: 6}
+	if got := c.AnalysisConcurrency(); got != 6 {
+		t.Errorf("AnalysisConcurrency = %d, want 6", got)
+	}
+}
+
 // ---------- use_universal_path semantics ----------
 
 func TestValidate_UniversalModuleRequiresUniversalPath(t *testing.T) {
