@@ -212,15 +212,15 @@ finalize-round result publishes, doesn't cache, and re-analyzes
 on the next fetcher run (same anti-thrash trade-off as the floor
 gates).
 
-#### L.4 Step 2.5 strengthening: hallucinated citations + fabricated import paths
+#### L.4 Step 2.5 strengthening: hallucinated citations
 
 L.4 Step 2 dropped Qwen3-235B's punt rate from 80% to 0% on CAPZ
 but exposed a new failure mode (Case 1 of the Step 2 A/B): a
 draft that passes the punt regex with high confidence but cites
 an artifact it never read (`actuators.go` it never opened),
-emitting a wrong-but-fluent root cause. Step 2.5 adds two
-deterministic checks that run alongside the punt regex and
-combine into one retry message:
+emitting a wrong-but-fluent root cause. Step 2.5 adds a
+deterministic check that runs alongside the punt regex and
+combines into one retry message:
 
 1. **Hallucinated artifact citations.** The agentic loop records
    the path of every successful `read_artifact` / `tail_artifact`
@@ -239,14 +239,15 @@ combine into one retry message:
    basename. Failed reads (tool returned `{"error": ...}`)
    do NOT count as reads, so a model cannot launder a citation
    by reading a non-existent file.
-2. **Fabricated Go-import paths in `relevant_files`.** Entries
-   prefixed with `sigs.k8s.io/`, `github.com/`, `k8s.io/`,
-   `golang.org/`, or `google.golang.org/` are flagged: that field
-   is supposed to hold repo-relative source paths, and the L.4
-   Step 2 Case 1 hallucination used a GOPATH-shaped prefix on a
-   file that didn't exist. The check rejects the format; the
-   model is asked to re-emit with the correct repo-relative
-   path or omit the entry.
+
+> A second Step 2.5 check (a regex that flagged Go-import-style
+> prefixes such as `sigs.k8s.io/` or `github.com/` in
+> `relevant_files`/prose as "fabricated import paths") was later
+> removed: with the artifact-tree seed and a stronger model it
+> caught zero real fabrications and instead misfired on legitimate
+> upstream URLs the model cited for provenance (e.g. the clusterctl
+> `core-components.yaml` release asset), which needlessly failed
+> grounded analyses and collapsed the agentic cache rate.
 
 When the agentic loop runs with `critique.enabled: true`, the
 read-tracking maps are pre-allocated even before the first
@@ -286,6 +287,21 @@ is also true. Cache invalidation: every cache entry carries a
 edits to any recipe change the hash and invalidate affected entries
 on the next run, independently of the engine-side
 `critique_version` bump.
+
+**Inapplicable recipes do not block caching.** A recipe whose
+required evidence does not exist anywhere in the build's artifact
+tree is inapplicable to that build: the agent cannot read evidence
+the run never produced. When a matched recipe has a missing
+evidence group, the engine does one bounded recursive listing of
+the build tree and drops any group whose `any_of` patterns match no
+path in it. Only groups whose evidence **exists but was not read**
+remain a genuine miss. Without this, a recipe that triggers on the
+root cause but requires (say) a cluster YAML the failed run never
+dumped would fail critique on every run, so the analysis was
+published but never cached and re-analyzed forever. The listing is
+cached per analysis and only fetched when a skill miss actually
+occurs; a truncated listing disables the check (the engine cannot
+prove a path is absent), preserving the stricter behavior.
 
 See [`docs/skills.md`](skills.md) for the full schema, authoring
 guidance, and observability notes.
@@ -333,7 +349,11 @@ with a single bounded tree walk (so cost does not scale with the number of
 targets). It runs on both the in-loop critique retry and the post-loop
 force-finalize path (where weak models most often land after exhausting
 their tool-call budget), in the latter case driving one extra finalize round
-with the injected evidence. It adds the fetched bytes (up to a few capped
+with the injected evidence. If that post-injection finalize comes back as
+prose instead of JSON, the engine retries it once (the force-finalize prompt
+demands a JSON-only response: no prose, no markdown fences) before giving up,
+so a one-off formatting slip does not discard an otherwise-cacheable answer.
+It adds the fetched bytes (up to a few capped
 artifacts per retry) to the conversation, so it is best suited to
 large-context models. Best-effort: a path that cannot be resolved or fetched
 is skipped and the plain text feedback still applies. No cache-version
