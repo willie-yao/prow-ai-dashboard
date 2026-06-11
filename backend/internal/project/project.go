@@ -109,13 +109,10 @@ type Artifacts struct {
 	Collector string `yaml:"collector" json:"collector,omitempty"`
 }
 
-// AI selects the AI module used to build prompts and gather evidence for
-// failure analysis. Implementations live under backend/internal/ai/modules/.
+// AI configures the agentic failure-analysis pipeline: the endpoint and model
+// to call, optional request headers, analysis concurrency, and the inlined
+// agentic loop tuning.
 type AI struct {
-	// Module names the registered AI module (e.g. "generic"). Defaults
-	// to "generic" when unset.
-	Module string `yaml:"module" json:"module,omitempty"`
-
 	// Endpoint is the OpenAI-compatible chat-completions URL. When unset,
 	// reads AI_ENDPOINT env, then defaults to GitHub Copilot. Excluded
 	// from manifest.json.
@@ -133,22 +130,6 @@ type AI struct {
 	// AI_TOKEN is the supported channel for the bearer token.
 	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 
-	// Agentic enables tool-calling-based artifact browsing. When on, the
-	// module skips its curator-driven evidence collection for failures
-	// that opt in (via AgenticPreferrer) and lets the model browse the
-	// artifact tree itself. Requires a function-calling endpoint.
-	Agentic *Agentic `yaml:"agentic,omitempty" json:"agentic,omitempty"`
-
-	// UseUniversalPath bypasses the module-routed pipeline in favor of a
-	// project-agnostic agentic flow: collector evidence is skipped, the
-	// per-failure prompt is reduced to the test failure context, and the
-	// agent discovers everything via the registered tools.
-	//
-	// Implies agentic.enabled=true. There is no curator fallback in this
-	// mode: an endpoint that rejects function-calling surfaces as
-	// "unavailable" rather than degrading to a tools-free prompt.
-	UseUniversalPath bool `yaml:"use_universal_path,omitempty" json:"-"`
-
 	// Concurrency caps how many failures are analyzed in parallel. Each
 	// analysis is an independent sequence of model round-trips, so raising
 	// this lets a batching endpoint (e.g. a self-hosted vLLM/TRT-LLM server)
@@ -158,6 +139,14 @@ type AI struct {
 	// rate-limited provider (e.g. Copilot) can 429 under parallelism. Raise
 	// it only for endpoints you control. Excluded from manifest.json.
 	Concurrency int `yaml:"concurrency,omitempty" json:"-"`
+
+	// Agentic holds the tool-calling loop tuning, inlined under `ai:` in
+	// YAML (e.g. ai.max_iters, ai.timeout, ai.critique). All fields are
+	// optional; zero values fall back to DefaultAgentic. The agentic loop
+	// is the only analysis path: the model browses the build's artifacts
+	// via the registered tools (filesystem + k8s by default) and returns a
+	// single JSON verdict. A function-calling endpoint is required.
+	Agentic Agentic `yaml:",inline" json:"agentic,omitempty"`
 }
 
 // AnalysisConcurrency returns the number of failures to analyze in parallel,
@@ -171,18 +160,9 @@ func (c *Config) AnalysisConcurrency() int {
 }
 
 // Agentic configures the tool-calling AI loop. All fields are optional; zero
-// values fall back to engine defaults defined in DefaultAgentic.
+// values fall back to engine defaults defined in DefaultAgentic. Inlined under
+// `ai:` in project.yaml.
 type Agentic struct {
-	// Enabled turns the agentic pipeline on. When false (the default),
-	// every failure is analyzed by the existing curator-driven pipeline
-	// regardless of any other field.
-	Enabled bool `yaml:"enabled" json:"enabled"`
-
-	// Always forces agentic mode for every failure the module analyzes.
-	// When false, the module decides per-failure via its AgenticPreferrer
-	// implementation (modules that don't implement it never go agentic).
-	Always bool `yaml:"always,omitempty" json:"always,omitempty"`
-
 	// MaxIters caps the number of tool-call rounds per failure. Defaults
 	// to DefaultAgentic.MaxIters.
 	MaxIters int `yaml:"max_iters,omitempty" json:"max_iters,omitempty"`
@@ -279,15 +259,13 @@ type AgenticCritique struct {
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
-// DefaultAgentic is the zero-config fallback applied when a consumer enables
-// Agentic without overriding any limits. Tuned to match the validated spike:
-// 15 iterations is enough for deep exploration without runaway loops, and 5
+// DefaultAgentic is the zero-config fallback applied to the agentic loop tuning
+// when a consumer omits a field. Tuned to match the validated spike: 15
+// iterations is enough for deep exploration without runaway loops, and 5
 // minutes is the wall-clock timeout. (The byte budgets are not configured
 // here: the model/context budgets auto-size from the endpoint window and the
 // GCS fetch ceiling is a fixed fetcher constant.)
 var DefaultAgentic = Agentic{
-	Enabled:      false,
-	Always:       false,
 	MaxIters:     15,
 	Timeout:      5 * time.Minute,
 	MinToolCalls: 0,
@@ -298,36 +276,34 @@ var DefaultAgentic = Agentic{
 	},
 }
 
-// EffectiveAgentic returns the resolved Agentic config with defaults applied
-// for any zero-valued limits. Safe to call on a nil receiver (returns
-// DefaultAgentic with Enabled=false).
-func (a *Agentic) EffectiveAgentic() Agentic {
+// EffectiveAgentic returns the resolved agentic tuning with defaults applied
+// for any zero-valued field. Safe to call on a nil receiver (returns
+// DefaultAgentic).
+func (a *AI) EffectiveAgentic() Agentic {
 	out := DefaultAgentic
 	if a == nil {
 		return out
 	}
-	out.Enabled = a.Enabled
-	out.Always = a.Always
-	if a.MaxIters > 0 {
-		out.MaxIters = a.MaxIters
+	if a.Agentic.MaxIters > 0 {
+		out.MaxIters = a.Agentic.MaxIters
 	}
-	if a.Timeout > 0 {
-		out.Timeout = a.Timeout
+	if a.Agentic.Timeout > 0 {
+		out.Timeout = a.Agentic.Timeout
 	}
-	if a.MinToolCalls > 0 {
-		out.MinToolCalls = a.MinToolCalls
+	if a.Agentic.MinToolCalls > 0 {
+		out.MinToolCalls = a.Agentic.MinToolCalls
 	}
-	if a.MinGCSBytes > 0 {
-		out.MinGCSBytes = a.MinGCSBytes
+	if a.Agentic.MinGCSBytes > 0 {
+		out.MinGCSBytes = a.Agentic.MinGCSBytes
 	}
-	out.Critique.Enabled = a.Critique.Enabled
-	if a.Critique.MaxRetries > 0 {
-		out.Critique.MaxRetries = a.Critique.MaxRetries
+	out.Critique.Enabled = a.Agentic.Critique.Enabled
+	if a.Agentic.Critique.MaxRetries > 0 {
+		out.Critique.MaxRetries = a.Agentic.Critique.MaxRetries
 	}
-	out.SingleToolCall = a.SingleToolCall
-	out.EvidenceInjection = a.EvidenceInjection
-	if len(a.Tools) > 0 {
-		out.Tools = append([]string(nil), a.Tools...)
+	out.SingleToolCall = a.Agentic.SingleToolCall
+	out.EvidenceInjection = a.Agentic.EvidenceInjection
+	if len(a.Agentic.Tools) > 0 {
+		out.Tools = append([]string(nil), a.Agentic.Tools...)
 	}
 	return out
 }
@@ -453,19 +429,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// "universal" is reserved for the use_universal_path flow. Picking it
-	// as a normal module name without the flag would be a footgun: the
-	// fetcher's normal module registry never registers it, so the run
-	// would fail later with a confusing "unknown ai.module" error.
-	if c.AI != nil && strings.EqualFold(strings.TrimSpace(c.AI.Module), "universal") && !c.AI.UseUniversalPath {
-		return fmt.Errorf(`ai.module: "universal" requires ai.use_universal_path: true`)
-	}
-
 	// Evidence injection hooks the critique retry path, so it is inert
 	// without critique. Reject the misconfiguration at load rather than
-	// silently doing nothing.
-	if c.AI != nil && c.AI.Agentic != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
-		return fmt.Errorf("ai.agentic.evidence_injection requires ai.agentic.critique.enabled: true")
+	// silently doing nothing. (Note: critique is also auto-enabled by the
+	// fetcher when skill recipes are present, so this only catches the
+	// recipe-free case.)
+	if c.AI != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
+		return fmt.Errorf("ai.evidence_injection requires ai.critique.enabled: true")
 	}
 
 	return nil

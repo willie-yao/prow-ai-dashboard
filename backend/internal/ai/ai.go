@@ -1,15 +1,12 @@
-// Package ai provides a generic chat-completion client with a project-pluggable
-// Module abstraction. Project-specific prompts and evidence collection live in
-// internal/ai/modules/<id>/. Module + Client are composed by Service, which
-// orchestrates a single test failure's analysis.
+// Package ai provides a generic chat-completion client and the agentic
+// tool-calling analysis loop. The per-failure seed prompt is built by the
+// universal Module (internal/ai/modules/universal); Module + Client are
+// composed by Service, which orchestrates a single test failure's analysis.
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -196,52 +193,6 @@ func (r analysisResponse) proseFields() []string {
 	return out
 }
 
-// doAnalyze runs a single chat completion, parses the JSON response, caches
-// it, and returns both the brief AISummary and the deep AIAnalysis derived
-// from the same model output. The AIAnalysis is stamped with per-call
-// telemetry (ElapsedMs, ModelBytes, CacheHit) for the published JSON.
-func (c *Client) doAnalyze(ctx context.Context, cacheKey, sysPrompt, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
-	start := time.Now()
-	if raw, ok := c.cache.Get(cacheKey); ok {
-		var parsed analysisResponse
-		if json.Unmarshal(raw, &parsed) == nil {
-			summary, analysis := c.buildOutputs(parsed)
-			if analysis != nil {
-				analysis.CacheHit = true
-				analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
-			}
-			return summary, analysis, nil
-		}
-	}
-
-	resp, err := c.callAPI(ctx, c.model, sysPrompt, userPrompt)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var parsed analysisResponse
-	cleaned := extractJSON(resp)
-	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
-		// Fallback: treat the whole response as the root cause.
-		parsed = analysisResponse{
-			Summary:      truncate(resp, 200),
-			RootCause:    resp,
-			Severity:     "Medium",
-			SuggestedFix: "Unable to parse structured response",
-		}
-	}
-
-	// Persist the parsed struct so future reads always get a consistent shape.
-	_ = c.cache.Set(cacheKey, parsed)
-
-	summary, analysis := c.buildOutputs(parsed)
-	if analysis != nil {
-		analysis.ModelBytes = len(sysPrompt) + len(userPrompt) + len(resp)
-		analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
-	}
-	return summary, analysis, nil
-}
-
 // buildOutputs splits an analysisResponse into the AISummary + AIAnalysis
 // pair the pipeline consumes, both stamped with the same generated_at.
 func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
@@ -260,7 +211,6 @@ func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *mode
 	analysis := &models.AIAnalysis{
 		GeneratedAt:   now,
 		Model:         c.model,
-		Mode:          curatorMode,
 		RootCause:     parsed.RootCause,
 		Severity:      parsed.Severity,
 		SuggestedFix:  parsed.SuggestedFix,
@@ -292,24 +242,6 @@ func firstSentence(s string) string {
 
 // ---------- API helper ----------
 
-type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-}
-
-type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type chatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
 // setRequestHeaders applies the standard headers and then merges any
 // user-supplied ExtraHeaders. Extras win on conflict so projects can
 // override the default Authorization scheme.
@@ -334,69 +266,6 @@ func isCopilotEndpoint(rawURL string) bool {
 		return false
 	}
 	return strings.HasSuffix(u.Hostname(), "githubcopilot.com")
-}
-
-func (c *Client) callAPI(ctx context.Context, model, sysPrompt, userMessage string) (string, error) {
-	time.Sleep(callDelay)
-
-	reqBody := chatRequest{
-		Model: model,
-		Messages: []chatMessage{
-			{Role: "system", Content: sysPrompt},
-			{Role: "user", Content: userMessage},
-		},
-	}
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshaling request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
-	}
-	c.setRequestHeaders(req)
-
-	var resp *http.Response
-	for attempt := 0; attempt < 3; attempt++ {
-		resp, err = c.httpClient.Do(req)
-		if err != nil {
-			return "", fmt.Errorf("API call failed: %w", err)
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close()
-			wait := time.Duration(2<<attempt) * time.Second
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(wait):
-			}
-			req, _ = http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(body))
-			c.setRequestHeaders(req)
-			continue
-		}
-		break
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API returned %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
-
-	var chatResp chatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("parsing response: %w", err)
-	}
-	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("empty response from API")
-	}
-
-	return chatResp.Choices[0].Message.Content, nil
 }
 
 // ---------- Helpers ----------

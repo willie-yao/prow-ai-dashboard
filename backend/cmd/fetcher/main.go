@@ -2,8 +2,8 @@
 // configuration, discovers Prow jobs, fetches build results from GCS, runs
 // optional AI failure analysis, and writes JSON for the frontend to render.
 // All orchestration lives in internal/fetcher; this file is just flag
-// parsing and the explicit wiring of the built-in collector and AI module
-// factories into the fetcher registries.
+// parsing and the explicit wiring of the built-in collector factory into the
+// fetcher's collector registry.
 package main
 
 import (
@@ -13,7 +13,6 @@ import (
 	"os"
 	"time"
 
-	aigeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/generic"
 	collectorgeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 )
@@ -31,9 +30,6 @@ func main() {
 
 	opts.Collectors = fetcher.NewCollectorRegistry()
 	opts.Collectors.Register("generic", collectorgeneric.Factory)
-
-	opts.AIModules = fetcher.NewAIModuleRegistry()
-	opts.AIModules.Register("generic", aigeneric.Factory)
 
 	if err := fetcher.Run(context.Background(), opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

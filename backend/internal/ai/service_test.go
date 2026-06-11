@@ -14,35 +14,16 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// stubModule satisfies ai.Module for service tests. Behaviors are controlled
-// via the exported fields.
+// stubModule satisfies ai.Module for service tests. The prompt is returned
+// verbatim by AnalysisPrompt.
 type stubModule struct {
-	name          string
-	prompt        string
-	transientFor  string // failure messages exactly matching this string are flagged transient
-	transientWith string // the returned reason when transientFor matches
-	prefer        bool
-	preferReason  string
+	name   string
+	prompt string
 }
 
 func (m *stubModule) Name() string { return m.name }
-func (m *stubModule) IsKnownTransient(msg string) string {
-	if msg != "" && msg == m.transientFor {
-		return m.transientWith
-	}
-	return ""
-}
 func (m *stubModule) AnalysisPrompt(_ context.Context, _ *http.Client, _ *models.BuildResult, _ *models.TestCase, _ int) string {
 	return m.prompt
-}
-
-// stubPreferrer wraps stubModule and implements AgenticPreferrer.
-type stubPreferrer struct {
-	*stubModule
-}
-
-func (p *stubPreferrer) PrefersAgentic(_ *models.BuildResult, _ *models.TestCase) (bool, string) {
-	return p.prefer, p.preferReason
 }
 
 func newRun(jobName, buildID string) *models.BuildResult {
@@ -57,7 +38,7 @@ func newFailedTC(name, msg string) *models.TestCase {
 
 // ---------- Mode + cache invalidation ----------
 
-func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
+func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := `{"summary":"x","is_transient":false,"root_cause":"y","severity":"Low","suggested_fix":"f","relevant_files":[]}`
@@ -66,7 +47,7 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, false /* universalPath */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc := newFailedTC("Test A", "failure msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -76,61 +57,6 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	}
 	if tc.AIAnalysis.Mode != AgenticMode {
 		t.Errorf("Mode = %q, want %q", tc.AIAnalysis.Mode, AgenticMode)
-	}
-}
-
-func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	// First failure: agentic 400 (function calling unsupported).
-	srv.push(400, `{"error":{"message":"function calling not supported"}}`)
-	// Curator fallback for first failure.
-	srv.push(200, chatRespFinal(`{"summary":"first","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
-	// Second failure: should skip agentic entirely and go straight to curator.
-	srv.push(200, chatRespFinal(`{"summary":"second","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
-
-	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
-
-	tc1 := newFailedTC("Test A", "msg-a")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
-	tc2 := newFailedTC("Test B", "msg-b")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc2)
-
-	if tc1.AIAnalysis == nil || tc1.AIAnalysis.Mode != curatorMode {
-		t.Errorf("first analysis: expected curator fallback after ErrToolsUnsupported, got %+v", tc1.AIAnalysis)
-	}
-	if tc2.AIAnalysis == nil || tc2.AIAnalysis.Mode != curatorMode {
-		t.Errorf("second analysis: expected curator (tools-unsupported flag should stick), got %+v", tc2.AIAnalysis)
-	}
-	// Expect exactly 3 server calls: 1 agentic 400 + 2 curator successes.
-	if got := atomic.LoadInt32(&srv.calls); got != 3 {
-		t.Errorf("server calls = %d, want 3", got)
-	}
-}
-
-func TestService_TransientShortCircuit(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	// No server pushes: any HTTP call should explode this test.
-
-	client := newAgenticTestClient(t, srv.URL)
-	mod := &stubModule{name: "kubernetes", prompt: "user", transientFor: "rate limit", transientWith: "HTTP 429: rate limited"}
-	s := NewService(client, mod, "sys", nil)
-
-	tc := newFailedTC("Test A", "rate limit")
-	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
-
-	if tc.AISummary == nil || !tc.AISummary.IsTransient {
-		t.Fatal("expected transient summary")
-	}
-	if tc.AIAnalysis != nil {
-		t.Error("transient should NOT produce a deep analysis")
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 0 {
-		t.Errorf("server calls = %d, want 0 (transient should short-circuit)", got)
 	}
 }
 
@@ -144,17 +70,18 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
-	// Test case already has CURATOR analysis cached on it from a prior run.
+	// Test case already has a stale non-agentic analysis cached on it from a
+	// prior run (e.g. the old curator pipeline).
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale curator summary"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale curator root cause", Mode: curatorMode}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale curator root cause", Mode: "curator"}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if tc.AIAnalysis.Mode != AgenticMode {
-		t.Errorf("Mode = %q, want %q (stale curator entry should be re-analyzed under agentic)", tc.AIAnalysis.Mode, AgenticMode)
+		t.Errorf("Mode = %q, want %q (stale non-agentic entry should be re-analyzed)", tc.AIAnalysis.Mode, AgenticMode)
 	}
 	if !strings.Contains(tc.AISummary.Summary, "new agentic") {
 		t.Errorf("expected fresh agentic summary, got %q", tc.AISummary.Summary)
@@ -167,16 +94,18 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	// No server pushes: should not call the API.
 
 	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: curatorMode}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
 	if got := atomic.LoadInt32(&srv.calls); got != 0 {
-		t.Errorf("server calls = %d, want 0 (existing curator analysis should be kept)", got)
+		t.Errorf("server calls = %d, want 0 (existing agentic analysis should be kept)", got)
 	}
 	if tc.AIAnalysis.RootCause != "cached" {
 		t.Errorf("expected cached root cause to be preserved, got %q", tc.AIAnalysis.RootCause)
@@ -185,10 +114,6 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 func TestService_CacheKeyShape(t *testing.T) {
 	s := &Service{module: &stubModule{name: "kubernetes"}}
-	curator := s.cacheKey("Test A", "boom")
-	if !strings.HasPrefix(curator, "analyze:kubernetes:") {
-		t.Errorf("curator key should start with 'analyze:kubernetes:', got %q", curator)
-	}
 	// Agentic key encodes job + build so two builds of the same test never collide.
 	a1 := s.agenticCacheKey("job1", "build1", "Test A", "boom")
 	a2 := s.agenticCacheKey("job1", "build2", "Test A", "boom")
@@ -200,15 +125,15 @@ func TestService_CacheKeyShape(t *testing.T) {
 	}
 }
 
-// ---------- Universal mode (use_universal_path) ----------
+// ---------- tools-unsupported (no fallback) ----------
 
-// TestService_UniversalOn_ToolsUnsupportedSetsUnavailable covers the no-fallback
-// invariant of the universal path: a tools-unsupported endpoint must not
-// silently regress to the curator pipeline (the user explicitly opted into
-// an agentic-only flow). The first failure trips ErrToolsUnsupported and is
-// marked unavailable; the second failure short-circuits without making any
-// HTTP call because the run-scoped tools-unsupported flag stuck.
-func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
+// TestService_ToolsUnsupported_SetsUnavailable covers the no-fallback
+// invariant: a tools-unsupported endpoint must surface as "unavailable"
+// rather than degrading to a tools-free prompt (there is no curator path).
+// The first failure trips ErrToolsUnsupported and is marked unavailable; the
+// second failure short-circuits without any HTTP call because the run-scoped
+// tools-unsupported flag stuck.
+func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	// Only one server push: the agentic 400. The second Analyze() must
@@ -218,7 +143,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc1 := newFailedTC("Test A", "msg-a")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
@@ -229,7 +154,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 		t.Errorf("first failure: expected unavailable summary, got %+v", tc1.AISummary)
 	}
 	if tc1.AIAnalysis != nil {
-		t.Errorf("first failure: AIAnalysis should NOT be set under universal-mode tools-unsupported, got %+v", tc1.AIAnalysis)
+		t.Errorf("first failure: AIAnalysis should NOT be set under tools-unsupported, got %+v", tc1.AIAnalysis)
 	}
 	if tc2.AISummary == nil || !strings.Contains(tc2.AISummary.Summary, "AI analysis unavailable") {
 		t.Errorf("second failure: expected unavailable summary (sticky flag), got %+v", tc2.AISummary)
@@ -240,38 +165,32 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 }
 
 // TestService_ShouldReanalyze_FloorTable covers the build-level cache
-// invalidation: when a cached agentic-mode analysis records fewer tool calls
-// than the current MinToolCalls floor OR fewer GCS bytes than the current
-// MinGCSBytes floor, the build cache must NOT be trusted (shouldReanalyze
-// returns true) so the loop runs again and the new floor can actually take
-// effect. Curator caches are unaffected because they legitimately have
-// ToolCalls=0 and GCSBytes=0 by design.
+// invalidation: a stale non-agentic cached mode always reanalyzes, and an
+// agentic-mode analysis recording fewer tool calls than MinToolCalls OR fewer
+// GCS bytes than MinGCSBytes must not be trusted (shouldReanalyze returns
+// true) so the loop runs again and the new floor can take effect.
 func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	cases := []struct {
 		name         string
 		cachedMode   string
 		cachedCalls  int
 		cachedGCS    int
-		desiredMode  string
 		minToolCalls int
 		minGCSBytes  int
 		want         bool
 	}{
-		{"agentic_below_calls_floor", AgenticMode, 0, 0, AgenticMode, 3, 0, true},
-		{"agentic_at_calls_floor", AgenticMode, 3, 0, AgenticMode, 3, 0, false},
-		{"agentic_above_calls_floor", AgenticMode, 5, 0, AgenticMode, 3, 0, false},
-		{"universal_below_calls_floor", UniversalMode, 0, 0, UniversalMode, 3, 0, true},
-		{"universal_at_calls_floor", UniversalMode, 3, 0, UniversalMode, 3, 0, false},
-		{"agentic_zero_floors_no_invalidation", AgenticMode, 0, 0, AgenticMode, 0, 0, false},
-		{"curator_floors_ignored", curatorMode, 0, 0, curatorMode, 3, 50_000, false},
-		{"mode_mismatch_overrides_floors", curatorMode, 5, 200_000, AgenticMode, 0, 0, true},
-		{"agentic_below_gcs_floor_only", AgenticMode, 10, 1_000, AgenticMode, 0, 50_000, true},
-		{"agentic_at_gcs_floor_only", AgenticMode, 10, 50_000, AgenticMode, 0, 50_000, false},
-		{"agentic_above_gcs_floor_only", AgenticMode, 10, 200_000, AgenticMode, 0, 50_000, false},
-		{"agentic_meets_calls_misses_gcs", AgenticMode, 5, 10_000, AgenticMode, 5, 50_000, true},
-		{"agentic_misses_calls_meets_gcs", AgenticMode, 1, 200_000, AgenticMode, 5, 50_000, true},
-		{"agentic_meets_both", AgenticMode, 5, 50_000, AgenticMode, 5, 50_000, false},
-		{"universal_below_gcs_floor", UniversalMode, 10, 1_000, UniversalMode, 0, 50_000, true},
+		{"agentic_below_calls_floor", AgenticMode, 0, 0, 3, 0, true},
+		{"agentic_at_calls_floor", AgenticMode, 3, 0, 3, 0, false},
+		{"agentic_above_calls_floor", AgenticMode, 5, 0, 3, 0, false},
+		{"agentic_zero_floors_no_invalidation", AgenticMode, 0, 0, 0, 0, false},
+		{"stale_mode_always_reanalyzes", "curator", 5, 200_000, 0, 0, true},
+		{"empty_mode_always_reanalyzes", "", 5, 200_000, 0, 0, true},
+		{"agentic_below_gcs_floor_only", AgenticMode, 10, 1_000, 0, 50_000, true},
+		{"agentic_at_gcs_floor_only", AgenticMode, 10, 50_000, 0, 50_000, false},
+		{"agentic_above_gcs_floor_only", AgenticMode, 10, 200_000, 0, 50_000, false},
+		{"agentic_meets_calls_misses_gcs", AgenticMode, 5, 10_000, 5, 50_000, true},
+		{"agentic_misses_calls_meets_gcs", AgenticMode, 1, 200_000, 5, 50_000, true},
+		{"agentic_meets_both", AgenticMode, 5, 50_000, 5, 50_000, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -279,19 +198,17 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 			testCase := &models.TestCase{
 				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS},
 			}
-			if got := s.shouldReanalyze(testCase, tc.desiredMode); got != tc.want {
-				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) desired=%q floors(calls=%d, gcs=%d) = %v, want %v",
-					tc.cachedMode, tc.cachedCalls, tc.cachedGCS, tc.desiredMode, tc.minToolCalls, tc.minGCSBytes, got, tc.want)
+			if got := s.shouldReanalyze(testCase); got != tc.want {
+				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) floors(calls=%d, gcs=%d) = %v, want %v",
+					tc.cachedMode, tc.cachedCalls, tc.cachedGCS, tc.minToolCalls, tc.minGCSBytes, got, tc.want)
 			}
 		})
 	}
 }
 
 // TestService_BelowFloor_ReanalyzesBuildCacheEntry exercises the full Analyze
-// path: a build-cached agentic-universal analysis with ToolCalls below the
-// current floor must trigger a fresh API call instead of being served from
-// the build cache. Regression for the bug where shouldReanalyze only checked
-// Mode and let pre-floor zero-tool entries bypass the floor forever.
+// path: a build-cached agentic analysis with ToolCalls below the current floor
+// must trigger a fresh API call instead of being served from the build cache.
 func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -304,14 +221,14 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(
 		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1},
-		&fakeFactory{}, registry, enabled, true, true, /* universalPath */
+		&fakeFactory{}, registry, enabled,
 	)
 
-	// Pre-floor cached universal analysis with ToolCalls=0 already attached
-	// to the test case (as it would be after loading data/jobs/*.json).
+	// Pre-floor cached agentic analysis with ToolCalls=0 already attached to
+	// the test case (as it would be after loading data/jobs/*.json).
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale zero-tool"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale", Mode: UniversalMode, ToolCalls: 0}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale", Mode: AgenticMode, ToolCalls: 0}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -348,5 +265,4 @@ func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 
 // Ensure stubModule satisfies the Module interface (compile-time check).
 var _ Module = (*stubModule)(nil)
-var _ AgenticPreferrer = (*stubPreferrer)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)

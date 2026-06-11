@@ -53,7 +53,6 @@ type Options struct {
 	IncludePresubmits bool
 	EnableAI          bool
 	Collectors        *CollectorRegistry
-	AIModules         *AIModuleRegistry
 }
 
 // Run executes the full pipeline: load → discover → fetch → aggregate →
@@ -64,9 +63,6 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.Collectors == nil {
 		return fmt.Errorf("fetcher.Options.Collectors registry is required")
 	}
-	if opts.AIModules == nil {
-		return fmt.Errorf("fetcher.Options.AIModules registry is required")
-	}
 
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
@@ -75,17 +71,11 @@ func Run(ctx context.Context, opts Options) error {
 	log.Printf("Project: %s (%s) dashboard=%s bucket=%s",
 		cfg.Name, cfg.DisplayShortName(), cfg.TestGrid.Dashboard, cfg.GCS.Bucket)
 
-	// Validate plugin references against the registries up front so a typo'd
-	// artifacts.collector or ai.module fails before any expensive work.
-	// ai.module is checked regardless of -ai so misconfigurations surface in
-	// every run, matching the old project.Validate behavior.
+	// Validate the collector reference against the registry up front so a
+	// typo'd artifacts.collector fails before any expensive work.
 	if !opts.Collectors.Has(cfg.CollectorName()) {
 		return fmt.Errorf("unknown artifacts.collector %q (registered: %s)",
 			cfg.CollectorName(), strings.Join(opts.Collectors.Names(), ", "))
-	}
-	if cfg.AI != nil && strings.TrimSpace(cfg.AI.Module) != "" && !cfg.AI.UseUniversalPath && !opts.AIModules.Has(cfg.AI.Module) {
-		return fmt.Errorf("unknown ai.module %q (registered: %s)",
-			cfg.AI.Module, strings.Join(opts.AIModules.Names(), ", "))
 	}
 
 	var aiSystemPrompt string
@@ -240,7 +230,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Step 5: AI failure analysis (optional).
 	if opts.EnableAI {
-		analyzeFailuresWithAI(ctx, cfg, opts.AIModules, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt, aiSkillSet)
+		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt, aiSkillSet)
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
@@ -341,9 +331,9 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 }
 
 // fetchBuildResult fetches metadata and JUnit XML for a single build, then
-// delegates per-test artifact discovery to the configured collector. When
-// the project opts into use_universal_path, collector discovery is skipped
-// entirely (the agent walks artifacts on demand via tools).
+// delegates per-test artifact discovery to the configured collector (a no-op
+// for the default generic collector; the agentic loop fetches what it needs
+// via tools).
 func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, build gcsweb.Build) (*models.BuildResult, error) {
 	loc := gcs.BuildLocation{
 		JobLocation: gcs.JobLocation{JobType: job.JobType, Repo: job.Repo},
@@ -395,10 +385,8 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 		}
 	}
 
-	if cfg == nil || cfg.AI == nil || !cfg.AI.UseUniversalPath {
-		if err := collector.CollectArtifacts(ctx, loc, result); err != nil {
-			log.Printf("    ⚠ %s/%s: collector %s: %v", job.Name, build.ID, collector.Name(), err)
-		}
+	if err := collector.CollectArtifacts(ctx, loc, result); err != nil {
+		log.Printf("    ⚠ %s/%s: collector %s: %v", job.Name, build.ID, collector.Name(), err)
 	}
 
 	return result, nil
@@ -429,8 +417,9 @@ const (
 	gcsByteBudget = 1_000_000_000
 )
 
-// analyzeFailuresWithAI runs AI analysis on every failed test case.
-func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AIModuleRegistry, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir, systemPrompt string, skillSet *skills.Set) {
+// analyzeFailuresWithAI runs the agentic AI analysis on every failed test
+// case. The agentic tool-calling loop is the only analysis path.
+func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir, systemPrompt string, skillSet *skills.Set) {
 	aiClient := ai.NewClientWithOptions(ai.Options{
 		Token:        token,
 		CacheDir:     outDir,
@@ -449,114 +438,74 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
 	}
 
-	useUniversal := cfg != nil && cfg.AI != nil && cfg.AI.UseUniversalPath
-
-	var module ai.Module
-	if useUniversal {
-		module = universal.New()
-	} else {
-		m, err := modules.Build(cfg)
-		if err != nil {
-			// AI module registry was already validated in Run; reaching here
-			// means a programming error in fallback wiring rather than a
-			// recoverable config issue.
-			log.Printf("AI module build failed: %v; skipping AI analysis", err)
-			return
-		}
-		module = m
-	}
+	module := universal.New()
 	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
-	if cfg != nil && (useUniversal || cfg.AI.Agentic != nil) {
-		var eff project.Agentic
-		if cfg.AI.Agentic != nil {
-			eff = cfg.AI.Agentic.EffectiveAgentic()
-		} else {
-			eff = (&project.Agentic{}).EffectiveAgentic()
-		}
-		// Universal path implies agentic; force-enable regardless of
-		// agentic.enabled and treat it as always-on.
-		if useUniversal {
-			eff.Enabled = true
-			eff.Always = true
-		}
-		if eff.Enabled {
-			// Recipe files feed the critique gate, so shipping them is the
-			// opt-in for both the recipes and the gate they need: auto-enable
-			// critique when recipes are present (an explicit critique block
-			// still supplies max_retries via EffectiveAgentic).
-			if !eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
-				eff.Critique.Enabled = true
-				log.Printf("🧪 %d skill recipe(s) present; auto-enabling the critique gate they feed", len(skillSet.Skills()))
-			}
-			// Size the byte budgets from the endpoint's reported context
-			// window. The window is the source of truth (Dynamo enforces it
-			// as a hard limit), so these are derived, not configured. Falls
-			// back to a static model budget with compaction off when the
-			// endpoint doesn't report a window (e.g. Copilot).
-			modelByteBudget := fallbackModelByteBudget
-			contextByteBudget := 0
-			if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
-				windowBytes := tokens * avgBytesPerToken
-				modelByteBudget = windowBytes * modelBudgetWindowPct / 100
-				contextByteBudget = windowBytes * contextBudgetWindowPct / 100
-				log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
-					tokens, windowBytes/1024, modelByteBudget/1024, contextByteBudget/1024)
-			}
-			factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
-			registry := tools.NewRegistry()
-			filesystem.Register(registry)
-			k8s.Register(registry)
-			toolNames := eff.Tools
-			if len(toolNames) == 0 {
-				toolNames = []string{"filesystem", "k8s"}
-			}
-			enabled, err := registry.Enable(toolNames)
-			if err != nil {
-				if useUniversal {
-					log.Printf("⚠ Tool registry enable failed under use_universal_path (%v); AI analysis will mark failures unavailable", err)
-				} else {
-					log.Printf("⚠ Tool registry enable failed (%v); skipping agentic", err)
-				}
-			} else {
-				service.EnableAgentic(ai.AgenticOptions{
-					MaxIters:           eff.MaxIters,
-					ModelByteBudget:    modelByteBudget,
-					GCSByteBudget:      gcsByteBudget,
-					Timeout:            eff.Timeout,
-					ContextByteBudget:  contextByteBudget,
-					MinToolCalls:       eff.MinToolCalls,
-					MinGCSBytes:        eff.MinGCSBytes,
-					CritiqueEnabled:    eff.Critique.Enabled,
-					CritiqueMaxRetries: eff.Critique.MaxRetries,
-					SingleToolCall:     eff.SingleToolCall,
-					EvidenceInjection:  eff.EvidenceInjection,
-				}, factory, registry, enabled, eff.Always, useUniversal)
-				// Hand the loaded recipe set to the service. nil-safe;
-				// with no recipes the service skips skill matching.
-				service.SetSkills(skillSet)
-				critiqueLog := "off"
-				if eff.Critique.Enabled {
-					critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
-				}
-				skillsLog := "off"
-				if eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
-					skillsLog = fmt.Sprintf("on/%d", len(skillSet.Skills()))
-				}
-				if useUniversal {
-					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
-				} else {
-					mode := "module-opt-in"
-					if eff.Always {
-						mode = "always"
-					}
-					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						mode, eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
-				}
-			}
-		}
+
+	eff := cfg.AI.EffectiveAgentic()
+	// Recipe files feed the critique gate, so shipping them is the opt-in
+	// for both the recipes and the gate they need: auto-enable critique when
+	// recipes are present (an explicit critique block still supplies
+	// max_retries via EffectiveAgentic).
+	if !eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+		eff.Critique.Enabled = true
+		log.Printf("🧪 %d skill recipe(s) present; auto-enabling the critique gate they feed", len(skillSet.Skills()))
 	}
-	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())
+	// Size the byte budgets from the endpoint's reported context window. The
+	// window is the source of truth (Dynamo enforces it as a hard limit), so
+	// these are derived, not configured. Falls back to a static model budget
+	// with compaction off when the endpoint doesn't report a window (e.g.
+	// Copilot).
+	modelByteBudget := fallbackModelByteBudget
+	contextByteBudget := 0
+	if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
+		windowBytes := tokens * avgBytesPerToken
+		modelByteBudget = windowBytes * modelBudgetWindowPct / 100
+		contextByteBudget = windowBytes * contextBudgetWindowPct / 100
+		log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
+			tokens, windowBytes/1024, modelByteBudget/1024, contextByteBudget/1024)
+	}
+	factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
+	registry := tools.NewRegistry()
+	filesystem.Register(registry)
+	k8s.Register(registry)
+	toolNames := eff.Tools
+	if len(toolNames) == 0 {
+		toolNames = []string{"filesystem", "k8s"}
+	}
+	enabled, err := registry.Enable(toolNames)
+	if err != nil {
+		// Without tools there is no analysis path; failures will be marked
+		// AI-unavailable when Analyze finds no browser/registry configured.
+		log.Printf("⚠ Tool registry enable failed (%v); AI analysis will mark failures unavailable", err)
+	} else {
+		service.EnableAgentic(ai.AgenticOptions{
+			MaxIters:           eff.MaxIters,
+			ModelByteBudget:    modelByteBudget,
+			GCSByteBudget:      gcsByteBudget,
+			Timeout:            eff.Timeout,
+			ContextByteBudget:  contextByteBudget,
+			MinToolCalls:       eff.MinToolCalls,
+			MinGCSBytes:        eff.MinGCSBytes,
+			CritiqueEnabled:    eff.Critique.Enabled,
+			CritiqueMaxRetries: eff.Critique.MaxRetries,
+			SingleToolCall:     eff.SingleToolCall,
+			EvidenceInjection:  eff.EvidenceInjection,
+		}, factory, registry, enabled)
+		// Hand the loaded recipe set to the service. nil-safe; with no
+		// recipes the service skips skill matching.
+		service.SetSkills(skillSet)
+		critiqueLog := "off"
+		if eff.Critique.Enabled {
+			critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
+		}
+		skillsLog := "off"
+		if eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+			skillsLog = fmt.Sprintf("on/%d", len(skillSet.Skills()))
+		}
+		log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+			eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+	}
+	log.Printf("Using AI endpoint: %s, model: %s", aiClient.Endpoint(), aiClient.ModelName())
 
 	var totalFailures int
 	for _, d := range details {

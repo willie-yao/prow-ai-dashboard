@@ -297,33 +297,26 @@ func assertValidate(t *testing.T, c *Config, wantSub string) {
 }
 
 func TestAgentic_Effective(t *testing.T) {
-	t.Run("nil receiver returns defaults with Enabled=false", func(t *testing.T) {
-		got := (*Agentic)(nil).EffectiveAgentic()
+	// eff resolves agentic tuning the way the fetcher does: inline under AI.
+	eff := func(a Agentic) Agentic { return (&AI{Agentic: a}).EffectiveAgentic() }
+
+	t.Run("nil receiver returns defaults", func(t *testing.T) {
+		got := (*AI)(nil).EffectiveAgentic()
 		if !agenticEqual(got, DefaultAgentic) {
 			t.Errorf("got %+v, want defaults %+v", got, DefaultAgentic)
 		}
 	})
 	t.Run("zero struct returns defaults", func(t *testing.T) {
-		got := (&Agentic{}).EffectiveAgentic()
+		got := eff(Agentic{})
 		if !agenticEqual(got, DefaultAgentic) {
 			t.Errorf("got %+v, want defaults %+v", got, DefaultAgentic)
 		}
 	})
-	t.Run("Enabled flips through", func(t *testing.T) {
-		got := (&Agentic{Enabled: true}).EffectiveAgentic()
-		if !got.Enabled {
-			t.Error("Enabled = false, want true")
-		}
-		if got.MaxIters != DefaultAgentic.MaxIters {
-			t.Errorf("MaxIters = %d, want default %d", got.MaxIters, DefaultAgentic.MaxIters)
-		}
-	})
 	t.Run("explicit limits override defaults", func(t *testing.T) {
-		got := (&Agentic{
-			Enabled:  true,
+		got := eff(Agentic{
 			MaxIters: 7,
 			Timeout:  30 * time.Second,
-		}).EffectiveAgentic()
+		})
 		if got.MaxIters != 7 {
 			t.Errorf("MaxIters = %d, want 7", got.MaxIters)
 		}
@@ -332,65 +325,61 @@ func TestAgentic_Effective(t *testing.T) {
 		}
 	})
 	t.Run("SingleToolCall flips through", func(t *testing.T) {
-		if (&Agentic{Enabled: true}).EffectiveAgentic().SingleToolCall {
+		if eff(Agentic{}).SingleToolCall {
 			t.Error("SingleToolCall should default to false")
 		}
-		if !(&Agentic{Enabled: true, SingleToolCall: true}).EffectiveAgentic().SingleToolCall {
+		if !eff(Agentic{SingleToolCall: true}).SingleToolCall {
 			t.Error("SingleToolCall=true should pass through")
 		}
 	})
 	t.Run("EvidenceInjection flips through", func(t *testing.T) {
-		if (&Agentic{Enabled: true}).EffectiveAgentic().EvidenceInjection {
+		if eff(Agentic{}).EvidenceInjection {
 			t.Error("EvidenceInjection should default to false")
 		}
-		if !(&Agentic{Enabled: true, EvidenceInjection: true}).EffectiveAgentic().EvidenceInjection {
+		if !eff(Agentic{EvidenceInjection: true}).EvidenceInjection {
 			t.Error("EvidenceInjection=true should pass through")
 		}
 	})
 	t.Run("Tools list passes through", func(t *testing.T) {
-		in := &Agentic{Tools: []string{"filesystem"}}
+		in := &AI{Agentic: Agentic{Tools: []string{"filesystem"}}}
 		got := in.EffectiveAgentic()
 		if !equalStrings(got.Tools, []string{"filesystem"}) {
 			t.Errorf("Tools = %v, want [filesystem]", got.Tools)
 		}
 		// Mutate input slice; effective copy must NOT change.
-		in.Tools[0] = "mutated"
+		in.Agentic.Tools[0] = "mutated"
 		if got.Tools[0] != "filesystem" {
 			t.Errorf("EffectiveAgentic returned aliased slice; got %v after mutation", got.Tools)
 		}
 	})
 	t.Run("empty Tools falls back to default empty", func(t *testing.T) {
-		got := (&Agentic{}).EffectiveAgentic()
+		got := eff(Agentic{})
 		if len(got.Tools) != 0 {
 			t.Errorf("Tools = %v, want empty", got.Tools)
 		}
 	})
 	t.Run("MinToolCalls defaults to zero", func(t *testing.T) {
-		got := (&Agentic{Enabled: true}).EffectiveAgentic()
-		if got.MinToolCalls != 0 {
+		if got := eff(Agentic{}); got.MinToolCalls != 0 {
 			t.Errorf("MinToolCalls = %d, want 0", got.MinToolCalls)
 		}
 	})
 	t.Run("MinToolCalls passes through when set", func(t *testing.T) {
-		got := (&Agentic{Enabled: true, MinToolCalls: 3}).EffectiveAgentic()
-		if got.MinToolCalls != 3 {
+		if got := eff(Agentic{MinToolCalls: 3}); got.MinToolCalls != 3 {
 			t.Errorf("MinToolCalls = %d, want 3", got.MinToolCalls)
 		}
 	})
 	t.Run("MinGCSBytes defaults to zero", func(t *testing.T) {
-		got := (&Agentic{Enabled: true}).EffectiveAgentic()
-		if got.MinGCSBytes != 0 {
+		if got := eff(Agentic{}); got.MinGCSBytes != 0 {
 			t.Errorf("MinGCSBytes = %d, want 0", got.MinGCSBytes)
 		}
 	})
 	t.Run("MinGCSBytes passes through when set", func(t *testing.T) {
-		got := (&Agentic{Enabled: true, MinGCSBytes: 200_000}).EffectiveAgentic()
-		if got.MinGCSBytes != 200_000 {
+		if got := eff(Agentic{MinGCSBytes: 200_000}); got.MinGCSBytes != 200_000 {
 			t.Errorf("MinGCSBytes = %d, want 200000", got.MinGCSBytes)
 		}
 	})
 	t.Run("Critique disabled by default with default max retries", func(t *testing.T) {
-		got := (&Agentic{Enabled: true}).EffectiveAgentic()
+		got := eff(Agentic{})
 		if got.Critique.Enabled {
 			t.Error("Critique.Enabled = true, want false (default)")
 		}
@@ -399,7 +388,7 @@ func TestAgentic_Effective(t *testing.T) {
 		}
 	})
 	t.Run("Critique.Enabled flips through", func(t *testing.T) {
-		got := (&Agentic{Enabled: true, Critique: AgenticCritique{Enabled: true}}).EffectiveAgentic()
+		got := eff(Agentic{Critique: AgenticCritique{Enabled: true}})
 		if !got.Critique.Enabled {
 			t.Error("Critique.Enabled = false, want true")
 		}
@@ -409,10 +398,7 @@ func TestAgentic_Effective(t *testing.T) {
 		}
 	})
 	t.Run("Critique.MaxRetries passes through when set", func(t *testing.T) {
-		got := (&Agentic{
-			Enabled:  true,
-			Critique: AgenticCritique{Enabled: true, MaxRetries: 5},
-		}).EffectiveAgentic()
+		got := eff(Agentic{Critique: AgenticCritique{Enabled: true, MaxRetries: 5}})
 		if got.Critique.MaxRetries != 5 {
 			t.Errorf("Critique.MaxRetries = %d, want 5", got.Critique.MaxRetries)
 		}
@@ -422,9 +408,7 @@ func TestAgentic_Effective(t *testing.T) {
 // agenticEqual compares two Agentic structs without using ==, which would
 // fail to compile once Tools (a slice) was added.
 func agenticEqual(a, b Agentic) bool {
-	return a.Enabled == b.Enabled &&
-		a.Always == b.Always &&
-		a.MaxIters == b.MaxIters &&
+	return a.MaxIters == b.MaxIters &&
 		a.Timeout == b.Timeout &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
@@ -463,31 +447,9 @@ func TestAnalysisConcurrency_HonorsConfiguredValue(t *testing.T) {
 	}
 }
 
-// ---------- use_universal_path semantics ----------
-
-func TestValidate_UniversalModuleRequiresUniversalPath(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{Module: "universal"}
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("expected error when ai.module=universal without use_universal_path")
-	}
-	if !strings.Contains(err.Error(), "use_universal_path") {
-		t.Errorf("error %q should mention use_universal_path", err.Error())
-	}
-}
-
-func TestValidate_UniversalModuleWithFlagPasses(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{Module: "universal", UseUniversalPath: true}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("validation should pass when use_universal_path is true: %v", err)
-	}
-}
-
 func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
 	c := validConfig()
-	c.AI = &AI{Agentic: &Agentic{Enabled: true, EvidenceInjection: true}}
+	c.AI = &AI{Agentic: Agentic{EvidenceInjection: true}}
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error when evidence_injection without critique.enabled")
@@ -502,25 +464,22 @@ func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
 	}
 }
 
-func TestValidate_UniversalCaseInsensitive(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{Module: "Universal"} // capitalized; should still error
-	if err := c.Validate(); err == nil {
-		t.Fatal("expected error for case-insensitive universal without flag")
-	}
-}
-
-func TestParse_UseUniversalPathField(t *testing.T) {
-	yml := validYAML + "\nai:\n  use_universal_path: true\n  agentic:\n    enabled: true\n    tools: [filesystem]\n"
+// TestParse_AgenticInlineFields confirms the agentic tuning parses from flat
+// keys directly under ai: (no nested agentic: block).
+func TestParse_AgenticInlineFields(t *testing.T) {
+	yml := validYAML + "\nai:\n  max_iters: 20\n  tools: [filesystem]\n"
 	c, err := parse(strings.NewReader(yml))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if c.AI == nil || !c.AI.UseUniversalPath {
-		t.Errorf("UseUniversalPath = %v, want true", c.AI != nil && c.AI.UseUniversalPath)
+	if c.AI == nil {
+		t.Fatal("AI is nil")
 	}
-	if c.AI.Agentic == nil || !equalStrings(c.AI.Agentic.Tools, []string{"filesystem"}) {
-		t.Errorf("Agentic.Tools = %v, want [filesystem]", c.AI.Agentic)
+	if c.AI.Agentic.MaxIters != 20 {
+		t.Errorf("MaxIters = %d, want 20", c.AI.Agentic.MaxIters)
+	}
+	if !equalStrings(c.AI.Agentic.Tools, []string{"filesystem"}) {
+		t.Errorf("Tools = %v, want [filesystem]", c.AI.Agentic.Tools)
 	}
 }
 
@@ -537,13 +496,13 @@ func equalStrings(a, b []string) bool {
 }
 
 func TestParse_AgenticTimeoutField(t *testing.T) {
-	yml := validYAML + "\nai:\n  agentic:\n    enabled: true\n    timeout: 8m\n"
+	yml := validYAML + "\nai:\n  timeout: 8m\n"
 	c, err := parse(strings.NewReader(yml))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if c.AI == nil || c.AI.Agentic == nil {
-		t.Fatal("AI.Agentic is nil")
+	if c.AI == nil {
+		t.Fatal("AI is nil")
 	}
 	if c.AI.Agentic.Timeout != 8*time.Minute {
 		t.Errorf("Agentic.Timeout = %v, want 8m", c.AI.Agentic.Timeout)

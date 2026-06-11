@@ -9,7 +9,6 @@ Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 
 ```yaml
 ai:
-  module: "capi"          # Required. Selects the prompt & evidence module.
   endpoint: "..."         # Optional. Chat-completions URL. Defaults to Copilot.
   model: "..."            # Optional. Model identifier the endpoint expects.
   headers:                # Optional. Extra HTTP headers merged into every call.
@@ -41,7 +40,6 @@ when the yaml fields are blank.
 ```yaml
 # In the consumer repo's project.yaml
 ai:
-  module: "capi"
   # endpoint and model intentionally omitted; supplied via repo
   # variables on the consumer (see the deploy workflow).
 ```
@@ -84,7 +82,6 @@ your fine-grained PAT with the `copilot_chat` user permission.
 
 ```yaml
 ai:
-  module: "capi"
   endpoint: "https://api.githubcopilot.com/chat/completions"
   model: "claude-opus-4.7-xhigh"
 ```
@@ -111,7 +108,6 @@ when (and only when) the endpoint's host is `*.githubcopilot.com`.
 
 ```yaml
 ai:
-  module: "capi"
   endpoint: "https://api.openai.com/v1/chat/completions"
   model: "gpt-4o"
 ```
@@ -126,7 +122,6 @@ the default bearer scheme:
 
 ```yaml
 ai:
-  module: "capi"
   endpoint: "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
   model: "gpt-4o"
   headers:
@@ -143,7 +138,6 @@ NIMs accept the OpenAI schema. Use the model name your NIM exposes:
 
 ```yaml
 ai:
-  module: "capi"
   endpoint: "https://integrate.api.nvidia.com/v1/chat/completions"
   model: "meta/llama-3.1-70b-instruct"
 ```
@@ -157,7 +151,6 @@ Any OpenAI-compatible server works. For Ollama:
 
 ```yaml
 ai:
-  module: "capi"
   endpoint: "http://localhost:11434/v1/chat/completions"
   model: "llama3.1"
 ```
@@ -173,35 +166,24 @@ return stale cached responses from the previous model until the cache is
 cleared. Run the project's `clear-cache.yml` workflow after changing
 `endpoint` or `model` if you want fresh analyses.
 
-Switching `ai.agentic.enabled` on or off does NOT need a cache clear:
-the engine records the analysis mode (`curator` or `agentic`) on each
-cached entry and re-analyzes the failure when the cached mode no longer
-matches the desired mode. Switching mode therefore self-heals over one
-fetcher run.
+Switching providers does NOT change the analysis mode: the engine always
+runs the agentic loop. Cached entries simply re-analyze when the cached
+`mode` no longer matches, which self-heals over one fetcher run.
 
-## Function-calling support (required for agentic mode)
+## Function-calling support (required)
 
-Agentic mode (see [agentic.md](agentic.md)) sends an OpenAI-style
-`tools` field on every request and expects `tool_calls` back from the
-model. The engine probes lazily: the first agentic call to an endpoint
-that returns HTTP 400/422 with a tools-related error is treated as a
-capability miss; the fetcher falls back to the curator pipeline for
-the rest of that run and logs `AI endpoint rejected tools`. Verified
-endpoints: GitHub Copilot, OpenAI, Azure OpenAI, and tool-calling
-Ollama / NIM models (per-model). Curator mode has no function-calling
-requirement.
+The engine sends an OpenAI-style `tools` field on every request and expects
+`tool_calls` back from the model. There is no tools-free fallback: the first
+agentic call to an endpoint that returns HTTP 400/422 with a tools-related
+error is treated as a capability miss, and every failure that run surfaces as
+an "AI analysis unavailable" summary (the fetcher logs `AI endpoint rejected
+tools`). Verified endpoints: GitHub Copilot, OpenAI, Azure OpenAI, and
+tool-calling Ollama / NIM models (per-model).
 
 ## Cost and latency notes
 
-Each non-transient failure triggers one chat-completion call in
-curator mode (the default). The regex transient-failure triage in each
-module runs first and is free, so flaky runs (Azure throttling,
-image-pull retries, etc.) skip the model entirely.
-
-Token use per call (curator mode): roughly 3-15k input tokens
-(depending on how much debug-log evidence the module ships) and
-200-800 output tokens. Most providers price the input dominant.
-
-Agentic mode uses roughly 50-150k input tokens and 30-90 seconds of
-wall clock per failure (vs 5-15s for curator). Enable it selectively;
-see [agentic.md](agentic.md) for cost-control knobs.
+Each non-transient failure triggers one agentic investigation (a sequence of
+chat-completion calls). Roughly 50-150k input tokens and 30-90 seconds of
+wall clock per failure, depending on artifact size and how deep the model
+digs. Most providers price the input dominant. See
+[agentic.md](agentic.md) for cost-control knobs (`max_iters`, `concurrency`).

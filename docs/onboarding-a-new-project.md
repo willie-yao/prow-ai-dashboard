@@ -67,8 +67,8 @@ so you know what you're working with.
    go build -o /tmp/fetcher ./cmd/fetcher
    ```
 2. Write a throwaway `project.yaml` with the minimum fields:
-   `testgrid.dashboard`, `gcs.bucket`, `branding.*`, `artifacts.collector`,
-   `ai.module`. Job discovery is fully automatic, the engine lists every
+   `testgrid.dashboard`, `gcs.bucket`, `branding.*`. Job discovery is
+   fully automatic, the engine lists every
    YAML under `kubernetes/test-infra/config/jobs/` at the current `master`
    commit and keeps the jobs whose `testgrid-dashboards` annotation matches
    yours, so you do not enumerate paths or filename prefixes. Leave the
@@ -129,31 +129,18 @@ The optional `category_display_order` lets you order sections in the
 UI independently of match precedence. Only meaningful when
 `categories:` is declared.
 
-### `ai.module` (optional)
+### `ai` (agentic analysis)
 
-Defaults to `generic`. The engine registers `generic` as the only built-
-in module today. Custom modules can be added under
-`backend/internal/ai/modules/` and wired in `cmd/fetcher/main.go`, but
-the typical onboarding path uses `use_universal_path: true` (below) and
-ignores this field entirely.
+The engine analyzes every failure with the agentic tool-calling loop: the
+LLM browses the build's GCS artifact tree itself via the registered tools
+(filesystem + k8s by default). It requires an endpoint that supports
+OpenAI-style function calling; there is no tools-free fallback.
 
-### `ai.use_universal_path` (recommended)
-
-When `true`, the engine bypasses the module-routed pipeline and lets
-the LLM browse the build's GCS artifact tree itself via the registered
-tools (filesystem + k8s by default). Requires an endpoint that supports
-OpenAI-style function calling; there is no curator fallback.
-
-This is the path both CAPZ dashboards use today and the recommended
-starting point for new consumers. See [docs/agentic.md](agentic.md)
-for the full agentic config schema.
-
-### `ai.agentic` (optional)
-
-Tunes the agentic loop's per-failure budgets, evidence floors, critique
-gate, and skill-set integration. The common starting point is
-`agentic: { enabled: true, tools: [filesystem, k8s] }`; everything
-else has sensible engine defaults. See [docs/agentic.md](agentic.md).
+All tuning is inlined directly under `ai:` (per-failure budgets, evidence
+floors, critique gate, tool selection). The common starting point is just
+`ai: { tools: [filesystem, k8s] }` plus your endpoint/model; everything else
+has sensible engine defaults. See [docs/agentic.md](agentic.md) for the full
+config schema.
 
 ## Step 2: `prompts/system.md`
 

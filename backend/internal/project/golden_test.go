@@ -37,8 +37,8 @@ func TestLoadExampleGolden(t *testing.T) {
 			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
 		}
 	}
-	if cfg.AI == nil || cfg.AI.Module != "generic" {
-		t.Errorf("AI.Module wrong: %+v", cfg.AI)
+	if cfg.AI == nil {
+		t.Errorf("AI config missing: %+v", cfg)
 	}
 	if prompt == "" {
 		t.Error("LoadDir returned empty prompt; expected example/prompts/system.md content")

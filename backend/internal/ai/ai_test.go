@@ -118,142 +118,6 @@ func TestExtractJSON(t *testing.T) {
 	}
 }
 
-// ---------- Mock API tests ----------
-
-func newMockServer(t *testing.T, response string) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, response)
-	}))
-}
-
-func newTestClient(t *testing.T, serverURL string) *Client {
-	t.Helper()
-	c := NewClient("test-token", t.TempDir())
-	c.apiURL = serverURL
-	return c
-}
-
-func TestAnalyzeWithMock(t *testing.T) {
-	jsonResp := `{"summary":"Kubelet failed to start due to expired cert.","is_transient":false,"root_cause":"Kubelet client cert expired","severity":"High","suggested_fix":"Rotate cert","relevant_files":["kubelet.conf"]}`
-	srv := newMockServer(t, jsonResp)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	ctx := context.Background()
-
-	summary, analysis, err := client.doAnalyze(ctx, "comprehensive:abc123", "system", "user prompt")
-	if err != nil {
-		t.Fatalf("doAnalyze: %v", err)
-	}
-	if summary.Summary != "Kubelet failed to start due to expired cert." {
-		t.Errorf("unexpected summary: %q", summary.Summary)
-	}
-	if summary.IsTransient {
-		t.Error("expected is_transient=false")
-	}
-	if summary.GeneratedAt == "" {
-		t.Error("expected generated_at to be set on summary")
-	}
-	if analysis.RootCause != "Kubelet client cert expired" {
-		t.Errorf("unexpected root_cause: %q", analysis.RootCause)
-	}
-	if analysis.Severity != "High" {
-		t.Errorf("unexpected severity: %q", analysis.Severity)
-	}
-	if analysis.SuggestedFix != "Rotate cert" {
-		t.Errorf("unexpected suggested_fix: %q", analysis.SuggestedFix)
-	}
-	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "kubelet.conf" {
-		t.Errorf("unexpected relevant_files: %v", analysis.RelevantFiles)
-	}
-	if analysis.Model != Model {
-		t.Errorf("unexpected model: %q", analysis.Model)
-	}
-	if analysis.CacheHit {
-		t.Error("expected cache_hit=false on first call")
-	}
-	if analysis.ElapsedMs < 0 {
-		t.Errorf("expected non-negative elapsed_ms, got %d", analysis.ElapsedMs)
-	}
-	if analysis.ModelBytes <= 0 {
-		t.Errorf("expected positive model_bytes on curator path, got %d", analysis.ModelBytes)
-	}
-	if analysis.ToolCalls != 0 {
-		t.Errorf("expected tool_calls=0 on curator path, got %d", analysis.ToolCalls)
-	}
-	if analysis.GCSBytes != 0 {
-		t.Errorf("expected gcs_bytes=0 on curator path, got %d", analysis.GCSBytes)
-	}
-}
-
-func TestAnalyzeFallbackSummaryFromRootCause(t *testing.T) {
-	// Model omits the "summary" field — derive it from root_cause.
-	jsonResp := `{"root_cause":"Azure quota exceeded for VM size Standard_D4s_v3. Request quota increase.","severity":"High","suggested_fix":"File quota ticket"}`
-	srv := newMockServer(t, jsonResp)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	summary, _, err := client.doAnalyze(context.Background(), "comprehensive:fallback", "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyze: %v", err)
-	}
-	want := "Azure quota exceeded for VM size Standard_D4s_v3."
-	if summary.Summary != want {
-		t.Errorf("expected derived summary %q, got %q", want, summary.Summary)
-	}
-}
-
-func TestCacheHitSkipsAPICall(t *testing.T) {
-	callCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`,
-			`{"summary":"CNI misconfig.","is_transient":false,"root_cause":"A real bug in CNI configuration.","severity":"High","suggested_fix":"x","relevant_files":[]}`)
-	}))
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	ctx := context.Background()
-
-	// First call hits the API.
-	s1, a1, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
-	if err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	if callCount != 1 {
-		t.Fatalf("expected 1 API call, got %d", callCount)
-	}
-	if a1.CacheHit {
-		t.Error("expected cache_hit=false on first call")
-	}
-
-	// Second call uses the cache.
-	s2, a2, err := client.doAnalyze(ctx, "comprehensive:cni", "sys", "user")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if callCount != 1 {
-		t.Fatalf("expected still 1 API call (cache hit), got %d", callCount)
-	}
-	if !a2.CacheHit {
-		t.Error("expected cache_hit=true on second call")
-	}
-	if a2.ModelBytes != 0 {
-		t.Errorf("expected model_bytes=0 on cache hit (no model call), got %d", a2.ModelBytes)
-	}
-
-	if s1.Summary != s2.Summary {
-		t.Error("cached summary should match original")
-	}
-}
-
 // ---------- Pluggable endpoint / header tests ----------
 
 func TestNewClientWithOptionsDefaults(t *testing.T) {
@@ -316,8 +180,8 @@ func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClientWithOptions(Options{Token: "tok", CacheDir: t.TempDir(), Endpoint: srv.URL, Model: "m"})
-	if _, err := c.callAPI(context.Background(), "m", "sys", "user"); err != nil {
-		t.Fatalf("callAPI: %v", err)
+	if _, err := c.callChatWithTools(context.Background(), []agChatMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatalf("callChatWithTools: %v", err)
 	}
 	if got != "" {
 		t.Errorf("expected no Copilot-Integration-Id header for %q, got %q", srv.URL, got)
@@ -345,8 +209,8 @@ func TestCallAPICustomHeaders(t *testing.T) {
 			"api-key":         "azure-key",
 		},
 	})
-	if _, err := c.callAPI(context.Background(), "m", "sys", "user"); err != nil {
-		t.Fatalf("callAPI: %v", err)
+	if _, err := c.callChatWithTools(context.Background(), []agChatMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatalf("callChatWithTools: %v", err)
 	}
 
 	if gotAuth != "Bearer secret-bearer" {
@@ -378,8 +242,8 @@ func TestCallAPIExtraHeadersOverrideAuthorization(t *testing.T) {
 			"Authorization": "Token custom-scheme",
 		},
 	})
-	if _, err := c.callAPI(context.Background(), "m", "sys", "user"); err != nil {
-		t.Fatalf("callAPI: %v", err)
+	if _, err := c.callChatWithTools(context.Background(), []agChatMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+		t.Fatalf("callChatWithTools: %v", err)
 	}
 	if gotAuth != "Token custom-scheme" {
 		t.Errorf("Authorization = %q, want extras to win", gotAuth)
