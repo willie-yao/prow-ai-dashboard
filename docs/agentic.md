@@ -50,9 +50,6 @@ ai:
     enabled: true                 # required even under use_universal_path
     always: false                 # if true, run agentic on every failure
     max_iters: 15                 # tool-call rounds per failure
-    model_byte_budget: 0          # 0 = auto (~50% of detected context window); total tool-output bytes the model accumulates
-    gcs_byte_budget: 1000000000   # total bytes fetched from GCS
-    context_byte_budget: 0        # 0 = auto (~75% of detected context window); compaction guard against window overflow
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
@@ -69,32 +66,36 @@ ai:
 
 Defaults match the spike that validated the design and are conservative
 enough that you almost never need to tune them. Lower `max_iters` first
-if you see the model loop without converging; raise `gcs_byte_budget` if
-your builds have very large logs and grep is being cut short.
+if you see the model loop without converging. The byte budgets (model
+output, compaction, and the GCS fetch ceiling) are not configurable: the
+first two auto-size from the endpoint's context window and the GCS ceiling
+is a fixed engine safety cap.
 
 ### Automatic budget sizing
 
-`model_byte_budget` and `context_byte_budget` default to **auto**: at
-startup the engine GETs the endpoint's `/v1/models` and reads the served
-model's `context_window` (tokens), converts it to bytes (~4 bytes/token),
-and sets `model_byte_budget` to ~50% and `context_byte_budget` to ~75% of
-the window. This means most consumers never set either knob — the same
-config works against a 40K, 128K, or 256K deployment. An explicitly
-configured value always wins. If the endpoint doesn't expose `/v1/models`
-or omits `context_window` (e.g. GitHub Copilot), the engine falls back to
-the static defaults (`model_byte_budget` 300000, `context_byte_budget` off).
+The agentic loop bounds how much tool output the model accumulates (the
+evidence cap) and compacts old tool results before the request would
+overflow the model's context window (the compaction guard). **Neither is
+configurable** — the engine sizes them automatically: at startup it GETs
+the endpoint's `/v1/models`, reads the served model's `context_window`
+(tokens), converts it to bytes (~4 bytes/token), and sets the evidence cap
+to ~50% and the compaction guard to ~75% of the window. The same config
+therefore works against a 40K, 128K, or 256K deployment with no tuning. If
+the endpoint doesn't expose `/v1/models` or omits `context_window` (e.g.
+GitHub Copilot), the engine falls back to a static evidence cap (300000
+bytes) with compaction off.
 
 The budgets are client-side on purpose: an OpenAI-compatible server
 (Dynamo / vLLM / TRT-LLM) enforces its window as a *hard* limit and 500s on
 overflow rather than degrading, so the loop must compact *before* reaching
 it. Auto-sizing just removes the per-deployment hand-tuning.
 
-`context_byte_budget` is the compaction guard: the loop estimates each
-request's serialized size (system prompt + task + accumulated tool results +
-reasoning + tool schemas) and, before it would exceed the budget, elides
-the oldest tool-result bodies to a short stub (head + a "re-call the tool
-if you need this" note). This keeps a long, critique-heavy investigation
-from overflowing the window mid-loop and failing with an empty analysis.
+The compaction guard works by estimating each request's serialized size
+(system prompt + task + accumulated tool results + reasoning + tool
+schemas) and, before it would exceed the budget, eliding the oldest
+tool-result bodies to a short stub (head + a "re-call the tool if you need
+this" note). This keeps a long, critique-heavy investigation from
+overflowing the window mid-loop and failing with an empty analysis.
 
 
 ### `min_tool_calls`
@@ -146,10 +147,10 @@ returning 13 KB total, then a fabricated "no specific error found"
 root cause on a failure where Claude (same build) found the actual
 webhook x509 cert mismatch from 9 MB of logs.
 
-The byte counter is the same `gcs_bytes` counter the engine already
-uses for cost capping (`gcs_byte_budget`), so the floor is measured
-against bytes actually pulled from GCS by `read_artifact`,
-`tail_artifact`, and `grep_artifact`. `list_artifacts` contributes 0.
+The byte counter is the same `gcs_bytes` counter the engine uses for
+its internal GCS fetch ceiling, so the floor is measured against bytes
+actually pulled from GCS by `read_artifact`, `tail_artifact`, and
+`grep_artifact`. `list_artifacts` contributes 0.
 
 Default is `0` — no floor. A reasonable starting value for weaker
 models is `200000` (200 KB); raise gradually if the model keeps

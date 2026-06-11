@@ -320,22 +320,15 @@ func TestAgentic_Effective(t *testing.T) {
 	})
 	t.Run("explicit limits override defaults", func(t *testing.T) {
 		got := (&Agentic{
-			Enabled:         true,
-			MaxIters:        7,
-			ModelByteBudget: 50_000,
-			WallClock:       30 * time.Second,
+			Enabled:   true,
+			MaxIters:  7,
+			WallClock: 30 * time.Second,
 		}).EffectiveAgentic()
 		if got.MaxIters != 7 {
 			t.Errorf("MaxIters = %d, want 7", got.MaxIters)
 		}
-		if got.ModelByteBudget != 50_000 {
-			t.Errorf("ModelByteBudget = %d, want 50000", got.ModelByteBudget)
-		}
 		if got.WallClock != 30*time.Second {
 			t.Errorf("WallClock = %v, want 30s", got.WallClock)
-		}
-		if got.GCSByteBudget != DefaultAgentic.GCSByteBudget {
-			t.Errorf("GCSByteBudget = %d, want default %d", got.GCSByteBudget, DefaultAgentic.GCSByteBudget)
 		}
 	})
 	t.Run("SingleToolCall flips through", func(t *testing.T) {
@@ -440,8 +433,6 @@ func agenticEqual(a, b Agentic) bool {
 	return a.Enabled == b.Enabled &&
 		a.Always == b.Always &&
 		a.MaxIters == b.MaxIters &&
-		a.ModelByteBudget == b.ModelByteBudget &&
-		a.GCSByteBudget == b.GCSByteBudget &&
 		a.WallClock == b.WallClock &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
