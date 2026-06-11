@@ -424,7 +424,7 @@ const (
 	// gcsByteBudget is the fixed aggregate ceiling on bytes fetched from GCS
 	// across one analysis. Not configurable: it's a runaway-fetch safety cap,
 	// not a tuning knob (per-call fetches are already capped at 64 MB, and
-	// max_iters + wall_clock bound the loop). Rarely approached in practice
+	// max_iters + timeout bound the loop). Rarely approached in practice
 	// (~MBs per analysis).
 	gcsByteBudget = 1_000_000_000
 )
@@ -514,7 +514,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					MaxIters:           eff.MaxIters,
 					ModelByteBudget:    modelByteBudget,
 					GCSByteBudget:      gcsByteBudget,
-					WallClock:          eff.WallClock,
+					Timeout:            eff.Timeout,
 					ContextByteBudget:  contextByteBudget,
 					MinToolCalls:       eff.MinToolCalls,
 					MinGCSBytes:        eff.MinGCSBytes,
@@ -541,15 +541,15 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					skillsLog = fmt.Sprintf("on/%d", n)
 				}
 				if useUniversal {
-					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+						eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
-					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						mode, eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+						mode, eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				}
 			}
 		}

@@ -66,7 +66,7 @@ func TestService_AgenticAlways_TagsModeAgentic(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, false /* universalPath */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true /* always */, false /* universalPath */)
 
 	tc := newFailedTC("Test A", "failure msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -92,7 +92,7 @@ func TestService_ToolsUnsupported_FallsBackOnce(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	tc1 := newFailedTC("Test A", "msg-a")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
@@ -144,7 +144,7 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, false)
 
 	// Test case already has CURATOR analysis cached on it from a prior run.
 	tc := newFailedTC("Test A", "msg")
@@ -218,7 +218,7 @@ func TestService_UniversalOn_ToolsUnsupportedSetsUnavailable(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
+	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled, true, true /* universalPath */)
 
 	tc1 := newFailedTC("Test A", "msg-a")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
@@ -303,7 +303,7 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	registry, enabled := newServiceTestRegistry(t)
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(
-		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 1},
+		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1},
 		&fakeFactory{}, registry, enabled, true, true, /* universalPath */
 	)
 

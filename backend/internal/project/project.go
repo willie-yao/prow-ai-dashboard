@@ -192,9 +192,10 @@ type Agentic struct {
 	// the endpoint's reported context window; the GCS fetch ceiling is a fixed
 	// engine safety cap. See the fetcher's agentic wiring.
 
-	// WallClock caps the total time spent in the agentic loop per
-	// failure. Defaults to DefaultAgentic.WallClock.
-	WallClock time.Duration `yaml:"wall_clock,omitempty" json:"wall_clock,omitempty"`
+	// Timeout caps the total wall-clock time spent in the agentic loop
+	// per failure. When hit, the in-flight request is cancelled and the
+	// analysis errors out. Defaults to DefaultAgentic.Timeout.
+	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 
 	// MinToolCalls is the minimum number of tool calls the model must
 	// make before its final JSON answer is accepted. When the model
@@ -298,14 +299,15 @@ type AgenticSkills struct {
 
 // DefaultAgentic is the zero-config fallback applied when a consumer enables
 // Agentic without overriding any limits. Tuned to match the validated spike:
-// 15 iterations is enough for deep exploration without runaway loops, 300KB
-// of model bytes keeps prompts well under context limits, 1GB of GCS bytes
-// covers even very large build logs, and 5 minutes is the wall-clock cap.
+// 15 iterations is enough for deep exploration without runaway loops, and 5
+// minutes is the wall-clock timeout. (The byte budgets are not configured
+// here: the model/context budgets auto-size from the endpoint window and the
+// GCS fetch ceiling is a fixed fetcher constant.)
 var DefaultAgentic = Agentic{
 	Enabled:      false,
 	Always:       false,
 	MaxIters:     15,
-	WallClock:    5 * time.Minute,
+	Timeout:      5 * time.Minute,
 	MinToolCalls: 0,
 	MinGCSBytes:  0,
 	Critique: AgenticCritique{
@@ -327,8 +329,8 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	if a.MaxIters > 0 {
 		out.MaxIters = a.MaxIters
 	}
-	if a.WallClock > 0 {
-		out.WallClock = a.WallClock
+	if a.Timeout > 0 {
+		out.Timeout = a.Timeout
 	}
 	if a.MinToolCalls > 0 {
 		out.MinToolCalls = a.MinToolCalls

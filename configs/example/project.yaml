@@ -98,7 +98,7 @@ ai:
     # not configurable; the model/context budgets auto-size from the endpoint's
     # context window and the GCS fetch ceiling is a fixed engine safety cap
     # (see docs/agentic.md "Automatic budget sizing").
-    # wall_clock: 5m                # per-failure wall-clock cap
+    # timeout: 5m                   # per-failure wall-clock timeout
     # min_tool_calls: 0       # if >0, refuse to accept a final answer
     #                         # until the model has made this many calls.
     #                         # Below-floor finals are published but not

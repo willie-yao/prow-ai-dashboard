@@ -50,7 +50,7 @@ ai:
     enabled: true                 # required even under use_universal_path
     always: false                 # if true, run agentic on every failure
     max_iters: 15                 # tool-call rounds per failure
-    wall_clock: 5m                # per-failure agentic wall-clock cap
+    timeout: 5m                   # per-failure agentic wall-clock timeout
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
     single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
@@ -417,10 +417,13 @@ for curator) and runs for 30-90 seconds wall clock (vs 5-15s for
 curator). The exact numbers depend on artifact size and how deep the
 model digs.
 
-Hitting any budget cap or wall-clock cap mid-loop triggers a forced
-finalize round: the engine drops the `tools` field and asks the model
-for its final JSON answer based on whatever it has seen so far. This
-always produces a usable analysis — incomplete is better than absent.
+Hitting a byte-budget cap mid-loop triggers a forced finalize round:
+the engine drops the `tools` field and asks the model for its final
+JSON answer based on whatever it has seen so far. This always produces
+a usable analysis, since incomplete is better than absent. Hitting the
+`timeout`, by contrast, cancels the in-flight request and the analysis
+errors out for that failure, so set it generously enough that a healthy
+investigation finishes (raise it for slow or contended endpoints).
 
 ### `ai.concurrency` (parallel analysis)
 

@@ -45,7 +45,7 @@ type AgenticOptions struct {
 	MaxIters        int
 	ModelByteBudget int
 	GCSByteBudget   int
-	WallClock       time.Duration
+	Timeout         time.Duration
 
 	// ContextByteBudget caps the estimated serialized request size (system
 	// prompt + task + accumulated tool results + reasoning + tool schemas).
@@ -682,7 +682,7 @@ func (c *Client) doAnalyzeAgentic(
 	}
 	schemas := state.registry.Schemas(state.enabledTools)
 
-	loopCtx, cancel := context.WithDeadline(ctx, state.startTime.Add(in.Opts.WallClock))
+	loopCtx, cancel := context.WithDeadline(ctx, state.startTime.Add(in.Opts.Timeout))
 	defer cancel()
 
 	var finalContent string

@@ -269,7 +269,7 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 		files: map[string][]byte{"build-log.txt": []byte("hello\nworld\n")},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:job:1:abc", "system", "user")
 	if err != nil {
@@ -311,7 +311,7 @@ func TestAgentic_CacheHit(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{}
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
 	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user"); err != nil {
 		t.Fatalf("first call: %v", err)
@@ -343,7 +343,7 @@ func TestAgentic_ToolsUnsupported_FirstCall(t *testing.T) {
 	srv.push(400, `{"error":{"message":"function calling not supported by this model"}}`)
 
 	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 	_, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:nope", "sys", "user")
 	if err == nil {
 		t.Fatal("expected error")
@@ -363,7 +363,7 @@ func TestAgentic_FinalizeRound_JSONRepair(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:repair", "sys", "user")
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
@@ -384,7 +384,7 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 	srv.push(200, chatRespFinal("still not json"))
 
 	client := newAgenticTestClient(t, srv.URL)
-	opts := AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user")
 	if err != nil {
 		t.Fatalf("expected fallback synthesis, not error, got: %v", err)
@@ -476,7 +476,7 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 		files: map[string][]byte{"build-log.txt": []byte("the error\n")},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 1}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1}
 
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:nudge1", "sys", "user")
 	if err != nil {
@@ -529,7 +529,7 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
-	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, MinToolCalls: 2}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 2}
 
 	summary, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:notreused", "sys", "user")
 	if err != nil {
@@ -580,7 +580,7 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 		files: map[string][]byte{"build-log.txt": bigPayload(30_000)},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
-	opts := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, WallClock: 30 * time.Second, MinGCSBytes: 15_000}
+	opts := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, Timeout: 30 * time.Second, MinGCSBytes: 15_000}
 
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:gcsnudge", "sys", "user")
 	if err != nil {
@@ -785,7 +785,7 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 		MaxIters:           5,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
@@ -840,7 +840,7 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 		MaxIters:           5,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
@@ -889,7 +889,7 @@ func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 		MaxIters:        5,
 		ModelByteBudget: 100_000,
 		GCSByteBudget:   100_000,
-		WallClock:       30 * time.Second,
+		Timeout:         30 * time.Second,
 		// CritiqueEnabled defaults to false.
 	}
 	summary, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -931,7 +931,7 @@ func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 	// First call: critique disabled, model emits a punt-shaped final, cached.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	client := newAgenticTestClient(t, srv.URL)
-	off := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	off := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 	if _, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, off),
 		"agentic:test:critique-invalidate", "sys", "user"); err != nil {
@@ -948,7 +948,7 @@ func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 		MaxIters:           5,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
@@ -989,7 +989,7 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 		MaxIters:           2,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
@@ -1064,7 +1064,7 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 		MaxIters:           1,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 1,
 	}
@@ -1149,7 +1149,7 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 		MaxIters:           2,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
@@ -1191,7 +1191,7 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 		MaxIters:           5,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 	}
@@ -1301,7 +1301,7 @@ required_evidence:
 		MaxIters:           5,
 		ModelByteBudget:    100_000,
 		GCSByteBudget:      100_000,
-		WallClock:          30 * time.Second,
+		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
 		SkillsEnabled:      true,
@@ -1408,7 +1408,7 @@ func TestAgentic_SingleToolCall_EchoesOneToolCall(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, SingleToolCall: true}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, SingleToolCall: true}
 
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:job:1:stc", "system", "user")
 	if err != nil {
@@ -1445,7 +1445,7 @@ func TestAgentic_ParallelToolCalls_DefaultEchoesBoth(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:job:1:par", "system", "user")
 	if err != nil {
@@ -1525,7 +1525,7 @@ func TestAgentic_EvidenceInjection_FetchesCitedUnreadArtifact(t *testing.T) {
 		citePath: []byte("boot start\nINJECT_ME_MARKER cloud-init error: vnet peering mismatch\nboot end\n"),
 	}}
 	opts := AgenticOptions{
-		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
 	}
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -1566,7 +1566,7 @@ func TestAgentic_EvidenceInjection_OffByDefault(t *testing.T) {
 		citePath: []byte("INJECT_ME_MARKER should not appear\n"),
 	}}
 	opts := AgenticOptions{
-		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueEnabled: true, CritiqueMaxRetries: 2, // EvidenceInjection off
 	}
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -1606,7 +1606,7 @@ func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
 		citePath: []byte("POSTLOOP_MARKER cloud-init error: vnet peering mismatch\n"),
 	}}
 	opts := AgenticOptions{
-		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
 	}
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
@@ -1648,7 +1648,7 @@ func TestAgentic_EvidenceInjection_ResolvesBareBasename(t *testing.T) {
 		dirs: map[string][]string{"": {"artifacts/"}},
 	}
 	opts := AgenticOptions{
-		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
 	}
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -1693,7 +1693,7 @@ required_evidence:
 		dirs: map[string][]string{"": {"artifacts/"}, "artifacts": {"cert-manager/"}},
 	}
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
-		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second,
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueEnabled: true, CritiqueMaxRetries: 2, SkillsEnabled: true, EvidenceInjection: true,
 	})
 	in.Skills = set
@@ -1752,7 +1752,7 @@ func TestAgentic_SeedArtifactTree_InjectsPaths(t *testing.T) {
 		"artifacts/clusters/c1/machines/m1/cloud-init-output.log": []byte("y"),
 		"artifacts/junit_01.png":                                  []byte("noise"),
 	}}
-	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second, SeedArtifactTree: true}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, SeedArtifactTree: true}
 
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, browser, opts), "agentic:test:seed", "sys", "user")
@@ -1780,7 +1780,7 @@ func TestAgentic_SeedArtifactTree_OffByDefault(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}
-	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, WallClock: 30 * time.Second}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, browser, opts), "agentic:test:noseed", "sys", "user")
@@ -1823,7 +1823,7 @@ required_evidence:
 	}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		WallClock: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 2,
+		Timeout: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 2,
 		SkillsEnabled: true,
 	}
 	in := newTestAgenticInputs(t, browser, opts)
@@ -1869,7 +1869,7 @@ required_evidence:
 	}}
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		WallClock: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 0,
+		Timeout: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 0,
 		SkillsEnabled: true,
 	}
 	in := newTestAgenticInputs(t, browser, opts)
