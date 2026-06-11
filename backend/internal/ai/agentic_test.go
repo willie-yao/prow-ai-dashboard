@@ -632,6 +632,8 @@ func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 		"set is_transient=true and stop",
 		"manufacture a remediation for infrastructure flake",
 		"rule out a known-transient class",
+		"classify by EVIDENCE, not by the string",
+		"absence of a specific cause favors transient",
 	}
 	for _, s := range required {
 		if !strings.Contains(agToolDocs, s) {
