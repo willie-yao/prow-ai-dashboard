@@ -404,6 +404,18 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 	return result, nil
 }
 
+// Budget auto-sizing factors. The agentic loop needs a client-side byte
+// budget to compact the conversation before it hits the endpoint's hard
+// context limit (Dynamo/TRT-LLM 500s on overflow rather than degrading). When
+// the consumer doesn't set the budgets explicitly, the engine derives them
+// from the model's reported context window so they don't have to be
+// hand-tuned per deployment. Budgets are in bytes; the window is in tokens.
+const (
+	avgBytesPerToken       = 4  // rough bytes/token for logs/JSON/English text
+	modelBudgetWindowPct   = 50 // evidence-gathering cap ~= half the window
+	contextBudgetWindowPct = 75 // compaction guard ~= 3/4 the window (response + estimate headroom)
+)
+
 // analyzeFailuresWithAI runs AI analysis on every failed test case.
 func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AIModuleRegistry, details []models.JobDetail, flakinessReport models.FlakinessReport, token, outDir, systemPrompt string, skillSet *skills.Set) {
 	aiClient := ai.NewClientWithOptions(ai.Options{
@@ -455,6 +467,27 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 			eff.Always = true
 		}
 		if eff.Enabled {
+			// Auto-size the byte budgets from the endpoint's reported context
+			// window when the consumer didn't set them. The window is the
+			// source of truth (Dynamo enforces it as a hard limit); detecting
+			// it means consumers don't hand-tune bytes per deployment.
+			// Explicit config always wins; detection failure falls back to the
+			// EffectiveAgentic defaults.
+			rawModelSet := cfg.AI.Agentic != nil && cfg.AI.Agentic.ModelByteBudget > 0
+			rawCtxSet := cfg.AI.Agentic != nil && cfg.AI.Agentic.ContextByteBudget > 0
+			if !rawModelSet || !rawCtxSet {
+				if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
+					windowBytes := tokens * avgBytesPerToken
+					if !rawModelSet {
+						eff.ModelByteBudget = windowBytes * modelBudgetWindowPct / 100
+					}
+					if !rawCtxSet {
+						eff.ContextByteBudget = windowBytes * contextBudgetWindowPct / 100
+					}
+					log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
+						tokens, windowBytes/1024, eff.ModelByteBudget/1024, eff.ContextByteBudget/1024)
+				}
+			}
 			factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
 			registry := tools.NewRegistry()
 			filesystem.Register(registry)

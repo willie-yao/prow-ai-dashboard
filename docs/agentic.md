@@ -50,9 +50,9 @@ ai:
     enabled: true                 # required even under use_universal_path
     always: false                 # if true, run agentic on every failure
     max_iters: 15                 # tool-call rounds per failure
-    model_byte_budget: 300000     # total bytes of tool output sent to the model
+    model_byte_budget: 0          # 0 = auto (~50% of detected context window); total tool-output bytes the model accumulates
     gcs_byte_budget: 1000000000   # total bytes fetched from GCS
-    context_byte_budget: 0        # 0 = off; cap total request size to fit a small model window
+    context_byte_budget: 0        # 0 = auto (~75% of detected context window); compaction guard against window overflow
     wall_clock: 5m                # per-failure agentic wall-clock cap
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
@@ -72,16 +72,29 @@ enough that you almost never need to tune them. Lower `max_iters` first
 if you see the model loop without converging; raise `gcs_byte_budget` if
 your builds have very large logs and grep is being cut short.
 
-`context_byte_budget` is off by default and only matters for models with
-a small context window. When set, the loop estimates each request's
-serialized size (system prompt + task + accumulated tool results +
+### Automatic budget sizing
+
+`model_byte_budget` and `context_byte_budget` default to **auto**: at
+startup the engine GETs the endpoint's `/v1/models` and reads the served
+model's `context_window` (tokens), converts it to bytes (~4 bytes/token),
+and sets `model_byte_budget` to ~50% and `context_byte_budget` to ~75% of
+the window. This means most consumers never set either knob — the same
+config works against a 40K, 128K, or 256K deployment. An explicitly
+configured value always wins. If the endpoint doesn't expose `/v1/models`
+or omits `context_window` (e.g. GitHub Copilot), the engine falls back to
+the static defaults (`model_byte_budget` 300000, `context_byte_budget` off).
+
+The budgets are client-side on purpose: an OpenAI-compatible server
+(Dynamo / vLLM / TRT-LLM) enforces its window as a *hard* limit and 500s on
+overflow rather than degrading, so the loop must compact *before* reaching
+it. Auto-sizing just removes the per-deployment hand-tuning.
+
+`context_byte_budget` is the compaction guard: the loop estimates each
+request's serialized size (system prompt + task + accumulated tool results +
 reasoning + tool schemas) and, before it would exceed the budget, elides
 the oldest tool-result bodies to a short stub (head + a "re-call the tool
 if you need this" note). This keeps a long, critique-heavy investigation
 from overflowing the window mid-loop and failing with an empty analysis.
-Set it to roughly the model's context window in bytes (~3 bytes/token is
-a safe ratio for dense CI logs), staying under the hard token limit so
-the trigger fires before an overflow.
 
 
 ### `min_tool_calls`
