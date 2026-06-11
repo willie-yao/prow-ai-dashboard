@@ -84,14 +84,6 @@ type AgenticOptions struct {
 	// one extra agentic iteration. Only meaningful when CritiqueEnabled.
 	CritiqueMaxRetries int
 
-	// SkillsEnabled opts the run into recipe-driven missing-evidence
-	// checks inside the critique gate. Only meaningful when CritiqueEnabled
-	// is also true. When true, matched recipes contribute a missing-
-	// evidence section to the critique feedback whenever any required
-	// evidence group is not satisfied by the agent's read set; the retry
-	// budget is extended dynamically to fit the missing-group count.
-	SkillsEnabled bool
-
 	// SingleToolCall caps the loop to one tool call per assistant turn:
 	// extra tool calls in a multi-call model response are dropped (only the
 	// first is executed and echoed into history). Needed for endpoints whose
@@ -464,9 +456,10 @@ type AgenticInputs struct {
 	Mode         string
 
 	// Skills is the consumer's loaded recipe set. nil disables skill
-	// matching entirely (also the case when Opts.SkillsEnabled is false).
-	// Skills.Hash() is stamped onto cached entries so consumer-side
-	// recipe edits invalidate cache without an engine version bump.
+	// matching entirely (also the case when critique is disabled, since
+	// recipes are only consulted inside the critique gate). Skills.Hash()
+	// is stamped onto cached entries so consumer-side recipe edits
+	// invalidate cache without an engine version bump.
 	Skills *skills.Set
 }
 
@@ -614,7 +607,10 @@ func (c *Client) doAnalyzeAgentic(
 			// all invalidate previously cached entries on read.
 			critiqueOK := !in.Opts.CritiqueEnabled ||
 				(cached.CritiquePassed && cached.CritiqueVersion >= currentCritiqueVersion)
-			if in.Opts.SkillsEnabled {
+			// Skills feed only the critique gate, so the recipe-set hash
+			// is part of the cache contract exactly when critique is on:
+			// editing recipes then invalidates prior entries on read.
+			if in.Opts.CritiqueEnabled {
 				wantHash := ""
 				if in.Skills != nil {
 					wantHash = in.Skills.Hash()
@@ -652,7 +648,10 @@ func (c *Client) doAnalyzeAgentic(
 		webURLBase:   in.WebURLBase,
 		startTime:    time.Now(),
 	}
-	if in.Opts.SkillsEnabled {
+	// Skills are consulted only inside the critique gate, so load the
+	// recipe set into the run exactly when critique is enabled (recipe
+	// presence is the opt-in; an empty set is a no-op).
+	if in.Opts.CritiqueEnabled {
 		state.skillSet = in.Skills
 	}
 	// Pre-init the read-tracking maps when critique is enabled so

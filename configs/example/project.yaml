@@ -115,8 +115,9 @@ ai:
     #                         # artifact citations, fabricated import
     #                         # paths, and missing skill-driven evidence.
     #                         # Re-prompts up to max_retries times.
+    #                         # Auto-enabled when skills/*.yaml recipes
+    #                         # are present (recipes feed this gate).
     #   max_retries: 2
-    # skills:
-    #   enabled: false        # Recipe-driven evidence requirements loaded
-    #                         # from <project_dir>/skills/*.yaml. See
-    #                         # docs/skills.md for the schema.
+    # Recipe-driven evidence requirements are loaded automatically from
+    # <project_dir>/skills/*.yaml when present; no config flag. See
+    # docs/skills.md for the schema.

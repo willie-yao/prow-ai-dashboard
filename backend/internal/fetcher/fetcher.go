@@ -480,6 +480,14 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 			eff.Always = true
 		}
 		if eff.Enabled {
+			// Recipe files feed the critique gate, so shipping them is the
+			// opt-in for both the recipes and the gate they need: auto-enable
+			// critique when recipes are present (an explicit critique block
+			// still supplies max_retries via EffectiveAgentic).
+			if !eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+				eff.Critique.Enabled = true
+				log.Printf("🧪 %d skill recipe(s) present; auto-enabling the critique gate they feed", len(skillSet.Skills()))
+			}
 			// Size the byte budgets from the endpoint's reported context
 			// window. The window is the source of truth (Dynamo enforces it
 			// as a hard limit), so these are derived, not configured. Falls
@@ -520,7 +528,6 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					MinGCSBytes:        eff.MinGCSBytes,
 					CritiqueEnabled:    eff.Critique.Enabled,
 					CritiqueMaxRetries: eff.Critique.MaxRetries,
-					SkillsEnabled:      eff.Skills.Enabled,
 					SingleToolCall:     eff.SingleToolCall,
 					EvidenceInjection:  eff.EvidenceInjection,
 				}, factory, registry, enabled, eff.Always, useUniversal)
@@ -532,12 +539,8 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
 				}
 				skillsLog := "off"
-				if eff.Skills.Enabled {
-					n := 0
-					if skillSet != nil {
-						n = len(skillSet.Skills())
-					}
-					skillsLog = fmt.Sprintf("on/%d", n)
+				if eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+					skillsLog = fmt.Sprintf("on/%d", len(skillSet.Skills()))
 				}
 				if useUniversal {
 					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",

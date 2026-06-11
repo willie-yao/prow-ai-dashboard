@@ -56,10 +56,8 @@ ai:
     single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
     critique:
       enabled: false              # opt into the deterministic critique gate
+                                  # (auto-enabled when skills/*.yaml recipes are present)
       max_retries: 2              # re-prompt rounds before accepting a still-failing draft
-    skills:
-      enabled: false              # opt into the recipe-driven evidence gate
-                                  # (loads <project_dir>/skills/*.yaml; see docs/skills.md)
     evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
 ```
 
@@ -293,13 +291,14 @@ instruction" disclaimer) and dynamically extends the retry budget
 so the agent has room to satisfy the missing evidence in the
 next round.
 
-Skills are opt-in via `ai.agentic.skills.enabled: true`. They
-extend the critique gate, so they only fire when `critique.enabled`
-is also true. Cache invalidation: every cache entry carries a
-`skill_set_hash` fingerprint of the loaded recipe set; consumer
-edits to any recipe change the hash and invalidate affected entries
-on the next run, independently of the engine-side
-`critique_version` bump.
+Skills are not gated by a config flag: shipping recipe files under
+`<project_dir>/skills/*.yaml` is the opt-in. They extend the critique
+gate, so the fetcher auto-enables `critique` when recipes are present
+(an explicit `critique` block still supplies `max_retries`). Cache
+invalidation: every cache entry carries a `skill_set_hash` fingerprint
+of the loaded recipe set; consumer edits to any recipe change the hash
+and invalidate affected entries on the next run, independently of the
+engine-side `critique_version` bump.
 
 **Inapplicable recipes do not block caching.** A recipe whose
 required evidence does not exist anywhere in the build's artifact

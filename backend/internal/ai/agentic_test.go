@@ -1304,7 +1304,6 @@ required_evidence:
 		Timeout:            30 * time.Second,
 		CritiqueEnabled:    true,
 		CritiqueMaxRetries: 2,
-		SkillsEnabled:      true,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in.Skills = set
@@ -1694,7 +1693,7 @@ required_evidence:
 	}
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueEnabled: true, CritiqueMaxRetries: 2, SkillsEnabled: true, EvidenceInjection: true,
+		CritiqueEnabled: true, CritiqueMaxRetries: 2, EvidenceInjection: true,
 	})
 	in.Skills = set
 	_, _, err := client.doAnalyzeAgentic(context.Background(), in, "agentic:test:ei-skill", "sys", "user")
@@ -1824,7 +1823,6 @@ required_evidence:
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
 		Timeout: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 2,
-		SkillsEnabled: true,
 	}
 	in := newTestAgenticInputs(t, browser, opts)
 	in.Skills = set
@@ -1870,7 +1868,6 @@ required_evidence:
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
 		Timeout: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 0,
-		SkillsEnabled: true,
 	}
 	in := newTestAgenticInputs(t, browser, opts)
 	in.Skills = set

@@ -222,11 +222,11 @@ type Agentic struct {
 	// answers.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
-	// Skills configures the recipe-driven evidence layer. Only
-	// meaningful when Critique.Enabled is also true. Recipes live under
-	// <project_dir>/skills/*.yaml; this field controls whether the
-	// loaded set is consulted by the critique gate.
-	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
+	// NOTE: recipe-driven skills are not gated by a config flag. Recipes
+	// under <project_dir>/skills/*.yaml are consulted by the critique gate
+	// whenever they are present and critique is enabled. Shipping recipe
+	// files is itself the opt-in (the fetcher auto-enables critique when
+	// recipes are present).
 
 	// SingleToolCall makes the loop send at most one tool call per assistant
 	// turn: when the model returns several tool calls at once, only the first
@@ -279,20 +279,6 @@ type AgenticCritique struct {
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
-// AgenticSkills is the per-project skill-set config. Consumer-owned
-// diagnostic recipes live under <project_dir>/skills/ and feed the
-// critique gate's evidence checks.
-type AgenticSkills struct {
-	// Enabled turns the skills layer on for this consumer. When false
-	// (the default), recipes under <project_dir>/skills/ are still
-	// loaded and validated at startup but the critique gate ignores
-	// them. When true, matched recipes inject their procedure +
-	// required-evidence checks into the critique gate and may extend
-	// the retry budget. Only meaningful when Critique.Enabled is also
-	// true; otherwise a no-op.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-}
-
 // DefaultAgentic is the zero-config fallback applied when a consumer enables
 // Agentic without overriding any limits. Tuned to match the validated spike:
 // 15 iterations is enough for deep exploration without runaway loops, and 5
@@ -338,7 +324,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	if a.Critique.MaxRetries > 0 {
 		out.Critique.MaxRetries = a.Critique.MaxRetries
 	}
-	out.Skills.Enabled = a.Skills.Enabled
 	out.SingleToolCall = a.SingleToolCall
 	out.EvidenceInjection = a.EvidenceInjection
 	if len(a.Tools) > 0 {
@@ -483,12 +468,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ai.agentic.evidence_injection requires ai.agentic.critique.enabled: true")
 	}
 
-	// Skills only feed the critique gate's missing-evidence check, so
-	// skills.enabled is inert without critique. Same footgun as
-	// evidence_injection above; reject it at load.
-	if c.AI != nil && c.AI.Agentic != nil && c.AI.Agentic.Skills.Enabled && !c.AI.Agentic.Critique.Enabled {
-		return fmt.Errorf("ai.agentic.skills.enabled requires ai.agentic.critique.enabled: true")
-	}
 	return nil
 }
 
