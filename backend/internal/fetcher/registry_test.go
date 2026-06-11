@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -18,14 +17,6 @@ type stubCollector struct{ name string }
 func (s *stubCollector) Name() string { return s.name }
 func (s *stubCollector) CollectArtifacts(_ context.Context, _ gcs.BuildLocation, _ *models.BuildResult) error {
 	return nil
-}
-
-type stubModule struct{ name string }
-
-func (s *stubModule) Name() string                     { return s.name }
-func (s *stubModule) IsKnownTransient(_ string) string { return "" }
-func (s *stubModule) AnalysisPrompt(_ context.Context, _ *http.Client, _ *models.BuildResult, _ *models.TestCase, _ int) string {
-	return ""
 }
 
 func TestCollectorRegistry_BuildAndNames(t *testing.T) {
@@ -84,43 +75,4 @@ func TestCollectorRegistry_DuplicatePanics(t *testing.T) {
 		}
 	}()
 	r.Register("x", f)
-}
-
-func TestAIModuleRegistry_ExplicitChoice(t *testing.T) {
-	r := NewAIModuleRegistry()
-	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-	r.Register("kubernetes", func(_ *project.Config) ai.Module { return &stubModule{name: "kubernetes"} })
-
-	cfg := &project.Config{AI: &project.AI{Module: "kubernetes"}}
-	got, err := r.Build(cfg)
-	if err != nil || got.Name() != "kubernetes" {
-		t.Errorf("explicit kubernetes: got=%v err=%v", got, err)
-	}
-
-	cfg.AI.Module = "missing"
-	_, err = r.Build(cfg)
-	if err == nil || !strings.Contains(err.Error(), "registered: generic, kubernetes") {
-		t.Errorf("explicit unknown should error with registered list: %v", err)
-	}
-}
-
-func TestAIModuleRegistry_FallbackToGeneric(t *testing.T) {
-	r := NewAIModuleRegistry()
-	r.Register("generic", func(_ *project.Config) ai.Module { return &stubModule{name: "generic"} })
-
-	cfg := &project.Config{}
-	got, err := r.Build(cfg)
-	if err != nil || got.Name() != "generic" {
-		t.Errorf("unset ai.module falls back to generic: got=%v err=%v", got, err)
-	}
-}
-
-func TestAIModuleRegistry_NoGenericIsError(t *testing.T) {
-	r := NewAIModuleRegistry()
-	// Don't register "generic". Any implicit lookup should error.
-	cfg := &project.Config{}
-	_, err := r.Build(cfg)
-	if err == nil || !strings.Contains(err.Error(), `"generic"`) {
-		t.Errorf("missing generic should error: %v", err)
-	}
 }

@@ -57,7 +57,7 @@ For sites whose repo already uses GitHub Pages for something else (project websi
 ```
 
 Three extension points:
-- **Layer 1 — `project.yaml`**: bucket, dashboard, branding, AI provider (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...). See [docs/ai-providers.md](docs/ai-providers.md). Optional [agentic mode](docs/agentic.md) lets the model browse the artifact tree on demand via function-calling tools instead of relying on the curator's pre-fetched evidence.
+- **Layer 1 — `project.yaml`**: bucket, dashboard, branding, AI provider (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...). See [docs/ai-providers.md](docs/ai-providers.md). The [agentic loop](docs/agentic.md) is the only analysis path: the model browses the artifact tree on demand via function-calling tools.
 - **Layer 2 — `prompts/system.md`**: project-specific AI knowledge. Mandatory — the fetcher hard-errors if missing when `-ai` is enabled. See [docs/writing-prompts.md](docs/writing-prompts.md).
 - **Layer 3 — Engine collectors and AI modules** (`backend/internal/collectors/`, `backend/internal/ai/modules/`): `generic` collector + `generic | universal` AI modules. Selected by `project.yaml`.
 

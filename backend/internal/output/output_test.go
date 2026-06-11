@@ -207,7 +207,6 @@ func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
 	dir := t.TempDir()
 	cfg := sampleConfig()
 	cfg.AI = &project.AI{
-		Module:   "generic",
 		Endpoint: "https://internal.example/v1/chat/completions",
 		Model:    "internal-only-model-name",
 	}

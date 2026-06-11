@@ -76,48 +76,45 @@ branding:
 # ai-model / ai-endpoint inputs. The fetcher reads the env when YAML fields
 # are blank; the YAML wins if both are set.
 ai:
-  module: "generic"
   endpoint: "https://api.githubcopilot.com/chat/completions"
   model: "claude-opus-4.7-xhigh"
 
-  # Universal agentic path: bypass the module-routed pipeline and let the
-  # LLM browse GCS + cluster artifacts itself via the registered tools.
-  # Requires a function-calling endpoint; there is no curator fallback.
-  use_universal_path: true
+  # The agentic tool-calling loop is the only analysis path: the LLM browses
+  # GCS + cluster artifacts itself via the registered tools and returns a
+  # single JSON verdict. A function-calling endpoint is required. All agentic
+  # tuning is inlined directly under `ai:` (no nested `agentic:` block).
 
-  agentic:
-    enabled: true
-    # tools: which registered tool groups the model can call. Defaults to
-    # ["filesystem", "k8s"]. Narrow this if your project's artifact tree
-    # doesn't include kubernetes resource YAMLs.
-    tools:
-      - filesystem
-      - k8s
-    # max_iters: 15           # tool-call rounds per failure (engine default)
-    # NOTE: the model-output, context (compaction), and GCS byte budgets are
-    # not configurable; the model/context budgets auto-size from the endpoint's
-    # context window and the GCS fetch ceiling is a fixed engine safety cap
-    # (see docs/agentic.md "Automatic budget sizing").
-    # timeout: 5m                   # per-failure wall-clock timeout
-    # min_tool_calls: 0       # if >0, refuse to accept a final answer
-    #                         # until the model has made this many calls.
-    #                         # Below-floor finals are published but not
-    #                         # cached, so the next run retries. Useful for
-    #                         # weaker models that finalize prematurely.
-    # min_gcs_bytes: 0        # if >0, also require this many bytes of GCS
-    #                         # evidence (catches the case where the model
-    #                         # satisfies min_tool_calls with cheap list
-    #                         # calls or tiny byte ranges). Same publish/
-    #                         # don't-cache semantics as min_tool_calls.
-    # critique:
-    #   enabled: false        # Deterministic regex pass that rejects
-    #                         # punt-shaped suggested_fix, hallucinated
-    #                         # artifact citations, fabricated import
-    #                         # paths, and missing skill-driven evidence.
-    #                         # Re-prompts up to max_retries times.
-    #                         # Auto-enabled when skills/*.yaml recipes
-    #                         # are present (recipes feed this gate).
-    #   max_retries: 2
-    # Recipe-driven evidence requirements are loaded automatically from
-    # <project_dir>/skills/*.yaml when present; no config flag. See
-    # docs/skills.md for the schema.
+  # tools: which registered tool groups the model can call. Defaults to
+  # ["filesystem", "k8s"]. Narrow to ["filesystem"] if your project's
+  # artifact tree doesn't include kubernetes resource YAMLs.
+  tools:
+    - filesystem
+    - k8s
+  # max_iters: 15           # tool-call rounds per failure (engine default)
+  # NOTE: the model-output, context (compaction), and GCS byte budgets are
+  # not configurable; the model/context budgets auto-size from the endpoint's
+  # context window and the GCS fetch ceiling is a fixed engine safety cap
+  # (see docs/agentic.md "Automatic budget sizing").
+  # timeout: 5m             # per-failure wall-clock timeout
+  # min_tool_calls: 0       # if >0, refuse to accept a final answer
+  #                         # until the model has made this many calls.
+  #                         # Below-floor finals are published but not
+  #                         # cached, so the next run retries. Useful for
+  #                         # weaker models that finalize prematurely.
+  # min_gcs_bytes: 0        # if >0, also require this many bytes of GCS
+  #                         # evidence (catches the case where the model
+  #                         # satisfies min_tool_calls with cheap list
+  #                         # calls or tiny byte ranges). Same publish/
+  #                         # don't-cache semantics as min_tool_calls.
+  # critique:
+  #   enabled: false        # Deterministic regex pass that rejects
+  #                         # punt-shaped suggested_fix, hallucinated
+  #                         # artifact citations, fabricated import
+  #                         # paths, and missing skill-driven evidence.
+  #                         # Re-prompts up to max_retries times.
+  #                         # Auto-enabled when skills/*.yaml recipes
+  #                         # are present (recipes feed this gate).
+  #   max_retries: 2
+  # Recipe-driven evidence requirements are loaded automatically from
+  # <project_dir>/skills/*.yaml when present; no config flag. See
+  # docs/skills.md for the schema.

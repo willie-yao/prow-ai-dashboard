@@ -136,11 +136,10 @@ when recipes are present:
 ```yaml
 # project.yaml
 ai:
-  agentic:
-    # critique is auto-enabled because skills/*.yaml recipes exist;
-    # set it explicitly only to override max_retries.
-    critique:
-      max_retries: 2
+  # critique is auto-enabled because skills/*.yaml recipes exist;
+  # set it explicitly only to override max_retries.
+  critique:
+    max_retries: 2
 ```
 
 Skills extend critique; they don't replace it. If you ship recipes but

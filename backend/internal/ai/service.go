@@ -18,28 +18,19 @@ import (
 )
 
 // Service orchestrates AI analysis for a single project. It composes a generic
-// API Client with a project-specific Module, the composed system prompt, and a
-// snapshot of consecutive failure counts.
+// API Client with the universal prompt builder, the composed system prompt, and
+// a snapshot of consecutive failure counts. Every failure is analyzed by the
+// agentic tool-calling loop; there is no other path.
 type Service struct {
 	client         *Client
 	module         Module
 	systemPrompt   string
 	consecutiveMap map[string]int
 
-	// agenticOpts is the resolved agentic config. When agenticOn is false
-	// (the default), Analyze never goes agentic regardless of any other
-	// signal.
+	// agenticOpts is the resolved agentic config.
 	agenticOpts AgenticOptions
-	agenticOn   bool
-	agenticAll  bool // when true, every failure goes agentic; else module decides
 
-	// universalOn selects the use_universal_path flow: agentic is always
-	// on, no curator fallback on ErrToolsUnsupported, and Mode is stamped
-	// UniversalMode so cached entries from any other mode get re-analyzed.
-	universalOn bool
-
-	// browserFactory provides per-build Browser instances. Required when
-	// agentic mode is on.
+	// browserFactory provides per-build Browser instances.
 	browserFactory artifacts.Factory
 
 	// registry + enabledTools define which tools the agentic loop can call.
@@ -47,7 +38,7 @@ type Service struct {
 	enabledTools []string
 
 	// skillSet is the loaded recipe set (project-scoped). nil when no
-	// recipes are loaded or skills are disabled.
+	// recipes are loaded.
 	skillSet *skills.Set
 
 	// toolCaches memoizes a *tools.Cache per buildPrefix so all failures
@@ -55,8 +46,9 @@ type Service struct {
 	toolCaches sync.Map // map[string]*tools.Cache
 
 	// toolsUnsupported is set after the first agentic call that returns
-	// ErrToolsUnsupported, so subsequent failures fall straight back to
-	// the curator pipeline.
+	// ErrToolsUnsupported, so subsequent failures in the run skip straight
+	// to "unavailable" instead of re-hitting an endpoint that can't do
+	// function-calling.
 	toolsUnsupported atomic.Bool
 }
 
@@ -76,16 +68,12 @@ func NewService(client *Client, module Module, systemPrompt string, consecutiveM
 	}
 }
 
-// EnableAgentic switches the Service into mixed curator + agentic mode.
-// always=true forces every failure through agentic; always=false defers to
-// the Module's AgenticPreferrer. universalPath=true selects the agentic-only
-// flow with no curator fallback on ErrToolsUnsupported.
+// EnableAgentic installs the agentic loop's runtime dependencies (resolved
+// options, per-build browser factory, tool registry, and enabled tool set).
+// Must be called once at fetcher startup before Analyze.
 //
 // Safe to call once at Service construction; not safe for concurrent use.
-func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabledTools []string, always, universalPath bool) {
-	s.agenticOn = true
-	s.agenticAll = always || universalPath
-	s.universalOn = universalPath
+func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabledTools []string) {
 	s.agenticOpts = opts
 	s.browserFactory = factory
 	s.registry = registry
@@ -99,28 +87,16 @@ func (s *Service) SetSkills(set *skills.Set) {
 	s.skillSet = set
 }
 
-// Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case.
-// Skips if already analyzed under the current mode; short-circuits on known
-// transients; runs agentic when enabled and applicable, else curator. On API
-// failure leaves an "AI analysis unavailable" summary.
+// Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
+// using the agentic tool-calling loop. Skips if already analyzed and still
+// meets the current quality floors. On API failure (or an endpoint without
+// function-calling) it leaves an "AI analysis unavailable" summary.
 func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase) {
-	desiredMode := s.desiredMode(run, tc)
-
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc, desiredMode) {
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyze(tc) {
 		return
 	}
 
-	if reason := s.module.IsKnownTransient(tc.FailureMessage); reason != "" {
-		tc.AISummary = &models.AISummary{
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-			Summary:     reason,
-			IsTransient: true,
-		}
-		log.Printf("  ⏭ Skipping transient: %s: %s", tc.Name, reason)
-		return
-	}
-
-	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, desiredMode)
+	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 	consec := s.consecutiveMap[consecutiveKey(jobID, tc.Name)]
 	if consec < 1 {
 		consec = 1
@@ -128,42 +104,22 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 
-	if desiredMode == AgenticMode || desiredMode == UniversalMode {
-		// Universal mode has no curator fallback; bail fast if tools are
-		// known-unsupported from a prior failure in this run.
-		if s.universalOn && s.toolsUnsupported.Load() {
-			s.setUnavailable(tc, fmt.Errorf("universal AI path requires endpoint with function-calling support"))
-			return
-		}
-		summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt)
-		if err == nil {
-			tc.AISummary = summary
-			tc.AIAnalysis = analysis
-			return
-		}
+	// No curator fallback: an endpoint that can't do function-calling
+	// (detected on an earlier failure this run, or on this call) surfaces
+	// as unavailable rather than degrading to a tools-free prompt.
+	if s.toolsUnsupported.Load() {
+		s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support"))
+		return
+	}
+	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt)
+	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
-			if s.universalOn {
-				log.Printf("  ⚠ AI endpoint rejected tools; universal mode has no curator fallback: %v", err)
-				s.setUnavailable(tc, fmt.Errorf("universal AI path requires endpoint with function-calling support: %w", err))
-				return
-			}
-			log.Printf("  ⚠ AI endpoint rejected tools; falling back to curator for this run: %v", err)
-			// Fall through to curator path below.
-		} else {
-			log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
-			s.setUnavailable(tc, err)
+			log.Printf("  ⚠ AI endpoint rejected tools; analysis unavailable (no curator fallback): %v", err)
+			s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support: %w", err))
 			return
 		}
-	}
-
-	summary, analysis, err := s.client.doAnalyze(ctx,
-		s.cacheKey(tc.Name, tc.FailureMessage),
-		s.systemPrompt,
-		userPrompt,
-	)
-	if err != nil {
-		log.Printf("  ⚠ AI analysis failed for %s: %v", tc.Name, err)
+		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		return
 	}
@@ -190,18 +146,10 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		EnabledTools: s.enabledTools,
 		Cache:        cache,
 		WebURLBase:   run.WebURL,
-		Mode:         s.modeForRun(),
+		Mode:         AgenticMode,
 		Skills:       s.skillSet,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
-}
-
-// modeForRun returns UniversalMode under use_universal_path, else AgenticMode.
-func (s *Service) modeForRun() string {
-	if s.universalOn {
-		return UniversalMode
-	}
-	return AgenticMode
 }
 
 // toolCacheFor returns the *tools.Cache scoped to one build, creating it
@@ -225,55 +173,23 @@ func (s *Service) setUnavailable(tc *models.TestCase, err error) {
 	}
 }
 
-// curatorMode is the value stored in models.AIAnalysis.Mode for results
-// from the single-shot curator pipeline. shouldReanalyze treats "" as this.
-const curatorMode = "curator"
-
-// desiredMode picks the pipeline to use for this failure. UniversalMode when
-// use_universal_path is on; AgenticMode when agentic is enabled AND (always
-// or the module opts in); else curatorMode. Honors the run-scoped
-// tools-unsupported flag so a 400 on one failure doesn't keep retrying.
-func (s *Service) desiredMode(run *models.BuildResult, tc *models.TestCase) string {
-	if s.universalOn {
-		return UniversalMode
-	}
-	if !s.agenticOn || s.toolsUnsupported.Load() {
-		return curatorMode
-	}
-	if s.agenticAll {
-		return AgenticMode
-	}
-	if p, ok := s.module.(AgenticPreferrer); ok {
-		prefer, reason := p.PrefersAgentic(run, tc)
-		if prefer {
-			if reason == "" {
-				reason = "module preference"
-			}
-			log.Printf("  ↻ %s opted into agentic mode: %s", tc.Name, reason)
-			return AgenticMode
-		}
-	}
-	return curatorMode
-}
-
 // shouldReanalyze returns true when a cached analysis must be discarded
 // because the mode changed or, for agentic-mode caches, because the prior
-// analysis fell below the project's current floors or critique contract.
-func (s *Service) shouldReanalyze(tc *models.TestCase, desiredMode string) bool {
-	if tc.AIAnalysis.Mode != desiredMode {
+// shouldReanalyze returns true when a cached analysis must be discarded
+// because it predates the single agentic path (stale mode) or fails any
+// current quality gate.
+func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
+	if tc.AIAnalysis.Mode != AgenticMode {
 		return true
 	}
-	return s.belowCurrentAgenticFloor(tc, desiredMode)
+	return s.belowCurrentAgenticFloor(tc)
 }
 
-// belowCurrentAgenticFloor returns true when desiredMode is agentic AND the
-// cached analysis fails any current quality gate: tool-call or GCS-byte
-// floor, critique-not-passed when critique is on, critique version older
-// than the engine's current version, or skill-set hash mismatch.
-func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode string) bool {
-	if desiredMode != AgenticMode && desiredMode != UniversalMode {
-		return false
-	}
+// belowCurrentAgenticFloor returns true when the cached analysis fails any
+// current quality gate: tool-call or GCS-byte floor, critique-not-passed when
+// critique is on, critique version older than the engine's current version, or
+// skill-set hash mismatch.
+func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 	if tc.AIAnalysis.ToolCalls < s.agenticOpts.MinToolCalls {
 		return true
 	}
@@ -303,11 +219,6 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode stri
 		}
 	}
 	return false
-}
-
-// cacheKey returns the cache key for the curator analysis call.
-func (s *Service) cacheKey(testName, failureMessage string) string {
-	return fmt.Sprintf("analyze:%s:%x", s.module.Name(), failureHash(testName, failureMessage))
 }
 
 // agenticCacheKey scopes agentic results by job+build because the model's

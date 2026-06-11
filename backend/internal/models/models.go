@@ -95,18 +95,19 @@ type AIAnalysis struct {
 	Severity      string   `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
 	SuggestedFix  string   `json:"suggested_fix"`
 	RelevantFiles []string `json:"relevant_files,omitempty"`
-	// Mode records which analysis pipeline produced this result, so that
-	// switching modes (e.g. flipping agentic on) forces a re-analysis.
+	// Mode records the analysis pipeline that produced this result. There is
+	// a single pipeline ("agentic"); the field is retained so entries from a
+	// prior pipeline are detected as stale and re-analyzed.
 	Mode string `json:"mode,omitempty"`
 
 	// ToolCalls is the number of agent tool invocations made during this
-	// analysis. Always zero for curator.
+	// analysis.
 	ToolCalls int `json:"tool_calls,omitempty"`
 	// ModelBytes is the cumulative bytes sent to / received from the chat
 	// completion endpoint.
 	ModelBytes int `json:"model_bytes,omitempty"`
 	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
-	// calls. Always zero for curator.
+	// calls.
 	GCSBytes int `json:"gcs_bytes,omitempty"`
 	// ElapsedMs is the wall-clock duration of the analysis in milliseconds.
 	ElapsedMs int `json:"elapsed_ms,omitempty"`
@@ -114,26 +115,22 @@ type AIAnalysis struct {
 	CacheHit bool `json:"cache_hit,omitempty"`
 	// BudgetExhausted reports whether the agentic loop hit one of its
 	// budget caps and was forced to finalize on best-effort evidence.
-	// Always false for curator.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 
 	// CritiquePassed reports whether this analysis cleared the critique
 	// gate. Only meaningful when the project has critique enabled.
-	// Always false for curator.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
 	// CritiqueVersion records the critique-contract version under which
 	// this analysis was validated. The build-level shouldReanalyze check
 	// requires version >= the engine's current version when critique is
 	// enabled, so strengthening the gate invalidates older entries.
-	// Always 0 for curator.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
 	// SkillSetHash is the fingerprint of the consumer's loaded recipe
 	// set at the time this analysis was validated. Edits to triggers /
 	// required-evidence / procedure flip the hash and force re-analysis.
-	// Empty when skills are not enabled or no recipes are loaded.
-	// Always empty for curator.
+	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 }
 

@@ -1,28 +1,20 @@
-# Agentic AI mode (tool calling)
+# Agentic AI analysis (tool calling)
 
-Agentic mode lets the LLM decide which artifacts to read instead of
-pre-fetching a fixed set. The model calls four function-calling tools
-that browse the build's GCS artifact tree: `list_artifacts`,
-`read_artifact`, `tail_artifact`, and `grep_artifact`. Optional tier-2
-tools add Kubernetes-shaped discovery (`discover_clusters`,
+The agentic loop is the engine's only analysis path: the LLM decides which
+artifacts to read instead of pre-fetching a fixed set. The model calls four
+function-calling tools that browse the build's GCS artifact tree:
+`list_artifacts`, `read_artifact`, `tail_artifact`, and `grep_artifact`.
+Optional tier-2 tools add Kubernetes-shaped discovery (`discover_clusters`,
 `discover_controllers`, etc.).
 
-Enable it with `ai.use_universal_path: true` + `ai.agentic.enabled: true`
-for the typical "let the model figure it out" flow. The non-universal
-opt-in flow is available too for projects that want a custom AI module
-to decide per-failure whether to go agentic.
-
-## When to enable it
-
-Agentic mode is the recommended starting point for any new consumer.
-Set `ai.use_universal_path: true` to get the full agentic flow with no
-curator pre-fetch step (the model browses everything itself via the
-registered tools). The universal flow is what both production CAPZ
-dashboards use today.
+There is nothing to enable: if `-ai` is on and the endpoint supports
+function calling, every failure is analyzed by the agentic loop. The model
+browses everything itself via the registered tools; the per-failure prompt
+is just the failing test's context.
 
 ## Endpoint requirements
 
-Agentic mode requires the AI endpoint to implement OpenAI-style
+Agentic analysis requires the AI endpoint to implement OpenAI-style
 function calling (`tools` field on the request, `tool_calls` field on
 the response). Verified endpoints:
 
@@ -31,34 +23,31 @@ the response). Verified endpoints:
 - **Azure OpenAI** — supported on tool-calling-capable deployments.
 - **Ollama / vLLM / NIMs** — supported per-model; check your model card.
 
-Under `use_universal_path: true` there is no curator fallback: an
-endpoint that rejects tools surfaces as an explicit "unavailable"
-summary in the dashboard rather than silently degrading. The
-non-universal opt-in flow does fall back to curator on a tools-not-
-supported error and logs `AI endpoint rejected tools; falling back to
-curator for this run`.
+There is no tools-free fallback: an endpoint that rejects function calling
+surfaces as an explicit "AI analysis unavailable" summary in the dashboard
+rather than silently degrading.
 
 ## Configuring it
 
-All knobs live under `ai.agentic` in `project.yaml`. Every field is
-optional except `enabled`:
+All knobs are inlined directly under `ai:` in `project.yaml`. Every field is
+optional; the agentic loop runs with engine defaults when none are set:
 
 ```yaml
 ai:
-  use_universal_path: true        # recommended for new consumers
-  agentic:
-    enabled: true                 # required even under use_universal_path
-    always: false                 # if true, run agentic on every failure
-    max_iters: 15                 # tool-call rounds per failure
-    timeout: 5m                   # per-failure agentic wall-clock timeout
-    min_tool_calls: 0             # minimum tool calls before a final answer is accepted
-    min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
-    single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
-    critique:
-      enabled: false              # opt into the deterministic critique gate
-                                  # (auto-enabled when skills/*.yaml recipes are present)
-      max_retries: 2              # re-prompt rounds before accepting a still-failing draft
-    evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
+  endpoint: ...                 # optional; env AI_ENDPOINT / default Copilot
+  model: ...                    # optional; env AI_MODEL / default Copilot model
+  concurrency: 1                # parallel analyses (raise for endpoints you control)
+  max_iters: 15                 # tool-call rounds per failure
+  timeout: 5m                   # per-failure agentic wall-clock timeout
+  min_tool_calls: 0             # minimum tool calls before a final answer is accepted
+  min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
+  single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
+  critique:
+    enabled: false              # opt into the deterministic critique gate
+                                # (auto-enabled when skills/*.yaml recipes are present)
+    max_retries: 2              # re-prompt rounds before accepting a still-failing draft
+  evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
+  tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -105,9 +94,9 @@ finalizing") and re-prompts. Below-floor finals are still published
 so the next fetcher run retries the analysis fresh.
 
 Default is `0` — no floor. Strong tool-using models (e.g. Claude Opus)
-already investigate deeply on the universal path (~9 tool calls
-median); the floor is unnecessary and would add noise. Weaker
-open-weights models (e.g. Qwen3-235B) tend to finalize from the
+already investigate deeply (~9 tool calls median); the floor is
+unnecessary and would add noise. Weaker open-weights models (e.g.
+Qwen3-235B) tend to finalize from the
 prompt alone in 0-2 tool calls, fabricating wrong root causes. Set
 `min_tool_calls: 3` (or higher) for these endpoints to force at least
 some artifact inspection.
@@ -394,25 +383,11 @@ few KB to tens of KB) to the prompt. Degrades to a no-op if the listing is
 empty or fails (the loop proceeds with its normal prompt). One extra listing
 per uncached failure; no cache-version interaction.
 
-### `always: true` vs `always: false`
-
-- `always: true` routes every failure through agentic regardless of the
-  module's preference. Use for end-to-end validation against a small
-  dataset, or for projects where curator coverage is poor across the
-  board. Expect ~10x the AI bill of curator mode.
-- `always: false` lets the AI module decide per-failure via its optional
-  `AgenticPreferrer` implementation. Modules without one (currently the
-  `generic` module) never go agentic in this mode, so `always: false`
-  with `module: generic` is effectively a no-op. Under
-  `use_universal_path: true`, agentic is forced on for every failure
-  regardless of this field.
-
 ## Cost and behavior
 
-Per failure, agentic mode uses roughly 50-150k input tokens (vs 3-15k
-for curator) and runs for 30-90 seconds wall clock (vs 5-15s for
-curator). The exact numbers depend on artifact size and how deep the
-model digs.
+Per failure, agentic analysis uses roughly 50-150k input tokens and runs
+for 30-90 seconds wall clock. The exact numbers depend on artifact size
+and how deep the model digs.
 
 Hitting a byte-budget cap mid-loop triggers a forced finalize round:
 the engine drops the `tools` field and asks the model for its final
@@ -437,40 +412,31 @@ Defaults to **1** (sequential): the engine has no request-level backoff,
 so a shared, rate-limited provider (e.g. GitHub Copilot) can return 429
 under parallelism. Raise it only for endpoints you control. The setting
 is independent of the fetcher's `-workers` flag, which parallelizes the
-artifact *fetch* phase, not analysis. It applies to both curator and
-agentic analysis. Concurrency does not change results or cache
-semantics; the AI cache, per-build tool caches, and the
+artifact *fetch* phase, not analysis. Concurrency does not change results
+or cache semantics; the AI cache, per-build tool caches, and the
 tools-unsupported flag are all internally synchronized.
 
 ## Cache semantics
 
-Agentic and curator analyses are cached under different keys
-(`agentic:<module>:<job>:<build>:<hash>` vs `analyze:<module>:<hash>`).
-Switching a project between modes does not re-analyze instantly; the
-engine detects the cached `mode` mismatch on the next fetcher run and
-re-analyzes the failure under the new mode.
+Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`.
+The engine records the analysis `mode` on each entry; an entry from a
+prior pipeline (or one below the current quality floors) is detected as
+stale on the next fetcher run and re-analyzed.
 
 Cached agentic entries are scoped to a specific build because answers
 cite build-specific paths and line numbers; the same test failing in
-two different builds gets two separate agentic analyses. Cached
-curator entries are not build-scoped (the prompt content is largely
-deterministic given the test + failure message).
+two different builds gets two separate agentic analyses.
 
 ## Troubleshooting
 
-- **No agentic entries are appearing.** Confirm `agentic.enabled: true`
-  and either `use_universal_path: true`, `agentic.always: true`, or a
-  module that implements `AgenticPreferrer`. Check the fetcher logs for
-  either `Universal AI path enabled (...)` / `Agentic AI enabled (...)`
-  at startup.
+- **No analyses are appearing.** Confirm the fetcher ran with `-ai` and
+  check the startup logs for `Agentic AI enabled (...)`. A failed tool
+  registry enable logs a warning and marks failures unavailable.
 - **Every failure logs "AI endpoint rejected tools".** The endpoint
-  doesn't support function calling. Either switch endpoints or set
-  `agentic.enabled: false` to silence the log line. Under
-  `use_universal_path: true` this surfaces as an "unavailable" summary
-  for every failure instead.
-- **Costs spiked.** Drop `agentic.always: true` to `false`, or lower
-  `max_iters`. Inspect the cached analyses for `mode: "agentic"` /
-  `"agentic-universal"` to estimate how much of the bill is agentic.
+  doesn't support function calling; analyses surface as an "AI analysis
+  unavailable" summary. Switch to a function-calling endpoint.
+- **Costs spiked.** Lower `max_iters`, or analyze fewer builds. Inspect
+  the cached analyses for `mode: "agentic"` to estimate the bill.
 - **Model loops without finalizing.** Lower `max_iters` and check
   whether the forced-finalize round produces a useful answer. If not,
   the `prompts/system.md` may not give the model enough structure to
@@ -483,9 +449,6 @@ deterministic given the test + failure message).
 - `backend/internal/ai/critique.go` — the deterministic critique gate.
 - `backend/internal/ai/skills/` — the recipe-driven evidence layer.
 - `backend/internal/ai/modules/universal/` — the project-agnostic AI
-  module used under `use_universal_path: true`.
+  module that builds the per-failure seed prompt.
 - `backend/internal/artifacts/` — the `Browser` interface and
   `GCSBrowser` implementation backing the filesystem tools.
-- `backend/cmd/ai-toolcall-spike/` — the throwaway prototype the
-  production design was validated against. Useful for spot-checking
-  agentic answers against a single failure without redeploying.

@@ -23,24 +23,18 @@ import (
 )
 
 // AgenticMode is the value stored in models.AIAnalysis.Mode for results
-// produced by the agentic pipeline.
+// produced by the agentic pipeline (the only analysis path). A cached entry
+// with any other mode is treated as stale by shouldReanalyze.
 const AgenticMode = "agentic"
-
-// UniversalMode is the value stored in models.AIAnalysis.Mode for results
-// produced by the use_universal_path flow. Distinct from AgenticMode so
-// that flipping a project between the two invalidates previously cached
-// analyses (shouldReanalyze treats any mode mismatch as cache-miss).
-const UniversalMode = "agentic-universal"
 
 // ErrToolsUnsupported is returned from the agentic loop when the configured
 // provider rejects function-calling on the first call (typically HTTP 400
-// with a body mentioning "tools" or "functions"). Callers should fall back
-// to the single-shot curator pipeline for that failure and avoid retrying
-// agentic mode against the same endpoint for the rest of the run.
+// with a body mentioning "tools" or "functions"). There is no tools-free
+// fallback: the affected failure is marked AI-unavailable for the run.
 var ErrToolsUnsupported = errors.New("ai endpoint does not support function calling")
 
 // AgenticOptions is the resolved per-failure budget config. Build via
-// project.Agentic.EffectiveAgentic() once per fetcher run and reuse.
+// project.AI.EffectiveAgentic() once per fetcher run and reuse.
 type AgenticOptions struct {
 	MaxIters        int
 	ModelByteBudget int
@@ -408,8 +402,7 @@ func (s *agentState) gcsRemaining() int   { return s.opts.GCSByteBudget - s.gcsB
 // stampAgenticTelemetry copies per-call counters onto the AIAnalysis so the
 // published JSON exposes per-failure cost. Called at every successful exit
 // point (cache hit, normal finish, finalize-round finish, synthesized
-// fallback). An empty mode defaults to AgenticMode; UniversalMode is passed
-// explicitly by the universal path.
+// fallback). An empty mode defaults to AgenticMode.
 func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode string, cacheHit bool, start time.Time) {
 	if analysis == nil {
 		return
@@ -444,8 +437,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 //     project at fetcher startup).
 //   - Opts and Skills are per-project.
 //   - Mode is the value stamped on the returned AIAnalysis (defaults to
-//     AgenticMode; UniversalMode is passed by the universal path so cache
-//     invalidation kicks in when consumers flip the switch).
+//     AgenticMode).
 type AgenticInputs struct {
 	Browser      artifacts.Browser
 	Opts         AgenticOptions
@@ -580,9 +572,8 @@ func compactMessages(messages []agChatMessage, schemaBytes, budgetBytes int) ([]
 	return messages, elided
 }
 
-// doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns
-// the same (summary, analysis) pair as doAnalyze so callers can treat both
-// pipelines uniformly.
+// doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
+// (summary, analysis) pair for the published output.
 //
 // The caller is responsible for constructing a fresh Browser per failure
 // (typically via artifacts.Factory.ForBuild) and for choosing the cache key
@@ -590,8 +581,8 @@ func compactMessages(messages []agChatMessage, schemaBytes, budgetBytes int) ([]
 // share an agentic cache entry).
 //
 // Returns ErrToolsUnsupported wrapped on the first API call if the endpoint
-// rejects function-calling. The caller should fall back to doAnalyze for
-// that failure.
+// rejects function-calling. There is no tools-free fallback; the caller marks
+// the failure AI-unavailable for the run.
 func (c *Client) doAnalyzeAgentic(
 	ctx context.Context,
 	in AgenticInputs,

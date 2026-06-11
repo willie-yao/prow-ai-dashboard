@@ -40,17 +40,14 @@ backend/                       Go 1.25
     _manifest_check/           Build-time check on manifest schema
   internal/
     ai/                        AI orchestration (most active area)
-      ai.go                    Single-shot curator path (legacy, kept wired)
+      ai.go                    Chat client, JSON parsing, header handling
       agentic.go               Agentic loop + cache shape + floor gates
-      service.go               Cache-key, mode selection, shouldReanalyze
+      service.go               Cache-key, staleness, shouldReanalyze
       critique.go              Deterministic regex judge that gates drafts
       skills/                  Consumer-owned recipe registry
-      evidence/                Prelude (skills + critique contract) injected
-                               into the user message
       tools/                   Function-calling tools (filesystem, k8s)
       modules/
-        generic/               Generic AI module
-        universal/             Universal agentic module (what consumers use)
+        universal/             Universal agentic module (builds the seed prompt)
       baseprompt.go            BasePrompt (engine-owned)
       responseformat.go        ResponseFormatFooter (engine-owned)
       compose.go               Composes: BasePrompt + consumer system.md + footer
@@ -176,22 +173,22 @@ If you're touching anything under `backend/internal/ai/`, read
 [`docs/agentic.md`](docs/agentic.md) and [`docs/skills.md`](docs/skills.md)
 first. Quick map:
 
-- **Two modes:** `agentic-universal` (the recommended path, used when
-  `ai.use_universal_path: true`) and `curator` (single-shot, kept wired
-  for endpoints that don't support function-calling). Selected per
-  failure in `Service.desiredMode`.
-- **Agentic loop:** `agentic.go` runs up to `MaxIters` rounds (default 20).
+- **Single path:** every failure is analyzed by the agentic loop (cache
+  `mode: "agentic"`). There is no curator/module selection and no tools-free
+  fallback; an endpoint without function-calling marks failures unavailable.
+- **Agentic loop:** `agentic.go` runs up to `MaxIters` rounds (default 15).
   Each round: send conversation → model returns tool calls → engine runs
   tools → results appended → repeat until model returns a final
   `analysisResponse` JSON or budget exhausted.
-- **Quality floors:** `min_tool_calls`, `min_gcs_bytes`, `model_byte_budget`,
+- **Quality floors:** `min_tool_calls`, `min_gcs_bytes`, model byte budget,
   critique pass, skill-set hash - all enforced in
   `belowCurrentAgenticFloor`. A cache hit that fails any current floor is
   re-analyzed.
 - **Critique gate** (`critique.go`): deterministic regex judge runs after
   every draft. Catches investigation-as-remediation, hallucinated artifact
   paths, fabricated import paths, etc. Re-prompts the model with feedback;
-  caches the result with the critique version it passed under.
+  caches the result with the critique version it passed under. Auto-enabled
+  when skill recipes are present.
 - **Skills** (`skills/`): consumer-owned recipe registry. Each recipe pairs
   a failure signal with required evidence the model must read before
   claiming that class of failure. Hash of loaded skills participates in
@@ -212,9 +209,9 @@ Engine ships the AI defaults; consumer overrides per project. The contract:
 - **Engine-owned:** BasePrompt, ResponseFormatFooter, critique contract,
   tool schemas, cache shape.
 - **Consumer-owned** (in `project.yaml`): bucket, dashboard, branding,
-  `ai.module`, `ai.use_universal_path`, `ai.agentic.*`, floors
-  (`min_tool_calls`, `min_gcs_bytes`, `model_byte_budget`), critique +
-  skills toggles, evidence selection (`ai.evidence.machine_logs`,
+  the inlined `ai.*` agentic tuning (floors `min_tool_calls` /
+  `min_gcs_bytes`, `max_iters`, `timeout`, `critique`, `tools`,
+  `evidence_injection`), evidence selection (`ai.evidence.machine_logs`,
   `ai.evidence.controller_logs`, `ai.evidence.build_log_patterns`).
 - **Consumer-owned** (in `prompts/system.md`): project-specific AI
   knowledge. Mandatory; injected verbatim between BasePrompt and
@@ -248,10 +245,9 @@ live deploy.
   carefully.
 - **Anchor pin test failures.** You edited prompt text without updating
   the anchor test. Update both in the same commit.
-- **Universal vs curator mode confusion.** Consumers using
-  `ai.use_universal_path: true` produce `agentic-universal` cache
-  entries; the `curator` path produces `curator` entries. A cache lookup
-  with a mismatched mode is treated as a miss and re-analyzed.
+- **Stale-mode cache entries.** A cached analysis whose `mode` is not
+  `"agentic"` (e.g. from an earlier pipeline) is treated as a miss and
+  re-analyzed on the next fetcher run. No action needed; it self-heals.
 - **In-cluster AI endpoints** are unreachable from GitHub-hosted runners.
   Use `runs-on:` + a self-hosted runner OR set `skip-fetch: true` and
   commit pre-fetched `data/` to the consumer repo.

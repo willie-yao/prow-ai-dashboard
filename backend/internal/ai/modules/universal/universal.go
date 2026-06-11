@@ -1,9 +1,8 @@
-// Package universal provides the project-agnostic AI module used by the
-// use_universal_path flow. Unlike the curator-style modules in modules/capi
-// and modules/generic, this module performs NO upfront evidence fetching: the
-// agentic loop is expected to discover everything via registered tools
-// (filesystem + k8s by default). The prompt is intentionally minimal — just
-// enough context to point the agent at the right build and failing test.
+// Package universal provides the project-agnostic AI module: the only Module
+// implementation. It performs NO upfront evidence fetching; the agentic loop
+// discovers everything via registered tools (filesystem + k8s by default). The
+// prompt is intentionally minimal, just enough context to point the agent at
+// the right build and failing test.
 package universal
 
 import (
