@@ -507,6 +507,13 @@ func (c *Config) Validate() error {
 	if c.AI != nil && c.AI.Agentic != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
 		return fmt.Errorf("ai.agentic.evidence_injection requires ai.agentic.critique.enabled: true")
 	}
+
+	// Skills only feed the critique gate's missing-evidence check, so
+	// skills.enabled is inert without critique. Same footgun as
+	// evidence_injection above; reject it at load.
+	if c.AI != nil && c.AI.Agentic != nil && c.AI.Agentic.Skills.Enabled && !c.AI.Agentic.Critique.Enabled {
+		return fmt.Errorf("ai.agentic.skills.enabled requires ai.agentic.critique.enabled: true")
+	}
 	return nil
 }
 

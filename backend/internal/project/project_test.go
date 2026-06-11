@@ -520,6 +520,23 @@ func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
 	}
 }
 
+func TestValidate_SkillsRequireCritique(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{Agentic: &Agentic{Enabled: true, Skills: AgenticSkills{Enabled: true}}}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("expected error when skills.enabled without critique.enabled")
+	}
+	if !strings.Contains(err.Error(), "critique.enabled") {
+		t.Errorf("error %q should mention critique.enabled", err.Error())
+	}
+	// With critique enabled the same config validates.
+	c.AI.Agentic.Critique.Enabled = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("validation should pass when critique is enabled alongside skills: %v", err)
+	}
+}
+
 func TestValidate_UniversalCaseInsensitive(t *testing.T) {
 	c := validConfig()
 	c.AI = &AI{Module: "Universal"} // capitalized; should still error

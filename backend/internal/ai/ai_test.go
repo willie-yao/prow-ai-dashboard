@@ -385,3 +385,81 @@ func TestCallAPIExtraHeadersOverrideAuthorization(t *testing.T) {
 		t.Errorf("Authorization = %q, want extras to win", gotAuth)
 	}
 }
+
+func TestModelsURLFor(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"http://host:8000/v1/chat/completions", "http://host:8000/v1/models", true},
+		{"https://api.example.com/v1/chat/completions", "https://api.example.com/v1/models", true},
+		{"https://api.githubcopilot.com/chat/completions", "https://api.githubcopilot.com/models", true},
+		{"http://host:8000/v1/embeddings", "", false},
+		{"http://host:8000/something", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := modelsURLFor(tc.in)
+		if ok != tc.wantOK || got != tc.want {
+			t.Errorf("modelsURLFor(%q) = (%q,%v), want (%q,%v)", tc.in, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
+func TestDetectContextWindowTokens(t *testing.T) {
+	t.Run("matches configured model", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/models" {
+				t.Errorf("expected GET /v1/models, got %s", r.URL.Path)
+			}
+			w.Write([]byte(`{"data":[{"id":"other","context_window":1000},{"id":"my-model","context_window":262144}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "my-model", Token: "x"})
+		got, ok := c.DetectContextWindowTokens(context.Background())
+		if !ok || got != 262144 {
+			t.Errorf("got (%d,%v), want (262144,true)", got, ok)
+		}
+	})
+
+	t.Run("falls back to first with positive window", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"unknown","context_window":40960}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "absent", Token: "x"})
+		got, ok := c.DetectContextWindowTokens(context.Background())
+		if !ok || got != 40960 {
+			t.Errorf("got (%d,%v), want (40960,true)", got, ok)
+		}
+	})
+
+	t.Run("no context_window reported -> not ok", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"m"}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "m", Token: "x"})
+		if _, ok := c.DetectContextWindowTokens(context.Background()); ok {
+			t.Error("expected ok=false when no context_window reported")
+		}
+	})
+
+	t.Run("HTTP error -> not ok", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "m", Token: "x"})
+		if _, ok := c.DetectContextWindowTokens(context.Background()); ok {
+			t.Error("expected ok=false on HTTP 404")
+		}
+	})
+
+	t.Run("non-chat endpoint -> not ok (no models URL)", func(t *testing.T) {
+		c := NewClientWithOptions(Options{Endpoint: "http://host/v1/embeddings", Model: "m", Token: "x"})
+		if _, ok := c.DetectContextWindowTokens(context.Background()); ok {
+			t.Error("expected ok=false when endpoint isn't a chat-completions URL")
+		}
+	})
+}
