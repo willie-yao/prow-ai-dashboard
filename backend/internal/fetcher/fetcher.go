@@ -406,14 +406,20 @@ func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Buck
 
 // Budget auto-sizing factors. The agentic loop needs a client-side byte
 // budget to compact the conversation before it hits the endpoint's hard
-// context limit (Dynamo/TRT-LLM 500s on overflow rather than degrading). When
-// the consumer doesn't set the budgets explicitly, the engine derives them
-// from the model's reported context window so they don't have to be
-// hand-tuned per deployment. Budgets are in bytes; the window is in tokens.
+// context limit (Dynamo/TRT-LLM 500s on overflow rather than degrading). The
+// engine derives the budgets from the model's reported context window so they
+// are not configurable per deployment. Budgets are in bytes; the window is in
+// tokens.
 const (
 	avgBytesPerToken       = 4  // rough bytes/token for logs/JSON/English text
 	modelBudgetWindowPct   = 50 // evidence-gathering cap ~= half the window
 	contextBudgetWindowPct = 75 // compaction guard ~= 3/4 the window (response + estimate headroom)
+
+	// fallbackModelByteBudget is used when the endpoint doesn't report a
+	// context window (e.g. GitHub Copilot's /v1/models). Matches the
+	// historical default. The compaction guard stays off (0) in that case,
+	// which is safe for large-window models and the only prior behavior.
+	fallbackModelByteBudget = 300_000
 )
 
 // analyzeFailuresWithAI runs AI analysis on every failed test case.
@@ -467,26 +473,19 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 			eff.Always = true
 		}
 		if eff.Enabled {
-			// Auto-size the byte budgets from the endpoint's reported context
-			// window when the consumer didn't set them. The window is the
-			// source of truth (Dynamo enforces it as a hard limit); detecting
-			// it means consumers don't hand-tune bytes per deployment.
-			// Explicit config always wins; detection failure falls back to the
-			// EffectiveAgentic defaults.
-			rawModelSet := cfg.AI.Agentic != nil && cfg.AI.Agentic.ModelByteBudget > 0
-			rawCtxSet := cfg.AI.Agentic != nil && cfg.AI.Agentic.ContextByteBudget > 0
-			if !rawModelSet || !rawCtxSet {
-				if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
-					windowBytes := tokens * avgBytesPerToken
-					if !rawModelSet {
-						eff.ModelByteBudget = windowBytes * modelBudgetWindowPct / 100
-					}
-					if !rawCtxSet {
-						eff.ContextByteBudget = windowBytes * contextBudgetWindowPct / 100
-					}
-					log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
-						tokens, windowBytes/1024, eff.ModelByteBudget/1024, eff.ContextByteBudget/1024)
-				}
+			// Size the byte budgets from the endpoint's reported context
+			// window. The window is the source of truth (Dynamo enforces it
+			// as a hard limit), so these are derived, not configured. Falls
+			// back to a static model budget with compaction off when the
+			// endpoint doesn't report a window (e.g. Copilot).
+			modelByteBudget := fallbackModelByteBudget
+			contextByteBudget := 0
+			if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
+				windowBytes := tokens * avgBytesPerToken
+				modelByteBudget = windowBytes * modelBudgetWindowPct / 100
+				contextByteBudget = windowBytes * contextBudgetWindowPct / 100
+				log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
+					tokens, windowBytes/1024, modelByteBudget/1024, contextByteBudget/1024)
 			}
 			factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
 			registry := tools.NewRegistry()
@@ -506,10 +505,10 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 			} else {
 				service.EnableAgentic(ai.AgenticOptions{
 					MaxIters:           eff.MaxIters,
-					ModelByteBudget:    eff.ModelByteBudget,
+					ModelByteBudget:    modelByteBudget,
 					GCSByteBudget:      eff.GCSByteBudget,
 					WallClock:          eff.WallClock,
-					ContextByteBudget:  eff.ContextByteBudget,
+					ContextByteBudget:  contextByteBudget,
 					MinToolCalls:       eff.MinToolCalls,
 					MinGCSBytes:        eff.MinGCSBytes,
 					CritiqueEnabled:    eff.Critique.Enabled,
@@ -536,14 +535,14 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 				}
 				if useUniversal {
 					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+						eff.MaxIters, modelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
 					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						mode, eff.MaxIters, eff.ModelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+						mode, eff.MaxIters, modelByteBudget/1024, eff.GCSByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				}
 			}
 		}

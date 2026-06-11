@@ -94,8 +94,10 @@ ai:
       - filesystem
       - k8s
     # max_iters: 15           # tool-call rounds per failure (engine default)
-    # model_byte_budget: 300000     # bytes of tool output the model sees
     # gcs_byte_budget: 1000000000   # cap on bytes fetched from GCS
+    # NOTE: the model-output and context (compaction) byte budgets are not
+    # configurable; the engine auto-sizes them from the endpoint's reported
+    # context window (see docs/agentic.md "Automatic budget sizing").
     # wall_clock: 5m                # per-failure wall-clock cap
     # min_tool_calls: 0       # if >0, refuse to accept a final answer
     #                         # until the model has made this many calls.

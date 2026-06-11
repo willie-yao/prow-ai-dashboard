@@ -187,21 +187,14 @@ type Agentic struct {
 	// to DefaultAgentic.MaxIters.
 	MaxIters int `yaml:"max_iters,omitempty" json:"max_iters,omitempty"`
 
-	// ModelByteBudget caps the total bytes returned to the model from
-	// tool calls (across all rounds) per failure. Defaults to
-	// DefaultAgentic.ModelByteBudget.
-	ModelByteBudget int `yaml:"model_byte_budget,omitempty" json:"model_byte_budget,omitempty"`
-
 	// GCSByteBudget caps the total bytes fetched from GCS (across all
 	// tool calls) per failure. Defaults to DefaultAgentic.GCSByteBudget.
 	GCSByteBudget int `yaml:"gcs_byte_budget,omitempty" json:"gcs_byte_budget,omitempty"`
 
-	// ContextByteBudget caps the estimated serialized request size so the
-	// agentic loop compacts old tool-result bodies before a small-context
-	// model overflows its window mid-investigation. 0 (the default) disables
-	// compaction. Set it to roughly the model context window in bytes
-	// (~3.5-4 bytes/token); only needed for models with a small window.
-	ContextByteBudget int `yaml:"context_byte_budget,omitempty" json:"context_byte_budget,omitempty"`
+	// NOTE: the model-output and context (compaction) byte budgets are NOT
+	// configurable. The engine derives them from the endpoint's reported
+	// context window at startup (see fetcher auto-sizing), so they don't
+	// need per-deployment tuning.
 
 	// WallClock caps the total time spent in the agentic loop per
 	// failure. Defaults to DefaultAgentic.WallClock.
@@ -313,14 +306,13 @@ type AgenticSkills struct {
 // of model bytes keeps prompts well under context limits, 1GB of GCS bytes
 // covers even very large build logs, and 5 minutes is the wall-clock cap.
 var DefaultAgentic = Agentic{
-	Enabled:         false,
-	Always:          false,
-	MaxIters:        15,
-	ModelByteBudget: 300_000,
-	GCSByteBudget:   1_000_000_000,
-	WallClock:       5 * time.Minute,
-	MinToolCalls:    0,
-	MinGCSBytes:     0,
+	Enabled:       false,
+	Always:        false,
+	MaxIters:      15,
+	GCSByteBudget: 1_000_000_000,
+	WallClock:     5 * time.Minute,
+	MinToolCalls:  0,
+	MinGCSBytes:   0,
 	Critique: AgenticCritique{
 		Enabled:    false,
 		MaxRetries: 2,
@@ -340,9 +332,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	if a.MaxIters > 0 {
 		out.MaxIters = a.MaxIters
 	}
-	if a.ModelByteBudget > 0 {
-		out.ModelByteBudget = a.ModelByteBudget
-	}
 	if a.GCSByteBudget > 0 {
 		out.GCSByteBudget = a.GCSByteBudget
 	}
@@ -354,9 +343,6 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	}
 	if a.MinGCSBytes > 0 {
 		out.MinGCSBytes = a.MinGCSBytes
-	}
-	if a.ContextByteBudget > 0 {
-		out.ContextByteBudget = a.ContextByteBudget
 	}
 	out.Critique.Enabled = a.Critique.Enabled
 	if a.Critique.MaxRetries > 0 {
