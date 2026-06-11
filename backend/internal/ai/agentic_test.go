@@ -642,7 +642,34 @@ func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 	}
 }
 
-// TestForceFinalizePrompt_JSONOnlyAnchor pins the JSON-only instruction added
+// TestEnginePrompts_ProjectAgnostic guards the engine/consumer split: the
+// engine-side prompts (BasePrompt, agToolDocs, the floors nudge) must not name
+// any specific project's artifacts or components. Per-project file names and
+// failure patterns belong in the consumer's prompts/system.md, which is
+// appended between BasePrompt and the response-format footer. A regression here
+// means project knowledge leaked back into the shared engine prompt.
+func TestEnginePrompts_ProjectAgnostic(t *testing.T) {
+	forbidden := []string{
+		"CAPZ", "CAPI", "AzureMachine", "azureserviceoperator",
+		"artifacts/clusters", "cloud-init", "etcd-join",
+	}
+	corpus := map[string]string{
+		"BasePrompt": BasePrompt,
+		"agToolDocs": agToolDocs,
+		"floorsNudge": formatFloorsNudge(
+			&agentState{calls: 0, gcsBytes: 0},
+			AgenticOptions{MinToolCalls: 5, MinGCSBytes: 500_000},
+		),
+	}
+	for name, text := range corpus {
+		for _, f := range forbidden {
+			if strings.Contains(text, f) {
+				t.Errorf("%s contains project-specific token %q; move it to the consumer prompts/system.md", name, f)
+			}
+		}
+	}
+}
+
 // to the finalize prompt. Without it, weaker models answered the injected
 // evidence in prose, the finalize round failed to parse, and otherwise-grounded
 // drafts were published but never cached.
