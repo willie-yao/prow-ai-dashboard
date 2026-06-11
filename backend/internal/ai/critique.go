@@ -349,6 +349,51 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 	return out
 }
 
+// pruneAbsentSkillEvidence drops matched-recipe evidence groups whose required
+// evidence does not exist anywhere in the build's artifact tree. Such a recipe
+// is inapplicable to this build (the agent cannot read evidence the build never
+// produced), so its unsatisfiable requirement must not block caching forever.
+// treeSet is the normalized set of every artifact path in the build; pass nil
+// to make this a no-op (preserves the absence-unaware behavior). A group is
+// kept (a genuine miss) only when its evidence exists in the tree but the agent
+// did not read it. After pruning, Passed and Feedback are recomputed against
+// the surviving checks. Returns the number of groups dropped as absent.
+func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, treeSet map[string]bool) int {
+	if treeSet == nil || len(out.MissingSkillEvidence) == 0 {
+		return 0
+	}
+	dropped := 0
+	var kept []skillEvidenceMiss
+	for _, m := range out.MissingSkillEvidence {
+		var keptGroups []skills.EvidenceGroup
+		for _, g := range m.Missing {
+			if g.Satisfied(treeSet) {
+				// Evidence exists in the build but the agent never read
+				// it: a real miss the agent should have covered.
+				keptGroups = append(keptGroups, g)
+			} else {
+				// Evidence is absent from the build: recipe inapplicable.
+				dropped++
+			}
+		}
+		if len(keptGroups) > 0 {
+			kept = append(kept, skillEvidenceMiss{Skill: m.Skill, Missing: keptGroups})
+		}
+	}
+	if dropped == 0 {
+		return 0
+	}
+	out.MissingSkillEvidence = kept
+	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 {
+		out.Passed = true
+		out.Feedback = ""
+	} else {
+		out.Passed = false
+		out.Feedback = formatCritiqueFeedback(parsed, *out)
+	}
+	return dropped
+}
+
 // formatCritiqueFeedback builds the user-role message appended to the
 // agentic conversation when a draft fails critique. Combines feedback
 // for whichever checks failed into one message so the model can address

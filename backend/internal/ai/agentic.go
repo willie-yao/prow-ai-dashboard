@@ -251,7 +251,10 @@ analysis now using the evidence you have already gathered, following the
 "Response format" section of the system prompt exactly. If you did not find a
 definitive root cause, say so explicitly in root_cause (e.g. "Investigation
 reached budget; best-evidence hypothesis is X based on Y") rather than
-continuing to investigate.`
+continuing to investigate.
+
+Output ONLY the JSON object: no prose, no explanation, no markdown fences.
+Your entire response must start with { and end with }.`
 
 // formatFloorsNudge builds the user message appended after a tools-free
 // model response when one or both per-project floors are unmet. Mentions
@@ -368,6 +371,48 @@ type agentState struct {
 	// set, and so cacheAcceptedAnalysis / stampAgenticTelemetry can
 	// stamp the hash without re-threading it.
 	skillSet *skills.Set
+
+	// artifactTreeSetCache is the normalized set of every artifact path
+	// in the build, fetched lazily the first time a skill-evidence miss
+	// needs to know whether the required evidence even exists in this
+	// build. Used to drop recipe requirements that are unsatisfiable
+	// because the evidence is absent (recipe inapplicable), so an
+	// otherwise-grounded draft is not blocked from caching forever.
+	// nil after artifactTreeChecked means "no usable tree" (fetch error
+	// or truncated listing), in which case the absence check is skipped.
+	artifactTreeSetCache map[string]bool
+	artifactTreeChecked  bool
+}
+
+// skillAbsenceTreeCap bounds the recursive listing used to decide whether a
+// skill's required evidence exists anywhere in the build. Set well above a
+// typical build's artifact count so the listing is not truncated; a truncated
+// listing disables the absence check (can't prove a path is absent).
+const skillAbsenceTreeCap = 5000
+
+// artifactTreeSet returns the normalized set of every artifact path in the
+// build, fetched once and cached. Returns nil when the tree cannot be listed
+// or was truncated (so callers conservatively skip the absence optimization).
+func (s *agentState) artifactTreeSet(ctx context.Context) map[string]bool {
+	if s.artifactTreeChecked {
+		return s.artifactTreeSetCache
+	}
+	s.artifactTreeChecked = true
+	if s.browser == nil {
+		return nil
+	}
+	paths, truncated, err := s.browser.ListTree(ctx, skillAbsenceTreeCap)
+	if err != nil || truncated {
+		return nil
+	}
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if norm := normalizeArtifactCitation(p); norm != "" {
+			set[norm] = true
+		}
+	}
+	s.artifactTreeSetCache = set
+	return set
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -742,6 +787,13 @@ func (c *Client) doAnalyzeAgentic(
 				if parsed, ok := tryParseAnalysis(candidate); ok {
 					matchedSkills := matchSkillsForDraft(state, parsed)
 					out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
+					if len(out.MissingSkillEvidence) > 0 {
+						if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
+							if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
+								log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
+							}
+						}
+					}
 					if out.Passed {
 						state.critiquePassed = true
 					} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
@@ -849,6 +901,13 @@ func (c *Client) doAnalyzeAgentic(
 	if in.Opts.CritiqueEnabled && !state.critiquePassed {
 		matchedSkills := matchSkillsForDraft(state, parsed)
 		out := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchedSkills)
+		if len(out.MissingSkillEvidence) > 0 {
+			if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
+				if n := pruneAbsentSkillEvidence(parsed, &out, treeSet); n > 0 {
+					log.Printf("  ⓘ skill-evidence: %d required group(s) absent from this build's artifacts; not held against the draft", n)
+				}
+			}
+		}
 		switch {
 		case out.Passed:
 			state.critiquePassed = true
@@ -863,16 +922,29 @@ func (c *Client) doAnalyzeAgentic(
 					agChatMessage{Role: "assistant", Content: strPtr(finalContent)},
 					agChatMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + inj)})
 				revised := c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
-				if rp, ok2 := tryParseAnalysis(revised); ok2 {
+				rp, ok2 := tryParseAnalysis(revised)
+				if !ok2 {
+					// The model sometimes answers the injected evidence in
+					// prose instead of JSON on the first finalize. One more
+					// attempt with the same JSON-only prompt usually lands it.
+					revised = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
+					rp, ok2 = tryParseAnalysis(revised)
+				}
+				if ok2 {
 					parsed = rp
 					out2 := critiqueDraft(parsed, state.readArtifactsFull, state.readArtifactsBase, matchSkillsForDraft(state, parsed))
+					if len(out2.MissingSkillEvidence) > 0 {
+						if treeSet := state.artifactTreeSet(loopCtx); treeSet != nil {
+							pruneAbsentSkillEvidence(parsed, &out2, treeSet)
+						}
+					}
 					if out2.Passed {
 						state.critiquePassed = true
 					} else {
 						log.Printf("  ⚠ agentic critique: post-injection draft still failing %v; accepting but not caching", out2.Matches())
 					}
 				} else {
-					log.Printf("  ⚠ agentic critique: post-injection finalize did not parse; keeping prior draft, not caching")
+					log.Printf("  ⚠ agentic critique: post-injection finalize did not parse after retry; keeping prior draft, not caching")
 				}
 			} else {
 				log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())

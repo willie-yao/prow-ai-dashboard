@@ -640,6 +640,21 @@ func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 	}
 }
 
+// TestForceFinalizePrompt_JSONOnlyAnchor pins the JSON-only instruction added
+// to the finalize prompt. Without it, weaker models answered the injected
+// evidence in prose, the finalize round failed to parse, and otherwise-grounded
+// drafts were published but never cached.
+func TestForceFinalizePrompt_JSONOnlyAnchor(t *testing.T) {
+	for _, s := range []string{
+		"Output ONLY the JSON object",
+		"must start with { and end with }",
+	} {
+		if !strings.Contains(agForceFinalizePrompt, s) {
+			t.Errorf("agForceFinalizePrompt missing JSON-only anchor %q\nfull text:\n%s", s, agForceFinalizePrompt)
+		}
+	}
+}
+
 // TestResponseFormatFooter_TransientAnchors pins the transient guidance so
 // it defers to the project's named transient classes rather than blanket-
 // biasing toward is_transient=false (which buried the consumer's rules).
@@ -1747,5 +1762,96 @@ func TestAgentic_SeedArtifactTree_OffByDefault(t *testing.T) {
 	defer srv.mu.Unlock()
 	if strings.Contains(string(srv.requests[0]), "Artifact paths for this build") {
 		t.Errorf("default (seed off) must not inject the artifact tree")
+	}
+}
+
+// TestAgentic_SkillEvidenceAbsentFromBuild_StillCaches verifies the
+// skill-evidence absence fix: when a matched recipe requires evidence that
+// does not exist anywhere in the build's artifact tree, the recipe is
+// inapplicable and must not block caching of an otherwise-clean draft.
+func TestAgentic_SkillEvidenceAbsentFromBuild_StillCaches(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	// Triggers the "x509" recipe but is otherwise clean (concrete fix, no
+	// artifact citations). The required evidence is absent from the build.
+	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook-tls
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	// Build tree has NO config/webhook/*.yaml -> evidence absent.
+	browser := &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("x509 error"),
+		"artifacts/clusters/bootstrap/logs/capz-system/capz-controller-manager/m.log": []byte("y"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		WallClock: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 2,
+		SkillsEnabled: true,
+	}
+	in := newTestAgenticInputs(t, browser, opts)
+	in.Skills = set
+
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:skill-absent", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if !analysis.CritiquePassed {
+		t.Errorf("absent required evidence should not block critique; got CritiquePassed=false")
+	}
+}
+
+// TestAgentic_SkillEvidencePresentButUnread_DoesNotCache is the contrast: the
+// required evidence DOES exist in the build but the agent never read it, so the
+// recipe legitimately fails and the draft is published but not cached.
+func TestAgentic_SkillEvidencePresentButUnread_DoesNotCache(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
+	// Pushed twice: critique fails (evidence present, unread) and the loop
+	// may re-prompt before accepting-but-not-caching.
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal(final))
+	srv.push(200, chatRespFinal(final))
+
+	client := newAgenticTestClient(t, srv.URL)
+	set := loadAgenticSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook-tls
+triggers: ["x509"]
+required_evidence:
+  - id: webhook-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	// Build tree CONTAINS the required evidence; the agent never read it.
+	browser := &fakeBrowser{files: map[string][]byte{
+		"build-log.txt":                 []byte("x509 error"),
+		"config/webhook/manifests.yaml": []byte("webhooks:"),
+	}}
+	opts := AgenticOptions{
+		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		WallClock: 30 * time.Second, CritiqueEnabled: true, CritiqueMaxRetries: 0,
+		SkillsEnabled: true,
+	}
+	in := newTestAgenticInputs(t, browser, opts)
+	in.Skills = set
+
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:skill-present-unread", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	if analysis.CritiquePassed {
+		t.Errorf("present-but-unread required evidence must keep the draft uncached (CritiquePassed=false)")
 	}
 }

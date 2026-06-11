@@ -288,6 +288,21 @@ edits to any recipe change the hash and invalidate affected entries
 on the next run, independently of the engine-side
 `critique_version` bump.
 
+**Inapplicable recipes do not block caching.** A recipe whose
+required evidence does not exist anywhere in the build's artifact
+tree is inapplicable to that build: the agent cannot read evidence
+the run never produced. When a matched recipe has a missing
+evidence group, the engine does one bounded recursive listing of
+the build tree and drops any group whose `any_of` patterns match no
+path in it. Only groups whose evidence **exists but was not read**
+remain a genuine miss. Without this, a recipe that triggers on the
+root cause but requires (say) a cluster YAML the failed run never
+dumped would fail critique on every run, so the analysis was
+published but never cached and re-analyzed forever. The listing is
+cached per analysis and only fetched when a skill miss actually
+occurs; a truncated listing disables the check (the engine cannot
+prove a path is absent), preserving the stricter behavior.
+
 See [`docs/skills.md`](skills.md) for the full schema, authoring
 guidance, and observability notes.
 
@@ -334,7 +349,11 @@ with a single bounded tree walk (so cost does not scale with the number of
 targets). It runs on both the in-loop critique retry and the post-loop
 force-finalize path (where weak models most often land after exhausting
 their tool-call budget), in the latter case driving one extra finalize round
-with the injected evidence. It adds the fetched bytes (up to a few capped
+with the injected evidence. If that post-injection finalize comes back as
+prose instead of JSON, the engine retries it once (the force-finalize prompt
+demands a JSON-only response: no prose, no markdown fences) before giving up,
+so a one-off formatting slip does not discard an otherwise-cacheable answer.
+It adds the fetched bytes (up to a few capped
 artifacts per retry) to the conversation, so it is best suited to
 large-context models. Best-effort: a path that cannot be resolved or fetched
 is skipped and the plain text feedback still applies. No cache-version

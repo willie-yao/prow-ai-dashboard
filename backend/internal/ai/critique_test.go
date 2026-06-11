@@ -635,3 +635,113 @@ required_evidence:
 		}
 	}
 }
+
+// ---------- Skill-evidence absence pruning ----------
+
+// skillMissOutcome builds a critiqueOutcome with one unsatisfied required-
+// evidence group, the input pruneAbsentSkillEvidence operates on.
+func skillMissOutcome(t *testing.T) (analysisResponse, critiqueOutcome) {
+	t.Helper()
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook
+triggers: ["x509"]
+required_evidence:
+  - id: cert-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	parsed := analysisResponse{
+		RootCause:    "x509 webhook validation failed; see build-log.txt.",
+		SuggestedFix: "Regenerate the webhook serving certificate and redeploy.",
+	}
+	// build-log.txt read so the unread check is clean; the cert-config group
+	// is unsatisfied (no config/webhook/*.yaml read).
+	out := critiqueDraft(parsed,
+		map[string]bool{"build-log.txt": true},
+		map[string]bool{"build-log.txt": true},
+		set.Match("x509"))
+	if out.Passed || len(out.MissingSkillEvidence) != 1 {
+		t.Fatalf("setup: expected one missing skill group, got passed=%v misses=%v", out.Passed, out.MissingSkillEvidence)
+	}
+	return parsed, out
+}
+
+func TestPruneAbsentSkillEvidence_AbsentGroupDroppedAndPasses(t *testing.T) {
+	parsed, out := skillMissOutcome(t)
+	// Tree has no config/webhook/*.yaml: the recipe is inapplicable.
+	tree := map[string]bool{"build-log.txt": true, "artifacts/clusters/x/manager.log": true}
+	dropped := pruneAbsentSkillEvidence(parsed, &out, tree)
+	if dropped != 1 {
+		t.Fatalf("expected 1 absent group dropped, got %d", dropped)
+	}
+	if !out.Passed {
+		t.Errorf("draft should pass once the only failure (absent evidence) is dropped: %+v", out)
+	}
+	if out.Feedback != "" {
+		t.Errorf("Feedback should be cleared on pass, got %q", out.Feedback)
+	}
+}
+
+func TestPruneAbsentSkillEvidence_PresentButUnreadKept(t *testing.T) {
+	parsed, out := skillMissOutcome(t)
+	// Tree DOES contain a matching path: evidence exists but was unread, so
+	// it stays a genuine miss the agent should have covered.
+	tree := map[string]bool{"config/webhook/manifests.yaml": true}
+	dropped := pruneAbsentSkillEvidence(parsed, &out, tree)
+	if dropped != 0 {
+		t.Fatalf("expected 0 dropped (evidence present), got %d", dropped)
+	}
+	if out.Passed || len(out.MissingSkillEvidence) != 1 {
+		t.Errorf("present-but-unread evidence must remain a miss: %+v", out)
+	}
+}
+
+func TestPruneAbsentSkillEvidence_NilTreeIsNoOp(t *testing.T) {
+	parsed, out := skillMissOutcome(t)
+	if dropped := pruneAbsentSkillEvidence(parsed, &out, nil); dropped != 0 {
+		t.Fatalf("nil tree should be a no-op, got %d dropped", dropped)
+	}
+	if out.Passed || len(out.MissingSkillEvidence) != 1 {
+		t.Errorf("nil tree must leave the outcome unchanged: %+v", out)
+	}
+}
+
+// TestPruneAbsentSkillEvidence_OtherFailureKeepsFailing verifies that dropping
+// an absent skill group does NOT mask an unrelated failing check: a punt in
+// suggested_fix must keep the draft failing with regenerated feedback.
+func TestPruneAbsentSkillEvidence_OtherFailureKeepsFailing(t *testing.T) {
+	set := loadSkillsForTest(t, map[string]string{
+		"webhook": `
+id: webhook
+triggers: ["x509"]
+required_evidence:
+  - id: cert-config
+    any_of: ["config/webhook/.*\\.yaml"]
+`,
+	})
+	parsed := analysisResponse{
+		RootCause:    "x509 webhook validation failed.",
+		SuggestedFix: "Check the webhook certificate.", // punt
+	}
+	out := critiqueDraft(parsed,
+		map[string]bool{"build-log.txt": true},
+		map[string]bool{"build-log.txt": true},
+		set.Match("x509"))
+	if len(out.PuntMatches) == 0 || len(out.MissingSkillEvidence) != 1 {
+		t.Fatalf("setup: expected punt + one skill miss, got %+v", out)
+	}
+	dropped := pruneAbsentSkillEvidence(parsed, &out, map[string]bool{"build-log.txt": true})
+	if dropped != 1 {
+		t.Fatalf("expected the absent skill group dropped, got %d", dropped)
+	}
+	if out.Passed {
+		t.Errorf("draft must still fail on the punt, not pass")
+	}
+	if !strings.Contains(out.Feedback, "diagnostic / information-gathering") {
+		t.Errorf("regenerated feedback should retain the punt section, got %q", out.Feedback)
+	}
+	if strings.Contains(out.Feedback, "matches one or more diagnostic recipes") {
+		t.Errorf("regenerated feedback should NOT mention the dropped skill")
+	}
+}
