@@ -50,18 +50,15 @@ ai:
     enabled: true                 # required even under use_universal_path
     always: false                 # if true, run agentic on every failure
     max_iters: 15                 # tool-call rounds per failure
-    wall_clock: 5m                # per-failure agentic wall-clock cap
+    timeout: 5m                   # per-failure agentic wall-clock timeout
     min_tool_calls: 0             # minimum tool calls before a final answer is accepted
     min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
     single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
     critique:
       enabled: false              # opt into the deterministic critique gate
+                                  # (auto-enabled when skills/*.yaml recipes are present)
       max_retries: 2              # re-prompt rounds before accepting a still-failing draft
-    skills:
-      enabled: false              # opt into the recipe-driven evidence gate
-                                  # (loads <project_dir>/skills/*.yaml; see docs/skills.md)
     evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
-    seed_artifact_tree: false     # prepend the build's full artifact path list to the prompt
 ```
 
 Defaults match the spike that validated the design and are conservative
@@ -294,13 +291,14 @@ instruction" disclaimer) and dynamically extends the retry budget
 so the agent has room to satisfy the missing evidence in the
 next round.
 
-Skills are opt-in via `ai.agentic.skills.enabled: true`. They
-extend the critique gate, so they only fire when `critique.enabled`
-is also true. Cache invalidation: every cache entry carries a
-`skill_set_hash` fingerprint of the loaded recipe set; consumer
-edits to any recipe change the hash and invalidate affected entries
-on the next run, independently of the engine-side
-`critique_version` bump.
+Skills are not gated by a config flag: shipping recipe files under
+`<project_dir>/skills/*.yaml` is the opt-in. They extend the critique
+gate, so the fetcher auto-enables `critique` when recipes are present
+(an explicit `critique` block still supplies `max_retries`). Cache
+invalidation: every cache entry carries a `skill_set_hash` fingerprint
+of the loaded recipe set; consumer edits to any recipe change the hash
+and invalidate affected entries on the next run, independently of the
+engine-side `critique_version` bump.
 
 **Inapplicable recipes do not block caching.** A recipe whose
 required evidence does not exist anywhere in the build's artifact
@@ -373,16 +371,16 @@ large-context models. Best-effort: a path that cannot be resolved or fetched
 is skipped and the plain text feedback still applies. No cache-version
 interaction; it only changes the retry prompt.
 
-### `seed_artifact_tree`
+### Artifact-tree seeding (always on)
 
-Off by default. When enabled, the engine fetches the build's full artifact
-path list (one recursive GCS listing) and prepends it to the analysis prompt,
-so the model starts with the **exact** paths to pass to `read_artifact` /
-`tail_artifact` / `grep_artifact` instead of guessing leaf filenames. On
-weaker models, guessed-and-wrong paths are a leading cause of failed deep
-reads: the model navigates to the right directory but invents a filename that
-does not exist, so it never reaches the controller/machine log holding the
-upstream cause. Seeding the real tree removes the guessing.
+The engine always fetches the build's full artifact path list (one recursive
+GCS listing) and prepends it to the analysis prompt, so the model starts with
+the **exact** paths to pass to `read_artifact` / `tail_artifact` /
+`grep_artifact` instead of guessing leaf filenames. On weaker models,
+guessed-and-wrong paths are a leading cause of failed deep reads: the model
+navigates to the right directory but invents a filename that does not exist, so
+it never reaches the controller/machine log holding the upstream cause. Seeding
+the real tree removes the guessing. It is not configurable.
 
 The listing is capped (currently 500 paths) to bound prompt size; a build
 with more artifacts is truncated with a note pointing the model at
@@ -392,10 +390,9 @@ drops non-text noise (images and archives such as `.png`, `.svg`, `.gz`,
 budget for diagnostic logs. The seed header also tells the model to read from
 the list directly and **not** spend tool calls on `list_artifacts` /
 `find_artifacts` rediscovering paths it already has. It adds the path list (a
-few KB to tens of KB) to the prompt, so it suits large-context models.
-Degrades to a no-op if the listing is empty or fails (the loop proceeds with
-its normal prompt). One extra listing per uncached failure; no cache-version
-interaction.
+few KB to tens of KB) to the prompt. Degrades to a no-op if the listing is
+empty or fails (the loop proceeds with its normal prompt). One extra listing
+per uncached failure; no cache-version interaction.
 
 ### `always: true` vs `always: false`
 
@@ -417,10 +414,13 @@ for curator) and runs for 30-90 seconds wall clock (vs 5-15s for
 curator). The exact numbers depend on artifact size and how deep the
 model digs.
 
-Hitting any budget cap or wall-clock cap mid-loop triggers a forced
-finalize round: the engine drops the `tools` field and asks the model
-for its final JSON answer based on whatever it has seen so far. This
-always produces a usable analysis — incomplete is better than absent.
+Hitting a byte-budget cap mid-loop triggers a forced finalize round:
+the engine drops the `tools` field and asks the model for its final
+JSON answer based on whatever it has seen so far. This always produces
+a usable analysis, since incomplete is better than absent. Hitting the
+`timeout`, by contrast, cancels the in-flight request and the analysis
+errors out for that failure, so set it generously enough that a healthy
+investigation finishes (raise it for slow or contended endpoints).
 
 ### `ai.concurrency` (parallel analysis)
 

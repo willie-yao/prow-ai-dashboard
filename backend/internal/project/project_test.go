@@ -320,15 +320,15 @@ func TestAgentic_Effective(t *testing.T) {
 	})
 	t.Run("explicit limits override defaults", func(t *testing.T) {
 		got := (&Agentic{
-			Enabled:   true,
-			MaxIters:  7,
-			WallClock: 30 * time.Second,
+			Enabled:  true,
+			MaxIters: 7,
+			Timeout:  30 * time.Second,
 		}).EffectiveAgentic()
 		if got.MaxIters != 7 {
 			t.Errorf("MaxIters = %d, want 7", got.MaxIters)
 		}
-		if got.WallClock != 30*time.Second {
-			t.Errorf("WallClock = %v, want 30s", got.WallClock)
+		if got.Timeout != 30*time.Second {
+			t.Errorf("Timeout = %v, want 30s", got.Timeout)
 		}
 	})
 	t.Run("SingleToolCall flips through", func(t *testing.T) {
@@ -345,14 +345,6 @@ func TestAgentic_Effective(t *testing.T) {
 		}
 		if !(&Agentic{Enabled: true, EvidenceInjection: true}).EffectiveAgentic().EvidenceInjection {
 			t.Error("EvidenceInjection=true should pass through")
-		}
-	})
-	t.Run("SeedArtifactTree flips through", func(t *testing.T) {
-		if (&Agentic{Enabled: true}).EffectiveAgentic().SeedArtifactTree {
-			t.Error("SeedArtifactTree should default to false")
-		}
-		if !(&Agentic{Enabled: true, SeedArtifactTree: true}).EffectiveAgentic().SeedArtifactTree {
-			t.Error("SeedArtifactTree=true should pass through")
 		}
 	})
 	t.Run("Tools list passes through", func(t *testing.T) {
@@ -433,13 +425,12 @@ func agenticEqual(a, b Agentic) bool {
 	return a.Enabled == b.Enabled &&
 		a.Always == b.Always &&
 		a.MaxIters == b.MaxIters &&
-		a.WallClock == b.WallClock &&
+		a.Timeout == b.Timeout &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
 		a.Critique == b.Critique &&
 		a.SingleToolCall == b.SingleToolCall &&
 		a.EvidenceInjection == b.EvidenceInjection &&
-		a.SeedArtifactTree == b.SeedArtifactTree &&
 		equalStrings(a.Tools, b.Tools)
 }
 
@@ -511,23 +502,6 @@ func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
 	}
 }
 
-func TestValidate_SkillsRequireCritique(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{Agentic: &Agentic{Enabled: true, Skills: AgenticSkills{Enabled: true}}}
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("expected error when skills.enabled without critique.enabled")
-	}
-	if !strings.Contains(err.Error(), "critique.enabled") {
-		t.Errorf("error %q should mention critique.enabled", err.Error())
-	}
-	// With critique enabled the same config validates.
-	c.AI.Agentic.Critique.Enabled = true
-	if err := c.Validate(); err != nil {
-		t.Fatalf("validation should pass when critique is enabled alongside skills: %v", err)
-	}
-}
-
 func TestValidate_UniversalCaseInsensitive(t *testing.T) {
 	c := validConfig()
 	c.AI = &AI{Module: "Universal"} // capitalized; should still error
@@ -560,4 +534,18 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestParse_AgenticTimeoutField(t *testing.T) {
+	yml := validYAML + "\nai:\n  agentic:\n    enabled: true\n    timeout: 8m\n"
+	c, err := parse(strings.NewReader(yml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if c.AI == nil || c.AI.Agentic == nil {
+		t.Fatal("AI.Agentic is nil")
+	}
+	if c.AI.Agentic.Timeout != 8*time.Minute {
+		t.Errorf("Agentic.Timeout = %v, want 8m", c.AI.Agentic.Timeout)
+	}
 }

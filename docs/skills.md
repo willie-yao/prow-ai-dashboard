@@ -127,23 +127,24 @@ Loaded 7 AI skill recipe(s) from ./skills/ (hash=a1b2c3d4)
 
 ## Enabling
 
-Skills are loaded regardless of any flag (so a parse error caught
-the broken recipe before runtime), but the critique gate only
-consults them when the consumer opts in:
+Skills are loaded regardless of any flag (so a parse error catches a
+broken recipe before runtime). There is no `skills.enabled` flag:
+shipping recipe files under `<project_dir>/skills/*.yaml` is the opt-in.
+Skills extend the critique gate, so the fetcher auto-enables `critique`
+when recipes are present:
 
 ```yaml
 # project.yaml
 ai:
   agentic:
+    # critique is auto-enabled because skills/*.yaml recipes exist;
+    # set it explicitly only to override max_retries.
     critique:
-      enabled: true       # required for skills to do anything
       max_retries: 2
-    skills:
-      enabled: true       # opt in
 ```
 
-With `critique.enabled: false`, the skills layer is a no-op even if
-`skills.enabled: true`. Skills extend critique; they don't replace it.
+Skills extend critique; they don't replace it. If you ship recipes but
+do not want the critique gate, remove the recipe files.
 
 ## Cache invalidation
 

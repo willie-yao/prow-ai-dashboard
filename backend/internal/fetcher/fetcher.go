@@ -424,7 +424,7 @@ const (
 	// gcsByteBudget is the fixed aggregate ceiling on bytes fetched from GCS
 	// across one analysis. Not configurable: it's a runaway-fetch safety cap,
 	// not a tuning knob (per-call fetches are already capped at 64 MB, and
-	// max_iters + wall_clock bound the loop). Rarely approached in practice
+	// max_iters + timeout bound the loop). Rarely approached in practice
 	// (~MBs per analysis).
 	gcsByteBudget = 1_000_000_000
 )
@@ -480,6 +480,14 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 			eff.Always = true
 		}
 		if eff.Enabled {
+			// Recipe files feed the critique gate, so shipping them is the
+			// opt-in for both the recipes and the gate they need: auto-enable
+			// critique when recipes are present (an explicit critique block
+			// still supplies max_retries via EffectiveAgentic).
+			if !eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+				eff.Critique.Enabled = true
+				log.Printf("🧪 %d skill recipe(s) present; auto-enabling the critique gate they feed", len(skillSet.Skills()))
+			}
 			// Size the byte budgets from the endpoint's reported context
 			// window. The window is the source of truth (Dynamo enforces it
 			// as a hard limit), so these are derived, not configured. Falls
@@ -514,16 +522,14 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					MaxIters:           eff.MaxIters,
 					ModelByteBudget:    modelByteBudget,
 					GCSByteBudget:      gcsByteBudget,
-					WallClock:          eff.WallClock,
+					Timeout:            eff.Timeout,
 					ContextByteBudget:  contextByteBudget,
 					MinToolCalls:       eff.MinToolCalls,
 					MinGCSBytes:        eff.MinGCSBytes,
 					CritiqueEnabled:    eff.Critique.Enabled,
 					CritiqueMaxRetries: eff.Critique.MaxRetries,
-					SkillsEnabled:      eff.Skills.Enabled,
 					SingleToolCall:     eff.SingleToolCall,
 					EvidenceInjection:  eff.EvidenceInjection,
-					SeedArtifactTree:   eff.SeedArtifactTree,
 				}, factory, registry, enabled, eff.Always, useUniversal)
 				// Hand the loaded recipe set to the service. nil-safe;
 				// with no recipes the service skips skill matching.
@@ -533,23 +539,19 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 					critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
 				}
 				skillsLog := "off"
-				if eff.Skills.Enabled {
-					n := 0
-					if skillSet != nil {
-						n = len(skillSet.Skills())
-					}
-					skillsLog = fmt.Sprintf("on/%d", n)
+				if eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
+					skillsLog = fmt.Sprintf("on/%d", len(skillSet.Skills()))
 				}
 				if useUniversal {
-					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+					log.Printf("🌐 Universal AI path enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+						eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				} else {
 					mode := "module-opt-in"
 					if eff.Always {
 						mode = "always"
 					}
-					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s wall, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
-						mode, eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.WallClock, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
+					log.Printf("🛠 Agentic AI enabled (%s, %d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=%s, skills=%s, tools=%v)",
+						mode, eff.MaxIters, modelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024, critiqueLog, skillsLog, enabled)
 				}
 			}
 		}

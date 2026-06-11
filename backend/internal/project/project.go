@@ -192,9 +192,10 @@ type Agentic struct {
 	// the endpoint's reported context window; the GCS fetch ceiling is a fixed
 	// engine safety cap. See the fetcher's agentic wiring.
 
-	// WallClock caps the total time spent in the agentic loop per
-	// failure. Defaults to DefaultAgentic.WallClock.
-	WallClock time.Duration `yaml:"wall_clock,omitempty" json:"wall_clock,omitempty"`
+	// Timeout caps the total wall-clock time spent in the agentic loop
+	// per failure. When hit, the in-flight request is cancelled and the
+	// analysis errors out. Defaults to DefaultAgentic.Timeout.
+	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 
 	// MinToolCalls is the minimum number of tool calls the model must
 	// make before its final JSON answer is accepted. When the model
@@ -221,11 +222,11 @@ type Agentic struct {
 	// answers.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
-	// Skills configures the recipe-driven evidence layer. Only
-	// meaningful when Critique.Enabled is also true. Recipes live under
-	// <project_dir>/skills/*.yaml; this field controls whether the
-	// loaded set is consulted by the critique gate.
-	Skills AgenticSkills `yaml:"skills,omitempty" json:"skills,omitempty"`
+	// NOTE: recipe-driven skills are not gated by a config flag. Recipes
+	// under <project_dir>/skills/*.yaml are consulted by the critique gate
+	// whenever they are present and critique is enabled. Shipping recipe
+	// files is itself the opt-in (the fetcher auto-enables critique when
+	// recipes are present).
 
 	// SingleToolCall makes the loop send at most one tool call per assistant
 	// turn: when the model returns several tool calls at once, only the first
@@ -249,13 +250,9 @@ type Agentic struct {
 	// disabled.
 	EvidenceInjection bool `yaml:"evidence_injection,omitempty" json:"evidence_injection,omitempty"`
 
-	// SeedArtifactTree prepends the build's full artifact path list to the
-	// analysis prompt, so the model starts knowing the EXACT paths to read
-	// instead of guessing leaf filenames (the dominant cause of failed deep
-	// reads on weaker models). One recursive GCS listing per uncached
-	// failure, capped. Adds the path list to the prompt, so it suits
-	// large-context models. Defaults to disabled.
-	SeedArtifactTree bool `yaml:"seed_artifact_tree,omitempty" json:"seed_artifact_tree,omitempty"`
+	// NOTE: artifact-tree seeding (prepending the build's exact artifact
+	// path list to the prompt) is always on and not configurable. It is
+	// deterministic, capped, and a no-op when the listing is empty.
 
 	// Tools selects which registered tool groups (e.g. "filesystem",
 	// "k8s") or individual tool names (e.g. "k8s.discover_clusters") are
@@ -282,30 +279,17 @@ type AgenticCritique struct {
 	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
-// AgenticSkills is the per-project skill-set config. Consumer-owned
-// diagnostic recipes live under <project_dir>/skills/ and feed the
-// critique gate's evidence checks.
-type AgenticSkills struct {
-	// Enabled turns the skills layer on for this consumer. When false
-	// (the default), recipes under <project_dir>/skills/ are still
-	// loaded and validated at startup but the critique gate ignores
-	// them. When true, matched recipes inject their procedure +
-	// required-evidence checks into the critique gate and may extend
-	// the retry budget. Only meaningful when Critique.Enabled is also
-	// true; otherwise a no-op.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-}
-
 // DefaultAgentic is the zero-config fallback applied when a consumer enables
 // Agentic without overriding any limits. Tuned to match the validated spike:
-// 15 iterations is enough for deep exploration without runaway loops, 300KB
-// of model bytes keeps prompts well under context limits, 1GB of GCS bytes
-// covers even very large build logs, and 5 minutes is the wall-clock cap.
+// 15 iterations is enough for deep exploration without runaway loops, and 5
+// minutes is the wall-clock timeout. (The byte budgets are not configured
+// here: the model/context budgets auto-size from the endpoint window and the
+// GCS fetch ceiling is a fixed fetcher constant.)
 var DefaultAgentic = Agentic{
 	Enabled:      false,
 	Always:       false,
 	MaxIters:     15,
-	WallClock:    5 * time.Minute,
+	Timeout:      5 * time.Minute,
 	MinToolCalls: 0,
 	MinGCSBytes:  0,
 	Critique: AgenticCritique{
@@ -327,8 +311,8 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	if a.MaxIters > 0 {
 		out.MaxIters = a.MaxIters
 	}
-	if a.WallClock > 0 {
-		out.WallClock = a.WallClock
+	if a.Timeout > 0 {
+		out.Timeout = a.Timeout
 	}
 	if a.MinToolCalls > 0 {
 		out.MinToolCalls = a.MinToolCalls
@@ -340,10 +324,8 @@ func (a *Agentic) EffectiveAgentic() Agentic {
 	if a.Critique.MaxRetries > 0 {
 		out.Critique.MaxRetries = a.Critique.MaxRetries
 	}
-	out.Skills.Enabled = a.Skills.Enabled
 	out.SingleToolCall = a.SingleToolCall
 	out.EvidenceInjection = a.EvidenceInjection
-	out.SeedArtifactTree = a.SeedArtifactTree
 	if len(a.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Tools...)
 	}
@@ -486,12 +468,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ai.agentic.evidence_injection requires ai.agentic.critique.enabled: true")
 	}
 
-	// Skills only feed the critique gate's missing-evidence check, so
-	// skills.enabled is inert without critique. Same footgun as
-	// evidence_injection above; reject it at load.
-	if c.AI != nil && c.AI.Agentic != nil && c.AI.Agentic.Skills.Enabled && !c.AI.Agentic.Critique.Enabled {
-		return fmt.Errorf("ai.agentic.skills.enabled requires ai.agentic.critique.enabled: true")
-	}
 	return nil
 }
 

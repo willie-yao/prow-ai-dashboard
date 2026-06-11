@@ -94,7 +94,7 @@ func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, 
 
 // SetSkills installs the consumer's loaded recipe set. Safe to call once
 // during fetcher startup, after EnableAgentic. The agentic loop honors the
-// set only when Opts.SkillsEnabled is also true.
+// set only when critique is enabled (recipes feed the critique gate).
 func (s *Service) SetSkills(set *skills.Set) {
 	s.skillSet = set
 }
@@ -289,10 +289,11 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, desiredMode stri
 		}
 	}
 	// Invalidate entries whose SkillSetHash doesn't match the currently-
-	// loaded set so consumer recipe edits trigger re-analysis. Empty
-	// wantHash matches an entry stamped with no recipes (intentional:
-	// nothing to invalidate if no recipes are loaded).
-	if s.agenticOpts.SkillsEnabled {
+	// loaded set so consumer recipe edits trigger re-analysis. Skills feed
+	// the critique gate, so the hash is part of the contract exactly when
+	// critique is on. Empty wantHash matches an entry stamped with no
+	// recipes (intentional: nothing to invalidate if no recipes are loaded).
+	if s.agenticOpts.CritiqueEnabled {
 		wantHash := ""
 		if s.skillSet != nil {
 			wantHash = s.skillSet.Hash()
