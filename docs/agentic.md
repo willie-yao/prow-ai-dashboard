@@ -408,6 +408,26 @@ finalize round: the engine drops the `tools` field and asks the model
 for its final JSON answer based on whatever it has seen so far. This
 always produces a usable analysis — incomplete is better than absent.
 
+### `ai.concurrency` (parallel analysis)
+
+Failures are analyzed sequentially by default, so a full cold-cache
+fetch takes roughly `failures x 30-90s`. Each analysis is an
+independent sequence of model round-trips, so `ai.concurrency: N` runs
+up to N investigations at once. A batching endpoint (self-hosted vLLM /
+TRT-LLM, which serve many requests on one GPU via continuous batching)
+absorbs this and wall-clock drops roughly in proportion until the
+endpoint saturates; a value of 4-6 is a good starting point for a
+dedicated endpoint.
+
+Defaults to **1** (sequential): the engine has no request-level backoff,
+so a shared, rate-limited provider (e.g. GitHub Copilot) can return 429
+under parallelism. Raise it only for endpoints you control. The setting
+is independent of the fetcher's `-workers` flag, which parallelizes the
+artifact *fetch* phase, not analysis. It applies to both curator and
+agentic analysis. Concurrency does not change results or cache
+semantics; the AI cache, per-build tool caches, and the
+tools-unsupported flag are all internally synchronized.
+
 ## Cache semantics
 
 Agentic and curator analyses are cached under different keys

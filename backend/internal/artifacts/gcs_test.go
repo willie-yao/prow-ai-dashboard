@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -60,7 +62,10 @@ type fakeGCS struct {
 	t     *testing.T
 	files map[string][]byte // full object name (incl. logs/<job>/<build>/...) -> bytes
 
-	// requests counts every request seen, keyed by method+URL path.
+	// requests counts every request seen, keyed by method+URL path. mu
+	// guards it because httptest serves concurrent requests on separate
+	// goroutines (the concurrent-cache test issues many at once).
+	mu       sync.Mutex
 	requests map[string]int
 }
 
@@ -68,9 +73,18 @@ func newFakeGCS(t *testing.T, files map[string][]byte) *fakeGCS {
 	return &fakeGCS{t: t, files: files, requests: map[string]int{}}
 }
 
+// requestCount returns how many times the given "METHOD /path" was served.
+func (f *fakeGCS) requestCount(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.requests[key]
+}
+
 func (f *fakeGCS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := r.Method + " " + r.URL.Path
+	f.mu.Lock()
 	f.requests[key]++
+	f.mu.Unlock()
 
 	if strings.HasPrefix(r.URL.Path, "/storage/v1/b/") {
 		f.serveList(w, r)
@@ -230,11 +244,11 @@ func TestRead_RangeAndCache(t *testing.T) {
 		t.Errorf("size = %d, want 16", size)
 	}
 
-	firstCalls := fake.requests["GET /test-bucket/logs/job1/b1/artifacts/data.txt"]
+	firstCalls := fake.requestCount("GET /test-bucket/logs/job1/b1/artifacts/data.txt")
 
 	// Read again with different offset; without cache this fires another HTTP call.
 	_, _, _ = b.Read(context.Background(), "artifacts/data.txt", 0, 4)
-	if fake.requests["GET /test-bucket/logs/job1/b1/artifacts/data.txt"] != firstCalls+1 {
+	if fake.requestCount("GET /test-bucket/logs/job1/b1/artifacts/data.txt") != firstCalls+1 {
 		t.Errorf("want second HTTP call (no cache on Read)")
 	}
 }
@@ -373,4 +387,36 @@ func TestListTree_TruncatesAtCap(t *testing.T) {
 	if len(paths) != 2 || !truncated {
 		t.Errorf("got %d paths truncated=%v, want 2 truncated=true", len(paths), truncated)
 	}
+}
+
+// TestGCSBrowser_ConcurrentCacheAccess exercises the per-build cache from many
+// goroutines at once, the way ai.concurrency > 1 shares one GCSBrowser across
+// failures in the same build. Run with -race; an unsynchronized map here would
+// trip "concurrent map read and map write".
+func TestGCSBrowser_ConcurrentCacheAccess(t *testing.T) {
+	files := map[string][]byte{
+		"a.log": bytes.Repeat([]byte("a"), 1024),
+		"b.log": bytes.Repeat([]byte("b"), 1024),
+		"c.log": bytes.Repeat([]byte("c"), 1024),
+	}
+	b, _, _ := newBrowserWithFake(t, files)
+	names := []string{"a.log", "b.log", "c.log"}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := names[i%len(names)]
+			switch i % 3 {
+			case 0:
+				_, _, _ = b.Read(context.Background(), name, 0, 1024)
+			case 1:
+				_, _ = b.Tail(context.Background(), name, 10, 4096)
+			case 2:
+				_, _ = b.Grep(context.Background(), name, regexp.MustCompile("a|b|c"), 0, 5, 1000)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

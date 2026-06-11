@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
@@ -516,7 +517,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 	}
 	log.Printf("Using AI module: %s, endpoint: %s, model: %s", module.Name(), aiClient.Endpoint(), aiClient.ModelName())
 
-	var totalFailures, transientSkipped int
+	var totalFailures int
 	for _, d := range details {
 		for _, run := range d.Runs {
 			for _, tc := range run.TestCases {
@@ -535,6 +536,18 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
+	// Flatten the failed test cases into a work list so they can be analyzed
+	// by a bounded worker pool. Each analysis is independent and writes only
+	// its own *TestCase; the AI cache, per-build tool caches, and the
+	// tools-unsupported flag are all internally synchronized, so the only
+	// cross-goroutine state here is the transientSkipped counter (atomic).
+	type aiWork struct {
+		jobID       string
+		buildPrefix string
+		run         *models.BuildResult
+		tc          *models.TestCase
+	}
+	var work []aiWork
 	for i := range details {
 		d := &details[i]
 		jobLoc := gcs.JobLocation{JobType: d.JobType, Repo: d.Repo}
@@ -552,15 +565,37 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, modules *AI
 				if tc.Status != "failed" {
 					continue
 				}
-				before := tc.AISummary
-				service.Analyze(ctx, httpClient, d.JobID, buildPrefix, run, tc)
-				if before == nil && tc.AISummary != nil && tc.AISummary.IsTransient && tc.AIAnalysis == nil {
-					transientSkipped++
-				}
+				work = append(work, aiWork{jobID: d.JobID, buildPrefix: buildPrefix, run: run, tc: tc})
 			}
 		}
 	}
-	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped)
+
+	concurrency := cfg.AnalysisConcurrency()
+	if concurrency > len(work) {
+		concurrency = len(work)
+	}
+	if concurrency > 1 {
+		log.Printf("🤖 analyzing with concurrency=%d", concurrency)
+	}
+
+	var transientSkipped atomic.Int64
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, w := range work {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(w aiWork) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			before := w.tc.AISummary
+			service.Analyze(ctx, httpClient, w.jobID, w.buildPrefix, w.run, w.tc)
+			if before == nil && w.tc.AISummary != nil && w.tc.AISummary.IsTransient && w.tc.AIAnalysis == nil {
+				transientSkipped.Add(1)
+			}
+		}(w)
+	}
+	wg.Wait()
+	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 }
 
 // aiEndpoint returns the configured AI chat-completions URL, or "" to let

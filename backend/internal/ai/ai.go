@@ -71,8 +71,18 @@ func NewClientWithOptions(opts Options) *Client {
 	if model == "" {
 		model = Model
 	}
+	// Clone the default transport so proxy support (ProxyFromEnvironment),
+	// TLS, and dial defaults are preserved; only enlarge the idle-connection
+	// pool so concurrent analyses (see project.AI.Concurrency) reuse
+	// connections to one endpoint instead of churning them.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 32
+	transport.MaxIdleConnsPerHost = 16
 	return &Client{
-		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		httpClient: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: transport,
+		},
 		apiURL:       endpoint,
 		token:        opts.Token,
 		model:        model,

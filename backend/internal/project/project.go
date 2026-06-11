@@ -148,6 +148,26 @@ type AI struct {
 	// mode: an endpoint that rejects function-calling surfaces as
 	// "unavailable" rather than degrading to a tools-free prompt.
 	UseUniversalPath bool `yaml:"use_universal_path,omitempty" json:"-"`
+
+	// Concurrency caps how many failures are analyzed in parallel. Each
+	// analysis is an independent sequence of model round-trips, so raising
+	// this lets a batching endpoint (e.g. a self-hosted vLLM/TRT-LLM server)
+	// work several investigations at once and cut wall-clock roughly in
+	// proportion until the endpoint saturates. Defaults to 1 (sequential),
+	// because the engine has no request-level backoff and a shared,
+	// rate-limited provider (e.g. Copilot) can 429 under parallelism. Raise
+	// it only for endpoints you control. Excluded from manifest.json.
+	Concurrency int `yaml:"concurrency,omitempty" json:"-"`
+}
+
+// AnalysisConcurrency returns the number of failures to analyze in parallel,
+// clamped to a minimum of 1 so an unset or invalid value preserves the
+// original sequential behavior.
+func (c *Config) AnalysisConcurrency() int {
+	if c.AI == nil || c.AI.Concurrency < 1 {
+		return 1
+	}
+	return c.AI.Concurrency
 }
 
 // Agentic configures the tool-calling AI loop. All fields are optional; zero
