@@ -50,8 +50,8 @@ ai:
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
-Defaults match the spike that validated the design and are conservative
-enough that you almost never need to tune them. Lower `max_iters` first
+The defaults are conservative enough that you almost never need to tune
+them. Lower `max_iters` first
 if you see the model loop without converging. The byte budgets (model
 output, compaction, and the GCS fetch ceiling) are not configurable: the
 first two auto-size from the endpoint's context window and the GCS ceiling
@@ -152,10 +152,9 @@ analysis must meet BOTH to be cached and to bypass re-analysis on
 the next run.
 
 Anti-thrash: progress is tracked per floor. A model that calls
-`list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`,
-and used to risk being re-nudged every iteration. The current loop
-re-nudges only if the model has made progress on the specific axis
-that is still unmet; if neither calls nor bytes have advanced since
+`list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`.
+The loop re-nudges only if the model has made progress on the specific
+axis that is still unmet; if neither calls nor bytes have advanced since
 the last nudge, the answer is accepted (but not cached).
 
 ### `critique`
@@ -178,9 +177,9 @@ after `max_retries` retries are published but NOT cached, so the
 next fetcher run retries with a fresh attempt.
 
 Defaults to disabled. Recommended for weaker open-weights models
-that consistently punt despite the prompt-side rules (Qwen3-235B
-post-L.4-Step-1 measured at 80% punt rate on CAPZ failures, vs
-40% for Claude Opus on the same cases). Strong tool-using models
+that consistently punt despite the prompt-side rules (in practice
+some open-weights models punt on a large fraction of failures where
+a strong tool-using model rarely does). Strong tool-using models
 benefit too but the cost / behavior trade-off is per-consumer:
 when enabled, expect 1.0-1.5x baseline iterations for the typical
 failure (most analyses pass critique on the first try; only the
@@ -190,18 +189,14 @@ punts incur retries).
 field follows the `min_tool_calls` / `min_gcs_bytes` "0 = use
 default" convention: writing `max_retries: 0` in YAML is
 indistinguishable from omitting the field, so both yield the
-engine default. To disable retries entirely (treat critique as a
-pure don't-cache gate with no re-prompting), turn the whole
-feature off (`critique.enabled: false`) — the gate-only mode is
-a future option that the v1 implementation does not surface.
+engine default. To turn critique off entirely, set
+`critique.enabled: false`.
 
 Cache invalidation: enabling `critique` on an existing project
-invalidates any cached entries that didn't pass critique (which
-includes ALL pre-L.4-Step-2 entries, since they were written with
-no critique field; defaults to `false` on read). Same two-layer
-behavior as the floor invalidations (agentic AI cache + build-cache
-test data). Disabling critique does NOT invalidate previously
-critique-passed entries; they serve from cache as usual.
+invalidates any cached entries that didn't pass critique. Same
+two-layer behavior as the floor invalidations (agentic AI cache +
+build-cache test data). Disabling critique does NOT invalidate
+previously critique-passed entries; they serve from cache as usual.
 
 Coverage: critique runs both in-loop (on tools-free finals that
 parse on the spot, with re-prompt retries) AND post-loop (on
@@ -212,15 +207,12 @@ finalize-round result publishes, doesn't cache, and re-analyzes
 on the next fetcher run (same anti-thrash trade-off as the floor
 gates).
 
-#### L.4 Step 2.5 strengthening: hallucinated citations
+#### Hallucinated citation check
 
-L.4 Step 2 dropped Qwen3-235B's punt rate from 80% to 0% on CAPZ
-but exposed a new failure mode (Case 1 of the Step 2 A/B): a
-draft that passes the punt regex with high confidence but cites
-an artifact it never read (`actuators.go` it never opened),
-emitting a wrong-but-fluent root cause. Step 2.5 adds a
-deterministic check that runs alongside the punt regex and
-combines into one retry message:
+Alongside the punt regex, critique runs a deterministic check that
+rejects a draft citing an artifact it never read (a confident,
+fluent root cause built on an artifact the agent never opened). It
+combines with the punt check into one retry message:
 
 1. **Hallucinated artifact citations.** The agentic loop records
    the path of every successful `read_artifact` / `tail_artifact`
@@ -240,15 +232,6 @@ combines into one retry message:
    do NOT count as reads, so a model cannot launder a citation
    by reading a non-existent file.
 
-> A second Step 2.5 check (a regex that flagged Go-import-style
-> prefixes such as `sigs.k8s.io/` or `github.com/` in
-> `relevant_files`/prose as "fabricated import paths") was later
-> removed: with the artifact-tree seed and a stronger model it
-> caught zero real fabrications and instead misfired on legitimate
-> upstream URLs the model cited for provenance (e.g. the clusterctl
-> `core-components.yaml` release asset), which needlessly failed
-> grounded analyses and collapsed the agentic cache rate.
-
 When the agentic loop runs with `critique.enabled: true`, the
 read-tracking maps are pre-allocated even before the first
 successful read, so the hallucination check is active from the
@@ -256,23 +239,21 @@ first tools-free final. When critique is disabled the maps stay
 nil and the check is a free no-op.
 
 Cache versioning: a `critique_version` int is stamped onto every
-critique-passing analysis (currently `4` = L.4 Step 3). The
-build-cache and per-failure-cache invalidation gates both reject
-entries whose `critique_version` is below the current engine's
-version. This guarantees that strengthening the gate
-(e.g. adding a new check in a future L.4 Step) automatically
-invalidates entries that passed under the older, weaker
-contract, without needing per-consumer cache clears.
+critique-passing analysis. The build-cache and per-failure-cache
+invalidation gates both reject entries whose `critique_version` is
+below the current engine's version, so strengthening the gate
+automatically invalidates entries that passed under the older,
+weaker contract without needing per-consumer cache clears.
 
-#### L.4 Step 3 strengthening: consumer-owned skill / recipe registry
+#### Consumer-owned skill / recipe registry
 
-L.4 Step 2.5 cleaned up structural hallucinations but couldn't
-catch semantic ones (model reads an artifact and draws the wrong
-conclusion, e.g. "API throttling" when the build-log clearly
-shows x509 errors). Step 3 adds a consumer-side knowledge layer:
-each project ships YAML "skills" (recipes) under
-`<project_dir>/skills/*.yaml`. When a recipe's regex triggers
-match the model's draft, the critique gate enforces that the
+The hallucination check catches structural hallucinations but not
+semantic ones (the model reads an artifact and draws the wrong
+conclusion, e.g. "API throttling" when the build-log clearly shows
+x509 errors). Skills add a consumer-side knowledge layer: each
+project ships YAML "skills" (recipes) under
+`<project_dir>/skills/*.yaml`. When a recipe's trigger regex
+matches the model's draft, the critique gate enforces that the
 agent has read evidence the recipe declares canonical for the
 pattern. Missing evidence appends a per-recipe feedback block
 (with procedure quoted under a "consumer guidance, not engine

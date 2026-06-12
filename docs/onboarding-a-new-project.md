@@ -52,8 +52,8 @@ enabled by default; opt into presubmits per project via either
 true` on the reusable workflow (either toggle enables them).
 
 Presubmit builds live under `pr-logs/pull/<org>_<repo>/<pr#>/<job>/...`;
-the engine generalized its bucket URL helpers in Phase E to route between
-periodic and presubmit GCS paths automatically.
+the engine's bucket URL helpers route between periodic and presubmit GCS
+paths automatically.
 
 ## Step 0: sweep the jobs first
 
@@ -212,7 +212,7 @@ flow will replace it. Use Option A in that case, or skip ahead to
 [Optional: AI endpoint unreachable from GitHub-hosted runners](#optional-ai-endpoint-unreachable-from-github-hosted-runners)
 for the `skip-fetch` and self-hosted-runner patterns. Pluggable non-Pages
 deploy targets (Netlify, gh-pages branch in a different repo, etc.) are
-tracked as Phase J in the engine plan.
+not yet supported.
 
 ## Step 5: manual GitHub config
 
