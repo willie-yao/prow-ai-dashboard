@@ -63,7 +63,8 @@ func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Agentic call returns final JSON; cached "curator" entry should be invalidated.
+	// Agentic call returns final JSON; a cached entry with a foreign mode
+	// should be invalidated.
 	final := `{"summary":"new agentic","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final))
 
@@ -72,11 +73,11 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
-	// Test case already has a stale non-agentic analysis cached on it from a
-	// prior run (e.g. the old curator pipeline).
+	// Test case already has a stale analysis cached on it with a mode that
+	// is not the current agentic mode (e.g. from an older engine).
 	tc := newFailedTC("Test A", "msg")
-	tc.AISummary = &models.AISummary{Summary: "stale curator summary"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale curator root cause", Mode: "curator"}
+	tc.AISummary = &models.AISummary{Summary: "stale summary"}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale root cause", Mode: "old-mode"}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -129,9 +130,9 @@ func TestService_CacheKeyShape(t *testing.T) {
 
 // TestService_ToolsUnsupported_SetsUnavailable covers the no-fallback
 // invariant: a tools-unsupported endpoint must surface as "unavailable"
-// rather than degrading to a tools-free prompt (there is no curator path).
-// The first failure trips ErrToolsUnsupported and is marked unavailable; the
-// second failure short-circuits without any HTTP call because the run-scoped
+// (there is no tools-free analysis path). The first failure trips
+// ErrToolsUnsupported and is marked unavailable; the second failure
+// short-circuits without any HTTP call because the run-scoped
 // tools-unsupported flag stuck.
 func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	shrinkCallDelay(t)
@@ -183,7 +184,7 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 		{"agentic_at_calls_floor", AgenticMode, 3, 0, 3, 0, false},
 		{"agentic_above_calls_floor", AgenticMode, 5, 0, 3, 0, false},
 		{"agentic_zero_floors_no_invalidation", AgenticMode, 0, 0, 0, 0, false},
-		{"stale_mode_always_reanalyzes", "curator", 5, 200_000, 0, 0, true},
+		{"stale_mode_always_reanalyzes", "old-mode", 5, 200_000, 0, 0, true},
 		{"empty_mode_always_reanalyzes", "", 5, 200_000, 0, 0, true},
 		{"agentic_below_gcs_floor_only", AgenticMode, 10, 1_000, 0, 50_000, true},
 		{"agentic_at_gcs_floor_only", AgenticMode, 10, 50_000, 0, 50_000, false},

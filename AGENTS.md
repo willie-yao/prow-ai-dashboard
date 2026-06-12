@@ -174,8 +174,8 @@ If you're touching anything under `backend/internal/ai/`, read
 first. Quick map:
 
 - **Single path:** every failure is analyzed by the agentic loop (cache
-  `mode: "agentic"`). There is no curator/module selection and no tools-free
-  fallback; an endpoint without function-calling marks failures unavailable.
+  `mode: "agentic"`). There is no mode selection and no tools-free fallback;
+  an endpoint without function-calling marks failures unavailable.
 - **Agentic loop:** `agentic.go` runs up to `MaxIters` rounds (default 15).
   Each round: send conversation → model returns tool calls → engine runs
   tools → results appended → repeat until model returns a final

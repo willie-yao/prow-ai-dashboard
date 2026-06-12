@@ -1,9 +1,8 @@
 # Authoring AI skills (recipes) for your project
 
-> Status: L.4 Step 3 onwards. Consumer-side opt-in. Skills extend the
-> critique gate; you only need this doc if you have `ai.agentic.critique.enabled: true`
-> AND you want to harden the gate against the specific failure
-> patterns your CI hits.
+> Status: Consumer-side opt-in. Skills extend the critique gate; shipping
+> recipe files auto-enables critique, so you only need this doc if you want
+> to harden the gate against the specific failure patterns your CI hits.
 
 This doc explains how to author and ship diagnostic recipes (called
 "skills" in the engine) that bias the AI loop toward reading the
@@ -43,8 +42,7 @@ A skill is the right tool when **all** of the following are true:
   failure, always look at the cert-manager Certificate config and
   the webhook server secret").
 - The weaker AI model used by the consumer (e.g. Qwen3-235B) stops
-  short of that procedure even with the prompt fixes from L.4
-  Steps 1-2.5.
+  short of that procedure even with the engine's prompt-side rules.
 
 If the model already does the right thing on this failure pattern,
 do not author a skill: extra triggers just inflate the recipe set
@@ -181,8 +179,8 @@ Tradeoffs:
 - **Narrower triggers** are tight but miss paraphrases the model
   might use.
 
-Start narrow. Widen when you observe a real miss in the shadow A/B
-data; never widen on speculation.
+Start narrow. Widen when you observe a real miss in the data; never
+widen on speculation.
 
 ## Writing good evidence groups
 
@@ -227,20 +225,19 @@ invalidates all entries on the next run.
 Before merging a new recipe:
 
 1. **Trigger fires on a real draft.** Run `grep -i <trigger>` against
-   `data/jobs/*.json` to confirm at least one shadow-data analysis
-   uses the phrase.
+   `data/jobs/*.json` to confirm at least one analysis uses the phrase.
 2. **Evidence groups match real reads.** Check the `tool_calls` of a
-   matching analysis (or run the universal path locally) to confirm
-   the agent does fetch the artifact when prompted.
+   matching analysis (or run a local fetch) to confirm the agent does
+   fetch the artifact when prompted.
 3. **Procedure is short and tool-oriented.** Quote canonical tool
    names + paths. Don't issue meta-instructions ("think carefully").
 4. **`min_gcs_bytes` is high enough** that the cumulative
    tool-call budget already covers the canonical reads. Otherwise
    the agent will satisfy `min_gcs_bytes` with shallow listings and
    never reach the depth your recipe expects.
-5. **A/B-tested before promotion.** Refetch with the recipe enabled,
-   build an A/B writeup, and confirm the recipe-matched cases gain
-   evidence reads and substantive root-cause depth vs the baseline.
+5. **Validated before promotion.** Refetch with the recipe present
+   and confirm the recipe-matched cases gain evidence reads and
+   substantive root-cause depth versus the prior run.
 
 ## Observability
 
@@ -256,6 +253,5 @@ After the run, every `AIAnalysis` in `data/jobs/*.json` carries:
 - `critique_version`: which engine contract version did it clear?
 - `skill_set_hash`: fingerprint of the recipe set at the time.
 
-The Step 3 A/B harness (`build_ab_l4s3.py`) groups analyses by
-`skill_set_hash` so you can compare pre-skill vs post-skill runs
-without re-fetching unchanged entries.
+Grouping analyses by `skill_set_hash` lets you compare runs from
+before and after a recipe change without re-fetching unchanged entries.

@@ -14,7 +14,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// Module implements ai.Module for the universal agentic flow.
+// Module implements ai.Module: it builds the per-failure seed prompt for the
+// agentic loop.
 type Module struct{}
 
 // New constructs the universal module.
@@ -22,12 +23,6 @@ func New() *Module { return &Module{} }
 
 // Name returns "universal".
 func (m *Module) Name() string { return "universal" }
-
-// IsKnownTransient returns "" — universal mode leaves transient
-// classification to either the optional ai.transient_patterns regex
-// pre-filter (applied by the Service before reaching the module) or the
-// AI's is_transient response field.
-func (m *Module) IsKnownTransient(_ string) string { return "" }
 
 // AnalysisPrompt builds a minimal per-failure prompt. No build log tail,
 // no error grep, no machine logs — the agent is expected to fetch what it

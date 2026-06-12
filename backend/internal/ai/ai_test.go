@@ -167,9 +167,6 @@ func TestIsCopilotEndpoint(t *testing.T) {
 
 // TestCopilotHeaderSkippedForNonCopilotEndpoint verifies the integration
 // header isn't sent when the configured endpoint isn't api.githubcopilot.com.
-// The positive case (header present for the Copilot endpoint) is covered by
-// TestAnalyzeWithMock, which still asserts a successful round-trip with the
-// default ModelsAPIURL.
 func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +185,7 @@ func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
 	}
 }
 
-func TestCallAPICustomHeaders(t *testing.T) {
+func TestRequestHeaders_CustomHeaders(t *testing.T) {
 	var gotAuth, gotNIM, gotAPIKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -224,7 +221,7 @@ func TestCallAPICustomHeaders(t *testing.T) {
 	}
 }
 
-func TestCallAPIExtraHeadersOverrideAuthorization(t *testing.T) {
+func TestRequestHeaders_ExtraHeadersOverrideAuthorization(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")

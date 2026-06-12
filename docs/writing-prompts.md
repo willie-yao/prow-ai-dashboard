@@ -162,7 +162,7 @@ If you want the model to know any of that, it must be in your
 `prompts/system.md`.
 
 One adjacent knob you may also want, **outside** the system prompt: the
-agentic loop configuration in `project.yaml` under `ai.agentic`. The
-loop's tool budget, evidence floors, and critique/skills gates all live
-there. See [docs/agentic.md](agentic.md) for the full reference and
+agentic loop configuration in `project.yaml` under `ai`. The loop's tool
+budget, evidence floors, and critique/skills gates all live there. See
+[docs/agentic.md](agentic.md) for the full reference and
 [docs/skills.md](skills.md) for recipe-driven evidence requirements.
