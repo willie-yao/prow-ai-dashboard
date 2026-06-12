@@ -104,9 +104,9 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 
 	userPrompt := s.module.AnalysisPrompt(ctx, httpClient, run, tc, consec)
 
-	// No curator fallback: an endpoint that can't do function-calling
-	// (detected on an earlier failure this run, or on this call) surfaces
-	// as unavailable rather than degrading to a tools-free prompt.
+	// An endpoint that can't do function-calling (detected on an earlier
+	// failure this run, or on this call) surfaces as unavailable: there is
+	// no tools-free analysis path to degrade to.
 	if s.toolsUnsupported.Load() {
 		s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support"))
 		return
@@ -115,7 +115,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
-			log.Printf("  ⚠ AI endpoint rejected tools; analysis unavailable (no curator fallback): %v", err)
+			log.Printf("  ⚠ AI endpoint rejected tools; analysis unavailable: %v", err)
 			s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support: %w", err))
 			return
 		}

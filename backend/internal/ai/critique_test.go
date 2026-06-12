@@ -524,11 +524,10 @@ required_evidence:
 	}
 }
 
-// TestCritiqueDraft_NilSkillsBackwardCompatible verifies the pre-
-// Step-3 contract: passing nil for matchedSkills disables the check
-// entirely, even if the draft would otherwise have matched a recipe.
-// Existing legacy call sites rely on this.
-func TestCritiqueDraft_NilSkillsBackwardCompatible(t *testing.T) {
+// TestCritiqueDraft_NilSkillsDisablesCheck verifies that passing nil for
+// matchedSkills disables the skill-evidence check entirely, even if the draft
+// would otherwise have matched a recipe.
+func TestCritiqueDraft_NilSkillsDisablesCheck(t *testing.T) {
 	parsed := analysisResponse{
 		RootCause:    "Webhook x509 failure.",
 		SuggestedFix: "Fix the cert and reapply.",

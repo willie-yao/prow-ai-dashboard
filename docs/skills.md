@@ -1,9 +1,8 @@
 # Authoring AI skills (recipes) for your project
 
-> Status: L.4 Step 3 onwards. Consumer-side opt-in. Skills extend the
-> critique gate; you only need this doc if you have `ai.agentic.critique.enabled: true`
-> AND you want to harden the gate against the specific failure
-> patterns your CI hits.
+> Status: Consumer-side opt-in. Skills extend the critique gate; shipping
+> recipe files auto-enables critique, so you only need this doc if you want
+> to harden the gate against the specific failure patterns your CI hits.
 
 This doc explains how to author and ship diagnostic recipes (called
 "skills" in the engine) that bias the AI loop toward reading the
@@ -230,8 +229,8 @@ Before merging a new recipe:
    `data/jobs/*.json` to confirm at least one shadow-data analysis
    uses the phrase.
 2. **Evidence groups match real reads.** Check the `tool_calls` of a
-   matching analysis (or run the universal path locally) to confirm
-   the agent does fetch the artifact when prompted.
+   matching analysis (or run a local fetch) to confirm the agent does
+   fetch the artifact when prompted.
 3. **Procedure is short and tool-oriented.** Quote canonical tool
    names + paths. Don't issue meta-instructions ("think carefully").
 4. **`min_gcs_bytes` is high enough** that the cumulative
