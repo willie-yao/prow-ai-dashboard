@@ -98,6 +98,27 @@ type AgenticOptions struct {
 // the prompt size on builds with very large artifact trees.
 const artifactTreeMaxPaths = 500
 
+// Bound the artifact-tree seed by bytes, not just path count: a few hundred
+// deeply-nested paths can still overflow the window on iter 1. Budget is this
+// fraction of the context budget, or the static fallback when the endpoint
+// reports no window (e.g. Copilot).
+const artifactTreeSeedBudgetPct = 15
+const artifactTreeSeedFallbackBytes = 48 * 1024
+
+// artifactTreeSeedBytes is the seed's byte ceiling: a fraction of the detected
+// context budget (ContextByteBudget, else ModelByteBudget), else the static
+// fallback.
+func artifactTreeSeedBytes(opts AgenticOptions) int {
+	base := opts.ContextByteBudget
+	if base <= 0 {
+		base = opts.ModelByteBudget
+	}
+	if base <= 0 {
+		return artifactTreeSeedFallbackBytes
+	}
+	return base * artifactTreeSeedBudgetPct / 100
+}
+
 // artifactTreeNoiseExt are file extensions the seed drops before capping:
 // non-text artifacts the model cannot usefully read, so excluding them leaves
 // more of the path budget for diagnostic logs.
@@ -659,7 +680,7 @@ func (c *Client) doAnalyzeAgentic(
 	// model reads exact paths instead of guessing leaf filenames (the
 	// dominant cause of failed deep reads). Deterministic, capped, and a
 	// no-op when the listing is empty or fails.
-	if seed := c.buildArtifactTreeSeed(ctx, in.Browser); seed != "" {
+	if seed := c.buildArtifactTreeSeed(ctx, in.Browser, artifactTreeSeedBytes(in.Opts)); seed != "" {
 		userPrompt = seed + "\n\n---\n\n" + userPrompt
 	}
 	messages := []agChatMessage{
@@ -951,12 +972,12 @@ func (c *Client) doAnalyzeAgentic(
 // buildArtifactTreeSeed returns a prompt addendum listing the build's
 // artifact path tree (capped), so the model reads exact paths instead of
 // guessing leaf filenames. Over-fetches, drops non-text noise, then caps to
-// artifactTreeMaxPaths so the budget holds diagnostic logs. Tells the model
+// artifactTreeMaxPaths and maxBytes (whichever binds first). Tells the model
 // to read from the list directly rather than spend tool calls on
 // list_artifacts / find_artifacts rediscovering paths it already has. One
 // recursive listing; degrades to "" if the listing is empty or fails (the
 // loop proceeds with its normal prompt).
-func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser) string {
+func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser, maxBytes int) string {
 	if browser == nil {
 		return ""
 	}
@@ -984,16 +1005,29 @@ func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Br
 		paths = paths[:artifactTreeMaxPaths]
 		truncated = true
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, and do NOT spend tool calls on list_artifacts / find_artifacts to rediscover paths that are already listed here. Read the relevant logs directly:\n", len(paths))
+	// Append paths until the path cap or the byte budget binds (maxBytes bounds
+	// the path lines; the header/note add a few hundred bytes on top).
+	var lines strings.Builder
+	kept := 0
 	for _, p := range paths {
-		b.WriteString(p)
-		b.WriteByte('\n')
+		if maxBytes > 0 && lines.Len()+len(p)+1 > maxBytes {
+			truncated = true
+			break
+		}
+		lines.WriteString(p)
+		lines.WriteByte('\n')
+		kept++
 	}
+	if kept == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, and do NOT spend tool calls on list_artifacts / find_artifacts to rediscover paths that are already listed here. Read the relevant logs directly:\n", kept)
+	b.WriteString(lines.String())
 	if truncated {
-		fmt.Fprintf(&b, "... [list truncated at %d paths; use list_artifacts only for subtrees not shown above]\n", artifactTreeMaxPaths)
+		b.WriteString("... [list truncated; use list_artifacts for subtrees not shown above]\n")
 	}
-	log.Printf("  🗂 artifact-tree seed: %d path(s) injected", len(paths))
+	log.Printf("  🗂 artifact-tree seed: %d path(s) injected (%d bytes)", kept, b.Len())
 	return b.String()
 }
 

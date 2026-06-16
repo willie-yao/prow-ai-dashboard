@@ -1793,6 +1793,46 @@ func TestAgentic_SeedArtifactTree_NoOpOnEmptyTree(t *testing.T) {
 	}
 }
 
+// TestAgentic_SeedArtifactTree_ByteCapped verifies the seed is bounded by a
+// byte budget (a fraction of the model/context budget), not just the path
+// count, so a build with many long paths can't overflow the window on iter 1.
+// Regression test for the AKS-KubeRay-class prompt-overflow 400s.
+func TestAgentic_SeedArtifactTree_ByteCapped(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+
+	// 60 long, sortable paths (~500 bytes each ≈ 30KB total). With a small
+	// model budget the seed byte budget is ~3KB, so only the first handful fit.
+	files := map[string][]byte{}
+	for i := 0; i < 60; i++ {
+		p := fmt.Sprintf("artifacts/clusters/c/p%03d/%s.log", i, strings.Repeat("x", 470))
+		files[p] = []byte("y")
+	}
+	browser := &fakeBrowser{files: files}
+	// ModelByteBudget 20000 -> artifactTreeSeedBytes = 15% = 3000 bytes.
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 20_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
+
+	_, _, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, browser, opts), "agentic:test:seedcap", "sys", "user")
+	if err != nil {
+		t.Fatalf("doAnalyzeAgentic: %v", err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	req := string(srv.requests[0])
+	if !strings.Contains(req, "artifacts/clusters/c/p000/") {
+		t.Errorf("seed should include the first (sorted) path")
+	}
+	if strings.Contains(req, "artifacts/clusters/c/p059/") {
+		t.Errorf("seed should be byte-truncated; last path must not be present")
+	}
+	if !strings.Contains(req, "list truncated; use list_artifacts") {
+		t.Errorf("byte-truncated seed must carry the truncation note")
+	}
+}
+
 // TestAgentic_SkillEvidenceAbsentFromBuild_StillCaches verifies the
 // skill-evidence absence fix: when a matched recipe requires evidence that
 // does not exist anywhere in the build's artifact tree, the recipe is

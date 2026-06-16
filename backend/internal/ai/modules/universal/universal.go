@@ -29,11 +29,13 @@ func (m *Module) Name() string { return "universal" }
 // needs using list_artifacts / read_artifact / tail_artifact / grep_artifact
 // and (when k8s tools are enabled) discover_clusters / discover_controllers.
 //
-// Trailing failure-body content is truncated to the last 8KB to keep the
-// seed prompt small; the agent can tail_artifact the junit file itself if
-// it needs more.
+// The failure message and body are size-capped to keep the prompt small; the
+// agent can tail_artifact the junit file itself if it needs more.
 func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
+	// Caps stop a giant ginkgo failure message (MBs on some AKS KubeRay runs)
+	// from overflowing the model window on the first request.
 	const failureBodyTail = 8 * 1024
+	const failureMessageCap = 16 * 1024
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Test failure to investigate.\n\n")
@@ -55,7 +57,7 @@ func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.B
 
 	if msg := strings.TrimSpace(tc.FailureMessage); msg != "" {
 		sb.WriteString("\nFailure message:\n")
-		sb.WriteString(msg)
+		sb.WriteString(clampHeadTail(msg, failureMessageCap))
 		sb.WriteString("\n")
 	}
 	if body := strings.TrimSpace(tc.FailureBody); body != "" {
@@ -83,4 +85,19 @@ calls, say what you determined and what remains unknown.
 `)
 
 	return sb.String()
+}
+
+// clampHeadTail keeps the head (3/4) and tail (1/4) of s within max bytes with
+// an elision marker between, so both the opening assertion and closing summary
+// survive. Cuts are trimmed to valid UTF-8. Returns s unchanged if max<=0 or it
+// already fits.
+func clampHeadTail(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	head := max * 3 / 4
+	tail := max - head
+	h := strings.ToValidUTF8(s[:head], "")
+	t := strings.ToValidUTF8(s[len(s)-tail:], "")
+	return h + fmt.Sprintf("\n... [%d bytes elided to fit the context window; read the junit/build-log artifact for the full message] ...\n", len(s)-len(h)-len(t)) + t
 }
