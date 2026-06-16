@@ -283,17 +283,26 @@ navigates to the right directory but invents a filename that does not exist, so
 it never reaches the controller/machine log holding the upstream cause. Seeding
 the real tree removes the guessing. It is not configurable.
 
-The listing is capped (currently 500 paths) to bound prompt size; a build
-with more artifacts is truncated with a note pointing the model at
-`list_artifacts` for the rest. Before capping, the engine over-fetches and
-drops non-text noise (images and archives such as `.png`, `.svg`, `.gz`,
-`.tar`, `.zip`) the model cannot usefully read, leaving more of the path
-budget for diagnostic logs. The seed header also tells the model to read from
-the list directly and **not** spend tool calls on `list_artifacts` /
-`find_artifacts` rediscovering paths it already has. It adds the path list (a
-few KB to tens of KB) to the prompt. Degrades to a no-op if the listing is
-empty or fails (the loop proceeds with its normal prompt). One extra listing
-per uncached failure; no cache-version interaction.
+The listing is bounded two ways so it can't overflow the model's context
+window on the first request: a path-count cap (currently 500 paths) **and** a
+byte cap sized to a fraction (~15%) of the detected context budget, or a
+conservative static fallback (~48 KB) when the endpoint doesn't report a window
+(e.g. GitHub Copilot). Whichever binds first truncates the list, with a note
+pointing the model at `list_artifacts` for the rest. Before capping, the engine
+over-fetches and drops non-text noise (images and archives such as `.png`,
+`.svg`, `.gz`, `.tar`, `.zip`) the model cannot usefully read, leaving more of
+the budget for diagnostic logs. The seed header also tells the model to read
+from the list directly and **not** spend tool calls on `list_artifacts` /
+`find_artifacts` rediscovering paths it already has. Degrades to a no-op if the
+listing is empty or fails (the loop proceeds with its normal prompt). One extra
+listing per uncached failure; no cache-version interaction.
+
+The per-failure task prompt is bounded for the same reason: the failing test's
+junit **failure message** is clamped (head + tail, ~16 KB) before it is
+embedded, because some test families (e.g. AKS KubeRay) emit multi-hundred-KB
+to multi-MB ginkgo messages that would otherwise overflow the window on
+iteration 1 and fail the analysis with a 400. The agent can still read the full
+junit / build-log via its tools.
 
 ### Investigation floors
 

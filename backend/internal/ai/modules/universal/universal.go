@@ -32,6 +32,15 @@ func (m *Module) Name() string { return "universal" }
 // Trailing failure-body content is truncated to the last 8KB to keep the
 // seed prompt small; the agent can tail_artifact the junit file itself if
 // it needs more.
+// failureMessageCap bounds the junit failure message embedded in the prompt.
+// Ginkgo can emit very large messages (full object dumps, captured output);
+// some test families (e.g. AKS KubeRay) produce messages of hundreds of KB to
+// MB that overflow the model's context window on the very first request,
+// before compaction can run, and fail the whole analysis with a 400. The agent
+// can still read the full junit/build-log via its tools, so we keep the head
+// (the assertion/reason) and tail (any final summary) and elide the middle.
+const failureMessageCap = 16 * 1024
+
 func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
 	const failureBodyTail = 8 * 1024
 
@@ -55,7 +64,7 @@ func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.B
 
 	if msg := strings.TrimSpace(tc.FailureMessage); msg != "" {
 		sb.WriteString("\nFailure message:\n")
-		sb.WriteString(msg)
+		sb.WriteString(clampHeadTail(msg, failureMessageCap))
 		sb.WriteString("\n")
 	}
 	if body := strings.TrimSpace(tc.FailureBody); body != "" {
@@ -83,4 +92,21 @@ calls, say what you determined and what remains unknown.
 `)
 
 	return sb.String()
+}
+
+// clampHeadTail returns s unchanged when it is within max bytes (or max is
+// non-positive); otherwise it keeps the leading 3/4 and trailing 1/4 of the
+// budget with an elision marker in between, so both the opening assertion and
+// any closing summary survive. Cut points are trimmed to valid UTF-8 so the
+// model never sees a split multi-byte rune. The returned string is the kept
+// payload plus the (small, fixed) marker.
+func clampHeadTail(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	head := max * 3 / 4
+	tail := max - head
+	h := strings.ToValidUTF8(s[:head], "")
+	t := strings.ToValidUTF8(s[len(s)-tail:], "")
+	return h + fmt.Sprintf("\n... [%d bytes elided to fit the context window; read the junit/build-log artifact for the full message] ...\n", len(s)-len(h)-len(t)) + t
 }

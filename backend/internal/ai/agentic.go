@@ -98,6 +98,34 @@ type AgenticOptions struct {
 // the prompt size on builds with very large artifact trees.
 const artifactTreeMaxPaths = 500
 
+// artifactTreeSeedBudgetPct bounds the seed's serialized size to this fraction
+// of the available context budget, so a build with a pathological artifact
+// tree (very many or very long paths) cannot dominate the model's window on
+// iteration 1, before compaction can run. Path count alone is not a sufficient
+// bound: a few hundred deeply-nested paths can still be large.
+const artifactTreeSeedBudgetPct = 15
+
+// artifactTreeSeedFallbackBytes bounds the seed when no context budget is
+// known (e.g. GitHub Copilot does not expose /v1/models, so budgets cannot be
+// sized from the window). Conservative: ~12K tokens at ~4 bytes/token.
+const artifactTreeSeedFallbackBytes = 48 * 1024
+
+// artifactTreeSeedBytes is the byte ceiling for the artifact-tree seed: a
+// fraction of the detected context window (ContextByteBudget tracks ~3/4 of it
+// when known), else a fraction of the model byte budget, else a conservative
+// static fallback. The fraction is applied to a window-derived budget when one
+// exists so a small-window model gets a proportionally smaller seed.
+func artifactTreeSeedBytes(opts AgenticOptions) int {
+	base := opts.ContextByteBudget
+	if base <= 0 {
+		base = opts.ModelByteBudget
+	}
+	if base <= 0 {
+		return artifactTreeSeedFallbackBytes
+	}
+	return base * artifactTreeSeedBudgetPct / 100
+}
+
 // artifactTreeNoiseExt are file extensions the seed drops before capping:
 // non-text artifacts the model cannot usefully read, so excluding them leaves
 // more of the path budget for diagnostic logs.
@@ -659,7 +687,7 @@ func (c *Client) doAnalyzeAgentic(
 	// model reads exact paths instead of guessing leaf filenames (the
 	// dominant cause of failed deep reads). Deterministic, capped, and a
 	// no-op when the listing is empty or fails.
-	if seed := c.buildArtifactTreeSeed(ctx, in.Browser); seed != "" {
+	if seed := c.buildArtifactTreeSeed(ctx, in.Browser, artifactTreeSeedBytes(in.Opts)); seed != "" {
 		userPrompt = seed + "\n\n---\n\n" + userPrompt
 	}
 	messages := []agChatMessage{
@@ -951,12 +979,13 @@ func (c *Client) doAnalyzeAgentic(
 // buildArtifactTreeSeed returns a prompt addendum listing the build's
 // artifact path tree (capped), so the model reads exact paths instead of
 // guessing leaf filenames. Over-fetches, drops non-text noise, then caps to
-// artifactTreeMaxPaths so the budget holds diagnostic logs. Tells the model
-// to read from the list directly rather than spend tool calls on
+// artifactTreeMaxPaths AND to maxBytes (whichever binds first) so the seed
+// can't blow the model's context window on a pathological tree. Tells the
+// model to read from the list directly rather than spend tool calls on
 // list_artifacts / find_artifacts rediscovering paths it already has. One
 // recursive listing; degrades to "" if the listing is empty or fails (the
 // loop proceeds with its normal prompt).
-func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser) string {
+func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Browser, maxBytes int) string {
 	if browser == nil {
 		return ""
 	}
@@ -984,16 +1013,31 @@ func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Br
 		paths = paths[:artifactTreeMaxPaths]
 		truncated = true
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, and do NOT spend tool calls on list_artifacts / find_artifacts to rediscover paths that are already listed here. Read the relevant logs directly:\n", len(paths))
+	// Append paths until either the path cap or the byte budget binds, so a
+	// build with very long or very many paths can't dominate the prompt. The
+	// budget bounds the path lines (the dominant term); the small fixed header
+	// and note add a few hundred bytes on top.
+	var lines strings.Builder
+	kept := 0
 	for _, p := range paths {
-		b.WriteString(p)
-		b.WriteByte('\n')
+		if maxBytes > 0 && lines.Len()+len(p)+1 > maxBytes {
+			truncated = true
+			break
+		}
+		lines.WriteString(p)
+		lines.WriteByte('\n')
+		kept++
 	}
+	if kept == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Artifact paths for this build (%d file(s)). These are the EXACT paths to pass to read_artifact / tail_artifact / grep_artifact; do NOT guess paths, and do NOT spend tool calls on list_artifacts / find_artifacts to rediscover paths that are already listed here. Read the relevant logs directly:\n", kept)
+	b.WriteString(lines.String())
 	if truncated {
-		fmt.Fprintf(&b, "... [list truncated at %d paths; use list_artifacts only for subtrees not shown above]\n", artifactTreeMaxPaths)
+		b.WriteString("... [list truncated; use list_artifacts for subtrees not shown above]\n")
 	}
-	log.Printf("  🗂 artifact-tree seed: %d path(s) injected", len(paths))
+	log.Printf("  🗂 artifact-tree seed: %d path(s) injected (%d bytes)", kept, b.Len())
 	return b.String()
 }
 
