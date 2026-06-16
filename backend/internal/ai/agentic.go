@@ -98,23 +98,16 @@ type AgenticOptions struct {
 // the prompt size on builds with very large artifact trees.
 const artifactTreeMaxPaths = 500
 
-// artifactTreeSeedBudgetPct bounds the seed's serialized size to this fraction
-// of the available context budget, so a build with a pathological artifact
-// tree (very many or very long paths) cannot dominate the model's window on
-// iteration 1, before compaction can run. Path count alone is not a sufficient
-// bound: a few hundred deeply-nested paths can still be large.
+// Bound the artifact-tree seed by bytes, not just path count: a few hundred
+// deeply-nested paths can still overflow the window on iter 1. Budget is this
+// fraction of the context budget, or the static fallback when the endpoint
+// reports no window (e.g. Copilot).
 const artifactTreeSeedBudgetPct = 15
-
-// artifactTreeSeedFallbackBytes bounds the seed when no context budget is
-// known (e.g. GitHub Copilot does not expose /v1/models, so budgets cannot be
-// sized from the window). Conservative: ~12K tokens at ~4 bytes/token.
 const artifactTreeSeedFallbackBytes = 48 * 1024
 
-// artifactTreeSeedBytes is the byte ceiling for the artifact-tree seed: a
-// fraction of the detected context window (ContextByteBudget tracks ~3/4 of it
-// when known), else a fraction of the model byte budget, else a conservative
-// static fallback. The fraction is applied to a window-derived budget when one
-// exists so a small-window model gets a proportionally smaller seed.
+// artifactTreeSeedBytes is the seed's byte ceiling: a fraction of the detected
+// context budget (ContextByteBudget, else ModelByteBudget), else the static
+// fallback.
 func artifactTreeSeedBytes(opts AgenticOptions) int {
 	base := opts.ContextByteBudget
 	if base <= 0 {
@@ -979,9 +972,8 @@ func (c *Client) doAnalyzeAgentic(
 // buildArtifactTreeSeed returns a prompt addendum listing the build's
 // artifact path tree (capped), so the model reads exact paths instead of
 // guessing leaf filenames. Over-fetches, drops non-text noise, then caps to
-// artifactTreeMaxPaths AND to maxBytes (whichever binds first) so the seed
-// can't blow the model's context window on a pathological tree. Tells the
-// model to read from the list directly rather than spend tool calls on
+// artifactTreeMaxPaths and maxBytes (whichever binds first). Tells the model
+// to read from the list directly rather than spend tool calls on
 // list_artifacts / find_artifacts rediscovering paths it already has. One
 // recursive listing; degrades to "" if the listing is empty or fails (the
 // loop proceeds with its normal prompt).
@@ -1013,10 +1005,8 @@ func (c *Client) buildArtifactTreeSeed(ctx context.Context, browser artifacts.Br
 		paths = paths[:artifactTreeMaxPaths]
 		truncated = true
 	}
-	// Append paths until either the path cap or the byte budget binds, so a
-	// build with very long or very many paths can't dominate the prompt. The
-	// budget bounds the path lines (the dominant term); the small fixed header
-	// and note add a few hundred bytes on top.
+	// Append paths until the path cap or the byte budget binds (maxBytes bounds
+	// the path lines; the header/note add a few hundred bytes on top).
 	var lines strings.Builder
 	kept := 0
 	for _, p := range paths {

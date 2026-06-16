@@ -19,8 +19,10 @@ func TestAnalysisPrompt_CapsHugeFailureMessage(t *testing.T) {
 
 	got := (&Module{}).AnalysisPrompt(context.Background(), nil, &models.BuildResult{}, tc, 1)
 
-	if len(got) > failureMessageCap+4*1024 {
-		t.Fatalf("prompt not clamped: len=%d, want <= ~%d", len(got), failureMessageCap+4*1024)
+	// The message cap is 16KB; the surrounding template adds a little more. The
+	// input is 2MB+, so a clamped prompt is comfortably under 20KB.
+	if len(got) > 20*1024 {
+		t.Fatalf("prompt not clamped: len=%d", len(got))
 	}
 	if strings.Contains(got, huge) {
 		t.Errorf("prompt embeds the full uncapped failure message")
