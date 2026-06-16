@@ -293,21 +293,25 @@ and publishes `<project_dir>/data/` directly. Cache restore/save
 steps are also skipped.
 
 **Use a self-hosted runner with cluster-internal access.** For
-sustained automated runs, deploy `actions-runner-controller` (ARC)
-in the cluster that hosts your endpoint, then forward
-`runs-on:` through the consumer workflow:
+sustained automated runs where your AI stack runs in a Kubernetes
+cluster, run the deploy job on a self-hosted runner inside that cluster
+so the fetcher reaches your endpoint over cluster DNS. Deploy
+`actions-runner-controller` (ARC) in the cluster, then point
+`runs-on:` at the runner set through the consumer workflow:
 
 ```yaml
 uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 with:
   project_dir: .
-  runs-on: '["self-hosted", "arc-your-runner"]'   # JSON array for multi-label
+  runs-on: my-runner   # the ARC runner-set name (a JSON array also works)
   ai-endpoint: http://your-svc.ns.svc.cluster.local:8000/v1/chat/completions
 ```
 
-`runs-on:` accepts a bare label (e.g. `ubuntu-latest`) or a
-JSON-encoded array. No engine changes needed beyond these workflow
-inputs.
+`runs-on:` accepts a bare label (the runner-set name) or a
+JSON-encoded array. See
+[self-hosted-runner-in-cluster.md](self-hosted-runner-in-cluster.md)
+for the full ARC install, validation, and tuning walkthrough. No engine
+changes are needed beyond these workflow inputs.
 
 ## Worked-example artifacts
 
