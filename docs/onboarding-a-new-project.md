@@ -2,6 +2,12 @@
 
 This is the worked example for adding a new prow-ai-dashboard project, in
 either a dedicated repo or a subdirectory of an existing one.
+It is the **granular reference**: it walks every configurable field and the
+edge cases (job grouping, presubmits, host-repo choices, private endpoints).
+For a faster opinionated happy path that gets one dashboard live in ~15
+minutes, start with [quickstart.md](quickstart.md) and come back here when you
+need a fork it does not cover.
+
 It uses [`willie-yao/capi-prow-ai-dashboard`][capi] (the Cluster API core
 dashboard) as the reference because CAPI core hits the largest number of
 edge cases: empty `cluster_name_prefix`, mixed unit + E2E + conformance

@@ -70,14 +70,14 @@ branding:
 # API. Defaults point at GitHub Copilot. See docs/ai-providers.md for
 # Nvidia Dynamo / Azure OpenAI / OpenAI / Ollama snippets.
 #
-# Keep internal-only identifiers out of this public file by omitting them
-# here and setting AI_ENDPOINT / AI_MODEL via repo variables on the consumer
-# (`gh variable set AI_MODEL ...`), passed through the reusable workflow's
-# ai-model / ai-endpoint inputs. The fetcher reads the env when YAML fields
-# are blank; the YAML wins if both are set.
+# Keep private or preview identifiers out of this public file by omitting
+# them here and setting AI_ENDPOINT / AI_MODEL via repo variables on the
+# consumer (`gh variable set AI_MODEL ...`), passed through the reusable
+# workflow's ai-model / ai-endpoint inputs. The fetcher reads the env when
+# YAML fields are blank; the YAML wins if both are set.
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-opus-4.7-xhigh"
+  model: "claude-sonnet-4.5"
 
   # The agentic tool-calling loop is the only analysis path: the LLM browses
   # GCS + cluster artifacts itself via the registered tools and returns a

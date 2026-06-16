@@ -12,7 +12,7 @@ name: Reusable Deploy
 #       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
 #       with:
 #         project_dir: .
-#         # Optional: keep internal-only model identifiers and private
+#         # Optional: keep private or preview model identifiers and private
 #         # endpoint URLs out of the public project.yaml by sourcing them
 #         # from repo variables (`gh variable set AI_MODEL ...`) instead.
 #         # The project.yaml `ai.model` / `ai.endpoint` fields still win
@@ -57,7 +57,7 @@ on:
         type: boolean
         default: true
       ai-model:
-        description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with a repo variable (vars.AI_MODEL) to keep internal-only model labels out of the public project.yaml. The yaml ai.model field wins if set."
+        description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with a repo variable (vars.AI_MODEL) to keep private or preview model labels out of the public project.yaml. The yaml ai.model field wins if set."
         required: false
         type: string
         default: ""

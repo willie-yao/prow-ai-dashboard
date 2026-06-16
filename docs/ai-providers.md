@@ -25,9 +25,8 @@ Set the bearer token via the `AI_TOKEN` secret in the GitHub Actions workflow
 `endpoint:` or `model:` is visible to the world. That's fine for public
 providers and standard model names, but it's a problem when:
 
-- The model identifier is an internal-only label (e.g. an "Internal only"
-  Copilot variant your org has access to that hasn't been broadly
-  announced).
+- The model identifier is one you would rather not commit to a public file
+  (a preview label, or a model only your org is enrolled in).
 - The endpoint is a private gateway URL you don't want indexed.
 
 For those cases, leave `endpoint:` and `model:` out of `project.yaml` and
@@ -71,35 +70,30 @@ keeps the values out of the public repo source.
 
 The engine also scrubs `ai.endpoint`, `ai.model`, and per-failure
 `ai_analysis.model` from every JSON file written to `frontend/public/data/`
-regardless of where the values came from, so internal model labels never
+regardless of where the values came from, so private model labels never
 reach the deployed GitHub Pages site even if a future change accidentally
 puts them back in yaml.
 
-## GitHub Copilot (default)
+## GitHub Copilot (default endpoint)
 
-This is what you get if you leave `endpoint` and `model` unset. Token is
-your fine-grained PAT with the `copilot_chat` user permission.
+Leave `endpoint` unset to target Copilot. `AI_TOKEN` is a fine-grained PAT
+with the `copilot_chat` user permission. Set `model` explicitly to a model
+your Copilot plan exposes; a public model id keeps the config reproducible
+for anyone reading the repo:
 
 ```yaml
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-opus-4.7-xhigh"
+  model: "claude-sonnet-4.5"
 ```
 
-Models verified against the Copilot endpoint:
-
-- `claude-opus-4.7-xhigh` — extra-high reasoning effort, 200K context.
-  Best quality for debugging analysis. Engine default. Marked
-  "(Internal only)" in the agent model list but currently accepted by
-  the public endpoint; treat availability as best-effort.
-- `claude-opus-4.7` — newer model, standard reasoning, 200K context.
-  Use as the fallback if xhigh access is revoked.
-- `claude-opus-4.6` — stable, broadly available. Safe baseline if you
-  hit access issues with the 4.7 line.
-- `claude-opus-4.7-1m-internal` — 1M context, standard reasoning. Only
-  useful if prompts exceed ~150K tokens; standard prompts don't need it.
-
-There is no combined "1M + xhigh" variant.
+Copilot is metered, not free: it requires a subscription, and a full cold
+fetch (one agentic investigation per failure) consumes request and token
+allowance. The free individual tier works for trying it out but has a limited
+monthly allowance; organizations need paid licenses. Model availability shifts
+over time and varies by plan, so set `model` explicitly to one your plan
+exposes (current options include the Claude Sonnet and GPT-5 families). If you
+leave `model` unset the engine falls back to a built-in default.
 
 The fetcher automatically sends `Copilot-Integration-Id: copilot-developer-cli`
 when (and only when) the endpoint's host is `*.githubcopilot.com`.
@@ -109,7 +103,7 @@ when (and only when) the endpoint's host is `*.githubcopilot.com`.
 ```yaml
 ai:
   endpoint: "https://api.openai.com/v1/chat/completions"
-  model: "gpt-4o"
+  model: "gpt-5-mini"
 ```
 
 `AI_TOKEN` is your OpenAI API key.
@@ -122,8 +116,8 @@ the default bearer scheme:
 
 ```yaml
 ai:
-  endpoint: "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
-  model: "gpt-4o"
+  endpoint: "https://my-resource.openai.azure.com/openai/deployments/gpt-5-mini/chat/completions?api-version=2024-08-01-preview"
+  model: "gpt-5-mini"
   headers:
     api-key: "${AI_TOKEN}"
 ```
