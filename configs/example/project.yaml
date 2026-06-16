@@ -77,7 +77,7 @@ branding:
 # YAML fields are blank; the YAML wins if both are set.
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "gpt-4o"
+  model: "claude-sonnet-4.5"
 
   # The agentic tool-calling loop is the only analysis path: the LLM browses
   # GCS + cluster artifacts itself via the registered tools and returns a

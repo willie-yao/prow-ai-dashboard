@@ -84,16 +84,16 @@ for anyone reading the repo:
 ```yaml
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "gpt-4o"
+  model: "claude-sonnet-4.5"
 ```
 
 Copilot is metered, not free: it requires a subscription, and a full cold
 fetch (one agentic investigation per failure) consumes request and token
 allowance. The free individual tier works for trying it out but has a limited
-monthly allowance; organizations need paid licenses. Pick a model whose
-context window comfortably fits a debugging prompt (most current Copilot models
-offer 128K or more). If you leave `model` unset the engine falls back to a
-built-in default, so set it explicitly to keep the config self-describing.
+monthly allowance; organizations need paid licenses. Model availability shifts
+over time and varies by plan, so set `model` explicitly to one your plan
+exposes (current options include the Claude Sonnet and GPT-5 families). If you
+leave `model` unset the engine falls back to a built-in default.
 
 The fetcher automatically sends `Copilot-Integration-Id: copilot-developer-cli`
 when (and only when) the endpoint's host is `*.githubcopilot.com`.
@@ -103,7 +103,7 @@ when (and only when) the endpoint's host is `*.githubcopilot.com`.
 ```yaml
 ai:
   endpoint: "https://api.openai.com/v1/chat/completions"
-  model: "gpt-4o"
+  model: "gpt-5-mini"
 ```
 
 `AI_TOKEN` is your OpenAI API key.
@@ -116,8 +116,8 @@ the default bearer scheme:
 
 ```yaml
 ai:
-  endpoint: "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
-  model: "gpt-4o"
+  endpoint: "https://my-resource.openai.azure.com/openai/deployments/gpt-5-mini/chat/completions?api-version=2024-08-01-preview"
+  model: "gpt-5-mini"
   headers:
     api-key: "${AI_TOKEN}"
 ```

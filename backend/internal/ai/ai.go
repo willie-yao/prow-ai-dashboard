@@ -20,7 +20,7 @@ const (
 	// ModelsAPIURL is the GitHub Copilot chat completions endpoint.
 	ModelsAPIURL = "https://api.githubcopilot.com/chat/completions"
 	// Model is the default model; override via Options.Model or AI_MODEL env.
-	Model = "gpt-4o"
+	Model = "claude-sonnet-4.5"
 )
 
 // callDelay throttles consecutive API calls. var (not const) so tests can

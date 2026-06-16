@@ -208,14 +208,26 @@ ai:
     enabled: true
 ```
 
-A model on your laptop is not reachable from GitHub's hosted runners, so this
-option does not auto-deploy. Use it to preview locally (build the fetcher as in
-Step 3, run it with `-ai` against the local endpoint writing into the engine's
-`frontend/public/data`, then `make dev` in the engine checkout to view). When
-you are happy, publish the prebuilt `data/` with the `skip-fetch` flow in
+A model on your laptop is not reachable from GitHub's hosted runners, so the
+runner cannot fetch against it. Instead you fetch locally and let the deploy
+just republish the committed data. Two adjustments to the hosted flow:
+
+- In `deploy.yml`, add `skip-fetch: true` under `with:` so every scheduled or
+  push deploy publishes your committed `<project_dir>/data/` instead of trying
+  to reach `localhost`. You can then drop the `AI_TOKEN` secret.
+- Fetch and commit the data yourself (build the fetcher as in Step 3):
+
+  ```bash
+  AI_TOKEN=ollama AI_ENDPOINT=http://localhost:11434/v1/chat/completions \
+  AI_MODEL=qwen3:8b \
+    /tmp/fetcher -project-dir=. -out=data -ai -builds=3   # use your subdir for -out too
+  git add data && git commit -m "Refresh dashboard data" && git push
+  ```
+
+To preview before committing, point `-out` at the engine checkout's
+`frontend/public/data` and run `make dev` there. This is the same `skip-fetch`
+pattern documented in
 [onboarding-a-new-project.md](onboarding-a-new-project.md#optional-ai-endpoint-unreachable-from-github-hosted-runners).
-With this option you can skip the `AI_TOKEN` secret in Step 4; set it to any
-non-empty placeholder (e.g. `ollama`) for local runs.
 
 ### Option B: hosted API (auto-deploys from GitHub Actions)
 
@@ -228,7 +240,7 @@ dollars):
 ```yaml
 ai:
   endpoint: "https://api.openai.com/v1/chat/completions"
-  model: "gpt-4o-mini"     # public, small, supports tool calling
+  model: "gpt-5-mini"      # public, small, supports tool calling
   tools: [filesystem, k8s]
 ```
 
@@ -240,7 +252,7 @@ with the `copilot_chat` permission):
 ```yaml
 ai:
   endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "gpt-4o"          # or another model your Copilot plan exposes
+  model: "claude-sonnet-4.5"   # or another model your Copilot plan exposes
   tools: [filesystem, k8s]
 ```
 
