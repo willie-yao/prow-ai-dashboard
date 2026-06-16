@@ -50,9 +50,13 @@ ai:
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
-The defaults are conservative enough that you almost never need to tune them.
-Each field below is the one-line summary; see [How it works](#how-it-works)
-for the underlying mechanics. The byte budgets (model output, compaction, and
+The defaults target a strong hosted model (Copilot / OpenAI / Claude) and are
+conservative enough that you almost never need to tune them. The further your
+model is from that (smaller context window, weaker tool calling, an
+open-weights chat template), the more of the optional guardrails you want on;
+see [Tuning by model tier](#tuning-by-model-tier) for recommended combinations
+and copy-paste presets. Each field below is the one-line summary; see
+[How it works](#how-it-works) for the underlying mechanics. The byte budgets (model output, compaction, and
 the GCS fetch ceiling) are **not** configurable: the first two auto-size from
 the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 (see [Automatic budget sizing](#automatic-budget-sizing)).
@@ -119,6 +123,124 @@ return empty).
 How many failures to analyze in parallel. Defaults to `1` (sequential). Raise
 only for endpoints you control; a shared, rate-limited provider can 429 under
 parallelism. See [Parallel analysis](#parallel-analysis).
+
+---
+
+## Tuning by model tier
+
+The defaults assume a frontier hosted model. As you move to smaller or
+open-weights models, turn on the optional guardrails that compensate for the
+two things weaker models do worst: they finalize before they have investigated,
+and they emit punt-shaped or ungrounded answers. The knobs group by what each
+one compensates for:
+
+- **Investigation depth** (`min_tool_calls`, `min_gcs_bytes`, `critique`): a
+  weak model's most common failure is finalizing from the prompt alone, or
+  after a couple of cheap `list_artifacts` calls. The floors reject a too-early
+  final and re-prompt; the critique gate repairs punt-shaped fixes and
+  hallucinated citations.
+- **Context fit** (`evidence_injection`): injects cited-but-unread artifact
+  bodies into the retry feedback. It is the single biggest critique-pass win
+  but it spends context, so it is only safe when the window is large.
+- **Protocol quirks** (`single_tool_call`): some open-weights chat templates
+  reject more than one tool call per assistant turn.
+- **Throughput** (`concurrency`): a property of the *endpoint*, not the model.
+  Keep it `1` on a shared or rate-limited provider regardless of model tier;
+  raise it only for an endpoint you control.
+
+You never size the byte budgets yourself: the engine auto-sizes them from the
+endpoint's reported context window (see
+[Automatic budget sizing](#automatic-budget-sizing)), so a small-context model
+is handled automatically. The only window-sensitive *choice* you make is
+whether to enable `evidence_injection`.
+
+### Smaller or weaker models: what to turn on
+
+In rough order of impact when stepping down from a frontier hosted model:
+
+1. **Add investigation floors.** Start `min_tool_calls: 3` and
+   `min_gcs_bytes: 200000` (200 KB), then raise gradually if analyses still
+   finalize shallow. The byte floor matters because the call-count floor alone
+   is gameable with cheap listings (see
+   [Investigation floors](#investigation-floors)).
+2. **Enable the critique gate** (`critique.enabled: true`). It catches
+   punt-shaped `suggested_fix` ("Check X, verify Y, investigate Z") and root
+   causes built on artifacts the model never read, both of which weak models
+   emit despite the prompt forbidding them. Strong models rarely trip it.
+3. **Set `single_tool_call: true` only if the model's chat template rejects
+   parallel tool calls.** Required for the stock Llama 3.x Instruct template
+   (it raises "This model only supports single tool-calls at once!", surfaced
+   as a 500). Leave it off for Qwen3-Coder, Copilot, OpenAI, and Claude, which
+   emit parallel calls cleanly; forcing it there only slows investigation.
+4. **Enable `evidence_injection` only on a large-context model.** On a small
+   window (e.g. a 32-40K open-weights deployment) the injected artifact bodies
+   can push the request toward overflow, so leave it off there and rely on the
+   plain-text "go read X" retry instead.
+
+### Settings by model tier
+
+| Option | Strong hosted (Claude / GPT / Copilot) | Strong open-weights, large ctx | Small / weak open-weights |
+|---|---|---|---|
+| `min_tool_calls` | off (`0`) | `5` | `3` |
+| `min_gcs_bytes` | off (`0`) | `500000` | `200000` |
+| `critique.enabled` | off | on | on |
+| `evidence_injection` | off | on (large ctx) | off (small ctx) |
+| `single_tool_call` | off | off | on *if template requires* |
+| `max_iters` | `15` (default) | `30` | `15` |
+| `concurrency` | `1` (shared provider) | `4` (dedicated endpoint) | endpoint-dependent |
+
+### Presets
+
+**Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot, OpenAI, or
+Azure). This is the CAPZ dashboard: the defaults are enough, so set only the
+tools. A frontier model investigates deeply and writes concrete fixes without
+the guardrails, and the provider is shared and rate-limited, so leave
+`concurrency` at `1`.
+
+```yaml
+ai:
+  tools: [filesystem, k8s]
+  # everything else defaults: no floors, critique off, concurrency 1,
+  # single_tool_call off.
+```
+
+**Strong open-weights, large context, dedicated endpoint** (e.g.
+Qwen3-Coder-480B at a 256K window on self-hosted vLLM / TRT-LLM / Dynamo). This
+is the Qwen dashboard. The endpoint is dedicated and batches concurrent
+requests, so concurrency pays off; the large window makes `evidence_injection`
+safe; the floors and critique keep a real investigation bar.
+
+```yaml
+ai:
+  concurrency: 4            # dedicated batching endpoint, ~4x faster cold fetch
+  max_iters: 30             # heavy-tail analyses were iteration-bound at 20
+  min_tool_calls: 5         # floors: keep a real investigation bar
+  min_gcs_bytes: 500000
+  critique:
+    enabled: true           # repair punts + hallucinated citations
+    max_retries: 2
+  evidence_injection: true  # safe: the 256K window absorbs injected bodies
+  tools: [filesystem, k8s]
+  # single_tool_call left off: Qwen3-Coder emits parallel tool calls cleanly.
+```
+
+**Small or weak open-weights, modest context** (e.g. a 32-40K Llama 3.x or a
+smaller MoE). Recommended starting point, then tune from the run telemetry
+(cached `tool_calls` / `gcs_bytes` and the critique pass rate).
+
+```yaml
+ai:
+  max_iters: 15             # default; raise only if analyses are iteration-bound
+  min_tool_calls: 3         # lower floor than the 480B; raise gradually
+  min_gcs_bytes: 200000
+  critique:
+    enabled: true
+    max_retries: 2
+  evidence_injection: false # small window: injected bodies risk overflow
+  single_tool_call: true    # ONLY if the chat template rejects parallel calls
+                            # (stock Llama 3.x); drop it otherwise
+  tools: [filesystem, k8s]
+```
 
 ---
 

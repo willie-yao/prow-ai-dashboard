@@ -39,7 +39,7 @@ For sites whose repo already uses GitHub Pages for something else (project websi
 │                                                                  │
 │   backend/    Go fetcher + collectors + AI modules               │
 │   frontend/   React UI (built per-project at deploy time)        │
-│   docs/       writing-prompts.md, ai-providers.md, ...           │
+│   docs/       quickstart.md, onboarding-a-new-project.md, ...    │
 │   configs/    example/ — docs-only sample, no live config        │
 │   .github/    reusable-deploy.yml, reusable-clear-cache.yml      │
 └──────────────────────────────────────────────────────────────────┘
@@ -92,10 +92,12 @@ site into `frontend/public/data/`, then `make dev`.
 
 ## Adding a project
 
-See [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md) for the
-full worked example. In short, drop these files into a repo with GitHub Pages
-capacity (either a brand-new dashboard repo, or an existing repo that doesn't
-already publish a Pages site):
+New here? [docs/quickstart.md](docs/quickstart.md) gets one dashboard live in
+~15 minutes on the opinionated happy path. For the granular reference (job
+grouping, presubmits, private endpoints, every field) see
+[docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md). In short,
+drop these files into a repo with GitHub Pages capacity (either a brand-new
+dashboard repo, or an existing repo that doesn't already publish a Pages site):
 
 1. Add `project.yaml` somewhere in the repo. See [`configs/example/project.yaml`](configs/example/project.yaml) for every field.
 2. Add `prompts/system.md` next to it. See [docs/writing-prompts.md](docs/writing-prompts.md) for guidance.
