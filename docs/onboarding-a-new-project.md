@@ -195,6 +195,12 @@ only do a deliberate bump (`@v1` -> `@v2`) for a major. See
 [releasing.md](releasing.md) for the release cadence and the changelog for
 what each version changed.
 
+You can optionally set `min_engine_version` in `project.yaml` (e.g.
+`min_engine_version: "1.4.0"`) to the lowest release your config relies on. The
+fetcher warns at startup if the engine it was built from is older, which catches
+a config that adopted a newer field without bumping the pinned ref. It is
+advisory only and never fails the run.
+
 ## Step 4: pick a host repo
 
 You have two options. The engine doesn't care which you pick — both end

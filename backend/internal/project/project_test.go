@@ -508,3 +508,34 @@ func TestParse_AgenticTimeoutField(t *testing.T) {
 		t.Errorf("Agentic.Timeout = %v, want 8m", c.AI.Agentic.Timeout)
 	}
 }
+
+func TestEngineVersionWarning(t *testing.T) {
+	cases := []struct {
+		name      string
+		minVer    string
+		engineVer string
+		wantWarn  bool
+	}{
+		{"no minimum set", "", "v1.0.0", false},
+		{"engine newer", "1.2.0", "v1.3.0", false},
+		{"engine equal", "1.2.0", "v1.2.0", false},
+		{"engine older", "1.4.0", "v1.2.0", true},
+		{"engine older, v-prefixed min", "v1.4.0", "v1.2.0", true},
+		{"dev engine never warns", "1.4.0", "dev-abc1234", false},
+		{"bare dev never warns", "1.4.0", "dev", false},
+		{"empty engine never warns", "1.4.0", "", false},
+		{"unrecognized engine version warns", "1.4.0", "garbage", true},
+		{"prerelease engine sorts below release", "1.0.0", "v1.0.0-beta.1", true},
+		{"invalid minimum is reported", "not-a-version", "v1.2.0", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{MinEngineVersion: tc.minVer}
+			got := c.EngineVersionWarning(tc.engineVer)
+			if (got != "") != tc.wantWarn {
+				t.Errorf("EngineVersionWarning(%q) with min %q = %q; wantWarn=%v",
+					tc.engineVer, tc.minVer, got, tc.wantWarn)
+			}
+		})
+	}
+}

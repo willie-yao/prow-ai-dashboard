@@ -109,6 +109,7 @@ jobs:
           # the consumer pinned (uses:@<ref>), so the pinned ref controls both
           # the pipeline and the code with no separate engine-ref knob.
           ref: ${{ github.job_workflow_sha }}
+          fetch-tags: true
           path: engine
 
       - name: Resolve project paths and base path
@@ -157,7 +158,15 @@ jobs:
       - name: Build data fetcher
         if: ${{ !inputs.skip-fetch }}
         working-directory: engine/backend
-        run: go build -o "$GITHUB_WORKSPACE/fetcher" ./cmd/fetcher/
+        run: |
+          # Embed the engine version. Pick the full MAJOR.MINOR.PATCH tag at the
+          # built commit (ignore the moving vMAJOR alias, which would understate
+          # the version), else dev-<sha> for branch or @main builds (which the
+          # version check then skips).
+          VERSION="$(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          [ -z "$VERSION" ] && VERSION="dev-$(git rev-parse --short HEAD)"
+          echo "Building fetcher version $VERSION"
+          go build -ldflags "-X main.version=$VERSION" -o "$GITHUB_WORKSPACE/fetcher" ./cmd/fetcher/
 
       # Restore cached data (job JSON + AI cache) so we only fetch new builds.
       - name: Restore data cache
