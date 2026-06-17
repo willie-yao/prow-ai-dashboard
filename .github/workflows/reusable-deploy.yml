@@ -31,11 +31,6 @@ on:
         required: false
         type: string
         default: "."
-      engine-ref:
-        description: "Git ref of the engine repo to use. Defaults to main."
-        required: false
-        type: string
-        default: main
       builds:
         description: "Number of recent builds to fetch per job."
         required: false
@@ -110,7 +105,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: willie-yao/prow-ai-dashboard
-          ref: ${{ inputs.engine-ref }}
+          # Build the engine code from the exact commit of the reusable workflow
+          # the consumer pinned (uses:@<ref>), so the pinned ref controls both
+          # the pipeline and the code with no separate engine-ref knob.
+          ref: ${{ github.job_workflow_sha }}
           path: engine
 
       - name: Resolve project paths and base path
