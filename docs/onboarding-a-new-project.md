@@ -169,6 +169,32 @@ adjusting is the deploy cron (CAPI + CAPZ both use `*/30 * * * *`).
 [capi-deploy]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/.github/workflows/deploy.yml
 [capi-clear]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/.github/workflows/clear-cache.yml
 
+### Versioning and pinning
+
+The `uses:` ref you put on the reusable workflow controls **both** the pipeline
+and the engine code it builds (they are checked out at the same commit, so they
+can't drift). Pick how closely you want to track the engine:
+
+```yaml
+# Recommended: track the latest stable v1 (auto patch + minor, no breaking changes)
+uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1
+
+# Pin an exact release (fully frozen until you bump it)
+uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1.2.0
+
+# Opt into a pre-release for testing
+uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1.0.0-beta.1
+
+# Bleeding edge (no stability guarantee)
+uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+```
+
+Use the same ref on `reusable-clear-cache.yml`. `@vMAJOR` is the sweet spot for
+most consumers: you get fixes and backward-compatible features automatically and
+only do a deliberate bump (`@v1` -> `@v2`) for a major. See
+[releasing.md](releasing.md) for the release cadence and the changelog for
+what each version changed.
+
 ## Step 4: pick a host repo
 
 You have two options. The engine doesn't care which you pick — both end
