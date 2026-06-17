@@ -1,0 +1,50 @@
+name: Release
+
+# Cuts a release when a semver tag is pushed. The tag glob requires a full
+# MAJOR.MINOR.PATCH so the moving `vMAJOR` alias this workflow pushes (e.g. `v1`)
+# does not re-trigger it. (The default GITHUB_TOKEN also does not retrigger
+# workflows, so this is belt-and-suspenders.)
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  # Re-run the full CI gate against the tagged commit before releasing.
+  gate:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create release and move major alias
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # A pre-release tag carries a suffix (e.g. v1.0.0-beta.1, v1.0.0-rc.1).
+          case "$TAG" in
+            *-*)
+              echo "Pre-release $TAG"
+              gh release create "$TAG" --title "$TAG" --generate-notes --prerelease
+              ;;
+            *)
+              echo "Stable release $TAG"
+              gh release create "$TAG" --title "$TAG" --generate-notes
+              # Fast-forward the major alias (vMAJOR) to this commit so consumers
+              # pinning @vMAJOR get the latest stable patch/minor.
+              MAJOR="$(printf '%s' "$TAG" | sed -E 's/^(v[0-9]+).*/\1/')"
+              echo "Moving alias $MAJOR -> $TAG"
+              git tag -f "$MAJOR" "$TAG"
+              git push origin -f "refs/tags/$MAJOR"
+              ;;
+          esac
