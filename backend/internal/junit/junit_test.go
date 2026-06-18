@@ -166,6 +166,33 @@ func TestParse_SingleTestSuite(t *testing.T) {
 	}
 }
 
+// TestParse_SingleTestSuite_ZeroTestsAttr covers the ClusterLoaderV2 quirk:
+// a bare <testsuite tests="0"> that still lists real testcases (including
+// failures). The parser must trust the elements, not the tests= count.
+func TestParse_SingleTestSuite_ZeroTestsAttr(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ClusterLoaderV2" tests="0" failures="1" errors="0" time="100.0">
+  <testcase name="load overall" classname="ClusterLoaderV2" time="50.0">
+    <failure type="Failure">measurement failed</failure>
+  </testcase>
+  <testcase name="load: step 01" classname="ClusterLoaderV2" time="0.1"/>
+</testsuite>`
+
+	cases, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if len(cases) != 2 {
+		t.Fatalf("expected 2 test cases, got %d", len(cases))
+	}
+	if cases[0].Status != "failed" {
+		t.Errorf("expected first case failed, got %q", cases[0].Status)
+	}
+	if cases[1].Status != "passed" {
+		t.Errorf("expected second case passed, got %q", cases[1].Status)
+	}
+}
+
 // TestParseFile stamps the source basename on every returned case so
 // the UI can disambiguate same-named tests across sharded junit files
 // (e.g. node-e2e's junit_ubuntu01.xml vs junit_runner.xml).

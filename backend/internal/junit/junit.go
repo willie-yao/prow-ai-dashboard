@@ -71,9 +71,12 @@ func Parse(data []byte) ([]models.TestCase, error) {
 		return convertSuites(suites.TestSuites), nil
 	}
 
-	// Fall back to a single <testsuite>.
+	// Fall back to a single <testsuite>. Trust the actual <testcase>
+	// elements rather than the self-reported tests= count: ClusterLoaderV2
+	// (the scalability suite) emits <testsuite tests="0"> while still listing
+	// its real testcases, so gating on the count would drop the whole file.
 	var suite xmlTestSuite
-	if err := xml.Unmarshal(data, &suite); err == nil && suite.Tests > 0 {
+	if err := xml.Unmarshal(data, &suite); err == nil && len(suite.TestCases) > 0 {
 		return convertSuites([]xmlTestSuite{suite}), nil
 	}
 
