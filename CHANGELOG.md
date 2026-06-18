@@ -24,6 +24,9 @@ for how to pin a release.
 
 - Release process: tag-triggered release workflow, semver tags, a moving
   `vMAJOR` alias, this changelog, and `docs/releasing.md`.
+- Engine version is embedded at build time and logged at startup; an optional
+  `min_engine_version` field in `project.yaml` warns when the engine is older
+  than the config expects.
 - Quickstart guide and a "Tuning by model tier" reference for the agentic loop.
 - In-cluster self-hosted runner guide for private AI endpoints.
 

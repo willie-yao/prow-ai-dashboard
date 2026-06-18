@@ -53,6 +53,10 @@ type Options struct {
 	IncludePresubmits bool
 	EnableAI          bool
 	Collectors        *CollectorRegistry
+	// Version is the engine's own version string (e.g. "v1.2.0"), embedded at
+	// build time. Logged at startup and compared against the config's
+	// min_engine_version. Empty/"dev" disables the comparison.
+	Version string
 }
 
 // Run executes the full pipeline: load → discover → fetch → aggregate →
@@ -70,6 +74,12 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	log.Printf("Project: %s (%s) dashboard=%s bucket=%s",
 		cfg.Name, cfg.DisplayShortName(), cfg.TestGrid.Dashboard, cfg.GCS.Bucket)
+	if opts.Version != "" {
+		log.Printf("Engine version: %s", opts.Version)
+	}
+	if w := cfg.EngineVersionWarning(opts.Version); w != "" {
+		log.Printf("⚠ %s", w)
+	}
 
 	// Validate the collector reference against the registry up front so a
 	// typo'd artifacts.collector fails before any expensive work.

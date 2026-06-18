@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +32,13 @@ type Config struct {
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	Artifacts            *Artifacts     `yaml:"artifacts,omitempty"  json:"artifacts,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
+
+	// MinEngineVersion, when set, is the lowest engine release this config
+	// expects (e.g. "1.4.0" or "v1.4.0"). The fetcher warns at startup if the
+	// running engine is older, catching a consumer that adopted a newer config
+	// field without bumping its pinned engine ref. Advisory only: a mismatch
+	// warns, it does not fail the run. Not serialized to manifest.json.
+	MinEngineVersion string `yaml:"min_engine_version,omitempty" json:"-"`
 
 	// ShortNamePrefix is a display-only hint derived at fetch time: the
 	// longest "periodic-<x>-" prefix shared by a majority of discovered
@@ -447,4 +455,40 @@ func (c *Config) DisplayShortName() string {
 		return c.ShortName
 	}
 	return c.ID
+}
+
+// EngineVersionWarning returns an advisory message when the running engine is
+// older than the config's MinEngineVersion, else "". engineVersion is the
+// engine's own version (e.g. "v1.2.0"); a dev/unparseable value is treated as
+// "cannot compare" and never warns. Both versions are normalized to a leading
+// "v", so min_engine_version may be written with or without it.
+func (c *Config) EngineVersionWarning(engineVersion string) string {
+	if c.MinEngineVersion == "" {
+		return ""
+	}
+	want := ensureVPrefix(c.MinEngineVersion)
+	if !semver.IsValid(want) {
+		return fmt.Sprintf("project.yaml min_engine_version %q is not a valid version; ignoring", c.MinEngineVersion)
+	}
+	got := ensureVPrefix(engineVersion)
+	if !semver.IsValid(got) {
+		// Local or untagged builds report dev[-<sha>]; cannot compare.
+		if engineVersion == "" || engineVersion == "dev" || strings.HasPrefix(engineVersion, "dev-") {
+			return ""
+		}
+		// Any other unparseable version signals a broken build embed; surface it.
+		return fmt.Sprintf("engine version %q is not a recognized release; cannot verify min_engine_version %s", engineVersion, want)
+	}
+	if semver.Compare(got, want) < 0 {
+		return fmt.Sprintf("engine version %s is older than this project's min_engine_version %s; "+
+			"some project.yaml fields may be unsupported. Pin a newer engine release.", got, want)
+	}
+	return ""
+}
+
+func ensureVPrefix(s string) string {
+	if s == "" || s[0] == 'v' {
+		return s
+	}
+	return "v" + s
 }

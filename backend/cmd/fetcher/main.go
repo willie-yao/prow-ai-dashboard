@@ -17,6 +17,10 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 )
 
+// version is the engine version, overridden at build time via
+// -ldflags "-X main.version=<tag>". Defaults to "dev" for local builds.
+var version = "dev"
+
 func main() {
 	var opts fetcher.Options
 	flag.StringVar(&opts.ProjectDir, "project-dir", ".", "directory containing project.yaml and prompts/system.md")
@@ -28,6 +32,7 @@ func main() {
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	flag.Parse()
 
+	opts.Version = version
 	opts.Collectors = fetcher.NewCollectorRegistry()
 	opts.Collectors.Register("generic", collectorgeneric.Factory)
 
