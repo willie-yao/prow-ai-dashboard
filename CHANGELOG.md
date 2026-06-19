@@ -41,3 +41,7 @@ for how to pin a release.
 - Deep links no longer render a blank page on GitHub Pages (SPA fallback).
 - Oversized junit failure messages and artifact-tree seeds no longer overflow
   the model context window on the first request.
+- Slow chat endpoints no longer hit a fixed per-request HTTP timeout: each chat
+  request is now bounded only by the per-failure `timeout` budget, so reasoning
+  and self-hosted models whose decode exceeded the old 60s client cap complete
+  instead of erroring out.

@@ -72,6 +72,12 @@ Per-failure wall-clock cap. Default `5m`. Hitting it cancels the in-flight
 request and errors the analysis out (unlike a budget cap, which forces a
 graceful finalize), so set it generously for slow or contended endpoints.
 
+This is the only bound on an individual chat request: the engine sets no fixed
+per-request HTTP timeout, so a single slow response (e.g. a reasoning model's
+decode, or a self-hosted endpoint under load) is capped only by this value.
+Size it to comfortably exceed the slowest single response you expect, not just
+the whole-loop budget.
+
 ### `min_tool_calls`
 
 Minimum tool calls before a final answer is accepted. Default `0` (no floor).
