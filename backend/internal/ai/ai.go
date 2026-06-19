@@ -76,8 +76,13 @@ func NewClientWithOptions(opts Options) *Client {
 	transport.MaxIdleConns = 32
 	transport.MaxIdleConnsPerHost = 16
 	return &Client{
+		// No client-level Timeout: per-request deadlines come from the
+		// caller's context. The agentic loop runs every chat call under the
+		// per-failure budget (ai.agentic.timeout, default 5m), and the
+		// /v1/models probe sets its own short sub-context. A fixed timeout
+		// here would silently override that budget and prematurely kill
+		// legitimately slow responses from reasoning/self-hosted endpoints.
 		httpClient: &http.Client{
-			Timeout:   60 * time.Second,
 			Transport: transport,
 		},
 		apiURL:       endpoint,
