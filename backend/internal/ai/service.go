@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -164,13 +165,32 @@ func (s *Service) toolCacheFor(buildPrefix string) *tools.Cache {
 }
 
 func (s *Service) setUnavailable(tc *models.TestCase, err error) {
-	if tc.AISummary == nil {
-		tc.AISummary = &models.AISummary{
-			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-			Summary:     "AI analysis unavailable: " + err.Error(),
-			IsTransient: false,
-		}
+	// Overwrite only an engine-written "unavailable" placeholder (no model
+	// analysis attached) so a retry reflects the current error: an errored
+	// failure is re-analyzed on every run (Analyze only skips when a complete
+	// analysis is cached), so a stale error from an earlier run (e.g. a
+	// transient endpoint outage or a misconfigured endpoint) must not persist
+	// once the cause changes. A real summary (which carries an AIAnalysis) or a
+	// transient classification is preserved.
+	if tc.AISummary != nil && (tc.AIAnalysis != nil || !isUnavailableSummary(tc.AISummary)) {
+		return
 	}
+	tc.AISummary = &models.AISummary{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Summary:     unavailablePrefix + err.Error(),
+		IsTransient: false,
+	}
+}
+
+// unavailablePrefix marks a summary the engine wrote because analysis could
+// not complete (no model result), as opposed to a model-produced summary.
+const unavailablePrefix = "AI analysis unavailable: "
+
+// isUnavailableSummary reports whether a summary is an engine-written
+// "unavailable" placeholder (not a model result and not a transient
+// classification), i.e. one a later run should replace.
+func isUnavailableSummary(s *models.AISummary) bool {
+	return s != nil && !s.IsTransient && strings.HasPrefix(s.Summary, unavailablePrefix)
 }
 
 // shouldReanalyze returns true when a cached analysis must be discarded

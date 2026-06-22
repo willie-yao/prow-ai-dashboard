@@ -45,3 +45,8 @@ for how to pin a release.
   request is now bounded only by the per-failure `timeout` budget, so reasoning
   and self-hosted models whose decode exceeded the old 60s client cap complete
   instead of erroring out.
+- A failure whose analysis could not complete (endpoint error, timeout, or a
+  misconfigured run) now has its "AI analysis unavailable" summary refreshed on
+  the next run instead of keeping the stale message. Errored failures are
+  re-analyzed every run, so once the endpoint is healthy they converge to a real
+  analysis; transient classifications and real summaries are still preserved.

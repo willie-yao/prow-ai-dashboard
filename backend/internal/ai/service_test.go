@@ -267,3 +267,78 @@ func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 // Ensure stubModule satisfies the Module interface (compile-time check).
 var _ Module = (*stubModule)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)
+
+// ---------- setUnavailable retry semantics ----------
+
+// TestSetUnavailable_RetrySemantics verifies that an engine-written
+// "unavailable" summary is replaced on a later attempt (so a stale error from
+// an earlier run does not persist once an errored failure is re-analyzed),
+// while a transient classification or a real summary is preserved.
+func TestSetUnavailable_RetrySemantics(t *testing.T) {
+	s := &Service{}
+
+	t.Run("sets when nil", func(t *testing.T) {
+		tc := newFailedTC("t", "m")
+		s.setUnavailable(tc, errEndpointA)
+		if tc.AISummary == nil || !strings.Contains(tc.AISummary.Summary, "endpoint A") {
+			t.Fatalf("want endpoint A summary, got %+v", tc.AISummary)
+		}
+	})
+
+	t.Run("overwrites a prior unavailable summary", func(t *testing.T) {
+		tc := newFailedTC("t", "m")
+		tc.AISummary = &models.AISummary{
+			GeneratedAt: "2000-01-01T00:00:00Z",
+			Summary:     unavailablePrefix + "endpoint A is down",
+		}
+		s.setUnavailable(tc, errEndpointB)
+		if !strings.Contains(tc.AISummary.Summary, "endpoint B") {
+			t.Fatalf("stale error not replaced: %q", tc.AISummary.Summary)
+		}
+		if tc.AISummary.GeneratedAt == "2000-01-01T00:00:00Z" {
+			t.Error("timestamp not refreshed on retry")
+		}
+	})
+
+	t.Run("preserves a transient classification", func(t *testing.T) {
+		tc := newFailedTC("t", "m")
+		tc.AISummary = &models.AISummary{Summary: "infra flake", IsTransient: true}
+		s.setUnavailable(tc, errEndpointB)
+		if !tc.AISummary.IsTransient || tc.AISummary.Summary != "infra flake" {
+			t.Fatalf("transient summary clobbered: %+v", tc.AISummary)
+		}
+	})
+
+	t.Run("preserves a real summary", func(t *testing.T) {
+		tc := newFailedTC("t", "m")
+		tc.AISummary = &models.AISummary{Summary: "real root cause"}
+		s.setUnavailable(tc, errEndpointB)
+		if tc.AISummary.Summary != "real root cause" {
+			t.Fatalf("real summary clobbered: %q", tc.AISummary.Summary)
+		}
+	})
+
+	t.Run("preserves a real summary even with the unavailable prefix", func(t *testing.T) {
+		// A model result is identified by an attached AIAnalysis, not just by
+		// its text, so a summary that happens to start with the prefix is not
+		// mistaken for an engine placeholder.
+		tc := newFailedTC("t", "m")
+		tc.AISummary = &models.AISummary{Summary: unavailablePrefix + "is part of the real analysis"}
+		tc.AIAnalysis = &models.AIAnalysis{Mode: AgenticMode}
+		s.setUnavailable(tc, errEndpointB)
+		if !strings.Contains(tc.AISummary.Summary, "real analysis") {
+			t.Fatalf("real summary with prefix clobbered: %q", tc.AISummary.Summary)
+		}
+	})
+}
+
+var (
+	errEndpointA = fmtErr("endpoint A")
+	errEndpointB = fmtErr("endpoint B")
+)
+
+func fmtErr(s string) error { return &simpleErr{s} }
+
+type simpleErr struct{ s string }
+
+func (e *simpleErr) Error() string { return e.s }
