@@ -199,8 +199,13 @@ export function fileToUrl(
     }
   }
 
-  // Skip descriptive text that isn't a real path
-  if (/\.status\.|portal\.azure|azuremachine.*field|controller.*log/i.test(clean)) {
+  // Skip descriptive text that isn't a real path: field references like
+  // "machine.status.conditions", Azure portal URLs, or prose like "the CAPZ
+  // controller log". These never contain a path separator, so gate on the
+  // absence of "/" to avoid catching real artifact paths that legitimately
+  // include "controller" and end in ".log" (e.g. a
+  // ".../capi-...-controller-manager/.../manager.log" artifact).
+  if (!clean.includes("/") && /\.status\.|portal\.azure|azuremachine.*field|controller.*log/i.test(clean)) {
     return null;
   }
 
@@ -211,21 +216,38 @@ export function fileToUrl(
     return `https://github.com/${owner}/${name}/blob/main/${clean}`;
   }
 
+  // Link Go import-path style references to other Kubernetes repos, e.g.
+  // "sigs.k8s.io/cluster-api/test/framework/controlplane_helpers.go" or
+  // "k8s.io/kubernetes/test/e2e/...". A vanity import path maps 1:1 to a GitHub
+  // repo + path, so this is deterministic. blob/HEAD lets GitHub resolve the
+  // default branch (cluster-api=main, kubernetes=master) rather than guessing.
+  // Must run before the GCS fallback so a vanity .yaml path is not mistaken for
+  // an artifact path.
+  const vanity = clean.match(
+    /^(sigs\.k8s\.io|k8s\.io)\/([^/]+)\/(.+\.(?:go|yaml|yml|sh|json|tpl|md))$/,
+  );
+  if (vanity) {
+    const [, host, repo, path] = vanity;
+    const owner = host === "sigs.k8s.io" ? "kubernetes-sigs" : "kubernetes";
+    return `https://github.com/${owner}/${repo}/blob/HEAD/${path}`;
+  }
+
   // Fallback: resolve plausible GCS artifact paths against the build's
   // web URL. Catches agent-cited paths like
   // "artifacts/clusters/<name>/machines/<vm>/kubelet.log" or
   // "clusters/<name>/resources/Foo/bar.yaml" that the curator-era
-  // heuristics above could not map.
+  // heuristics above could not map. Constrained to the build's artifact
+  // roots (artifacts/ or clusters/) so host-like or repo-doc tokens
+  // (e.g. "example.com/foo.yaml", "docs/book/src/x.md") are not turned
+  // into bogus GCS URLs.
   if (context?.webUrl) {
-    let path = clean.replace(/^\/+/, "");
-    const looksLikeArtifact =
-      /\.(log|yaml|yml|json|xml|txt|out|conf)$/i.test(path) && path.includes("/");
-    if (looksLikeArtifact) {
-      if (!path.startsWith("artifacts/")) {
-        path = `artifacts/${path}`;
-      }
+    const path = clean.replace(/^\/+/, "");
+    const isArtifactRoot = /^(artifacts|clusters)\//.test(path);
+    const knownExt = /\.(log|yaml|yml|json|xml|txt|out|conf)$/i.test(path);
+    if (isArtifactRoot && knownExt) {
+      const full = path.startsWith("artifacts/") ? path : `artifacts/${path}`;
       const base = context.webUrl.replace(/\/+$/, "");
-      return `${base}/${path}`;
+      return `${base}/${full}`;
     }
   }
 

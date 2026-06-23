@@ -176,6 +176,7 @@ type JobSummary struct {
 type RunSummary struct {
 	BuildID         string    `json:"build_id"`
 	Passed          bool      `json:"passed"`
+	Result          string    `json:"result,omitempty"`
 	Timestamp       time.Time `json:"timestamp"`
 	DurationSeconds float64   `json:"duration_seconds,omitempty"`
 	TestsTotal      int       `json:"tests_total,omitempty"`

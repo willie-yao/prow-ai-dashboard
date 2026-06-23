@@ -15,40 +15,41 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
 
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-      {recent.map((run) => (
-        <Tooltip
-          key={run.build_id}
-          title={`#${run.build_id} — ${run.passed ? "Passed" : "Failed"}`}
-        >
-          <Box
-            component={RouterLink}
-            to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
-            aria-label={`Run ${run.build_id} ${run.passed ? "passed" : "failed"}`}
-            onClick={(event) => event.stopPropagation()}
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              p: 0.5,
-              m: -0.5,
-              borderRadius: "50%",
-              "&:hover > span": { transform: "scale(1.25)" },
-            }}
-          >
+      {recent.map((run) => {
+        const label =
+          run.result === "PENDING" ? "Running" : run.passed ? "Passed" : "Failed";
+        return (
+          <Tooltip key={run.build_id} title={`#${run.build_id} — ${label}`}>
             <Box
-              component="span"
+              component={RouterLink}
+              to={`/job/${encodeURIComponent(jobID)}?run=${run.build_id}`}
+              aria-label={`Run ${run.build_id} ${label.toLowerCase()}`}
+              onClick={(event) => event.stopPropagation()}
               sx={{
-                display: "block",
-                width: 10,
-                height: 10,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                p: 0.5,
+                m: -0.5,
                 borderRadius: "50%",
-                bgcolor: (theme) => dotColorFor(theme, run.passed),
-                transition: "transform 140ms ease",
+                "&:hover > span": { transform: "scale(1.25)" },
               }}
-            />
-          </Box>
-        </Tooltip>
-      ))}
+            >
+              <Box
+                component="span"
+                sx={{
+                  display: "block",
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  bgcolor: (theme) => dotColorFor(theme, run.passed, run.result),
+                  transition: "transform 140ms ease",
+                }}
+              />
+            </Box>
+          </Tooltip>
+        );
+      })}
     </Box>
   );
 }

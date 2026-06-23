@@ -3,6 +3,7 @@
 export interface RunSummary {
   build_id: string;
   passed: boolean;
+  result?: string;
   timestamp: string;
   duration_seconds?: number;
   tests_total?: number;

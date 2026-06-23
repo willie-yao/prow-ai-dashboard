@@ -103,6 +103,7 @@ func BuildRunSummary(result models.BuildResult) models.RunSummary {
 	return models.RunSummary{
 		BuildID:         result.BuildID,
 		Passed:          result.Passed,
+		Result:          result.Result,
 		Timestamp:       result.Started,
 		DurationSeconds: result.DurationSeconds,
 		TestsTotal:      result.TestsTotal,
