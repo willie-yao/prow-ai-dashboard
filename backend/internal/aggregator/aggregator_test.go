@@ -254,6 +254,9 @@ func TestBuildRunSummary(t *testing.T) {
 	if !rs.Passed {
 		t.Error("expected Passed=true")
 	}
+	if rs.Result != "SUCCESS" {
+		t.Errorf("expected Result=SUCCESS, got %q", rs.Result)
+	}
 	if rs.TestsTotal != 2 || rs.TestsPassed != 1 || rs.TestsFailed != 1 {
 		t.Errorf("test counts wrong: total=%d passed=%d failed=%d", rs.TestsTotal, rs.TestsPassed, rs.TestsFailed)
 	}

@@ -29,8 +29,8 @@ import {
   timeAgo,
   fileToUrl,
   fileSortKey,
-  formatSteps,
 } from "../lib/utils";
+import { RichText } from "../components/RichText";
 import { RunTimeline } from "../components/RunTimeline";
 import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
@@ -722,7 +722,11 @@ export function TestDetailPage() {
                       Root Cause
                     </Typography>
                     <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-                      {formatSteps(selectedTc.ai_analysis.root_cause)}
+                      <RichText
+                        text={selectedTc.ai_analysis.root_cause}
+                        steps
+                        fileCtx={fileCtx(selectedRun, selectedTc)}
+                      />
                     </Typography>
                   </Box>
                   <Box>
@@ -730,7 +734,11 @@ export function TestDetailPage() {
                       Suggested Fix
                     </Typography>
                     <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
-                      {formatSteps(selectedTc.ai_analysis.suggested_fix)}
+                      <RichText
+                        text={selectedTc.ai_analysis.suggested_fix}
+                        steps
+                        fileCtx={fileCtx(selectedRun, selectedTc)}
+                      />
                     </Typography>
                   </Box>
                   {selectedTc.ai_analysis.relevant_files &&
@@ -798,7 +806,10 @@ export function TestDetailPage() {
                   variant="caption"
                   color={selectedTc.ai_summary.is_transient ? "text.secondary" : "warning.main"}
                 >
-                  {selectedTc.ai_summary.summary}
+                  <RichText
+                    text={selectedTc.ai_summary.summary}
+                    fileCtx={fileCtx(selectedRun, selectedTc)}
+                  />
                 </Typography>
               </Stack>
             )}

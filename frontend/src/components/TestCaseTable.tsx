@@ -22,7 +22,8 @@ import {
 } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
 import type { TestCase } from "../types/dashboard";
-import { formatDuration, fileToUrl, fileSortKey, formatSteps } from "../lib/utils";
+import { formatDuration, fileToUrl, fileSortKey } from "../lib/utils";
+import { RichText } from "./RichText";
 import { useManifest } from "../hooks/useManifest";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
@@ -168,6 +169,12 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           const isExpanded = expandedRows.has(idx);
           const hasFail = tc.status === "failed" && Boolean(tc.failure_message);
           const stripeBg = idx % 2 === 0 ? "surface.container" : "surface.containerHigh";
+          const aiFileCtx = {
+            buildLogUrl,
+            clusterArtifacts: tc.cluster_artifacts,
+            sourceRepo,
+            webUrl,
+          };
 
           return (
             <Fragment key={idx}>
@@ -270,7 +277,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     variant="caption"
                     sx={{ color: tc.ai_summary.is_transient ? "text.secondary" : "warning.main" }}
                   >
-                    {tc.ai_summary.summary}
+                    <RichText text={tc.ai_summary.summary} fileCtx={aiFileCtx} />
                     {tc.ai_summary.is_transient && (
                       <Box component="span" sx={{ ml: 0.5, color: "text.disabled" }}>
                         · Likely transient
@@ -546,7 +553,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                             Root Cause
                           </Typography>
                           <Typography variant="body2" sx={{ color: "text.primary", lineHeight: 1.7, whiteSpace: "pre-line" }}>
-                            {formatSteps(tc.ai_analysis.root_cause)}
+                            <RichText text={tc.ai_analysis.root_cause} steps fileCtx={aiFileCtx} />
                           </Typography>
                         </Box>
                         <Box>
@@ -554,7 +561,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                             Suggested Fix
                           </Typography>
                           <Typography variant="body2" sx={{ color: "text.primary", lineHeight: 1.7, whiteSpace: "pre-line" }}>
-                            {formatSteps(tc.ai_analysis.suggested_fix)}
+                            <RichText text={tc.ai_analysis.suggested_fix} steps fileCtx={aiFileCtx} />
                           </Typography>
                         </Box>
                         {tc.ai_analysis.relevant_files && tc.ai_analysis.relevant_files.length > 0 && (
@@ -564,9 +571,9 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                             </Typography>
                             <Box component="ul" sx={{ m: 0, pl: 2.5, color: "text.primary" }}>
                               {[...tc.ai_analysis.relevant_files]
-                                .sort((a, b) => fileSortKey(a, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo, webUrl }) - fileSortKey(b, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo, webUrl }))
+                                .sort((a, b) => fileSortKey(a, aiFileCtx) - fileSortKey(b, aiFileCtx))
                                 .map((f, i) => {
-                                  const url = fileToUrl(f, { buildLogUrl, clusterArtifacts: tc.cluster_artifacts, sourceRepo, webUrl });
+                                  const url = fileToUrl(f, aiFileCtx);
                                   return (
                                     <Box component="li" key={i} sx={{ fontFamily: "monospace", fontSize: "0.75rem", py: 0.25 }}>
                                       {url ? (
