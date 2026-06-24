@@ -57,6 +57,15 @@ const pathLinkSx = {
 // Inline-code span splitter: capture groups land on odd indices.
 const CODE_SPLIT = /`([^`]+)`/g;
 
+// basename shortens a linked file path to its final segment for display, so
+// long paths don't clutter the prose. The full path is kept in the link's
+// title (hover) and the href is unchanged. A path with no separator is
+// returned as-is.
+function basename(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i >= 0 ? path.slice(i + 1) : path;
+}
+
 // Candidate file path in free prose: one or more "/"-separated segments ending
 // in a known source/artifact extension. Requiring a slash and an extension
 // keeps it conservative; fileToUrl makes the final keep/drop decision so no
@@ -90,8 +99,9 @@ function linkifyPaths(
         target="_blank"
         rel="noopener noreferrer"
         sx={pathLinkSx}
+        title={token}
       >
-        {token}
+        {basename(token)}
       </Link>,
     );
     last = m.index + token.length;
@@ -126,8 +136,9 @@ export function RichText({ text, steps = false, fileCtx }: RichTextProps) {
               target="_blank"
               rel="noopener noreferrer"
               sx={codeLinkSx}
+              title={part}
             >
-              {part}
+              {basename(part)}
             </Link>
           );
         }
