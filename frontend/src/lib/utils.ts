@@ -131,11 +131,6 @@ export function shortTestName(name: string): string {
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
-export interface SourceRepoRef {
-  owner: string;
-  name: string;
-}
-
 /** Strip the derived short-name prefix off a job name for compact display. */
 export function shortJobName(name: string, shortNamePrefix: string): string {
   if (!shortNamePrefix) return name;
@@ -145,8 +140,6 @@ export function shortJobName(name: string, shortNamePrefix: string): string {
 export interface FileToUrlContext {
   buildLogUrl?: string;
   clusterArtifacts?: { machines?: { logs: Record<string, string> }[] };
-  /** Source repo for repo-relative file paths in AI analyses. */
-  sourceRepo?: SourceRepoRef;
   /**
    * Web URL root for the current build (e.g.
    * `https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<id>/`). When the
@@ -157,6 +150,15 @@ export interface FileToUrlContext {
    * `cluster_artifacts.machines` index.
    */
   webUrl?: string;
+  /**
+   * Verified GitHub links for source-file citations (cleaned path -> URL),
+   * from the analysis's `file_links`. It is the sole, authoritative source of
+   * source-file links: a cited path links only if it is a key here, so a file
+   * verified absent (e.g. in a different repo) is never turned into a broken
+   * link. Undefined for pre-feature data, in which case the UI shows only
+   * artifact/log links until the analysis is regenerated.
+   */
+  fileLinks?: Record<string, string>;
 }
 
 /** Turn a file path from AI analysis into a URL if possible. */
@@ -199,47 +201,22 @@ export function fileToUrl(
     }
   }
 
-  // Skip descriptive text that isn't a real path: field references like
-  // "machine.status.conditions", Azure portal URLs, or prose like "the CAPZ
-  // controller log". These never contain a path separator, so gate on the
-  // absence of "/" to avoid catching real artifact paths that legitimately
-  // include "controller" and end in ".log" (e.g. a
-  // ".../capi-...-controller-manager/.../manager.log" artifact).
-  if (!clean.includes("/") && /\.status\.|portal\.azure|azuremachine.*field|controller.*log/i.test(clean)) {
-    return null;
-  }
-
-  // Link plausible repo-relative source paths to the configured source repo.
-  const repoPathPrefixes = /^(test|templates|pkg|scripts|api|exp|hack|config|deploy|cloud|cmd|util|feature)\//;
-  if (/\.(go|yaml|yml|sh|json|tpl|md)$/.test(clean) && repoPathPrefixes.test(clean) && context?.sourceRepo) {
-    const { owner, name } = context.sourceRepo;
-    return `https://github.com/${owner}/${name}/blob/main/${clean}`;
-  }
-
-  // Link Go import-path style references to other Kubernetes repos, e.g.
-  // "sigs.k8s.io/cluster-api/test/framework/controlplane_helpers.go" or
-  // "k8s.io/kubernetes/test/e2e/...". A vanity import path maps 1:1 to a GitHub
-  // repo + path, so this is deterministic. blob/HEAD lets GitHub resolve the
-  // default branch (cluster-api=main, kubernetes=master) rather than guessing.
-  // Must run before the GCS fallback so a vanity .yaml path is not mistaken for
-  // an artifact path.
-  const vanity = clean.match(
-    /^(sigs\.k8s\.io|k8s\.io)\/([^/]+)\/(.+\.(?:go|yaml|yml|sh|json|tpl|md))$/,
-  );
-  if (vanity) {
-    const [, host, repo, path] = vanity;
-    const owner = host === "sigs.k8s.io" ? "kubernetes-sigs" : "kubernetes";
-    return `https://github.com/${owner}/${repo}/blob/HEAD/${path}`;
+  // Source-file links come from the analysis's verified map (file_links),
+  // built and existence-checked at fetch time. It is the single, generic
+  // source of truth for repo-relative, vanity-import, and owner/repo/path
+  // citations, so the UI carries no project- or ecosystem-specific path
+  // heuristics and never fabricates a link to a file that does not exist.
+  if (context?.fileLinks && context.fileLinks[clean]) {
+    return context.fileLinks[clean];
   }
 
   // Fallback: resolve plausible GCS artifact paths against the build's
   // web URL. Catches agent-cited paths like
   // "artifacts/clusters/<name>/machines/<vm>/kubelet.log" or
-  // "clusters/<name>/resources/Foo/bar.yaml" that the curator-era
-  // heuristics above could not map. Constrained to the build's artifact
-  // roots (artifacts/ or clusters/) so host-like or repo-doc tokens
-  // (e.g. "example.com/foo.yaml", "docs/book/src/x.md") are not turned
-  // into bogus GCS URLs.
+  // "clusters/<name>/resources/Foo/bar.yaml". Constrained to the build's
+  // artifact roots (artifacts/ or clusters/) so host-like or repo-doc tokens
+  // (e.g. "example.com/foo.yaml", "docs/book/src/x.md") are not turned into
+  // bogus GCS URLs.
   if (context?.webUrl) {
     const path = clean.replace(/^\/+/, "");
     const isArtifactRoot = /^(artifacts|clusters)\//.test(path);

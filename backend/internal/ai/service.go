@@ -51,6 +51,15 @@ type Service struct {
 	// to "unavailable" instead of re-hitting an endpoint that can't do
 	// function-calling.
 	toolsUnsupported atomic.Bool
+
+	// sourceRepoOwner/Name identify the project's own GitHub repo, used to
+	// resolve repo-relative file citations. Empty until SetSourceRepo.
+	sourceRepoOwner string
+	sourceRepoName  string
+
+	// linkVerifyCache memoizes GitHub file-existence checks across all
+	// analyses in a run, keyed by "owner/repo/path" -> bool (exists).
+	linkVerifyCache sync.Map
 }
 
 // NewService constructs a Service. systemPrompt is the fully composed prompt
@@ -86,6 +95,14 @@ func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, 
 // set only when critique is enabled (recipes feed the critique gate).
 func (s *Service) SetSkills(set *skills.Set) {
 	s.skillSet = set
+}
+
+// SetSourceRepo records the project's own GitHub repo (branding.source_repo),
+// used to resolve and verify repo-relative file citations. Safe to call once
+// at fetcher startup.
+func (s *Service) SetSourceRepo(owner, name string) {
+	s.sourceRepoOwner = owner
+	s.sourceRepoName = name
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
@@ -126,6 +143,9 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	}
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
+	if analysis != nil {
+		analysis.FileLinks = s.resolveFileLinks(ctx, httpClient, tc)
+	}
 }
 
 // runAgentic does the per-failure agentic call setup. Kept separate so

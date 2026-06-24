@@ -24,7 +24,6 @@ import { Link as RouterLink } from "react-router-dom";
 import type { TestCase } from "../types/dashboard";
 import { formatDuration, fileToUrl, fileSortKey } from "../lib/utils";
 import { RichText } from "./RichText";
-import { useManifest } from "../hooks/useManifest";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
 
@@ -100,8 +99,6 @@ const externalLinkSx = {
 };
 
 export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }: TestCaseTableProps) {
-  const manifest = useManifest();
-  const sourceRepo = manifest.branding.source_repo;
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
   const filtered = testCases.filter(
@@ -172,8 +169,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           const aiFileCtx = {
             buildLogUrl,
             clusterArtifacts: tc.cluster_artifacts,
-            sourceRepo,
             webUrl,
+            fileLinks: tc.ai_analysis?.file_links,
           };
 
           return (

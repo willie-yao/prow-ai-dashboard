@@ -450,6 +450,9 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 
 	module := universal.New()
 	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
+	// Used to resolve and verify repo-relative file citations against the
+	// project's own GitHub repo (branding.source_repo).
+	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
 
 	eff := cfg.AI.EffectiveAgentic()
 	// Recipe files feed the critique gate, so shipping them is the opt-in
