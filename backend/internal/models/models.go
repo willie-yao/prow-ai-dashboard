@@ -132,6 +132,20 @@ type AIAnalysis struct {
 	// required-evidence / procedure flip the hash and force re-analysis.
 	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
+
+	// FileLinks maps a cited source-file path (a relevant_files entry or a
+	// path mentioned in the prose) to a GitHub URL that has been verified to
+	// exist (HTTP 200). It is the authoritative allowlist for linking file
+	// references in the UI: a path that is not a key here is rendered without a
+	// link, so a file that lives in a different repo than the project (e.g. an
+	// upstream cluster-api test file cited by a CAPZ job) is never turned into a
+	// broken link. Intentionally not omitempty: a present-but-empty map means
+	// "verified, nothing linkable" (UI suppresses source links), while an absent
+	// field means pre-feature cached data (UI shows only artifact/log links
+	// until the analysis is regenerated). Only source links are tracked here;
+	// GCS artifact and build/machine log links are deterministic and resolved
+	// client-side.
+	FileLinks map[string]string `json:"file_links"`
 }
 
 // TestCase represents a single test case from JUnit XML.

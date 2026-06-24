@@ -23,7 +23,6 @@ import {
   OpenInNew,
 } from "@mui/icons-material";
 import { useJobDetail } from "../hooks/useData";
-import { useManifest } from "../hooks/useManifest";
 import {
   formatDuration,
   timeAgo,
@@ -124,8 +123,6 @@ const artifactLinkSx = {
 
 export function TestDetailPage() {
   const theme = useTheme();
-  const manifest = useManifest();
-  const sourceRepo = manifest.branding.source_repo;
   const { jobName: jobID, testName: encodedTestName } = useParams<{
     jobName: string;
     testName: string;
@@ -286,8 +283,8 @@ export function TestDetailPage() {
   const fileCtx = (run: BuildResult | null, tc: TestCase) => ({
     buildLogUrl: run?.build_log_url,
     clusterArtifacts: tc.cluster_artifacts,
-    sourceRepo,
     webUrl: run?.web_url,
+    fileLinks: tc.ai_analysis?.file_links,
   });
 
   return (

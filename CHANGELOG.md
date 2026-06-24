@@ -29,6 +29,13 @@ for how to pin a release.
   than the config expects.
 - Quickstart guide and a "Tuning by model tier" reference for the agentic loop.
 - In-cluster self-hosted runner guide for private AI endpoints.
+- AI analysis rendering: running builds show a yellow (not red) status dot;
+  inline `code` spans render as monospace pills; and cited file paths link to
+  their source. Source links are verified to exist at fetch time
+  (`file_links` on each analysis) so a file in a different repo than the project
+  is never turned into a broken link. Repo resolution is generic (project repo,
+  Go vanity import via `?go-get=1`, or `owner/repo/path`) with no project- or
+  ecosystem-specific knowledge in the engine.
 
 ### Changed
 
