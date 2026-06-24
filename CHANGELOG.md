@@ -20,6 +20,8 @@ for how to pin a release.
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] - 2026-06-24
+
 ### Added
 
 - Release process: tag-triggered release workflow, semver tags, a moving
@@ -35,7 +37,8 @@ for how to pin a release.
   (`file_links` on each analysis) so a file in a different repo than the project
   is never turned into a broken link. Repo resolution is generic (project repo,
   Go vanity import via `?go-get=1`, or `owner/repo/path`) with no project- or
-  ecosystem-specific knowledge in the engine.
+  ecosystem-specific knowledge in the engine. Inline links display just the
+  filename, with the full path shown on hover.
 
 ### Changed
 
