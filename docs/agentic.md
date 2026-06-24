@@ -252,6 +252,37 @@ ai:
 
 ## How it works
 
+### The loop at a glance
+
+Each failure is analyzed by a tool-calling loop. The engine seeds a prompt, then
+calls the model repeatedly: every turn the model either requests more tools (it
+keeps investigating) or returns a tools-free answer (it finalizes). The quality
+gates run only on the finalize branch and can push a weak answer back into the
+loop.
+
+```mermaid
+flowchart TD
+    A[Test failure] --> B["Seed prompt:<br/>system + project knowledge<br/>+ artifact-tree listing + failing test"]
+    B --> C["Call model<br/>(chat/completions)"]
+    C --> D{"Did the model<br/>call tools?"}
+    D -->|"Yes: more evidence wanted"| E["Engine executes against GCS:<br/>list / read / tail / grep"]
+    E --> F["Append results to transcript;<br/>record which artifacts were read"]
+    F --> C
+    D -->|"No: emits a final answer"| G{Quality gates}
+    G -->|"floors unmet"| H["Nudge to investigate further"]
+    H --> C
+    G -->|"critique fail:<br/>punt / hallucinated citation /<br/>missing skill evidence"| I["Feedback (+ injected evidence)"]
+    I --> C
+    G -->|"pass"| J([Cache + publish analysis])
+```
+
+The model is a stateless endpoint, so the engine re-sends the whole transcript
+(`messages[]` plus the tool schemas) on every call and carries the memory itself.
+Tool calls are not a rejected output: they are the model continuing its
+investigation. The model may finalize on any turn; the prompt encourages drilling,
+the floors enforce a minimum, and `max_iters` / the evidence cap bound the maximum.
+The sections below detail each box.
+
 ### Automatic budget sizing
 
 The agentic loop bounds how much tool output the model accumulates (the
