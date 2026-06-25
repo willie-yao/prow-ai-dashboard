@@ -448,6 +448,22 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Error("EvidenceInjection=true should pass through")
 		}
 	})
+	t.Run("PatternAnalysis on by default, explicit false opts out", func(t *testing.T) {
+		if !eff(Agentic{}).PatternAnalysisEnabled() {
+			t.Error("PatternAnalysis should default to ON when unset")
+		}
+		if !(*AI)(nil).EffectiveAgentic().PatternAnalysisEnabled() {
+			t.Error("PatternAnalysis should default to ON on a nil receiver")
+		}
+		off := false
+		if eff(Agentic{PatternAnalysis: &off}).PatternAnalysisEnabled() {
+			t.Error("pattern_analysis: false should turn the pass OFF")
+		}
+		on := true
+		if !eff(Agentic{PatternAnalysis: &on}).PatternAnalysisEnabled() {
+			t.Error("pattern_analysis: true should keep the pass ON")
+		}
+	})
 	t.Run("Tools list passes through", func(t *testing.T) {
 		in := &AI{Agentic: Agentic{Tools: []string{"filesystem"}}}
 		got := in.EffectiveAgentic()

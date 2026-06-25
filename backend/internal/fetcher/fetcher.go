@@ -623,7 +623,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 
-	if eff.PatternAnalysis {
+	if eff.PatternAnalysisEnabled() {
 		analyzePatternsAcrossBuilds(ctx, service, details)
 	}
 }

@@ -47,7 +47,7 @@ ai:
                                 # (auto-enabled when skills/*.yaml recipes are present)
     max_retries: 2              # re-prompt rounds before accepting a still-failing draft
   evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
-  pattern_analysis: false       # correlate a job's recent failed builds into one systemic-vs-flake verdict
+  pattern_analysis: true        # correlate a job's recent failed builds into one systemic-vs-flake verdict (on by default; set false to disable)
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -130,15 +130,18 @@ return empty).
 Run a second, job-level pass after the per-failure analyses: for every job that
 failed in at least 3 recent builds, correlate one representative analyzed
 failure per failed build into a single verdict on whether those failures share
-one root cause. Off by default. Each per-failure card answers "why did *this*
+one root cause. **On by default**; set `pattern_analysis: false` to disable it.
+Each per-failure card answers "why did *this*
 build fail"; this pass answers the question a single failure can't: a "transient
 flake" that recurs across most runs is usually a systemic, fixable bug (an
 undersized VM, a tight timeout, a missing image), not random noise. The specific
 failing test/spec may differ between builds; the pass weighs the underlying
 mechanism, not the surface symptom. It costs one extra tool-free model call per
 qualifying job, cached by the failure set so it only re-runs when the failures
-(or their analyses) change. The verdict surfaces as a banner on the job page.
-See [Pattern analysis](#pattern-analysis).
+(or their analyses) change. Because it is cheap and self-gating (only jobs with
+enough failed builds qualify), it is left on; disable it only on a tightly
+rate-limited endpoint where the extra tail calls are unwelcome. The verdict
+surfaces as a banner on the job page. See [Pattern analysis](#pattern-analysis).
 
 ### `concurrency`
 
@@ -586,7 +589,7 @@ builds gets two separate agentic analyses.
 
 `pattern_analysis` adds one job-level correlation pass that runs after every
 per-failure analysis in the run is complete (so all per-build root causes are
-available). It is off by default.
+available). It is on by default; set `pattern_analysis: false` to disable it.
 
 For each job, the engine:
 

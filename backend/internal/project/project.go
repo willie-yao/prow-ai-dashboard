@@ -340,13 +340,22 @@ type Agentic struct {
 	// schemas that mostly return empty on their artifact trees.
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 
-	// PatternAnalysis enables a second, test-level pass: after every failure
-	// is analyzed individually, the engine correlates the per-build analyses of
-	// each repeatedly-failing test into one verdict on whether the failures
+	// PatternAnalysis enables a second, job-level pass: after every failure is
+	// analyzed individually, the engine correlates the per-build analyses of
+	// each repeatedly-failing job into one verdict on whether the failures
 	// share a root cause (a systemic bug surfacing as flakes) or are genuinely
-	// varied. Opt-in (one extra model call per flaky test, cached by the
-	// failure set). Defaults to false.
-	PatternAnalysis bool `yaml:"pattern_analysis,omitempty" json:"pattern_analysis,omitempty"`
+	// varied. On by default (nil): the pass is cheap (one extra tool-free model
+	// call per qualifying job, cached by the failure set) and self-gating (it
+	// only fires for jobs that failed in enough builds). Set
+	// `pattern_analysis: false` to turn it off on a tightly rate-limited
+	// endpoint. A *bool so an explicit false is distinguishable from unset.
+	PatternAnalysis *bool `yaml:"pattern_analysis,omitempty" json:"pattern_analysis,omitempty"`
+}
+
+// PatternAnalysisEnabled reports whether the job-level pattern pass should run.
+// It is on unless the consumer explicitly set `pattern_analysis: false`.
+func (a Agentic) PatternAnalysisEnabled() bool {
+	return a.PatternAnalysis == nil || *a.PatternAnalysis
 }
 
 // AgenticCritique is the per-project critique-gate config. See
