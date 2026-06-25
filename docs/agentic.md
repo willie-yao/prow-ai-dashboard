@@ -14,7 +14,7 @@ is just the failing test's context.
 
 ## Endpoint requirements
 
-Agentic analysis requires the AI endpoint to implement OpenAI-style
+Agentic analysis requires the chat-completions endpoint to implement OpenAI-style
 function calling (`tools` field on the request, `tool_calls` field on
 the response). Verified endpoints:
 

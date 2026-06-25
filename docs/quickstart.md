@@ -6,7 +6,7 @@ runners, and engine defaults for everything else. The files drop into either a
 **new repo** or an **existing one**; Step 1 has commands for both.
 
 When you want the full set of choices (job grouping, presubmits, a self-hosted
-or private AI endpoint, every configurable field), graduate to
+or private chat-completions endpoint, every configurable field), graduate to
 [onboarding-a-new-project.md](onboarding-a-new-project.md), which is the
 granular reference. This guide deliberately skips those forks.
 
@@ -14,7 +14,7 @@ granular reference. This guide deliberately skips those forks.
 
 - The `gh` CLI, authenticated (`gh auth status`).
 - Go 1.25+ (for the local sweep, and for the free local-model option).
-- An **AI endpoint**. You pick one in Step 2; the options range from a free
+- A **chat-completions endpoint**. You pick one in Step 2; the options range from a free
   model running on your laptop (no account) to a hosted API. The only hard
   requirement is OpenAI-style function calling, which the agentic loop needs.
 - The **testgrid dashboard name** your project's jobs advertise in their
@@ -87,7 +87,7 @@ branding:
     name: "myproject"
 
 ai:
-  # endpoint + model are filled in by Step 2 (choose your AI endpoint).
+  # endpoint + model are filled in by Step 2 (choose your chat-completions endpoint).
   # The example below uses a free local model; swap per Step 2 for a hosted one.
   endpoint: "http://localhost:11434/v1/chat/completions"
   model: "qwen3:8b"
@@ -181,7 +181,7 @@ jobs:
       project_dir: "."        # or "dashboard" if you used a subdir
 ```
 
-## Step 2: choose your AI endpoint
+## Step 2: choose your chat-completions endpoint
 
 The agentic loop needs an endpoint that supports OpenAI-style function calling.
 Pick one of the options below and set `ai.endpoint` / `ai.model` in
@@ -233,7 +233,7 @@ just republish the committed data. Two adjustments to the hosted flow:
 To preview before committing, point `-out` at the engine checkout's
 `frontend/public/data` and run `make dev` there. This is the same `skip-fetch`
 pattern documented in
-[onboarding-a-new-project.md](onboarding-a-new-project.md#optional-ai-endpoint-unreachable-from-github-hosted-runners).
+[onboarding-a-new-project.md](onboarding-a-new-project.md#optional-chat-completions-endpoint-unreachable-from-github-hosted-runners).
 
 ### Option B: hosted API (auto-deploys from GitHub Actions)
 

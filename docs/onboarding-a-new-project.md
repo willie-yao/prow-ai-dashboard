@@ -3,7 +3,7 @@
 The complete reference for adding a prow-ai-dashboard project. For the fast
 happy path, start with [quickstart.md](quickstart.md) and come back here for the
 options it skips: job grouping, presubmits, host-repo choice, version pinning,
-and private AI endpoints.
+and private chat-completions endpoints.
 
 ## What you ship
 
@@ -14,7 +14,7 @@ else is reused from the engine at deploy time.
 ```
 <host-repo>/
 ├── <project_dir>/             # repo root, or a subdir of your choice
-│   ├── project.yaml           # bucket, branding, AI endpoint
+│   ├── project.yaml           # bucket, branding, chat-completions endpoint
 │   └── prompts/system.md      # AI prompt addendum (required)
 └── .github/workflows/
     ├── deploy.yml             # calls the reusable deploy workflow
@@ -239,7 +239,7 @@ redeploy. Prompt edits take effect automatically: the affected analyses re-run
 on the next deploy with no cache clear. Two or three iterations is normal. (To
 re-baseline everything at once, run the **Clear AI Cache** workflow first.)
 
-## Optional: AI endpoint unreachable from GitHub-hosted runners
+## Optional: chat-completions endpoint unreachable from GitHub-hosted runners
 
 If your endpoint is private (Azure Private Endpoint, K8s ClusterIP service,
 on-prem inference), GitHub-hosted runners cannot reach it. Two options:

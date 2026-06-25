@@ -249,7 +249,7 @@ live deploy.
 - **Stale-mode cache entries.** A cached analysis whose `mode` is not
   `"agentic"` (e.g. from an earlier pipeline) is treated as a miss and
   re-analyzed on the next fetcher run. No action needed; it self-heals.
-- **In-cluster AI endpoints** are unreachable from GitHub-hosted runners.
+- **In-cluster chat-completions endpoints** are unreachable from GitHub-hosted runners.
   Use `runs-on:` + a self-hosted runner OR set `skip-fetch: true` and
   commit pre-fetched `data/` to the consumer repo.
 - **Per-deploy `builds:` input.** Trade-off between history depth and

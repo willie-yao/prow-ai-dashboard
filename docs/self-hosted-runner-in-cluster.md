@@ -1,6 +1,6 @@
 # Running the deploy on an in-cluster self-hosted runner
 
-The deploy workflow runs the fetcher, which calls your AI endpoint over HTTP. By
+The deploy workflow runs the fetcher, which calls your chat-completions endpoint over HTTP. By
 default it runs on a GitHub-hosted runner, which only has public internet
 access. If your AI inference stack runs **inside a Kubernetes cluster** and is
 exposed only as a `ClusterIP` Service (no public ingress), a GitHub-hosted
@@ -13,7 +13,7 @@ schedule with no machine of yours in the loop.
 
 This is one of two escape hatches for a private endpoint; the other is fetching
 locally and publishing pre-fetched data with `skip-fetch: true` (see
-[onboarding-a-new-project.md](onboarding-a-new-project.md#optional-ai-endpoint-unreachable-from-github-hosted-runners)).
+[onboarding-a-new-project.md](onboarding-a-new-project.md#optional-chat-completions-endpoint-unreachable-from-github-hosted-runners)).
 Prefer the in-cluster runner for sustained, automated runs.
 
 ## How it works
@@ -40,7 +40,7 @@ of CPU cores and a few GB of memory is plenty.
 
 ## Prerequisites
 
-- A Kubernetes cluster that hosts your AI endpoint, with `kubectl` + `helm`
+- A Kubernetes cluster that hosts your chat-completions endpoint, with `kubectl` + `helm`
   access. Installing the runner controller creates cluster-scoped resources, so
   you need permission to install CRDs (cluster-admin, or a scoped install your
   platform team performs).
