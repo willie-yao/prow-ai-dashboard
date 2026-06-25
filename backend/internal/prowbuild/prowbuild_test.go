@@ -225,6 +225,11 @@ func TestDiscoverJobs_BucketDriven(t *testing.T) {
 		if j.JobID == "" {
 			t.Errorf("job %q has empty JobID", j.Name)
 		}
+		// TabName is the field the UI renders as the card title, so bucket
+		// discovery must populate it (there is no testgrid-tab-name here).
+		if j.TabName != j.Name {
+			t.Errorf("job %q TabName = %q, want = Name", j.Name, j.TabName)
+		}
 		if j.JobType == models.JobTypePresubmit && j.Repo != "istio/istio" {
 			t.Errorf("presubmit repo = %q, want istio/istio", j.Repo)
 		}

@@ -75,7 +75,7 @@ export function JobCard({ job }: JobCardProps) {
                 ".MuiCardActionArea-root:hover &": { color: "primary.main" },
               }}
             >
-              {job.tab_name}
+              {job.tab_name || job.name}
             </Typography>
             <StatusChip status={job.overall_status} />
           </Box>

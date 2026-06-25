@@ -36,6 +36,7 @@ func DiscoverJobs(ctx context.Context, b storage.Backend, includePresubmits bool
 		}
 		jobs = append(jobs, models.ProwJob{
 			Name:    name,
+			TabName: name,
 			JobType: models.JobTypePeriodic,
 			JobID:   models.JobIDFor(models.JobTypePeriodic, "", name),
 		})
@@ -57,6 +58,7 @@ func DiscoverJobs(ctx context.Context, b storage.Backend, includePresubmits bool
 			}
 			jobs = append(jobs, models.ProwJob{
 				Name:    name,
+				TabName: name,
 				JobType: models.JobTypePresubmit,
 				Repo:    repo,
 				JobID:   models.JobIDFor(models.JobTypePresubmit, repo, name),

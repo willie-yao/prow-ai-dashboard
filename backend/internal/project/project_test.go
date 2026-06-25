@@ -647,3 +647,24 @@ func TestEngineVersionWarning(t *testing.T) {
 		})
 	}
 }
+
+func TestCategorize(t *testing.T) {
+	c := &Config{Categories: []CategoryRule{
+		{Match: "postsubmit", ID: "postsubmit", Label: "Postsubmit"},
+		{Match: "integ", ID: "integration", Label: "Integration"},
+	}}
+	cases := []struct{ name, want string }{
+		{"integ-ambient_istio_release-1.30", "integration"},
+		{"integ-ambient_istio_release-1.30_postsubmit", "postsubmit"}, // first rule wins
+		{"unit-tests", "other"},
+	}
+	for _, tc := range cases {
+		if got := c.Categorize(tc.name); got != tc.want {
+			t.Errorf("Categorize(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// No rules -> ungrouped (empty category, not "other").
+	if got := (&Config{}).Categorize("anything"); got != "" {
+		t.Errorf("Categorize with no rules = %q, want empty", got)
+	}
+}

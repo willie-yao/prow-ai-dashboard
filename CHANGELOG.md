@@ -20,6 +20,15 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bucket-discovered jobs (`discovery.source: bucket`) now get a display title and
+  category. They previously rendered as untitled cards under "Other" because the
+  bucket path did not set `tab_name` or apply the project's `categories` rules
+  (only the testgrid path did). The categorize logic is now shared across both
+  discovery sources. The job-card title also falls back to the job name when no
+  tab name is present.
+
 ### Changed
 
 - `storage.provider` is now required (no implicit `gcs` default), so the config

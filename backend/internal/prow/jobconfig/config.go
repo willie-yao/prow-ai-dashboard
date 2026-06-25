@@ -117,7 +117,7 @@ func convertJob(r rawJob, filename, jobType, repo string, categories []project.C
 		Description:     r.Annotations["description"],
 		MinimumInterval: interval,
 		ConfigFile:      filename,
-		Category:        categorize(r.Name, categories),
+		Category:        project.CategorizeJob(r.Name, categories),
 		JobType:         jobType,
 		Repo:            repo,
 		JobID:           models.JobIDFor(jobType, repo, r.Name),
@@ -129,24 +129,4 @@ func convertJob(r rawJob, filename, jobType, repo string, categories []project.C
 		j.Branch = r.ExtraRefs[0].BaseRef
 	}
 	return j
-}
-
-// categorize returns the ID of the first CategoryRule whose Match substring
-// appears in the lowercased job name. Returns "other" when rules exist but
-// nothing matches, and "" when the consumer has not declared any rules at
-// all (ungrouped mode, the engine's default for new projects).
-func categorize(name string, rules []project.CategoryRule) string {
-	if len(rules) == 0 {
-		return ""
-	}
-	lower := strings.ToLower(name)
-	for _, r := range rules {
-		if r.Match == "" || r.ID == "" {
-			continue
-		}
-		if strings.Contains(lower, strings.ToLower(r.Match)) {
-			return r.ID
-		}
-	}
-	return "other"
 }

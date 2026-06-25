@@ -146,6 +146,11 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return fmt.Errorf("discovering jobs from bucket: %w", err)
 		}
+		// Bucket discovery has no job-config YAML, so assign categories from
+		// the project rules here (the testgrid path does this at parse time).
+		for i := range jobs {
+			jobs[i].Category = cfg.Categorize(jobs[i].Name)
+		}
 	default:
 		log.Println("Fetching job configs from test-infra...")
 		jobs, err = jobconfig.FetchJobConfigs(ctx, client, cfg)
