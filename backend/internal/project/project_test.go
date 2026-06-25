@@ -60,6 +60,7 @@ id: capz
 	wantSubstrings := []string{
 		"name",
 		"testgrid.dashboard",
+		"storage.provider",
 		"storage.bucket",
 		"branding.title",
 		"branding.base_path",
@@ -172,6 +173,28 @@ func TestParseGCSWebBucketDiscovery(t *testing.T) {
 	sc := c.StorageConfig()
 	if string(sc.Provider) != "gcsweb" || sc.Base != "https://gcsweb.istio.io/s3" {
 		t.Errorf("storage config = %+v", sc)
+	}
+}
+
+func TestValidateRequiresProvider(t *testing.T) {
+	const noProvider = `
+id: x
+name: x
+testgrid:
+  dashboard: d
+storage:
+  bucket: "b"
+branding:
+  title: x
+  base_path: /x
+  site_url: https://example.com
+  source_repo:
+    owner: x
+    name: x
+`
+	_, err := parse(strings.NewReader(noProvider))
+	if err == nil || !strings.Contains(err.Error(), "storage.provider") {
+		t.Fatalf("expected storage.provider required error, got: %v", err)
 	}
 }
 

@@ -94,10 +94,10 @@ ai:
   tools: [filesystem, k8s]
 ```
 
-Everything not listed has a sensible default: `storage.provider` defaults to
-`gcs`, jobs render in one flat grid (no `categories`), and discovery uses
-testgrid. For a non-GCS Prow (e.g. S3 behind a gcsweb gateway) set
-`storage.provider: gcsweb` with a `base` URL and `discovery.source: bucket`; see
+Most other fields have sensible defaults: jobs render in one flat grid (no
+`categories`), and discovery uses testgrid. `storage.provider` is required and
+selects the backend (`gcs` above; use `gcsweb` for a non-GCS Prow, e.g. S3
+behind a gcsweb gateway, with a `base` URL and `discovery.source: bucket`); see
 [onboarding-a-new-project.md](onboarding-a-new-project.md#example-a-non-gcs-prow-s3-behind-gcsweb).
 The `ai.endpoint` / `ai.model` above are a placeholder; Step 2 walks the real
 options and what to set here. Small or open-weights models also want the
