@@ -77,6 +77,33 @@ func (c *Config) EffectiveCategories() []CategoryRule {
 	return c.Categories
 }
 
+// Categorize returns the category id for a job name using the config's rules.
+// See CategorizeJob for the matching semantics.
+func (c *Config) Categorize(name string) string {
+	return CategorizeJob(name, c.Categories)
+}
+
+// CategorizeJob returns the category id for a job name by evaluating rules in
+// order (first case-insensitive substring match wins). It returns "" when no
+// rules are configured (ungrouped dashboard) and "other" when rules exist but
+// none match. Used by every job-discovery path so grouping is consistent
+// regardless of source.
+func CategorizeJob(name string, rules []CategoryRule) string {
+	if len(rules) == 0 {
+		return ""
+	}
+	lower := strings.ToLower(name)
+	for _, r := range rules {
+		if r.Match == "" || r.ID == "" {
+			continue
+		}
+		if strings.Contains(lower, strings.ToLower(r.Match)) {
+			return r.ID
+		}
+	}
+	return "other"
+}
+
 // Source controls how the fetcher behaves when discovering Prow jobs from
 // the kubernetes/test-infra repository. Discovery itself is dashboard-driven:
 // the engine asks GitHub code search for every YAML under config/jobs/ that

@@ -114,7 +114,7 @@ func TestCategorize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := categorize(tc.name, exampleRules)
+			got := project.CategorizeJob(tc.name, exampleRules)
 			if got != tc.expected {
 				t.Errorf("categorize(%q) = %q, want %q", tc.name, got, tc.expected)
 			}
@@ -142,7 +142,7 @@ func TestCategorizeRespectsRuleOrder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := categorize(tc.name, rules); got != tc.want {
+			if got := project.CategorizeJob(tc.name, rules); got != tc.want {
 				t.Errorf("categorize(%q) = %q, want %q", tc.name, got, tc.want)
 			}
 		})
