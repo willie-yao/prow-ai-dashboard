@@ -622,6 +622,111 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	}
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
+
+	if eff.PatternAnalysis {
+		analyzePatternsAcrossBuilds(ctx, service, details)
+	}
+}
+
+// patternMinFailedBuilds is the job-level "recurring" gate: a job is only
+// pattern-analyzed once it has this many completed failed builds. Matches the
+// consecutive-failure convention used for persistent-failure classification.
+const patternMinFailedBuilds = 3
+
+// analyzePatternsAcrossBuilds runs the opt-in second pass: for each job that
+// failed in enough recent builds, it correlates one representative analyzed
+// failure per failed build into a single systemic-vs-transient verdict and
+// stores it on the JobDetail. Per-failure analyses are already populated.
+func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, details []models.JobDetail) {
+	for i := range details {
+		d := &details[i]
+		failures := gatherPatternFailures(d)
+		failedBuilds := countFailedBuilds(d)
+		if failedBuilds < patternMinFailedBuilds || len(failures) < 2 {
+			continue
+		}
+		pa, err := service.AnalyzePattern(ctx, d.JobID, d.Name, failures)
+		if err != nil {
+			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, err)
+			continue
+		}
+		if pa == nil {
+			continue
+		}
+		d.PatternAnalyses = []models.PatternAnalysis{*pa}
+		verdict := "not systemic"
+		if pa.Systemic {
+			verdict = fmt.Sprintf("SYSTEMIC (%s): %s", pa.Confidence, pa.SharedRootCause)
+		}
+		log.Printf("  🔗 pattern analysis for %s across %d builds: %s", d.Name, pa.BuildsAnalyzed, verdict)
+	}
+}
+
+// countFailedBuilds counts a job's completed (non-pending) failed builds.
+func countFailedBuilds(d *models.JobDetail) int {
+	n := 0
+	for i := range d.Runs {
+		run := &d.Runs[i]
+		if !run.Passed && run.Result != "PENDING" {
+			n++
+		}
+	}
+	return n
+}
+
+// gatherPatternFailures picks one representative analyzed failure per failed
+// build of a job: the most severe failed test case that has an AIAnalysis. The
+// transient classification is carried through (it's exactly what the pattern
+// pass reconsiders across builds).
+func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
+	var out []ai.PatternFailure
+	for i := range d.Runs {
+		run := &d.Runs[i]
+		if run.Passed || run.Result == "PENDING" {
+			continue
+		}
+		var rep *models.TestCase
+		for j := range run.TestCases {
+			tc := &run.TestCases[j]
+			if tc.Status != "failed" || tc.AIAnalysis == nil {
+				continue
+			}
+			if rep == nil || severityRank(tc.AIAnalysis.Severity) > severityRank(rep.AIAnalysis.Severity) {
+				rep = tc
+			}
+		}
+		if rep == nil {
+			continue
+		}
+		out = append(out, ai.PatternFailure{
+			BuildID:        run.BuildID,
+			FailingTest:    rep.Name,
+			FailureMessage: rep.FailureMessage,
+			RootCause:      rep.AIAnalysis.RootCause,
+			IsTransient:    rep.AISummary != nil && rep.AISummary.IsTransient,
+			Severity:       rep.AIAnalysis.Severity,
+		})
+	}
+	return out
+}
+
+// severityRank orders analysis severities so the most actionable failure in a
+// build is picked as its representative. Unknown/empty sorts lowest.
+func severityRank(sev string) int {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return 5
+	case "high":
+		return 4
+	case "medium":
+		return 3
+	case "low":
+		return 2
+	case "transient-ignore":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // aiEndpoint returns the configured AI chat-completions URL, or "" to let

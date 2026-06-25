@@ -14,6 +14,7 @@ import type { BuildResult, TestCase } from "../types/dashboard";
 import { RunTimeline } from "../components/RunTimeline";
 import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
+import { PatternBanner } from "../components/PatternBanner";
 import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
@@ -72,6 +73,7 @@ export function JobDetailPage() {
   if (!data) return null;
 
   const lastRun = runs[0] ?? null;
+  const pattern = data.pattern_analyses?.[0];
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: 4 } }}>
@@ -122,6 +124,8 @@ export function JobDetailPage() {
           )}
         </Box>
       </Box>
+
+      {pattern && <PatternBanner pattern={pattern} jobID={jobID} />}
 
       {runs.length === 0 ? (
         <Panel sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>

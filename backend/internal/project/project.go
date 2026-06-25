@@ -339,6 +339,14 @@ type Agentic struct {
 	// failures) should set ["filesystem"] to avoid registering tier-2
 	// schemas that mostly return empty on their artifact trees.
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+
+	// PatternAnalysis enables a second, test-level pass: after every failure
+	// is analyzed individually, the engine correlates the per-build analyses of
+	// each repeatedly-failing test into one verdict on whether the failures
+	// share a root cause (a systemic bug surfacing as flakes) or are genuinely
+	// varied. Opt-in (one extra model call per flaky test, cached by the
+	// failure set). Defaults to false.
+	PatternAnalysis bool `yaml:"pattern_analysis,omitempty" json:"pattern_analysis,omitempty"`
 }
 
 // AgenticCritique is the per-project critique-gate config. See
@@ -400,6 +408,7 @@ func (a *AI) EffectiveAgentic() Agentic {
 	}
 	out.SingleToolCall = a.Agentic.SingleToolCall
 	out.EvidenceInjection = a.Agentic.EvidenceInjection
+	out.PatternAnalysis = a.Agentic.PatternAnalysis
 	if len(a.Agentic.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Agentic.Tools...)
 	}

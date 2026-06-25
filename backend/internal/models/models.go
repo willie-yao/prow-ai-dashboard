@@ -219,6 +219,41 @@ type JobDetail struct {
 	JobType string        `json:"job_type"`
 	Repo    string        `json:"repo"`
 	Runs    []BuildResult `json:"runs"`
+	// PatternAnalyses holds cross-build correlations for this job: whether the
+	// recent failed builds share one root cause (a systemic bug surfacing as
+	// flakes) or are genuinely varied. Empty unless ai.pattern_analysis is
+	// enabled and the job failed in enough builds.
+	PatternAnalyses []PatternAnalysis `json:"pattern_analyses,omitempty"`
+}
+
+// PatternAnalysis is a second-pass, job-level correlation across the per-build
+// failure analyses of one job's recent failed builds. It answers the question
+// the per-failure cards can't: are these repeated failures (often each
+// individually dismissed as a "transient flake") actually one recurring,
+// fixable bug? The specific failing test/spec may differ between builds; the
+// shared cause is what matters. Produced only when ai.pattern_analysis is
+// enabled and the job failed in enough builds.
+type PatternAnalysis struct {
+	// Subject is what the correlated failures belong to (the job's display
+	// name for a job-level pattern).
+	Subject        string `json:"subject"`
+	GeneratedAt    string `json:"generated_at"`
+	BuildsAnalyzed int    `json:"builds_analyzed"`
+	// Systemic is true when most failures share one underlying cause (so the
+	// "flaky" job is really a recurring bug); false when the failures are
+	// genuinely varied or independently transient.
+	Systemic bool `json:"systemic"`
+	// Confidence is the model's confidence in the systemic verdict:
+	// "high", "medium", or "low".
+	Confidence string `json:"confidence"`
+	// SharedRootCause describes the common cause when Systemic is true.
+	SharedRootCause string `json:"shared_root_cause,omitempty"`
+	// SharedBuilds lists the build IDs the model judged to share the cause.
+	SharedBuilds []string `json:"shared_builds,omitempty"`
+	// SuggestedFix is the cross-cutting fix for the shared cause.
+	SuggestedFix string `json:"suggested_fix,omitempty"`
+	// Summary is a one-paragraph human-readable verdict.
+	Summary string `json:"summary"`
 }
 
 // FailureClassification indicates the type of failure.

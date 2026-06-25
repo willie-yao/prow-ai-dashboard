@@ -150,12 +150,25 @@ export interface FlakinessReport {
   recently_broken: TestFlakiness[];
 }
 
+export interface PatternAnalysis {
+  subject: string;
+  generated_at: string;
+  builds_analyzed: number;
+  systemic: boolean;
+  confidence: "high" | "medium" | "low";
+  shared_root_cause?: string;
+  shared_builds?: string[];
+  suggested_fix?: string;
+  summary: string;
+}
+
 export interface JobDetail {
   name: string;
   job_id: string;
   job_type: "periodic" | "presubmit";
   repo: string;
   runs: BuildResult[];
+  pattern_analyses?: PatternAnalysis[];
 }
 
 export interface SearchEntry {
