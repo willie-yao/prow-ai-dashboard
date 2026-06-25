@@ -20,6 +20,8 @@ for how to pin a release.
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-06-25
+
 ### Added
 
 - Storage is now pluggable so the engine no longer assumes Google Cloud Storage.
