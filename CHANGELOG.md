@@ -20,6 +20,13 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Changed
+
+- `storage.provider` is now required (no implicit `gcs` default), so the config
+  is explicit about the backend rather than assuming a provider. Set
+  `provider: gcs` for Google Cloud Storage. Consumers already setting a provider
+  are unaffected.
+
 ## [1.0.0-beta.3] - 2026-06-25
 
 ### Added

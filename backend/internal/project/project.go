@@ -94,9 +94,9 @@ type TestGrid struct {
 }
 
 // Storage configures the artifact store that holds the project's Prow builds.
-// The engine does not assume Google Cloud Storage: Provider selects the
-// backend, and the optional *Base fields point the engine at a project's own
-// endpoints.
+// The engine does not assume Google Cloud Storage: Provider is required and
+// selects the backend, and the optional *Base fields point the engine at a
+// project's own endpoints.
 //
 //	provider: gcs    -> native Google Cloud Storage (kubernetes.io Prow).
 //	provider: gcsweb -> any gcsweb HTTP gateway fronting a bucket (e.g. an S3
@@ -145,15 +145,11 @@ func (c *Config) EffectiveDiscoverySource() string {
 	return c.Discovery.Source
 }
 
-// StorageConfig maps the project's storage block onto a storage.Config,
-// defaulting the provider to gcs when unset.
+// StorageConfig maps the project's storage block onto a storage.Config.
+// Validate() guarantees Provider is set, so no defaulting happens here.
 func (c *Config) StorageConfig() storage.Config {
-	provider := storage.Provider(c.Storage.Provider)
-	if provider == "" {
-		provider = storage.ProviderGCS
-	}
 	return storage.Config{
-		Provider: provider,
+		Provider: storage.Provider(c.Storage.Provider),
 		Bucket:   c.Storage.Bucket,
 		Base:     c.Storage.Base,
 		WebBase:  c.Storage.WebBase,
@@ -460,6 +456,7 @@ func (c *Config) Validate() error {
 	}
 	require("id", c.ID)
 	require("name", c.Name)
+	require("storage.provider", c.Storage.Provider)
 	require("storage.bucket", c.Storage.Bucket)
 	require("branding.title", c.Branding.Title)
 	require("branding.base_path", c.Branding.BasePath)
@@ -479,7 +476,7 @@ func (c *Config) Validate() error {
 
 	switch c.Storage.Provider {
 	case "", string(storage.ProviderGCS):
-		// gcs needs no extra fields.
+		// Empty is already reported by require above; gcs needs no extra fields.
 	case string(storage.ProviderGCSWeb):
 		require("storage.base (required for the gcsweb provider)", c.Storage.Base)
 	default:

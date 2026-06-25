@@ -71,9 +71,9 @@ which annotates every field. The fields that matter:
 
 - **`storage`** (required): where the project's Prow build artifacts live. The
   engine does not assume GCS.
-  - `provider`: `gcs` (the default) for native Google Cloud Storage
-    (kubernetes.io Prow), or `gcsweb` for any gcsweb HTTP gateway fronting a
-    bucket (e.g. an S3 bucket behind `gcsweb.<project>.io`).
+  - `provider` (required): the storage backend. `gcs` for native Google Cloud
+    Storage (kubernetes.io Prow), or `gcsweb` for any gcsweb HTTP gateway
+    fronting a bucket (e.g. an S3 bucket behind `gcsweb.<project>.io`).
   - `bucket`: the bucket name, no `gs://`/`s3://` prefix, e.g. `kubernetes-ci-logs`.
   - For `gcsweb`, also set `base` (the gateway root that serves raw objects and
     HTML listings, e.g. `https://gcsweb.istio.io/s3`) and usually `prow_base`

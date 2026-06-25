@@ -34,7 +34,8 @@ source:
 testgrid:
   dashboard: "sig-foo-your-project"
 
-# Where the project's Prow build artifacts live. The engine does not assume GCS.
+# Where the project's Prow build artifacts live. The engine does not assume GCS,
+# so `provider` is required.
 #   provider: gcs    -> native Google Cloud Storage (kubernetes.io Prow).
 #   provider: gcsweb -> any gcsweb gateway fronting a bucket (e.g. an S3 bucket
 #                       behind gcsweb.<project>.io); set `base` to that gateway,
