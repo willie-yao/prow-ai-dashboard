@@ -2,13 +2,6 @@
 
 Reusable engine for **AI-powered Prow/TestGrid dashboards**. Provides a project-agnostic alternative to TestGrid with AI-driven failure analysis, run triage, and notifications. Each project gets its own deployment, secrets, and GitHub Pages site by calling the reusable workflow shipped here from any repo it controls (a dedicated dashboard repo or a directory inside an existing one).
 
-## Consumers
-
-| Project | Dashboard | Source |
-| --- | --- | --- |
-| [Cluster API Provider Azure (CAPZ)](https://github.com/kubernetes-sigs/cluster-api-provider-azure) | [willie-yao.github.io/capz-prow-ai-dashboard](https://willie-yao.github.io/capz-prow-ai-dashboard/) | [willie-yao/capz-prow-ai-dashboard](https://github.com/willie-yao/capz-prow-ai-dashboard) |
-| [Cluster API (CAPI core)](https://github.com/kubernetes-sigs/cluster-api) | [willie-yao.github.io/capi-prow-ai-dashboard](https://willie-yao.github.io/capi-prow-ai-dashboard/) | [willie-yao/capi-prow-ai-dashboard](https://github.com/willie-yao/capi-prow-ai-dashboard) |
-
 > ⚠️ **Active development.** Engine APIs (project.yaml schema, reusable workflow inputs) may still change. Pin to `@main` or a commit SHA from your consumer until a release is cut.
 
 ## How it works
@@ -75,11 +68,11 @@ make dev    # http://localhost:5173 with HMR
 # Run fetcher against a consumer repo (point PROJECT_DIR at any directory
 # containing project.yaml + prompts/system.md). Output lands in
 # frontend/public/data/ which the Vite dev server serves automatically.
-make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard
+make fetch-data PROJECT_DIR=../your-consumer-repo
 
 # Or invoke the binary directly for one-off runs:
 ./bin/fetcher \
-  -project-dir=../capz-prow-ai-dashboard \
+  -project-dir=../your-consumer-repo \
   -out=frontend/public/data \
   -builds=3 -workers=5
 
