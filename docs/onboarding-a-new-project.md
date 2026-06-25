@@ -234,8 +234,10 @@ After it goes green, check:
   `dashboard.json`, with non-alphanumeric characters replaced) has failed
   `test_cases` with an `ai_summary` that names real symbols from your project.
 
-If summaries read generically, add specifics to `prompts/system.md`, run the
-**Clear AI Cache** workflow, and redeploy. Two or three iterations is normal.
+If summaries read generically, add specifics to `prompts/system.md` and
+redeploy. Prompt edits take effect automatically: the affected analyses re-run
+on the next deploy with no cache clear. Two or three iterations is normal. (To
+re-baseline everything at once, run the **Clear AI Cache** workflow first.)
 
 ## Optional: AI endpoint unreachable from GitHub-hosted runners
 

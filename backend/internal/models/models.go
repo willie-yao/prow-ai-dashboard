@@ -133,6 +133,13 @@ type AIAnalysis struct {
 	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
+	// PromptHash is the fingerprint of the composed system prompt (engine
+	// base + consumer addendum + response footer) under which this analysis
+	// was produced. The cache-read gates re-analyze when it no longer matches
+	// the current prompt, so editing prompts/system.md refreshes affected
+	// failures on the next run without a manual cache clear.
+	PromptHash string `json:"prompt_hash,omitempty"`
+
 	// FileLinks maps a cited source-file path (a relevant_files entry or a
 	// path mentioned in the prose) to a GitHub URL that has been verified to
 	// exist (HTTP 200). It is the authoritative allowlist for linking file

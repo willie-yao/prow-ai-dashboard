@@ -313,6 +313,11 @@ type agenticCacheData struct {
 	// edits recipes (engine-side contract unchanged, but the effective
 	// evidence requirements drifted).
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
+
+	// PromptHash is the fingerprint of the composed system prompt under
+	// which this entry was produced. The cache-read gate invalidates the
+	// entry when it no longer matches the current prompt.
+	PromptHash string `json:"prompt_hash,omitempty"`
 }
 
 // floorStatus tracks which per-project floors are currently unmet for a
@@ -373,6 +378,12 @@ type agentState struct {
 	// set, and so cacheAcceptedAnalysis / stampAgenticTelemetry can
 	// stamp the hash without re-threading it.
 	skillSet *skills.Set
+
+	// promptHash is the fingerprint of the composed system prompt for this
+	// run. Stamped onto the accepted analysis and the cache entry so a later
+	// prompt edit invalidates them on read. Held on state so the stamp and
+	// cache-write paths reuse it without re-threading sysPrompt.
+	promptHash string
 
 	// artifactTreeSetCache is the normalized set of every artifact path
 	// in the build, fetched lazily the first time a skill-evidence miss
@@ -446,6 +457,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		if state.skillSet != nil {
 			analysis.SkillSetHash = state.skillSet.Hash()
 		}
+		analysis.PromptHash = state.promptHash
 	}
 }
 
@@ -631,7 +643,11 @@ func (c *Client) doAnalyzeAgentic(
 					critiqueOK = false
 				}
 			}
-			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK {
+			// The prompt is always sent to the model, so a prompt change
+			// invalidates the entry regardless of critique. Editing
+			// prompts/system.md re-analyzes on the next run with no cache clear.
+			promptOK := cached.PromptHash == PromptFingerprint(sysPrompt)
+			if cached.ToolCalls >= in.Opts.MinToolCalls && cached.GCSBytes >= in.Opts.MinGCSBytes && critiqueOK && promptOK {
 				summary, analysis := c.buildOutputs(cached.analysisResponse)
 				stampAgenticTelemetry(analysis, nil, in.Mode, true, start)
 				// Restore the recorded per-analysis telemetry so the
@@ -646,6 +662,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.CritiquePassed = cached.CritiquePassed
 				analysis.CritiqueVersion = cached.CritiqueVersion
 				analysis.SkillSetHash = cached.SkillSetHash
+				analysis.PromptHash = cached.PromptHash
 				return summary, analysis, nil
 			}
 		}
@@ -659,6 +676,7 @@ func (c *Client) doAnalyzeAgentic(
 		cache:        in.Cache,
 		webURLBase:   in.WebURLBase,
 		startTime:    time.Now(),
+		promptHash:   PromptFingerprint(sysPrompt),
 	}
 	// Skills are consulted only inside the critique gate, so load the
 	// recipe set into the run exactly when critique is enabled (recipe
@@ -1193,6 +1211,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		CritiquePassed:   critiquePassed,
 		CritiqueVersion:  version,
 		SkillSetHash:     skillHash,
+		PromptHash:       state.promptHash,
 	})
 }
 

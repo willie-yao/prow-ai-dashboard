@@ -161,8 +161,9 @@ jobs:
 ```
 
 **`.github/workflows/clear-cache.yml`** (wipes the cache so the next deploy
-re-analyzes everything; you will use it after prompt edits). Use the same
-`project_dir` as `deploy.yml`:
+re-analyzes everything from scratch; optional, for an immediate full
+re-baseline. Prompt edits already take effect automatically on the next deploy.)
+Use the same `project_dir` as `deploy.yml`:
 
 ```yaml
 name: Clear AI Cache
@@ -335,8 +336,10 @@ Spot-check that the AI is grounded, not generic: open a failing job, expand a
 failed test, and confirm the analysis names real symbols from your project
 (controllers, custom resources, specific error strings) rather than "the build
 failed during a test." If it reads generically, your `prompts/system.md` needs
-more project specifics: edit it, run the **Clear AI Cache** workflow, and
-redeploy. Two or three prompt iterations is normal.
+more project specifics: edit it and redeploy. Prompt edits take effect
+automatically (the affected analyses re-run on the next deploy); two or three
+prompt iterations is normal. To re-baseline everything at once, run the **Clear
+AI Cache** workflow first.
 
 ## Next steps
 

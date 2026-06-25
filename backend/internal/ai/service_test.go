@@ -101,7 +101,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode}
+	tc.AIAnalysis = &models.AIAnalysis{RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys")}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -123,6 +123,31 @@ func TestService_CacheKeyShape(t *testing.T) {
 	}
 	if !strings.HasPrefix(a1, "agentic:kubernetes:job1:build1:") {
 		t.Errorf("agentic key shape unexpected: %q", a1)
+	}
+}
+
+// TestService_ShouldReanalyze_PromptHash verifies that a prompt change
+// invalidates a cached analysis (so editing prompts/system.md refreshes results
+// on the next run without a manual cache clear), while a matching prompt is
+// reused. The check is independent of critique, since the prompt is always sent.
+func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
+	s := &Service{systemPrompt: "engine base + my prompt"}
+	// Meets the (zero) floors and is agentic mode, so only the prompt gate
+	// can force re-analysis here.
+	mk := func(promptHash string) *models.TestCase {
+		return &models.TestCase{AIAnalysis: &models.AIAnalysis{Mode: AgenticMode, PromptHash: promptHash}}
+	}
+
+	if s.shouldReanalyze(mk(PromptFingerprint("engine base + my prompt"))) {
+		t.Error("matching prompt hash should be reused, got re-analyze")
+	}
+	if !s.shouldReanalyze(mk(PromptFingerprint("engine base + an OLD prompt"))) {
+		t.Error("changed prompt hash should force re-analysis")
+	}
+	// A pre-feature entry (no stamped hash) re-analyzes once, like other
+	// version-gated invalidations on upgrade.
+	if !s.shouldReanalyze(mk("")) {
+		t.Error("unstamped (pre-feature) entry should re-analyze once")
 	}
 }
 
@@ -195,9 +220,9 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &Service{agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls, MinGCSBytes: tc.minGCSBytes}}
+			s := &Service{systemPrompt: "sys", agenticOpts: AgenticOptions{MinToolCalls: tc.minToolCalls, MinGCSBytes: tc.minGCSBytes}}
 			testCase := &models.TestCase{
-				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS},
+				AIAnalysis: &models.AIAnalysis{Mode: tc.cachedMode, ToolCalls: tc.cachedCalls, GCSBytes: tc.cachedGCS, PromptHash: PromptFingerprint("sys")},
 			}
 			if got := s.shouldReanalyze(testCase); got != tc.want {
 				t.Errorf("shouldReanalyze cached(mode=%q, calls=%d, gcs=%d) floors(calls=%d, gcs=%d) = %v, want %v",
