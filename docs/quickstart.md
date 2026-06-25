@@ -14,9 +14,9 @@ granular reference. This guide deliberately skips those forks.
 
 - The `gh` CLI, authenticated (`gh auth status`).
 - Go 1.25+ (for the local sweep, and for the free local-model option).
-- A **chat-completions endpoint**. You pick one in Step 2; the options range from a free
+- An **OpenAI-compatible chat-completions endpoint**. You pick one in Step 2; the options range from a free
   model running on your laptop (no account) to a hosted API. The only hard
-  requirement is OpenAI-style function calling, which the agentic loop needs.
+  requirement is function calling, which the agentic loop needs.
 - The **testgrid dashboard name** your project's jobs advertise in their
   `testgrid-dashboards` annotation. That single name is how the engine
   discovers your jobs; you do not list job paths.
