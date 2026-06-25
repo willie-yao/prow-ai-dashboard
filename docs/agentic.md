@@ -47,6 +47,7 @@ ai:
                                 # (auto-enabled when skills/*.yaml recipes are present)
     max_retries: 2              # re-prompt rounds before accepting a still-failing draft
   evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
+  pattern_analysis: false       # correlate a job's recent failed builds into one systemic-vs-flake verdict
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -123,6 +124,21 @@ Which registered tool groups the model can call. Defaults to
 `[filesystem, k8s]`. Narrow to `[filesystem]` for non-Kubernetes projects
 whose artifact tree has no cluster resource YAMLs (the k8s tier-2 tools would
 return empty).
+
+### `pattern_analysis`
+
+Run a second, job-level pass after the per-failure analyses: for every job that
+failed in at least 3 recent builds, correlate one representative analyzed
+failure per failed build into a single verdict on whether those failures share
+one root cause. Off by default. Each per-failure card answers "why did *this*
+build fail"; this pass answers the question a single failure can't: a "transient
+flake" that recurs across most runs is usually a systemic, fixable bug (an
+undersized VM, a tight timeout, a missing image), not random noise. The specific
+failing test/spec may differ between builds; the pass weighs the underlying
+mechanism, not the surface symptom. It costs one extra tool-free model call per
+qualifying job, cached by the failure set so it only re-runs when the failures
+(or their analyses) change. The verdict surfaces as a banner on the job page.
+See [Pattern analysis](#pattern-analysis).
 
 ### `concurrency`
 
@@ -566,6 +582,39 @@ Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
 builds gets two separate agentic analyses.
 
+### Pattern analysis
+
+`pattern_analysis` adds one job-level correlation pass that runs after every
+per-failure analysis in the run is complete (so all per-build root causes are
+available). It is off by default.
+
+For each job, the engine:
+
+1. Counts the job's **completed failed builds** (pending builds are skipped).
+   The job qualifies only with at least 3 such builds, matching the
+   persistent-failure convention. This is the "recurring" gate.
+2. Picks **one representative failure per failed build**: the failed test case
+   with the highest-severity per-build analysis (`Critical` > `High` > `Medium`
+   > `Low` > `Transient-Ignore`). The transient classification is carried
+   through deliberately, because an all-transient set is exactly what the pass
+   reconsiders.
+3. Makes **one tool-free chat call** that asks the model to weigh the underlying
+   mechanism across builds and decide `systemic` (one shared, fixable cause) vs
+   not, with a confidence, the shared root cause, the cross-cutting fix, and the
+   builds it judges to share the cause. The newest 10 representatives are sent.
+
+The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
+prompt version plus each `(buildID, normalized-root-cause)` pair, so the pass
+only re-runs when the failure set or its per-build analyses change. The result
+is stored on the `JobDetail` and surfaces as a banner at the top of the job
+page: a "recurring failure pattern" callout with the shared cause and fix when
+systemic, or a quiet "no shared root cause" note when the failures are genuinely
+independent.
+
+This pass does not call tools or read artifacts itself; it reasons purely over
+the per-failure analyses the agentic loop already produced, so its marginal cost
+is a single small completion per qualifying job.
+
 ## Troubleshooting
 
 - **No analyses are appearing.** Confirm the fetcher ran with `-ai` and
@@ -586,6 +635,8 @@ builds gets two separate agentic analyses.
 - `backend/internal/ai/agentic.go` — the tool-calling loop, finalize
   round, and JSON repair.
 - `backend/internal/ai/critique.go` — the deterministic critique gate.
+- `backend/internal/ai/pattern.go` — the job-level cross-build pattern
+  correlation pass.
 - `backend/internal/ai/skills/` — the recipe-driven evidence layer.
 - `backend/internal/ai/modules/universal/` — the project-agnostic AI
   module that builds the per-failure seed prompt.

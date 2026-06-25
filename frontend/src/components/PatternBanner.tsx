@@ -1,0 +1,125 @@
+import Box from "@mui/material/Box";
+import Chip from "@mui/material/Chip";
+import Link from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import { Link as RouterLink } from "react-router-dom";
+import { Insights } from "@mui/icons-material";
+import type { PatternAnalysis } from "../types/dashboard";
+import { RichText } from "./RichText";
+import { soft } from "../theme";
+
+/**
+ * PatternBanner surfaces the job-level cross-build correlation: whether the
+ * job's recent failed builds share one root cause (a recurring bug surfacing as
+ * "flakes") or are genuinely independent. Prominent when systemic, subtle when
+ * not. Rendered only when ai.pattern_analysis produced a verdict.
+ */
+export function PatternBanner({
+  pattern,
+  jobID,
+}: {
+  pattern: PatternAnalysis;
+  jobID?: string;
+}) {
+  const color = pattern.systemic ? "warning" : "success";
+  const confColor =
+    pattern.confidence === "high"
+      ? color
+      : pattern.confidence === "medium"
+        ? "warning"
+        : undefined;
+
+  return (
+    <Box
+      component="section"
+      sx={{
+        borderRadius: "12px",
+        border: 1,
+        borderColor: (t) => soft(t, color, 0.3),
+        bgcolor: (t) => soft(t, color, 0.05),
+        p: { xs: 2, sm: 2.5 },
+      }}
+    >
+      <Stack spacing={2}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+          <Insights sx={{ fontSize: 20, color: `${color}.main` }} />
+          <Typography variant="label" sx={{ fontWeight: 600 }} color={`${color}.main`}>
+            {pattern.systemic ? "Recurring failure pattern" : "No shared root cause"}
+          </Typography>
+          <Chip
+            size="small"
+            label={`${pattern.builds_analyzed} builds analyzed`}
+            sx={{ bgcolor: "action.selected", color: "text.secondary", fontWeight: 600 }}
+          />
+          <Chip
+            size="small"
+            label={`Confidence: ${pattern.confidence}`}
+            sx={{
+              fontWeight: 600,
+              ...(confColor
+                ? { bgcolor: (t) => soft(t, confColor, 0.2), color: `${confColor}.main` }
+                : { bgcolor: "action.selected", color: "text.secondary" }),
+            }}
+          />
+        </Stack>
+
+        <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+          <RichText text={pattern.summary} steps />
+        </Typography>
+
+        {pattern.systemic && pattern.shared_root_cause && (
+          <Box>
+            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+              Shared Root Cause
+            </Typography>
+            <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+              <RichText text={pattern.shared_root_cause} steps />
+            </Typography>
+          </Box>
+        )}
+
+        {pattern.systemic && pattern.suggested_fix && (
+          <Box>
+            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+              Suggested Fix
+            </Typography>
+            <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
+              <RichText text={pattern.suggested_fix} steps />
+            </Typography>
+          </Box>
+        )}
+
+        {pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
+          <Box>
+            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+              Affected Builds
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
+              {pattern.shared_builds.map((b) => (
+                <Link
+                  key={b}
+                  component={RouterLink}
+                  to={jobID ? `/job/${encodeURIComponent(jobID)}?run=${b}` : "#"}
+                  underline="none"
+                  sx={{
+                    fontFamily: "monospace",
+                    fontSize: "0.8125rem",
+                    px: 0.75,
+                    py: 0.25,
+                    borderRadius: "4px",
+                    bgcolor: "action.selected",
+                    color: "primary.main",
+                    "&:hover": { bgcolor: (t) => soft(t, "primary", 0.15) },
+                  }}
+                >
+                  {b}
+                </Link>
+              ))}
+            </Stack>
+          </Box>
+        )}
+      </Stack>
+    </Box>
+  );
+}

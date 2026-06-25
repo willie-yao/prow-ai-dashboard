@@ -144,6 +144,14 @@ ai:
   #                         # Auto-enabled when skills/*.yaml recipes
   #                         # are present (recipes feed this gate).
   #   max_retries: 2
+  # pattern_analysis: false   # opt-in: after the per-failure analyses, for any
+  #                         # job that failed in >=3 recent builds, correlate
+  #                         # one representative failure per failed build into a
+  #                         # single "do these share one root cause?" verdict.
+  #                         # Catches a recurring "transient" that is really a
+  #                         # systemic bug. One extra tool-free call per
+  #                         # qualifying job, cached by the failure set. Shows
+  #                         # as a banner on the job page. See docs/agentic.md.
   # Recipe-driven evidence requirements are loaded automatically from
   # <project_dir>/skills/*.yaml when present; no config flag. See
   # docs/skills.md for the schema.

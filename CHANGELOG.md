@@ -22,6 +22,16 @@ for how to pin a release.
 
 ### Added
 
+- New opt-in `ai.pattern_analysis` (default off) adds a job-level, cross-build
+  correlation pass. After the per-failure analyses complete, for any job that
+  failed in at least 3 recent builds the engine correlates one representative
+  failure per failed build into a single verdict: do these failures share one
+  root cause (a systemic, fixable bug surfacing as repeated "flakes") or are they
+  genuinely independent? The specific failing test/spec may differ between
+  builds; the pass weighs the underlying mechanism. It costs one extra tool-free
+  model call per qualifying job, cached by the failure set so it only re-runs
+  when the failures (or their analyses) change, and surfaces as a banner at the
+  top of the job page. See [docs/agentic.md](docs/agentic.md#pattern-analysis).
 - Editing `prompts/system.md` now takes effect automatically: each analysis is
   fingerprinted with the prompt that produced it, and on the next run any failure
   whose prompt no longer matches is re-analyzed. No manual cache clear is needed.
