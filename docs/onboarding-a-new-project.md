@@ -42,7 +42,8 @@ id: myproject
 name: "My Project"
 testgrid:
   dashboard: "<your-testgrid-dashboard-name>"   # e.g. "sig-release-master-blocking"
-gcs:
+storage:
+  provider: gcs
   bucket: "kubernetes-ci-logs"
 branding:
   title: "My Project Prow Dashboard"
@@ -68,15 +69,30 @@ continuing. If your project has only presubmit jobs, add `source:` with
 Start from [`configs/example/project.yaml`](../configs/example/project.yaml),
 which annotates every field. The fields that matter:
 
-- **`testgrid.dashboard`** (required): the value your jobs set in their
-  `testgrid-dashboards` annotation, e.g. `"sig-release-master-blocking"`. The
-  engine keeps every job whose annotation contains this name, regardless of the
-  file path the job is defined in. Find it in the job's definition under
-  `kubernetes/test-infra/config/jobs/`, or on testgrid. Release-branch periodics
-  that advertise a different dashboard are excluded automatically.
-- **`gcs.bucket`** (required): the bucket name holding build artifacts, with no
-  `gs://` prefix, e.g. `kubernetes-ci-logs` for kubernetes.io Prow. It is the
-  bucket in a build's artifact URL: `gs://<bucket>/logs/<job>/<build-id>/`.
+- **`storage`** (required): where the project's Prow build artifacts live. The
+  engine does not assume GCS.
+  - `provider`: `gcs` (the default) for native Google Cloud Storage
+    (kubernetes.io Prow), or `gcsweb` for any gcsweb HTTP gateway fronting a
+    bucket (e.g. an S3 bucket behind `gcsweb.<project>.io`).
+  - `bucket`: the bucket name, no `gs://`/`s3://` prefix, e.g. `kubernetes-ci-logs`.
+  - For `gcsweb`, also set `base` (the gateway root that serves raw objects and
+    HTML listings, e.g. `https://gcsweb.istio.io/s3`) and usually `prow_base`
+    (the Prow deck root, e.g. `https://prow.istio.io/view/s3`).
+- **`discovery`** (optional): how the fetcher finds the project's jobs.
+  - `source: testgrid` (default): kubernetes/test-infra job YAMLs filtered by
+    `testgrid.dashboard`. The kubernetes ecosystem path.
+  - `source: bucket`: list the storage bucket's own job indexes (`logs/` and
+    `pr-logs/directory/`). Works for any Prow instance regardless of where job
+    configs live; no `testgrid.dashboard` needed. Optional `job_filters` keep
+    only job names containing a substring (omit to take every job in the
+    bucket, which suits a project-dedicated bucket).
+- **`testgrid.dashboard`** (required only for `discovery.source: testgrid`): the
+  value your jobs set in their `testgrid-dashboards` annotation, e.g.
+  `"sig-release-master-blocking"`. The engine keeps every job whose annotation
+  contains this name, regardless of the file path the job is defined in. Find it
+  in the job's definition under `kubernetes/test-infra/config/jobs/`, or on
+  testgrid. Release-branch periodics that advertise a different dashboard are
+  excluded automatically.
 - **`branding`** (required):
   - `title`: header text, e.g. `"My Project Prow Dashboard"`.
   - `base_path`: the Pages sub-path, which is `/` plus the repo that serves
@@ -100,6 +116,27 @@ which annotates every field. The fields that matter:
   defaults. See [agentic.md](agentic.md) for the full schema and
   [ai-providers.md](ai-providers.md) for provider-specific endpoint and model
   values.
+
+### Example: a non-GCS Prow (S3 behind gcsweb)
+
+A project on its own Prow instance, with artifacts in S3 fronted by a gcsweb
+gateway and no testgrid annotations, uses the `gcsweb` provider plus bucket
+discovery:
+
+```yaml
+storage:
+  provider: gcsweb
+  bucket: my-prow
+  base: "https://gcsweb.my-project.io/s3"     # raw objects + HTML listings
+  prow_base: "https://prow.my-project.io/view/s3"
+discovery:
+  source: bucket
+  job_filters:
+    - "integ-"        # keep only jobs whose name contains this (omit for all)
+```
+
+Everything downstream (build enumeration, JUnit parsing, the agentic analysis)
+is identical; only the storage and discovery blocks change.
 
 ## Step 2: `prompts/system.md`
 

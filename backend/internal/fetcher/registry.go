@@ -7,15 +7,16 @@ import (
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 // CollectorFactory constructs a collectors.Collector from project config and
-// the shared deps every collector needs (GCS bucket, HTTP client). Factories
-// are registered with a *CollectorRegistry at startup; cmd/fetcher wires the
-// built-in factories explicitly so tests can compose their own registries.
-type CollectorFactory func(cfg *project.Config, bucket *gcs.Bucket, client *http.Client) (collectors.Collector, error)
+// the shared deps every collector needs (the storage backend, HTTP client).
+// Factories are registered with a *CollectorRegistry at startup; cmd/fetcher
+// wires the built-in factories explicitly so tests can compose their own
+// registries.
+type CollectorFactory func(cfg *project.Config, backend storage.Backend, client *http.Client) (collectors.Collector, error)
 
 // CollectorRegistry maps a collector name (project.yaml artifacts.collector)
 // to its factory. The zero value is not usable; use NewCollectorRegistry.
@@ -56,11 +57,11 @@ func (r *CollectorRegistry) Names() []string {
 // Build picks the factory named by cfg.CollectorName() and invokes it. The
 // error message lists registered alternatives so misconfigurations point
 // users at the fix.
-func (r *CollectorRegistry) Build(cfg *project.Config, bucket *gcs.Bucket, client *http.Client) (collectors.Collector, error) {
+func (r *CollectorRegistry) Build(cfg *project.Config, backend storage.Backend, client *http.Client) (collectors.Collector, error) {
 	name := cfg.CollectorName()
 	f, ok := r.factories[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown artifacts.collector %q (registered: %s)", name, strings.Join(r.Names(), ", "))
 	}
-	return f(cfg, bucket, client)
+	return f(cfg, backend, client)
 }

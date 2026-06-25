@@ -14,7 +14,8 @@ name: "Cluster API Provider Azure"
 short_name: "CAPZ"
 testgrid:
   dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"
-gcs:
+storage:
+  provider: "gcs"
   bucket: "kubernetes-ci-logs"
 branding:
   title: "CAPZ Prow Dashboard"
@@ -36,8 +37,8 @@ func TestParseValid(t *testing.T) {
 	if c.TestGrid.Dashboard != "sig-cluster-lifecycle-cluster-api-provider-azure" {
 		t.Errorf("TestGrid.Dashboard = %q", c.TestGrid.Dashboard)
 	}
-	if c.GCS.Bucket != "kubernetes-ci-logs" {
-		t.Errorf("GCS.Bucket = %q", c.GCS.Bucket)
+	if c.Storage.Bucket != "kubernetes-ci-logs" {
+		t.Errorf("Storage.Bucket = %q", c.Storage.Bucket)
 	}
 	if c.Branding.Title != "CAPZ Prow Dashboard" {
 		t.Errorf("Branding.Title = %q", c.Branding.Title)
@@ -59,7 +60,7 @@ id: capz
 	wantSubstrings := []string{
 		"name",
 		"testgrid.dashboard",
-		"gcs.bucket",
+		"storage.bucket",
 		"branding.title",
 		"branding.base_path",
 		"branding.site_url",
@@ -80,7 +81,8 @@ name: x
 unknown_field: oops
 testgrid:
   dashboard: x
-gcs:
+storage:
+  provider: gcs
   bucket: x
 branding:
   title: x
@@ -110,7 +112,8 @@ source:
   test_infra_paths: ["config/jobs/x"]
 testgrid:
   dashboard: x
-gcs:
+storage:
+  provider: gcs
   bucket: x
 branding:
   title: x
@@ -133,6 +136,88 @@ func TestParseInvalidYAML(t *testing.T) {
 	_, err := parse(strings.NewReader("not: : valid"))
 	if err == nil {
 		t.Fatalf("expected error for invalid YAML, got nil")
+	}
+}
+
+// gcswebYAML uses the gcsweb provider and bucket discovery, the Istio-style
+// path: no testgrid dashboard, an explicit storage gateway.
+const gcswebYAML = `
+id: istio
+name: "Istio"
+storage:
+  provider: "gcsweb"
+  bucket: "istio-prow"
+  base: "https://gcsweb.istio.io/s3"
+  prow_base: "https://prow.istio.io/view/s3"
+discovery:
+  source: "bucket"
+  job_filters: ["integ-"]
+branding:
+  title: "Istio Prow Dashboard"
+  base_path: "/istio-prow-ai-dashboard"
+  site_url: "https://example.github.io/istio-prow-ai-dashboard"
+  source_repo:
+    owner: "istio"
+    name: "istio"
+`
+
+func TestParseGCSWebBucketDiscovery(t *testing.T) {
+	c, err := parse(strings.NewReader(gcswebYAML))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if c.EffectiveDiscoverySource() != DiscoveryBucket {
+		t.Errorf("discovery source = %q, want bucket", c.EffectiveDiscoverySource())
+	}
+	sc := c.StorageConfig()
+	if string(sc.Provider) != "gcsweb" || sc.Base != "https://gcsweb.istio.io/s3" {
+		t.Errorf("storage config = %+v", sc)
+	}
+}
+
+func TestValidateGCSWebRequiresBase(t *testing.T) {
+	const noBase = `
+id: x
+name: x
+storage:
+  provider: "gcsweb"
+  bucket: "b"
+discovery:
+  source: "bucket"
+branding:
+  title: x
+  base_path: /x
+  site_url: https://example.com
+  source_repo:
+    owner: x
+    name: x
+`
+	_, err := parse(strings.NewReader(noBase))
+	if err == nil || !strings.Contains(err.Error(), "storage.base") {
+		t.Fatalf("expected storage.base required error, got: %v", err)
+	}
+}
+
+func TestValidateBadDiscoverySource(t *testing.T) {
+	const bad = `
+id: x
+name: x
+storage:
+  provider: "gcs"
+  bucket: "b"
+discovery:
+  source: "nonsense"
+branding:
+  title: x
+  base_path: /x
+  site_url: https://example.com
+  source_repo:
+    owner: x
+    name: x
+`
+	_, err := parse(strings.NewReader(bad))
+	if err == nil || !strings.Contains(err.Error(), "discovery.source") {
+		t.Fatalf("expected discovery.source error, got: %v", err)
 	}
 }
 
@@ -176,7 +261,7 @@ func validConfig() *Config {
 		ID:       "test",
 		Name:     "Test",
 		TestGrid: TestGrid{Dashboard: "test-dashboard"},
-		GCS:      GCS{Bucket: "test-bucket"},
+		Storage:  Storage{Provider: "gcs", Bucket: "test-bucket"},
 		Branding: Branding{
 			Title:    "Test",
 			BasePath: "/test",

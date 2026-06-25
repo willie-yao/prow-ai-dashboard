@@ -56,7 +56,8 @@ backend/                       Go 1.25
     artifacts/                 Build-log + artifact parsing
     collectors/                Pluggable; `generic` ships in-tree
     fetcher/                   AIModuleRegistry, CollectorRegistry wiring
-    gcs/, gcsweb/              GCS reads + gcsweb HTML scraping
+    storage/                  Pluggable artifact store (gcs / gcsweb backends)
+    prowbuild/                Prow path layout, build info, JUnit + job discovery
     junit/                     JUnit XML parser
     models/                    Wire-format types (BuildResult, AIAnalysis, ...)
     notify/                    Slack notifications
@@ -125,9 +126,9 @@ needed for local dev (defaults to `/`).
 - **Vet:** `cd backend && go vet ./...`
 - **Format:** `cd backend && gofmt -l .` (then `gofmt -w .` to fix)
 - **Static analysis:** `cd backend && staticcheck ./...`
-  - Two unrelated pre-existing warnings are expected in
-    `cmd/ai-toolcall-spike/main.go` and `internal/gcs/gcs.go`. Any
-    new warning from code you touched is a regression.
+  - One unrelated pre-existing warning is expected in
+    `cmd/ai-toolcall-spike/main.go`. Any new warning from code you touched is a
+    regression.
 
 CI (`.github/workflows/ci.yml`) runs build + test + vet on backend and
 build + lint on frontend. CI does not run staticcheck; please still run it

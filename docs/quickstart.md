@@ -74,7 +74,8 @@ name: "My Project Prow Dashboard"
 testgrid:
   dashboard: "sig-foo-myproject"   # the testgrid-dashboards value your jobs set
 
-gcs:
+storage:
+  provider: gcs
   bucket: "kubernetes-ci-logs"
 
 branding:
@@ -93,10 +94,14 @@ ai:
   tools: [filesystem, k8s]
 ```
 
-Everything not listed has a sensible default: jobs render in one flat grid (no
-`categories`) and periodics only. The `ai.endpoint` / `ai.model` above are a
-placeholder; Step 2 walks the real options and what to set here. Small or
-open-weights models also want the guardrails described in
+Everything not listed has a sensible default: `storage.provider` defaults to
+`gcs`, jobs render in one flat grid (no `categories`), and discovery uses
+testgrid. For a non-GCS Prow (e.g. S3 behind a gcsweb gateway) set
+`storage.provider: gcsweb` with a `base` URL and `discovery.source: bucket`; see
+[onboarding-a-new-project.md](onboarding-a-new-project.md#example-a-non-gcs-prow-s3-behind-gcsweb).
+The `ai.endpoint` / `ai.model` above are a placeholder; Step 2 walks the real
+options and what to set here. Small or open-weights models also want the
+guardrails described in
 [agentic.md "Tuning by model tier"](agentic.md#tuning-by-model-tier).
 
 **`prompts/system.md`** (mandatory; the fetcher hard-errors if it is missing or

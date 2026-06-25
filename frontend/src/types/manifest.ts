@@ -22,8 +22,12 @@ export interface TestGrid {
   dashboard: string;
 }
 
-export interface GCS {
+export interface Storage {
+  provider: string;
   bucket: string;
+  base?: string;
+  web_base?: string;
+  prow_base?: string;
 }
 
 export interface CategoryRule {
@@ -38,7 +42,7 @@ export interface Manifest {
   short_name?: string;
   source: Source;
   testgrid: TestGrid;
-  gcs: GCS;
+  storage: Storage;
   branding: Branding;
   categories?: CategoryRule[];
   category_display_order?: string[];

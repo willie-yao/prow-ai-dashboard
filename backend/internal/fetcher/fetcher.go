@@ -27,14 +27,14 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcsweb"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 // Options is the parsed, validated invocation for a single fetcher run.
@@ -72,8 +72,8 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("loading project config: %w", err)
 	}
-	log.Printf("Project: %s (%s) dashboard=%s bucket=%s",
-		cfg.Name, cfg.DisplayShortName(), cfg.TestGrid.Dashboard, cfg.GCS.Bucket)
+	log.Printf("Project: %s (%s) storage=%s bucket=%s",
+		cfg.Name, cfg.DisplayShortName(), cfg.StorageConfig().Provider, cfg.Storage.Bucket)
 	if opts.Version != "" {
 		log.Printf("Engine version: %s", opts.Version)
 	}
@@ -124,30 +124,43 @@ func Run(ctx context.Context, opts Options) error {
 	defer cancel()
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	bucket := gcs.NewBucket(cfg.GCS.Bucket)
+	backend, err := storage.New(cfg.StorageConfig(), client)
+	if err != nil {
+		return fmt.Errorf("configuring storage: %w", err)
+	}
 
-	collector, err := opts.Collectors.Build(cfg, bucket, client)
+	collector, err := opts.Collectors.Build(cfg, backend, client)
 	if err != nil {
 		return fmt.Errorf("building collector: %w", err)
 	}
 	log.Printf("Using artifact collector: %s", collector.Name())
 
-	// Step 1: Discover jobs from test-infra config YAMLs.
-	log.Println("Fetching job configs from test-infra...")
-	jobs, err := jobconfig.FetchJobConfigs(ctx, client, cfg)
-	if err != nil {
-		return fmt.Errorf("fetching job configs: %w", err)
-	}
-
+	// Step 1: Discover jobs, either from test-infra (testgrid) or by listing
+	// the artifact bucket's own job indexes.
+	var jobs []models.ProwJob
 	includePresubmits := opts.IncludePresubmits || cfg.Source.IncludePresubmits
-	if !includePresubmits {
-		var periodic []models.ProwJob
-		for _, j := range jobs {
-			if j.JobType == models.JobTypePeriodic {
-				periodic = append(periodic, j)
-			}
+	switch cfg.EffectiveDiscoverySource() {
+	case project.DiscoveryBucket:
+		log.Println("Discovering jobs from the storage bucket...")
+		jobs, err = prowbuild.DiscoverJobs(ctx, backend, includePresubmits, cfg.Discovery.JobFilters)
+		if err != nil {
+			return fmt.Errorf("discovering jobs from bucket: %w", err)
 		}
-		jobs = periodic
+	default:
+		log.Println("Fetching job configs from test-infra...")
+		jobs, err = jobconfig.FetchJobConfigs(ctx, client, cfg)
+		if err != nil {
+			return fmt.Errorf("fetching job configs: %w", err)
+		}
+		if !includePresubmits {
+			var periodic []models.ProwJob
+			for _, j := range jobs {
+				if j.JobType == models.JobTypePeriodic {
+					periodic = append(periodic, j)
+				}
+			}
+			jobs = periodic
+		}
 	}
 	log.Printf("Discovered %d jobs (presubmits=%v)", len(jobs), includePresubmits)
 
@@ -178,7 +191,7 @@ func Run(ctx context.Context, opts Options) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			runs, err := fetchJobRunsCached(ctx, client, bucket, cfg, collector, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
+			runs, err := fetchJobRunsCached(ctx, backend, cfg, collector, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -254,7 +267,7 @@ func Run(ctx context.Context, opts Options) error {
 			slackWebhookURL,
 			filepath.Join(opts.OutDir, "notification_state.json"),
 			cfg.Branding.SiteURL,
-			bucket.ProwURL(""),
+			backend.ProwURL("logs/"),
 		)
 		stats, err := notifier.ProcessFailures(ctx, flakinessReport, details)
 		if err != nil {
@@ -310,8 +323,8 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 
 // fetchJobRunsCached discovers recent builds and reuses cached data for
 // completed builds. Per-build fetch errors are logged but do not abort.
-func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
-	builds, err := gcsweb.ListRecentBuilds(ctx, client, bucket, job, count)
+func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, count int, cachedBuilds map[string]models.BuildResult) ([]models.BuildResult, error) {
+	builds, err := prowbuild.ListRecentBuilds(ctx, backend, job, count)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
 	}
@@ -324,7 +337,7 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 			reused++
 			continue
 		}
-		result, err := fetchBuildResult(ctx, client, bucket, cfg, collector, job, b)
+		result, err := fetchBuildResult(ctx, backend, collector, job, b)
 		if err != nil {
 			log.Printf("    ⚠ %s/%s: %v", job.Name, b.ID, err)
 			continue
@@ -344,40 +357,40 @@ func fetchJobRunsCached(ctx context.Context, client *http.Client, bucket *gcs.Bu
 // delegates per-test artifact discovery to the configured collector (a no-op
 // for the default generic collector; the agentic loop fetches what it needs
 // via tools).
-func fetchBuildResult(ctx context.Context, client *http.Client, bucket *gcs.Bucket, cfg *project.Config, collector collectors.Collector, job *models.ProwJob, build gcsweb.Build) (*models.BuildResult, error) {
-	loc := gcs.BuildLocation{
-		JobLocation: gcs.JobLocation{JobType: job.JobType, Repo: job.Repo},
+func fetchBuildResult(ctx context.Context, backend storage.Backend, collector collectors.Collector, job *models.ProwJob, build prowbuild.Build) (*models.BuildResult, error) {
+	loc := prowbuild.BuildLocation{
+		JobLocation: prowbuild.JobLocation{JobType: job.JobType, Repo: job.Repo},
 		JobName:     job.Name,
 		BuildID:     build.ID,
 		PullNumber:  build.PullNumber,
 	}
 
-	info, err := gcs.FetchBuildInfo(ctx, client, bucket, loc)
+	info, err := prowbuild.FetchBuildInfo(ctx, backend, loc)
 	if err != nil {
 		return nil, fmt.Errorf("fetching build info: %w", err)
 	}
 
 	result := &models.BuildResult{BuildInfo: *info, TestCases: []models.TestCase{}}
 
-	junitURLs, err := gcs.DiscoverJUnitURLs(ctx, client, bucket, loc)
+	junitPaths, err := prowbuild.DiscoverJUnitPaths(ctx, backend, loc)
 	if err != nil {
 		log.Printf("    ⚠ %s/%s: discovering junit files: %v", job.Name, build.ID, err)
 		return result, nil
 	}
-	result.JUnitURLs = junitURLs
-	if len(junitURLs) == 0 {
+	if len(junitPaths) == 0 {
 		return result, nil
 	}
 
-	for _, junitURL := range junitURLs {
-		junitData, err := gcs.FetchRaw(ctx, client, junitURL)
+	for _, junitPath := range junitPaths {
+		result.JUnitURLs = append(result.JUnitURLs, backend.WebURL(junitPath))
+		junitData, err := storage.ReadAll(ctx, backend, junitPath)
 		if err != nil {
-			log.Printf("    ⚠ %s/%s: fetching %s: %v", job.Name, build.ID, path.Base(junitURL), err)
+			log.Printf("    ⚠ %s/%s: fetching %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}
-		testCases, err := junit.ParseFile(junitData, path.Base(junitURL))
+		testCases, err := junit.ParseFile(junitData, path.Base(junitPath))
 		if err != nil {
-			log.Printf("    ⚠ %s/%s: parsing %s: %v", job.Name, build.ID, path.Base(junitURL), err)
+			log.Printf("    ⚠ %s/%s: parsing %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}
 		result.TestCases = append(result.TestCases, testCases...)
@@ -477,7 +490,12 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 		log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
 			tokens, windowBytes/1024, modelByteBudget/1024, contextByteBudget/1024)
 	}
-	factory := artifacts.NewGCSFactory(cfg.GCS.Bucket, &http.Client{Timeout: 60 * time.Second})
+	aiBackend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 60 * time.Second})
+	if err != nil {
+		log.Printf("⚠ storage backend for AI failed (%v); AI analysis will mark failures unavailable", err)
+		return
+	}
+	factory := artifacts.NewBackendFactory(aiBackend, cfg.Storage.Bucket)
 	registry := tools.NewRegistry()
 	filesystem.Register(registry)
 	k8s.Register(registry)
@@ -553,10 +571,10 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	var work []aiWork
 	for i := range details {
 		d := &details[i]
-		jobLoc := gcs.JobLocation{JobType: d.JobType, Repo: d.Repo}
+		jobLoc := prowbuild.JobLocation{JobType: d.JobType, Repo: d.Repo}
 		for ri := range d.Runs {
 			run := &d.Runs[ri]
-			loc := gcs.BuildLocation{
+			loc := prowbuild.BuildLocation{
 				JobLocation: jobLoc,
 				JobName:     d.Name,
 				BuildID:     run.BuildID,

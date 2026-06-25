@@ -7,24 +7,25 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/gcs"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 type stubCollector struct{ name string }
 
 func (s *stubCollector) Name() string { return s.name }
-func (s *stubCollector) CollectArtifacts(_ context.Context, _ gcs.BuildLocation, _ *models.BuildResult) error {
+func (s *stubCollector) CollectArtifacts(_ context.Context, _ prowbuild.BuildLocation, _ *models.BuildResult) error {
 	return nil
 }
 
 func TestCollectorRegistry_BuildAndNames(t *testing.T) {
 	r := NewCollectorRegistry()
-	r.Register("kubernetes", func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
+	r.Register("kubernetes", func(_ *project.Config, _ storage.Backend, _ *http.Client) (collectors.Collector, error) {
 		return &stubCollector{name: "kubernetes"}, nil
 	})
-	r.Register("generic", func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
+	r.Register("generic", func(_ *project.Config, _ storage.Backend, _ *http.Client) (collectors.Collector, error) {
 		return &stubCollector{name: "generic"}, nil
 	})
 
@@ -50,7 +51,7 @@ func TestCollectorRegistry_BuildAndNames(t *testing.T) {
 
 func TestCollectorRegistry_DefaultsToGeneric(t *testing.T) {
 	r := NewCollectorRegistry()
-	r.Register("generic", func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
+	r.Register("generic", func(_ *project.Config, _ storage.Backend, _ *http.Client) (collectors.Collector, error) {
 		return &stubCollector{name: "generic"}, nil
 	})
 
@@ -64,7 +65,7 @@ func TestCollectorRegistry_DefaultsToGeneric(t *testing.T) {
 
 func TestCollectorRegistry_DuplicatePanics(t *testing.T) {
 	r := NewCollectorRegistry()
-	f := func(_ *project.Config, _ *gcs.Bucket, _ *http.Client) (collectors.Collector, error) {
+	f := func(_ *project.Config, _ storage.Backend, _ *http.Client) (collectors.Collector, error) {
 		return &stubCollector{name: "x"}, nil
 	}
 	r.Register("x", f)
