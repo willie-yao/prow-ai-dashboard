@@ -22,7 +22,7 @@ jobs:
 
 The reusable workflow checks out the host repo (which contributes the config + prompt) and this engine repo (which contributes the code), runs the fetcher with `-project-dir=<repo>/<project_dir>`, builds the frontend with the project's branding, and publishes the result to the host repo's GitHub Pages site via the official `actions/deploy-pages` pipeline (no `gh-pages` branch involved).
 
-For sites whose repo already uses GitHub Pages for something else (project websites, books, etc.) or whose AI endpoint is private and unreachable from GitHub-hosted runners, see [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md) for the supported escape hatches (`skip-fetch`, `runs-on` for self-hosted runners; non-Pages deploy targets are tracked as Phase J). When your AI inference stack runs inside a Kubernetes cluster, [docs/self-hosted-runner-in-cluster.md](docs/self-hosted-runner-in-cluster.md) walks through running the deploy on an in-cluster runner.
+For sites whose repo already uses GitHub Pages for something else (project websites, books, etc.) or whose chat-completions endpoint is private and unreachable from GitHub-hosted runners, see [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md) for the supported escape hatches (`skip-fetch`, `runs-on` for self-hosted runners; non-Pages deploy targets are tracked as Phase J). When your AI inference stack runs inside a Kubernetes cluster, [docs/self-hosted-runner-in-cluster.md](docs/self-hosted-runner-in-cluster.md) walks through running the deploy on an in-cluster runner.
 
 ## Architecture
 
