@@ -30,7 +30,8 @@ func TestLoadExampleGolden(t *testing.T) {
 		{"id", cfg.ID, "example"},
 		{"short_name", cfg.ShortName, "EXAMPLE"},
 		{"testgrid.dashboard", cfg.TestGrid.Dashboard, "sig-foo-your-project"},
-		{"gcs.bucket", cfg.GCS.Bucket, "kubernetes-ci-logs"},
+		{"storage.provider", cfg.Storage.Provider, "gcs"},
+		{"storage.bucket", cfg.Storage.Bucket, "kubernetes-ci-logs"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {

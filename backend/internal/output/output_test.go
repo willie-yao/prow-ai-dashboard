@@ -141,7 +141,7 @@ func sampleConfig() *project.Config {
 		Name:      "Cluster API Provider Azure",
 		ShortName: "CAPZ",
 		TestGrid:  project.TestGrid{Dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"},
-		GCS:       project.GCS{Bucket: "kubernetes-ci-logs"},
+		Storage:   project.Storage{Provider: "gcs", Bucket: "kubernetes-ci-logs"},
 		Branding: project.Branding{
 			Title:    "CAPZ Prow Dashboard",
 			BasePath: "/capz-prow-dashboard",

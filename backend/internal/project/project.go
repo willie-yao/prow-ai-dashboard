@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 // Config is the in-memory representation of a project.yaml file.
@@ -25,8 +27,9 @@ type Config struct {
 	Name                 string         `yaml:"name"       json:"name"`
 	ShortName            string         `yaml:"short_name" json:"short_name,omitempty"`
 	Source               Source         `yaml:"source"     json:"source"`
-	TestGrid             TestGrid       `yaml:"testgrid"   json:"testgrid"`
-	GCS                  GCS            `yaml:"gcs"        json:"gcs"`
+	TestGrid             TestGrid       `yaml:"testgrid,omitempty"   json:"testgrid,omitempty"`
+	Storage              Storage        `yaml:"storage"    json:"storage"`
+	Discovery            Discovery      `yaml:"discovery,omitempty"  json:"discovery,omitempty"`
 	Branding             Branding       `yaml:"branding"   json:"branding"`
 	Categories           []CategoryRule `yaml:"categories,omitempty"            json:"categories,omitempty"`
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
@@ -85,13 +88,77 @@ type Source struct {
 }
 
 // TestGrid identifies the testgrid dashboard that owns the project's jobs.
+// Only used when discovery.source is "testgrid".
 type TestGrid struct {
 	Dashboard string `yaml:"dashboard" json:"dashboard"`
 }
 
-// GCS identifies the bucket that holds the project's build artifacts.
-type GCS struct {
-	Bucket string `yaml:"bucket" json:"bucket"`
+// Storage configures the artifact store that holds the project's Prow builds.
+// The engine does not assume Google Cloud Storage: Provider selects the
+// backend, and the optional *Base fields point the engine at a project's own
+// endpoints.
+//
+//	provider: gcs    -> native Google Cloud Storage (kubernetes.io Prow).
+//	provider: gcsweb -> any gcsweb HTTP gateway fronting a bucket (e.g. an S3
+//	                    bucket behind gcsweb.istio.io); set base to that gateway.
+type Storage struct {
+	Provider string `yaml:"provider" json:"provider"`
+	Bucket   string `yaml:"bucket"   json:"bucket"`
+	// Base is the gcsweb gateway root serving raw objects and HTML listings,
+	// e.g. "https://gcsweb.istio.io/s3". Required for the gcsweb provider.
+	Base string `yaml:"base,omitempty" json:"base,omitempty"`
+	// WebBase overrides the human-browsable link root (defaults to the
+	// kubernetes gcsweb for gcs, or Base for gcsweb).
+	WebBase string `yaml:"web_base,omitempty" json:"web_base,omitempty"`
+	// ProwBase overrides the Prow deck deep-link root, e.g.
+	// "https://prow.istio.io/view/s3".
+	ProwBase string `yaml:"prow_base,omitempty" json:"prow_base,omitempty"`
+}
+
+// Discovery selects how the fetcher finds the project's jobs.
+//
+//	source: testgrid (default) -> kubernetes/test-infra job YAMLs filtered by
+//	                              testgrid.dashboard. The k8s ecosystem path.
+//	source: bucket             -> list the storage bucket's own job indexes
+//	                              (logs/ and pr-logs/directory/). Works for any
+//	                              Prow instance regardless of config repo.
+type Discovery struct {
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	// JobFilters, when set, keeps only discovered job names that contain one
+	// of these substrings. Only used by the bucket source; omit to take every
+	// job in the bucket (suitable for a project-dedicated bucket).
+	JobFilters []string `yaml:"job_filters,omitempty" json:"job_filters,omitempty"`
+}
+
+// Discovery source names.
+const (
+	DiscoveryTestGrid = "testgrid"
+	DiscoveryBucket   = "bucket"
+)
+
+// EffectiveDiscoverySource returns the configured discovery source, defaulting
+// to "testgrid" when unset.
+func (c *Config) EffectiveDiscoverySource() string {
+	if c.Discovery.Source == "" {
+		return DiscoveryTestGrid
+	}
+	return c.Discovery.Source
+}
+
+// StorageConfig maps the project's storage block onto a storage.Config,
+// defaulting the provider to gcs when unset.
+func (c *Config) StorageConfig() storage.Config {
+	provider := storage.Provider(c.Storage.Provider)
+	if provider == "" {
+		provider = storage.ProviderGCS
+	}
+	return storage.Config{
+		Provider: provider,
+		Bucket:   c.Storage.Bucket,
+		Base:     c.Storage.Base,
+		WebBase:  c.Storage.WebBase,
+		ProwBase: c.Storage.ProwBase,
+	}
 }
 
 // Branding controls UI-facing strings and URLs.
@@ -393,13 +460,32 @@ func (c *Config) Validate() error {
 	}
 	require("id", c.ID)
 	require("name", c.Name)
-	require("testgrid.dashboard", c.TestGrid.Dashboard)
-	require("gcs.bucket", c.GCS.Bucket)
+	require("storage.bucket", c.Storage.Bucket)
 	require("branding.title", c.Branding.Title)
 	require("branding.base_path", c.Branding.BasePath)
 	require("branding.site_url", c.Branding.SiteURL)
 	require("branding.source_repo.owner", c.Branding.SourceRepo.Owner)
 	require("branding.source_repo.name", c.Branding.SourceRepo.Name)
+
+	switch c.EffectiveDiscoverySource() {
+	case DiscoveryTestGrid:
+		require("testgrid.dashboard", c.TestGrid.Dashboard)
+	case DiscoveryBucket:
+		// No testgrid dashboard needed; jobs come from the bucket itself.
+	default:
+		missing = append(missing, fmt.Sprintf("discovery.source %q (want %q or %q)",
+			c.Discovery.Source, DiscoveryTestGrid, DiscoveryBucket))
+	}
+
+	switch c.Storage.Provider {
+	case "", string(storage.ProviderGCS):
+		// gcs needs no extra fields.
+	case string(storage.ProviderGCSWeb):
+		require("storage.base (required for the gcsweb provider)", c.Storage.Base)
+	default:
+		missing = append(missing, fmt.Sprintf("storage.provider %q (want %q or %q)",
+			c.Storage.Provider, storage.ProviderGCS, storage.ProviderGCSWeb))
+	}
 
 	if len(missing) > 0 {
 		return fmt.Errorf("project config missing required field(s): %s", strings.Join(missing, ", "))
