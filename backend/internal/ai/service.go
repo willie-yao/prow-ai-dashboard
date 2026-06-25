@@ -258,6 +258,13 @@ func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
 			return true
 		}
 	}
+	// The prompt is always sent to the model, so a prompt edit invalidates
+	// the entry unconditionally (no critique dependency). This is what lets a
+	// consumer edit prompts/system.md and get a refresh on the next run with
+	// no manual cache clear.
+	if tc.AIAnalysis.PromptHash != PromptFingerprint(s.systemPrompt) {
+		return true
+	}
 	return false
 }
 

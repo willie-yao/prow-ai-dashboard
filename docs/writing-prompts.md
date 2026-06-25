@@ -127,11 +127,20 @@ this engine repo.
   failure, read the summary, and refine the prompt where the model got it
   wrong. Clear the AI cache (see below) so the next run regenerates.
 
-## Clearing the AI cache after a prompt edit
+## Iterating on the prompt
 
-The engine caches AI responses keyed by `<test name, failure message>` only,
-not by prompt content. After editing `prompts/system.md` you must clear the
-cache for the new prompt to take effect:
+Editing `prompts/system.md` takes effect automatically: each analysis records a
+fingerprint of the prompt it was produced under, and on the next run any failure
+whose prompt no longer matches is re-analyzed. You do **not** need to clear the
+cache, and you do not lose existing analyses while re-analysis catches up: an
+old analysis stays published until its replacement succeeds (if a re-analysis
+errors or times out, the prior result is kept).
+
+Re-analysis is incremental, so a large dashboard refreshes over one or more
+deploys rather than all at once. To force every analysis to refresh immediately
+(e.g. to re-baseline after a big prompt rewrite), run the **Clear AI Cache**
+workflow from the Actions tab; that wipes the cache so the next deploy
+re-analyzes everything from scratch.
 
 ```yaml
 # In your consumer repo, e.g. .github/workflows/clear-cache.yml
@@ -142,9 +151,6 @@ jobs:
     with:
       project_dir: .
 ```
-
-Run it manually from the Actions tab. The next scheduled deploy will re-run
-every analysis under the updated prompt.
 
 ## What the engine does NOT add to your prompt
 

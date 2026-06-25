@@ -20,6 +20,18 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Added
+
+- Editing `prompts/system.md` now takes effect automatically: each analysis is
+  fingerprinted with the prompt that produced it, and on the next run any failure
+  whose prompt no longer matches is re-analyzed. No manual cache clear is needed.
+  Re-analysis is incremental and failure-preserving (an old analysis stays
+  published until its replacement succeeds), so results aren't lost while it
+  catches up. The **Clear AI Cache** workflow remains available to re-baseline
+  everything at once. Note: the first run after upgrading re-analyzes existing
+  entries once (they predate the fingerprint), consistent with other
+  cache-version bumps.
+
 ### Fixed
 
 - Bucket-discovered jobs (`discovery.source: bucket`) now get a display title and
