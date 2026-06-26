@@ -25,9 +25,12 @@ for how to pin a release.
 - New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid
   dashboard name or a storage bucket. It verifies discovery actually finds jobs,
   infers `categories` from the job names, and writes a ready-to-review scaffold
-  (`project.yaml`, both workflows, a `prompts/system.md` stub, and a manual
+  (`project.yaml`, both workflows, a `prompts/system.md` draft, and a manual
   `CHECKLIST.md`), validating the generated config against the engine's own
-  loader before writing. No network writes, no secrets touched. See
+  loader before writing. When an `AI_TOKEN` is available it drafts
+  `prompts/system.md` from the source repo's own docs (architecture, where
+  evidence lives, known transient classes); otherwise it writes a stub. No
+  GitHub writes, no secrets touched. See
   [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#fast-start-scaffold-it-with-onboard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (≥3 consecutive

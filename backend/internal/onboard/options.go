@@ -31,4 +31,20 @@ type Options struct {
 
 	// OutDir is where the scaffold is written.
 	OutDir string
+
+	// --- AI prompt drafting (optional) ---
+
+	// AIToken authenticates the chat-completions endpoint used to draft
+	// prompts/system.md. When empty, onboard writes the stub instead.
+	AIToken string
+	// AIEndpoint / AIModel override the chat-completions URL / model. Empty
+	// falls back to the GitHub Copilot defaults.
+	AIEndpoint string
+	AIModel    string
+	// GitHubToken authenticates source-repo doc reads (avoids the anonymous
+	// rate limit). Falls back to AIToken when empty.
+	GitHubToken string
+	// NoPrompt forces the stub even when an AI token is available (skip the
+	// model call).
+	NoPrompt bool
 }

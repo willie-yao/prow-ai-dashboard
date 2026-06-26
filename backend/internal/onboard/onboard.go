@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
@@ -72,7 +73,8 @@ func Run(ctx context.Context, opts Options) error {
 	if files[".github/workflows/clear-cache.yml"], err = render(clearCacheYAMLTmpl, data); err != nil {
 		return err
 	}
-	if files["prompts/system.md"], err = render(systemPromptTmpl, data); err != nil {
+	files["prompts/system.md"], err = buildSystemPrompt(ctx, opts, data)
+	if err != nil {
 		return err
 	}
 	dashOwner, dashName := splitRepo(opts.DashboardRepo)
@@ -95,7 +97,53 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// validateOptions checks required inputs and fills defaults.
+// buildSystemPrompt drafts prompts/system.md from the source repo's docs when
+// an AI token is available, falling back to the stub when AI is disabled, no
+// token is set, or generation fails. A failed (or slow) draft never aborts the
+// scaffold: the stub is always a valid result.
+func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (string, error) {
+	if opts.NoPrompt || opts.AIToken == "" {
+		if opts.AIToken == "" && !opts.NoPrompt {
+			fmt.Println("ⓘ no AI token (set AI_TOKEN); writing a prompts/system.md stub to fill in")
+		}
+		return render(systemPromptTmpl, data)
+	}
+
+	// Bound the whole drafting phase so a hung endpoint degrades to the stub
+	// instead of hanging the command.
+	ctx, cancel := context.WithTimeout(ctx, promptDraftTimeout)
+	defer cancel()
+
+	srcOwner, srcName := splitRepo(opts.SourceRepo)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+
+	fmt.Printf("✦ drafting prompts/system.md from %s/%s docs…\n", srcOwner, srcName)
+	// Source-repo doc reads use the GitHub token only; falling back to a
+	// possibly-non-GitHub AI token would send a bad bearer and block the
+	// otherwise-fine anonymous public read. Empty token = anonymous.
+	docs, err := fetchSourceDocs(ctx, httpClient, srcOwner, srcName, opts.GitHubToken)
+	if err != nil {
+		fmt.Printf("  ⚠ could not read source-repo docs (%v); writing the stub instead\n", err)
+		return render(systemPromptTmpl, data)
+	}
+
+	client := ai.NewClientWithOptions(ai.Options{
+		Token:    opts.AIToken,
+		Endpoint: opts.AIEndpoint,
+		Model:    opts.AIModel,
+	})
+	body, err := generatePromptBody(ctx, client, data.Name, docs)
+	if err != nil {
+		fmt.Printf("  ⚠ prompt generation failed (%v); writing the stub instead\n", err)
+		return render(systemPromptTmpl, data)
+	}
+	fmt.Printf("  ✓ drafted from %d doc(s)\n", len(docs))
+	return composeGeneratedPrompt(data.Name, body), nil
+}
+
+// promptDraftTimeout bounds doc fetch + one generation call.
+const promptDraftTimeout = 3 * time.Minute
+
 func validateOptions(opts *Options) error {
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")

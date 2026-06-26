@@ -33,14 +33,15 @@ else is reused from the engine at deploy time.
 The `onboard` subcommand generates this whole file set for you. It verifies your
 discovery config actually finds jobs, infers `categories` from the job names,
 and writes a ready-to-review scaffold (`project.yaml`, both workflows, a
-`prompts/system.md` stub, and a `CHECKLIST.md` of the manual steps). It performs
-no network writes and never touches secrets.
+`prompts/system.md` draft, and a `CHECKLIST.md` of the manual steps). It performs
+no GitHub writes and never touches secrets.
 
 ```bash
 git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
 cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
 
 export GITHUB_TOKEN=$(gh auth token)   # avoids the anonymous API rate limit
+export AI_TOKEN=$GITHUB_TOKEN          # optional: drafts prompts/system.md (see below)
 /tmp/fetcher onboard \
   -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -59,12 +60,19 @@ gcsweb), swap the discovery selector:
   -out ./my-dashboard
 ```
 
-Then **review the output**: fill in the `prompts/system.md` stub with
-project-specific knowledge (the biggest lever on analysis quality), trim or
-reorder the inferred `categories`, and follow `CHECKLIST.md` for the GitHub
-configuration (enable Pages, set `AI_TOKEN`). The sections below are the manual
-reference for each generated field if you prefer to write them by hand or to
-understand what the scaffold produced.
+**The `prompts/system.md` draft.** When an `AI_TOKEN` is set (and optional
+`AI_ENDPOINT` / `AI_MODEL`, same as the fetcher), onboard reads the source repo's
+own docs (README, `docs/`, architecture/contributing material) and drafts a real
+`prompts/system.md` grounded in them: the architecture, where evidence lives, and
+known transient classes. Without a token (or with `-no-prompt`), it writes a stub
+with TODOs instead. Either way the result is **a draft to review**, not a
+finished prompt; prompt quality is the biggest lever on analysis depth.
+
+Then **review the output**: refine `prompts/system.md`, trim or reorder the
+inferred `categories`, and follow `CHECKLIST.md` for the GitHub configuration
+(enable Pages, set the deploy-time `AI_TOKEN` secret). The sections below are the
+manual reference for each generated field if you prefer to write them by hand or
+to understand what the scaffold produced.
 
 ## Step 0: sweep the jobs first
 

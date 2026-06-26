@@ -67,7 +67,19 @@ func runOnboard(args []string) {
 	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
 	fs.StringVar(&opts.EngineRef, "engine-ref", "main", "prow-ai-dashboard ref the generated workflows pin")
 	fs.StringVar(&opts.OutDir, "out", "", "output directory for the scaffold (default: the dashboard repo name)")
+	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip AI prompt drafting and always write the prompts/system.md stub")
 	_ = fs.Parse(args)
+
+	// Resolve AI + GitHub credentials from the environment, mirroring the
+	// fetcher: prompt drafting uses AI_TOKEN (falling back to GITHUB_TOKEN) and
+	// optional AI_ENDPOINT / AI_MODEL; source-repo doc reads use GITHUB_TOKEN.
+	opts.AIToken = os.Getenv("AI_TOKEN")
+	if opts.AIToken == "" {
+		opts.AIToken = os.Getenv("GITHUB_TOKEN")
+	}
+	opts.AIEndpoint = os.Getenv("AI_ENDPOINT")
+	opts.AIModel = os.Getenv("AI_MODEL")
+	opts.GitHubToken = os.Getenv("GITHUB_TOKEN")
 
 	if err := onboard.Run(context.Background(), opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
