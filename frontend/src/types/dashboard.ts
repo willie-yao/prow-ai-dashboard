@@ -148,10 +148,12 @@ export interface FlakinessReport {
   most_flaky: TestFlakiness[];
   persistent_failures: TestFlakiness[];
   recently_broken: TestFlakiness[];
+  recurring_patterns?: PatternAnalysis[];
 }
 
 export interface PatternAnalysis {
   subject: string;
+  job_id?: string;
   generated_at: string;
   builds_analyzed: number;
   systemic: boolean;

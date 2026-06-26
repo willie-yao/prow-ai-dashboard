@@ -5,6 +5,7 @@ import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import Typography from "@mui/material/Typography";
 import ReportProblem from "@mui/icons-material/ReportProblem";
+import Insights from "@mui/icons-material/Insights";
 import { useMemo } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useFlakinessReport } from "../hooks/useData";
@@ -12,9 +13,13 @@ import { useManifest } from "../hooks/useManifest";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
-import type { TestFlakiness } from "../types/dashboard";
+import type { PatternAnalysis, TestFlakiness } from "../types/dashboard";
 
 const MAX_ITEMS = 10;
+// Recurring patterns are the highest-signal items (confirmed systemic bugs), so
+// they lead the box, but cap them so a noisy fleet can't crowd out the
+// test-level regressions below.
+const MAX_PATTERNS = 5;
 
 interface ItemGroup {
   label: string;
@@ -25,6 +30,13 @@ export function NeedsAttention() {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const { data, loading } = useFlakinessReport();
+
+  // Backend already filters to systemic verdicts and ranks them (confidence,
+  // then builds), so just drop any missing a job link and cap for display.
+  const recurring = useMemo<PatternAnalysis[]>(
+    () => (data?.recurring_patterns ?? []).filter((p) => p.job_id).slice(0, MAX_PATTERNS),
+    [data],
+  );
 
   const groups = useMemo<ItemGroup[]>(() => {
     if (!data) return [];
@@ -59,9 +71,10 @@ export function NeedsAttention() {
     return [];
   }, [data]);
 
-  if (loading || groups.length === 0) return null;
+  if (loading || (recurring.length === 0 && groups.length === 0)) return null;
 
-  const totalItems = groups.reduce((sum, g) => sum + g.items.length, 0);
+  const totalItems =
+    recurring.length + groups.reduce((sum, g) => sum + g.items.length, 0);
 
   return (
     <Panel elevation={0} sx={{ borderRadius: "12px", overflow: "hidden" }}>
@@ -88,9 +101,89 @@ export function NeedsAttention() {
           pb: { xs: 2, sm: 2.5 },
         }}
       >
+        {recurring.length > 0 && (
+          <Box component="li" sx={{ listStyle: "none" }}>
+            <Typography
+              variant="label"
+              component="p"
+              color="text.secondary"
+              sx={{ py: 1, textTransform: "uppercase" }}
+            >
+              Recurring Patterns
+            </Typography>
+
+            {recurring.map((pattern) => {
+              const confColor = pattern.confidence === "low" ? undefined : "warning";
+              return (
+                <ListItemButton
+                  key={pattern.job_id ?? pattern.subject}
+                  component={RouterLink}
+                  to={`/job/${encodeURIComponent(pattern.job_id ?? "")}`}
+                  sx={{
+                    gap: 1.5,
+                    px: 1,
+                    py: 1,
+                    borderRadius: "8px",
+                    color: "inherit",
+                    textDecoration: "none",
+                    "&:hover": {
+                      bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
+                    },
+                  }}
+                >
+                  <Insights
+                    sx={{ fontSize: 18, color: "warning.main", flexShrink: 0, mt: "2px" }}
+                  />
+
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                      {shortJobName(pattern.subject, filePrefix)}
+                    </Typography>
+                    <Typography variant="body2" color="text.primary" noWrap>
+                      {pattern.shared_root_cause || pattern.summary}
+                    </Typography>
+                  </Box>
+
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Chip
+                      size="small"
+                      label={`${pattern.builds_analyzed} builds`}
+                      sx={{
+                        height: 22,
+                        bgcolor: "action.selected",
+                        color: "text.secondary",
+                        fontWeight: 600,
+                        display: { xs: "none", sm: "flex" },
+                      }}
+                    />
+                    <Chip
+                      size="small"
+                      label={pattern.confidence}
+                      sx={{
+                        height: 22,
+                        fontWeight: 600,
+                        ...(confColor
+                          ? { bgcolor: (theme) => soft(theme, confColor, 0.15), color: `${confColor}.main` }
+                          : { bgcolor: "action.selected", color: "text.secondary" }),
+                      }}
+                    />
+                  </Box>
+                </ListItemButton>
+              );
+            })}
+          </Box>
+        )}
+
         {groups.map((group, gi) => (
           <Box key={group.label} component="li" sx={{ listStyle: "none" }}>
-            {gi > 0 && <Divider sx={{ my: 1 }} />}
+            {(gi > 0 || recurring.length > 0) && <Divider sx={{ my: 1 }} />}
             <Typography
               variant="label"
               component="p"

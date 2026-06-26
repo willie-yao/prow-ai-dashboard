@@ -31,7 +31,8 @@ for how to pin a release.
   mechanism. Like artifact-tree seeding it is not configurable: self-gating (a
   no-op on a healthy dashboard) and cached, so it costs nothing until a job
   genuinely recurs, then one extra tool-free model call. It surfaces as a banner
-  at the top of the job page. See
+  at the top of the job page, and the systemic verdicts are aggregated across all
+  jobs into the landing page's **Needs Attention** box. See
   [docs/agentic.md](docs/agentic.md#pattern-analysis).
 - Editing `prompts/system.md` now takes effect automatically: each analysis is
   fingerprinted with the prompt that produced it, and on the next run any failure
