@@ -241,6 +241,8 @@ func TestValidateOptions(t *testing.T) {
 		{"trailing slash repo", func(o *Options) { o.DashboardRepo = "owner/" }, "owner/name"},
 		{"three-part repo", func(o *Options) { o.SourceRepo = "a/b/c" }, "owner/name"},
 		{"gcsweb without bucket", func(o *Options) { o.GCSWebBase = "https://x" }, "gcsweb-base"},
+		{"ai token without endpoint or model", func(o *Options) { o.AIToken = "t" }, "AI_ENDPOINT and AI_MODEL"},
+		{"ai token without model", func(o *Options) { o.AIToken = "t"; o.AIEndpoint = "https://x" }, "AI_ENDPOINT and AI_MODEL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,7 +269,26 @@ func TestValidateOptions_DefaultsOutDir(t *testing.T) {
 	}
 }
 
-// TestScaffold_LoadsViaLoadDir writes the full file set (config + prompt) and
+// TestValidateOptions_AIProviderExplicit checks that AI drafting requires both
+// the endpoint and model (no assumed default), but -no-prompt or a full provider
+// config passes.
+func TestValidateOptions_AIProviderExplicit(t *testing.T) {
+	t.Run("full provider ok", func(t *testing.T) {
+		opts := testOpts()
+		opts.AIToken, opts.AIEndpoint, opts.AIModel = "t", "https://x/chat/completions", "m"
+		if err := validateOptions(&opts); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	t.Run("no-prompt skips the requirement", func(t *testing.T) {
+		opts := testOpts()
+		opts.AIToken, opts.NoPrompt = "t", true
+		if err := validateOptions(&opts); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 // confirms the engine's own LoadDir accepts it: the prompt stub is non-empty
 // (LoadDir rejects an empty prompt) and the config validates.
 func TestScaffold_LoadsViaLoadDir(t *testing.T) {

@@ -180,6 +180,14 @@ func validateOptions(opts *Options) error {
 	if opts.OpenPR && opts.GitHubToken == "" {
 		return fmt.Errorf("--open-pr needs a GitHub token with write access to the dashboard repo (set GITHUB_TOKEN)")
 	}
+	// When AI drafting will run, require the endpoint and model explicitly: the
+	// engine is provider-agnostic, so we never assume a default chat-completions
+	// endpoint. Without a token (or with --no-prompt) we just write the stub.
+	if opts.AIToken != "" && !opts.NoPrompt {
+		if opts.AIEndpoint == "" || opts.AIModel == "" {
+			return fmt.Errorf("AI drafting needs AI_ENDPOINT and AI_MODEL set (your provider's chat-completions URL and model id); set both, or unset AI_TOKEN / pass --no-prompt to write the prompts/system.md stub instead")
+		}
+	}
 	if opts.EngineRef == "" {
 		opts.EngineRef = "main"
 	}

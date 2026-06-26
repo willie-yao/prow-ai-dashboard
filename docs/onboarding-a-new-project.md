@@ -42,7 +42,12 @@ There are two ways to run it, from least to most setup.
 
 ```bash
 export GITHUB_TOKEN=$(gh auth token)   # reads the source repo's docs + your jobs
-export AI_TOKEN=...                     # optional, drafts prompts/system.md
+# Optional: drafts prompts/system.md. If you set AI_TOKEN, you must also set
+# AI_ENDPOINT and AI_MODEL for your chat-completions provider (the engine assumes
+# no default endpoint); see docs/ai-providers.md. Omit all three to write a stub.
+export AI_TOKEN=...
+export AI_ENDPOINT="https://<your-provider>/chat/completions"
+export AI_MODEL="<your-model-id>"
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
   -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -80,8 +85,8 @@ cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
 ```
 
 **The `prompts/system.md` draft.** When `AI_TOKEN` is set (the credential for
-your chat-completions endpoint, plus optional `AI_ENDPOINT` / `AI_MODEL` for a
-non-Copilot provider, same as the fetcher; see
+your chat-completions endpoint, alongside the required `AI_ENDPOINT` and
+`AI_MODEL` for your provider, same as the fetcher; see
 [ai-providers.md](ai-providers.md)), onboard reads the source repo's own docs
 (README, `docs/`, architecture/contributing material) and drafts a real
 `prompts/system.md` grounded in them: the architecture, where evidence lives, and

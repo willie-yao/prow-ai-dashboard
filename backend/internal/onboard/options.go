@@ -37,12 +37,13 @@ type Options struct {
 	// AIToken authenticates the chat-completions endpoint used to draft
 	// prompts/system.md. When empty, onboard writes the stub instead.
 	AIToken string
-	// AIEndpoint / AIModel override the chat-completions URL / model. Empty
-	// falls back to the GitHub Copilot defaults.
+	// AIEndpoint / AIModel are the chat-completions URL and model id of the
+	// provider used to draft prompts/system.md. Both are required when AIToken
+	// is set; the engine assumes no default provider.
 	AIEndpoint string
 	AIModel    string
 	// GitHubToken authenticates source-repo doc reads (avoids the anonymous
-	// rate limit). Falls back to AIToken when empty.
+	// rate limit) and, with --open-pr, opening the scaffold PR.
 	GitHubToken string
 	// NoPrompt forces the stub even when an AI token is available (skip the
 	// model call).

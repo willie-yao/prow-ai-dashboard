@@ -27,9 +27,10 @@ for how to pin a release.
   infers `categories` from the job names, and writes a ready-to-review scaffold
   (`project.yaml`, both workflows, a `prompts/system.md` draft, and a manual
   `CHECKLIST.md`), validating the generated config against the engine's own
-  loader before writing. When an `AI_TOKEN` is available it drafts
-  `prompts/system.md` from the source repo's own docs (architecture, where
-  evidence lives, known transient classes); otherwise it writes a stub. By
+  loader before writing. When `AI_TOKEN` (plus the provider's `AI_ENDPOINT` and
+  `AI_MODEL`, both required since the engine assumes no default endpoint) is set,
+  it drafts `prompts/system.md` from the source repo's own docs (architecture,
+  where evidence lives, known transient classes); otherwise it writes a stub. By
   default it writes a local directory and makes no GitHub writes; pass
   `-open-pr` to open a scaffold PR against the dashboard repo instead (one
   commit on a new branch), using `GITHUB_TOKEN`. It runs without a clone via
