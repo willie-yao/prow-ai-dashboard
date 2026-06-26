@@ -236,7 +236,11 @@ type JobDetail struct {
 type PatternAnalysis struct {
 	// Subject is what the correlated failures belong to (the job's display
 	// name for a job-level pattern).
-	Subject        string `json:"subject"`
+	Subject string `json:"subject"`
+	// JobID identifies the job these failures belong to. Populated when the
+	// verdict is attached so home-page aggregations can link back to the job
+	// page. Empty on the per-job copy is fine (the page already knows its job).
+	JobID          string `json:"job_id,omitempty"`
 	GeneratedAt    string `json:"generated_at"`
 	BuildsAnalyzed int    `json:"builds_analyzed"`
 	// Systemic is true when most failures share one underlying cause (so the
@@ -334,4 +338,10 @@ type FlakinessReport struct {
 	MostFlaky          []TestFlakiness `json:"most_flaky"`
 	PersistentFailures []TestFlakiness `json:"persistent_failures"`
 	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
+	// RecurringPatterns holds the systemic, job-level pattern verdicts across
+	// all jobs (a recurring bug surfacing as repeated "flakes"). Populated after
+	// AI analysis so the home page can surface them without loading every job
+	// file. Only systemic verdicts are included; empty when AI is off or no job
+	// has a confirmed recurring pattern.
+	RecurringPatterns []PatternAnalysis `json:"recurring_patterns,omitempty"`
 }

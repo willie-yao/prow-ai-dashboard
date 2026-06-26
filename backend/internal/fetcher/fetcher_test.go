@@ -3,6 +3,7 @@ package fetcher
 import (
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
@@ -67,5 +68,37 @@ func TestAIModel_NilAIBlock(t *testing.T) {
 	cfg := &project.Config{}
 	if got := aiModel(cfg); got != "env-model" {
 		t.Errorf("aiModel: got %q, want env value when AI block is nil", got)
+	}
+}
+
+func TestCollectRecurringPatterns_FiltersAndRanks(t *testing.T) {
+	jd := func(subject string, pa *models.PatternAnalysis) models.JobDetail {
+		d := models.JobDetail{JobID: subject, Name: subject}
+		if pa != nil {
+			pa.Subject = subject
+			d.PatternAnalyses = []models.PatternAnalysis{*pa}
+		}
+		return d
+	}
+	details := []models.JobDetail{
+		jd("low-systemic", &models.PatternAnalysis{Systemic: true, Confidence: "low", BuildsAnalyzed: 9}),
+		jd("not-systemic", &models.PatternAnalysis{Systemic: false, Confidence: "high", BuildsAnalyzed: 8}),
+		jd("high-3builds", &models.PatternAnalysis{Systemic: true, Confidence: "high", BuildsAnalyzed: 3}),
+		jd("high-6builds", &models.PatternAnalysis{Systemic: true, Confidence: "high", BuildsAnalyzed: 6}),
+		jd("no-pattern", nil),
+	}
+
+	got := collectRecurringPatterns(details)
+
+	// Only systemic verdicts are kept (3 of the 4 with patterns).
+	if len(got) != 3 {
+		t.Fatalf("got %d patterns, want 3 (systemic only)", len(got))
+	}
+	// Ranked by confidence desc, then builds desc: high/6, high/3, low/9.
+	wantOrder := []string{"high-6builds", "high-3builds", "low-systemic"}
+	for i, want := range wantOrder {
+		if got[i].Subject != want {
+			t.Errorf("rank %d: got %q, want %q", i, got[i].Subject, want)
+		}
 	}
 }

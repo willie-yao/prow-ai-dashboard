@@ -598,6 +598,12 @@ as a banner at the top of the job page: a "recurring failure pattern" callout
 with the shared cause and fix when systemic, or a quiet "no shared root cause"
 note when the failures are genuinely independent.
 
+The **systemic** verdicts are also aggregated across all jobs into
+`flakiness.json` (`recurring_patterns`) and surfaced on the landing page inside
+the **Needs Attention** box, ranked by confidence then build span, so a
+confirmed recurring bug is visible without opening each job. Non-systemic
+verdicts are not aggregated there.
+
 This pass does not call tools or read artifacts itself; it reasons purely over
 the per-failure analyses the agentic loop already produced, so its marginal cost
 is a single small completion per qualifying job.

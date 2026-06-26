@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -259,6 +260,13 @@ func Run(ctx context.Context, opts Options) error {
 	// Step 5: AI failure analysis (optional).
 	if opts.EnableAI {
 		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt, aiSkillSet)
+		// Surface the systemic, job-level pattern verdicts on the home page by
+		// folding them into the flakiness report (which the landing page
+		// already loads). Done here, after AI attached them to details.
+		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
+		if n := len(flakinessReport.RecurringPatterns); n > 0 {
+			log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
+		}
 	}
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
@@ -655,12 +663,51 @@ func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, detai
 		if pa == nil {
 			continue
 		}
+		pa.JobID = d.JobID
 		d.PatternAnalyses = []models.PatternAnalysis{*pa}
 		verdict := "not systemic"
 		if pa.Systemic {
 			verdict = fmt.Sprintf("SYSTEMIC (%s): %s", pa.Confidence, pa.SharedRootCause)
 		}
 		log.Printf("  🔗 pattern analysis for %s across %d builds: %s", d.Name, pa.BuildsAnalyzed, verdict)
+	}
+}
+
+// collectRecurringPatterns gathers the systemic, job-level pattern verdicts
+// across all jobs into one list for the home page, ranked highest-signal first
+// (by confidence, then by number of builds the verdict spans). Non-systemic
+// verdicts are excluded: only confirmed recurring bugs warrant attention.
+func collectRecurringPatterns(details []models.JobDetail) []models.PatternAnalysis {
+	var out []models.PatternAnalysis
+	for i := range details {
+		for _, pa := range details[i].PatternAnalyses {
+			if pa.Systemic {
+				out = append(out, pa)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, rj := confidenceRank(out[i].Confidence), confidenceRank(out[j].Confidence)
+		if ri != rj {
+			return ri > rj
+		}
+		return out[i].BuildsAnalyzed > out[j].BuildsAnalyzed
+	})
+	return out
+}
+
+// confidenceRank orders verdict confidences so the home-page list leads with
+// the surest patterns.
+func confidenceRank(c string) int {
+	switch strings.ToLower(strings.TrimSpace(c)) {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
 	}
 }
 
