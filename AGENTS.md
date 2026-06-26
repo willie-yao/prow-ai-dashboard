@@ -212,7 +212,7 @@ Engine ships the AI defaults; consumer overrides per project. The contract:
 - **Consumer-owned** (in `project.yaml`): bucket, dashboard, branding,
   the inlined `ai.*` agentic tuning (floors `min_tool_calls` /
   `min_gcs_bytes`, `max_iters`, `timeout`, `critique`, `tools`,
-  `evidence_injection`, `pattern_analysis`), evidence selection (`ai.evidence.machine_logs`,
+  `evidence_injection`), evidence selection (`ai.evidence.machine_logs`,
   `ai.evidence.controller_logs`, `ai.evidence.build_log_patterns`).
 - **Consumer-owned** (in `prompts/system.md`): project-specific AI
   knowledge. Mandatory; injected verbatim between BasePrompt and
