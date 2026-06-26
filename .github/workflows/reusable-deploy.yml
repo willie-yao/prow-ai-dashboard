@@ -22,6 +22,7 @@ name: Reusable Deploy
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
 #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+#         ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
 
 on:
   workflow_call:
@@ -82,6 +83,9 @@ on:
         required: false
       SLACK_WEBHOOK_URL:
         description: "Slack webhook for failure notifications."
+        required: false
+      ISSUE_TOKEN:
+        description: "GitHub token (PAT or App token) with issues:write on the target repo, for auto-filing issues when issues.enabled is set. Optional; omit to disable."
         required: false
 
 permissions:
@@ -185,6 +189,7 @@ jobs:
           AI_ENDPOINT: ${{ inputs.ai-endpoint }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
         run: |
           AI_FLAG=""
           if [ "${{ inputs.ai }}" = "true" ]; then

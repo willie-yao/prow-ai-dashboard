@@ -20,6 +20,19 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Added
+
+- Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
+  findings: systemic recurring patterns and persistent failures (≥3 consecutive
+  runs). Off by default; enable with an `issues:` block in `project.yaml` plus an
+  `ISSUE_TOKEN` secret (a token with `issues: write` on the target repo, which
+  defaults to `branding.source_repo` but should usually point at a repo you
+  control). Each finding maps to one issue, deduped by a hidden marker via local
+  state plus an eviction-proof repo-side search, so the same issue is reused
+  across runs rather than re-created. Recovered findings get a "recovered"
+  comment (and optionally a close). See
+  [docs/github-issues.md](docs/github-issues.md).
+
 ## [1.0.0-beta.4] - 2026-06-26
 
 ### Added

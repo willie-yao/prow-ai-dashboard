@@ -35,6 +35,7 @@ type Config struct {
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	Artifacts            *Artifacts     `yaml:"artifacts,omitempty"  json:"artifacts,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
+	Issues               *Issues        `yaml:"issues,omitempty"     json:"issues,omitempty"`
 
 	// MinEngineVersion, when set, is the lowest engine release this config
 	// expects (e.g. "1.4.0" or "v1.4.0"). The fetcher warns at startup if the
@@ -205,6 +206,83 @@ type Artifacts struct {
 	// Collector names the registered collector (e.g. "generic"). When
 	// unset, the generic no-op collector is used.
 	Collector string `yaml:"collector" json:"collector,omitempty"`
+}
+
+// Issue trigger names.
+const (
+	IssueTriggerPatterns   = "patterns"   // systemic recurring patterns
+	IssueTriggerPersistent = "persistent" // failures with >=3 consecutive runs
+)
+
+// Issues configures optional auto-filing of GitHub issues for recurring
+// patterns and persistent failures. Off by default; the fetcher only acts when
+// `enabled: true` AND an ISSUE_TOKEN secret is present, so a misconfigured repo
+// or a missing token is a no-op rather than a deploy failure.
+type Issues struct {
+	// Enabled turns the feature on for this consumer. Defaults to false.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Repo is the target repo for filed issues. Defaults to
+	// branding.source_repo. Point it at a repo you control (the token needs
+	// issues:write there); auto-filing on an upstream community repo is rarely
+	// wanted.
+	Repo *SourceRepo `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// Triggers selects which signals open an issue: "patterns" and/or
+	// "persistent". Defaults to both when empty.
+	Triggers []string `yaml:"triggers,omitempty" json:"triggers,omitempty"`
+	// Labels are applied to every filed issue. Defaults to ["prow-dashboard"].
+	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	// CommentOnRecovery posts a "recovered" comment when a tracked failure
+	// clears. Defaults to true.
+	CommentOnRecovery *bool `yaml:"comment_on_recovery,omitempty" json:"comment_on_recovery,omitempty"`
+	// CloseOnRecovery also closes the issue on recovery. Defaults to false
+	// (comment only, leave the issue open).
+	CloseOnRecovery bool `yaml:"close_on_recovery,omitempty" json:"close_on_recovery,omitempty"`
+	// MaxNewPerRun caps how many issues are created in a single fetch, a flood
+	// guard for when many patterns appear at once or local state is lost.
+	// Defaults to 5.
+	MaxNewPerRun int `yaml:"max_new_per_run,omitempty" json:"max_new_per_run,omitempty"`
+}
+
+// EffectiveIssues resolves the issues config with defaults applied. Safe on a
+// nil receiver (returns a disabled config).
+func (c *Config) EffectiveIssues() Issues {
+	out := Issues{}
+	if c != nil && c.Issues != nil {
+		out = *c.Issues
+	}
+	// Default the target repo to branding.source_repo only when `repo` is
+	// omitted entirely. A partial `repo` (one of owner/name) is rejected by
+	// Validate rather than silently completed from source_repo, which could
+	// file issues on the wrong repo.
+	if out.Repo == nil {
+		if c != nil {
+			out.Repo = &SourceRepo{Owner: c.Branding.SourceRepo.Owner, Name: c.Branding.SourceRepo.Name}
+		}
+	}
+	if len(out.Triggers) == 0 {
+		out.Triggers = []string{IssueTriggerPatterns, IssueTriggerPersistent}
+	}
+	if len(out.Labels) == 0 {
+		out.Labels = []string{"prow-dashboard"}
+	}
+	if out.CommentOnRecovery == nil {
+		t := true
+		out.CommentOnRecovery = &t
+	}
+	if out.MaxNewPerRun <= 0 {
+		out.MaxNewPerRun = 5
+	}
+	return out
+}
+
+// HasTrigger reports whether the given trigger is enabled.
+func (i Issues) HasTrigger(name string) bool {
+	for _, t := range i.Triggers {
+		if t == name {
+			return true
+		}
+	}
+	return false
 }
 
 // AI configures the agentic failure-analysis pipeline: the endpoint and model
@@ -554,6 +632,24 @@ func (c *Config) Validate() error {
 	// recipe-free case.)
 	if c.AI != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
 		return fmt.Errorf("ai.evidence_injection requires ai.critique.enabled: true")
+	}
+
+	// Validate issue triggers when the feature is configured, so a typo fails
+	// at load rather than silently never firing.
+	if c.Issues != nil {
+		for i, t := range c.Issues.Triggers {
+			switch t {
+			case IssueTriggerPatterns, IssueTriggerPersistent:
+			default:
+				return fmt.Errorf("issues.triggers[%d] %q is not valid (want %q or %q)",
+					i, t, IssueTriggerPatterns, IssueTriggerPersistent)
+			}
+		}
+		// A partial repo would otherwise be silently completed from
+		// branding.source_repo, risking issues on the wrong repo.
+		if r := c.Issues.Repo; r != nil && (r.Owner == "" || r.Name == "") {
+			return fmt.Errorf("issues.repo requires both owner and name (omit issues.repo entirely to default to branding.source_repo)")
+		}
 	}
 
 	return nil

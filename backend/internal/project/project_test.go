@@ -303,6 +303,40 @@ func TestValidate_BaselinePasses(t *testing.T) {
 	}
 }
 
+func TestValidate_Issues(t *testing.T) {
+	t.Run("partial repo rejected", func(t *testing.T) {
+		c := validConfig()
+		c.Issues = &Issues{Enabled: true, Repo: &SourceRepo{Owner: "only-owner"}}
+		if err := c.Validate(); err == nil {
+			t.Error("expected error for issues.repo missing name")
+		}
+	})
+	t.Run("bad trigger rejected", func(t *testing.T) {
+		c := validConfig()
+		c.Issues = &Issues{Enabled: true, Triggers: []string{"bogus"}}
+		if err := c.Validate(); err == nil {
+			t.Error("expected error for invalid issues.trigger")
+		}
+	})
+	t.Run("omitted repo defaults to source_repo", func(t *testing.T) {
+		c := validConfig()
+		c.Issues = &Issues{Enabled: true}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("valid issues config rejected: %v", err)
+		}
+		eff := c.EffectiveIssues()
+		if eff.Repo == nil || eff.Repo.Owner != "owner" || eff.Repo.Name != "name" {
+			t.Errorf("repo should default to source_repo, got %+v", eff.Repo)
+		}
+		if !eff.HasTrigger(IssueTriggerPatterns) || !eff.HasTrigger(IssueTriggerPersistent) {
+			t.Errorf("triggers should default to both, got %v", eff.Triggers)
+		}
+		if eff.MaxNewPerRun != 5 {
+			t.Errorf("MaxNewPerRun default = %d, want 5", eff.MaxNewPerRun)
+		}
+	})
+}
+
 func TestValidate_CategoryRules(t *testing.T) {
 	cases := []struct {
 		name    string
