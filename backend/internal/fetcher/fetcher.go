@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
@@ -295,8 +296,58 @@ func Run(ctx context.Context, opts Options) error {
 		log.Println("Notifications: skipped (no SLACK_WEBHOOK_URL)")
 	}
 
+	// Step 7: auto-file GitHub issues for systemic patterns / persistent
+	// failures (optional). Off unless enabled in config AND an ISSUE_TOKEN is
+	// present; either missing is a no-op, never a deploy failure.
+	processIssues(ctx, cfg, flakinessReport, details, opts.OutDir)
+
 	log.Println("Done!")
 	return nil
+}
+
+// processIssues reconciles the project's highest-signal findings into GitHub
+// issues on the configured target repo. Gated on issues.enabled + ISSUE_TOKEN.
+func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, outDir string) {
+	if cfg.Issues == nil || !cfg.Issues.Enabled {
+		return
+	}
+	token := os.Getenv("ISSUE_TOKEN")
+	if token == "" {
+		log.Println("Issues: enabled in config but ISSUE_TOKEN is unset; skipping")
+		return
+	}
+	eff := cfg.EffectiveIssues()
+	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+		log.Println("Issues: no target repo resolved (set issues.repo or branding.source_repo); skipping")
+		return
+	}
+
+	specs := issues.BuildSpecs(issues.BuildInput{
+		Report:       report,
+		JobDetails:   details,
+		Triggers:     eff.Triggers,
+		Labels:       eff.Labels,
+		DashboardURL: cfg.Branding.SiteURL,
+	})
+
+	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
+	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
+	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
+		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
+		CloseOnRecovery:   eff.CloseOnRecovery,
+		MaxNewPerRun:      eff.MaxNewPerRun,
+		RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
+	})
+	stats, err := mgr.Reconcile(ctx, specs)
+	if err != nil {
+		log.Printf("Warning: issue processing failed: %v", err)
+	} else {
+		log.Printf("🐙 Issues (%s/%s): %d filed, %d adopted, %d recovered",
+			eff.Repo.Owner, eff.Repo.Name, stats.Created, stats.Adopted, stats.Recovered)
+	}
+	if err := mgr.SaveState(); err != nil {
+		log.Printf("Warning: failed to save issue state: %v", err)
+	}
 }
 
 // loadCachedJobDetails loads existing per-job JSON files from the output

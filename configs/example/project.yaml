@@ -153,3 +153,18 @@ ai:
   # Recipe-driven evidence requirements are loaded automatically from
   # <project_dir>/skills/*.yaml when present; no config flag. See
   # docs/skills.md for the schema.
+
+# Optional: auto-file GitHub issues for systemic recurring patterns and
+# persistent failures. Off by default. Active only when enabled AND an
+# ISSUE_TOKEN secret (issues:write on the target repo) is wired in the deploy
+# workflow. Point `repo` at a repo you control. See docs/github-issues.md.
+# issues:
+#   enabled: true
+#   repo:                       # defaults to branding.source_repo
+#     owner: "your-org"
+#     name: "your-tracking-repo"
+#   triggers: [patterns, persistent]   # default: both
+#   labels: [prow-dashboard]           # default: [prow-dashboard]
+#   comment_on_recovery: true          # default true
+#   close_on_recovery: false           # default false (leave the issue open)
+#   max_new_per_run: 5                 # default 5 (flood guard)
