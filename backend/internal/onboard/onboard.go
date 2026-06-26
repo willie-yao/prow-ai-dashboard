@@ -118,9 +118,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	fmt.Printf("✦ drafting prompts/system.md from %s/%s docs…\n", srcOwner, srcName)
-	// Source-repo doc reads use the GitHub token only; falling back to a
-	// possibly-non-GitHub AI token would send a bad bearer and block the
-	// otherwise-fine anonymous public read. Empty token = anonymous.
+	// Empty GitHub token = anonymous public read.
 	docs, err := fetchSourceDocs(ctx, httpClient, srcOwner, srcName, opts.GitHubToken)
 	if err != nil {
 		fmt.Printf("  ⚠ could not read source-repo docs (%v); writing the stub instead\n", err)

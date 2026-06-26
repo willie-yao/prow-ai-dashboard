@@ -113,11 +113,7 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// AI_TOKEN is the credential for the configured chat-completions endpoint
-	// (Copilot PAT, OpenAI/NVIDIA key, self-hosted placeholder, etc.). It is not
-	// interchangeable with GITHUB_TOKEN: a user's GitHub token usually has
-	// nothing to do with their model endpoint, and the Actions-provided
-	// GITHUB_TOKEN can't authenticate to a model provider anyway.
+	// AI_TOKEN authenticates the configured chat-completions endpoint.
 	aiToken := os.Getenv("AI_TOKEN")
 	if opts.EnableAI && aiToken == "" {
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
