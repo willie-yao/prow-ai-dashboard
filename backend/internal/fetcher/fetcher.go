@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -36,6 +37,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/skillsuggest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -310,6 +312,13 @@ func Run(ctx context.Context, opts Options) error {
 	// present; either missing is a no-op, never a deploy failure.
 	processIssues(ctx, cfg, flakinessReport, details, opts.OutDir)
 
+	// Step 8: draft skill-recipe PRs for systemic recurring patterns no existing
+	// skill covers (optional). Off unless enabled AND AI ran AND a write-capable
+	// SKILL_TOKEN is present; any missing piece is a no-op, never a failure.
+	if opts.EnableAI {
+		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, aiSkillSet, aiToken, opts.OutDir)
+	}
+
 	log.Println("Done!")
 	return nil
 }
@@ -357,6 +366,66 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	if err := mgr.SaveState(); err != nil {
 		log.Printf("Warning: failed to save issue state: %v", err)
 	}
+}
+
+// processSkillSuggestions drafts skill-recipe PRs for systemic recurring
+// patterns no existing skill covers. Gated on ai.suggest_skills.enabled, a
+// SKILL_TOKEN secret (contents+pull-requests write on the dashboard repo), and
+// GITHUB_REPOSITORY (the dashboard repo, which GitHub Actions sets to the caller
+// repo). Any missing piece is a no-op.
+func processSkillSuggestions(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, skillSet *skills.Set, aiToken, outDir string) {
+	if cfg.AI == nil || cfg.AI.SuggestSkills == nil || !cfg.AI.SuggestSkills.Enabled {
+		return
+	}
+	if len(patterns) == 0 {
+		return
+	}
+	ghToken := os.Getenv("SKILL_TOKEN")
+	if ghToken == "" {
+		log.Println("Skill suggestions: enabled but SKILL_TOKEN is unset; skipping")
+		return
+	}
+	owner, name, ok := splitOwnerName(os.Getenv("GITHUB_REPOSITORY"))
+	if !ok {
+		log.Printf("Skill suggestions: GITHUB_REPOSITORY unset or invalid (%q); skipping", os.Getenv("GITHUB_REPOSITORY"))
+		return
+	}
+
+	eff := cfg.EffectiveSuggestSkills()
+	aiClient := ai.NewClientWithOptions(ai.Options{
+		Token:        aiToken,
+		Endpoint:     aiEndpoint(cfg),
+		Model:        aiModel(cfg),
+		ExtraHeaders: aiHeaders(cfg),
+	})
+	mgr := skillsuggest.NewManager(
+		ghpr.NewClient(nil, ghToken), aiClient, skillSet, owner, name,
+		filepath.Join(outDir, "skill_suggest_state.json"),
+		skillsuggest.Options{
+			MinConfidence: eff.MinConfidence,
+			MaxNewPerRun:  eff.MaxNewPerRun,
+			Labels:        eff.Labels,
+			DashboardURL:  cfg.Branding.SiteURL,
+		})
+	stats, err := mgr.Reconcile(ctx, patterns)
+	if err != nil {
+		log.Printf("Warning: skill suggestion processing failed: %v", err)
+	} else if stats.Suggested+stats.Adopted+stats.Covered > 0 {
+		log.Printf("🧩 Skill suggestions (%s/%s): %d suggested, %d adopted, %d already-covered",
+			owner, name, stats.Suggested, stats.Adopted, stats.Covered)
+	}
+	if err := mgr.SaveState(); err != nil {
+		log.Printf("Warning: failed to save skill suggestion state: %v", err)
+	}
+}
+
+// splitOwnerName parses an "owner/name" slug. ok is false on a malformed value.
+func splitOwnerName(slug string) (owner, name string, ok bool) {
+	parts := strings.SplitN(strings.TrimSpace(slug), "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 // loadCachedJobDetails loads existing per-job JSON files from the output

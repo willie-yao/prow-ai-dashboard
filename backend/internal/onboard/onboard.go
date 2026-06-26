@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
@@ -89,7 +90,14 @@ func Run(ctx context.Context, opts Options) error {
 		title := fmt.Sprintf("Add %s prow-ai-dashboard scaffold", data.Name)
 		httpClient := &http.Client{Timeout: 30 * time.Second}
 		fmt.Printf("⤴ opening a scaffold PR against %s…\n", opts.DashboardRepo)
-		url, err := openScaffoldPR(ctx, httpClient, opts.GitHubToken, dashOwner, dashName, files, title, scaffoldPRBody(data.Name))
+		url, err := ghpr.NewClient(httpClient, opts.GitHubToken).OpenPR(ctx, ghpr.Request{
+			Owner:        dashOwner,
+			Repo:         dashName,
+			Files:        files,
+			BranchPrefix: "onboard/scaffold",
+			Title:        title,
+			Body:         scaffoldPRBody(data.Name),
+		})
 		if err != nil {
 			return fmt.Errorf("opening scaffold PR: %w", err)
 		}

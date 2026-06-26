@@ -23,6 +23,7 @@ name: Reusable Deploy
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
 #         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 #         ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+#         SKILL_TOKEN: ${{ secrets.SKILL_TOKEN }}
 
 on:
   workflow_call:
@@ -86,6 +87,9 @@ on:
         required: false
       ISSUE_TOKEN:
         description: "GitHub token (PAT or App token) with issues:write on the target repo, for auto-filing issues when issues.enabled is set. Optional; omit to disable."
+        required: false
+      SKILL_TOKEN:
+        description: "GitHub token (PAT or App token) with contents:write + pull-requests:write on the dashboard repo, for opening skill-suggestion PRs when ai.suggest_skills.enabled is set. Optional; omit to disable."
         required: false
 
 permissions:
@@ -190,6 +194,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
+          SKILL_TOKEN: ${{ secrets.SKILL_TOKEN }}
         run: |
           AI_FLAG=""
           if [ "${{ inputs.ai }}" = "true" ]; then
