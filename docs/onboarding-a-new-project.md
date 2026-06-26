@@ -36,36 +36,9 @@ and produces a ready-to-review scaffold (`project.yaml`, both workflows, a
 `prompts/system.md` draft, and a `CHECKLIST.md` of the manual steps). It never
 touches secrets.
 
-There are three ways to run it, from least to most setup.
+There are two ways to run it, from least to most setup.
 
-### Option A: GitHub Action (no clone, opens a PR for you)
-
-Create the dashboard repo (a README is enough to initialize it), then add one
-thin workflow that calls the reusable onboarder. Run it and review the PR it
-opens against the same repo:
-
-```yaml
-# .github/workflows/onboard.yml
-on: { workflow_dispatch: {} }
-permissions:
-  contents: write
-  pull-requests: write
-jobs:
-  onboard:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-onboard.yml@main
-    with:
-      testgrid: "<your-testgrid-dashboard-name>"   # or bucket: / gcsweb-base:
-      source-repo: "<owner>/<code-repo-under-test>"
-    secrets:
-      AI_TOKEN: ${{ secrets.AI_TOKEN }}   # optional, drafts prompts/system.md
-```
-
-Trigger it from the Actions tab (Run workflow). The job's automatic
-`GITHUB_TOKEN` opens the PR, so enable **Settings > Actions > General > Allow
-GitHub Actions to create and approve pull requests** first. The source repo's
-docs are read with that same token, and `AI_TOKEN` (if set) drafts the prompt.
-
-### Option B: one CLI command (no clone, `go run` from the module)
+### Option A: one command, no clone (`go run` from the module)
 
 ```bash
 export GITHUB_TOKEN=$(gh auth token)   # reads the source repo's docs + your jobs
@@ -77,9 +50,11 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -out ./my-dashboard
 ```
 
-Add `-open-pr` (instead of `-out`) to have it open the PR itself, using
-`GITHUB_TOKEN` for write access to the dashboard repo (needs `contents:write` +
-`pull-requests:write`):
+This writes a local scaffold directory you review and push yourself. To skip the
+local copy and have onboard open the PR for you, swap `-out` for `-open-pr`. It
+uses `GITHUB_TOKEN` for write access to the dashboard repo (needs
+`contents:write` + `pull-requests:write`) and lands all files in one commit on a
+new branch:
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
@@ -96,7 +71,7 @@ gcsweb), swap the discovery selector in either command:
   -bucket "<bucket>" [-gcsweb-base "https://gcsweb.<project>.io/s3"] \
 ```
 
-### Option C: clone and build
+### Option B: clone and build
 
 ```bash
 git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
