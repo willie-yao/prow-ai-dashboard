@@ -28,6 +28,44 @@ else is reused from the engine at deploy time.
   default; enable presubmits with `source.include_presubmits: true` in
   `project.yaml` (or `include-presubmits: true` on the reusable workflow).
 
+## Fast start: scaffold it with `onboard`
+
+The `onboard` subcommand generates this whole file set for you. It verifies your
+discovery config actually finds jobs, infers `categories` from the job names,
+and writes a ready-to-review scaffold (`project.yaml`, both workflows, a
+`prompts/system.md` stub, and a `CHECKLIST.md` of the manual steps). It performs
+no network writes and never touches secrets.
+
+```bash
+git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
+cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
+
+export GITHUB_TOKEN=$(gh auth token)   # avoids the anonymous API rate limit
+/tmp/fetcher onboard \
+  -testgrid "<your-testgrid-dashboard-name>" \
+  -dashboard-repo "<owner>/<dashboard-repo>" \
+  -source-repo "<owner>/<code-repo-under-test>" \
+  -out ./my-dashboard
+```
+
+For a non-kubernetes Prow (a project-dedicated bucket, optionally behind
+gcsweb), swap the discovery selector:
+
+```bash
+/tmp/fetcher onboard \
+  -bucket "<bucket>" [-gcsweb-base "https://gcsweb.<project>.io/s3"] \
+  -dashboard-repo "<owner>/<dashboard-repo>" \
+  -source-repo "<owner>/<code-repo>" \
+  -out ./my-dashboard
+```
+
+Then **review the output**: fill in the `prompts/system.md` stub with
+project-specific knowledge (the biggest lever on analysis quality), trim or
+reorder the inferred `categories`, and follow `CHECKLIST.md` for the GitHub
+configuration (enable Pages, set `AI_TOKEN`). The sections below are the manual
+reference for each generated field if you prefer to write them by hand or to
+understand what the scaffold produced.
+
 ## Step 0: sweep the jobs first
 
 Confirm the engine discovers your jobs before writing the full config.

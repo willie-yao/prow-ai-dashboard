@@ -22,6 +22,13 @@ for how to pin a release.
 
 ### Added
 
+- New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid
+  dashboard name or a storage bucket. It verifies discovery actually finds jobs,
+  infers `categories` from the job names, and writes a ready-to-review scaffold
+  (`project.yaml`, both workflows, a `prompts/system.md` stub, and a manual
+  `CHECKLIST.md`), validating the generated config against the engine's own
+  loader before writing. No network writes, no secrets touched. See
+  [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#fast-start-scaffold-it-with-onboard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (≥3 consecutive
   runs). Off by default; enable with an `issues:` block in `project.yaml` plus an
