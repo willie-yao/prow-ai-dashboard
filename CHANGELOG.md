@@ -20,6 +20,18 @@ for how to pin a release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: AI analysis now requires an explicit endpoint and model.** The
+  engine no longer defaults to GitHub Copilot (`api.githubcopilot.com` /
+  `claude-sonnet-4.5`) when `ai.endpoint` / `ai.model` are unset. When AI is
+  enabled, configure both in `project.yaml` (`ai.endpoint`, `ai.model`) or via
+  the `AI_ENDPOINT` / `AI_MODEL` env vars; otherwise the fetch fails fast with a
+  clear error instead of silently calling Copilot. To keep prior behavior, set
+  `ai.endpoint: https://api.githubcopilot.com/chat/completions` and
+  `ai.model: claude-sonnet-4.5` (or the equivalent repo variables). This makes
+  the engine fully provider-agnostic with no opinionated default.
+
 ### Added
 
 - New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid

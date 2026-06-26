@@ -90,6 +90,24 @@ func Run(ctx context.Context, opts Options) error {
 			cfg.CollectorName(), strings.Join(opts.Collectors.Names(), ", "))
 	}
 
+	// AI_TOKEN authenticates the configured chat-completions endpoint.
+	aiToken := os.Getenv("AI_TOKEN")
+	if opts.EnableAI && aiToken == "" {
+		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
+		opts.EnableAI = false
+	}
+	// The engine assumes no default provider: AI analysis needs an explicit
+	// endpoint and model (project.yaml ai.endpoint/ai.model or AI_ENDPOINT/
+	// AI_MODEL env). Fail fast on a misconfiguration rather than silently
+	// publishing a dashboard with no analysis.
+	if opts.EnableAI {
+		if aiEndpoint(cfg) == "" || aiModel(cfg) == "" {
+			return fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
+		}
+	}
+
+	// Load the prompt and skills only once AI is confirmed enabled and
+	// configured, so a config error surfaces before any content errors.
 	var aiSystemPrompt string
 	var aiSkillSet *skills.Set
 	if opts.EnableAI {
@@ -111,13 +129,6 @@ func Run(ctx context.Context, opts Options) error {
 			log.Printf("Loaded %d AI skill recipe(s) from %s/skills/ (hash=%s)",
 				n, opts.ProjectDir, shortHash(aiSkillSet.Hash()))
 		}
-	}
-
-	// AI_TOKEN authenticates the configured chat-completions endpoint.
-	aiToken := os.Getenv("AI_TOKEN")
-	if opts.EnableAI && aiToken == "" {
-		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
-		opts.EnableAI = false
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
@@ -827,11 +838,10 @@ func severityRank(sev string) int {
 	}
 }
 
-// aiEndpoint returns the configured AI chat-completions URL, or "" to let
-// ai.NewClientWithOptions apply the Copilot default. The project.yaml
-// `ai.endpoint` field wins; otherwise the AI_ENDPOINT env var is used so
-// consumers can supply the value via a GitHub Actions secret rather than
-// committing it to the repo.
+// aiEndpoint returns the configured AI chat-completions URL, or "" if neither
+// is set. The project.yaml `ai.endpoint` field wins; otherwise the AI_ENDPOINT
+// env var is used so consumers can supply the value via a GitHub Actions
+// variable rather than committing it to the repo.
 func aiEndpoint(cfg *project.Config) string {
 	if cfg.AI != nil && cfg.AI.Endpoint != "" {
 		return cfg.AI.Endpoint
@@ -851,10 +861,9 @@ func shortHash(h string) string {
 	return h[:8]
 }
 
-// aiModel returns the configured AI model identifier, or "" to let
-// ai.NewClientWithOptions apply the Copilot default. The project.yaml
-// `ai.model` field wins; otherwise the AI_MODEL env var is used so
-// consumers can keep internal-only model labels out of the public repo.
+// aiModel returns the configured AI model identifier, or "" if neither is set.
+// The project.yaml `ai.model` field wins; otherwise the AI_MODEL env var is
+// used so consumers can keep internal-only model labels out of the public repo.
 func aiModel(cfg *project.Config) string {
 	if cfg.AI != nil && cfg.AI.Model != "" {
 		return cfg.AI.Model

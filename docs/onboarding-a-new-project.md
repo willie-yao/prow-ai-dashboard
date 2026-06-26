@@ -181,9 +181,9 @@ which annotates every field. The fields that matter:
   one flat grid. `category_display_order` (a list of `id`s) orders the sections
   independently of match precedence.
 - **`ai`** (optional): the endpoint, model, and tools for the analysis loop.
-  Omit it to use the GitHub Copilot defaults, or set it to point at another
-  provider or tune tools, e.g.
-  `endpoint: "https://api.githubcopilot.com/chat/completions"`,
+  When AI is enabled, `endpoint` and `model` are required (the engine has no
+  default provider); set them here or via the `AI_ENDPOINT` / `AI_MODEL` env
+  vars, e.g. `endpoint: "https://api.githubcopilot.com/chat/completions"`,
   `model: "claude-sonnet-4.5"`, `tools: [filesystem, k8s]`. All other knobs have
   defaults. See [agentic.md](agentic.md) for the full schema and
   [ai-providers.md](ai-providers.md) for provider-specific endpoint and model
