@@ -323,6 +323,49 @@ type AI struct {
 	// via the registered tools (filesystem + k8s by default) and returns a
 	// single JSON verdict. A function-calling endpoint is required.
 	Agentic Agentic `yaml:",inline" json:"agentic,omitempty"`
+
+	// SuggestSkills configures optional auto-drafting of skill recipes for
+	// systemic recurring patterns. Off by default. Excluded from manifest.json.
+	SuggestSkills *SuggestSkills `yaml:"suggest_skills,omitempty" json:"-"`
+}
+
+// SuggestSkills configures the self-improving skills feature: when a systemic
+// recurring pattern is found that no existing skill covers, the engine drafts a
+// skill recipe and opens a draft PR adding it to the dashboard repo's skills/
+// directory. Off by default; the fetcher only acts when `enabled: true` AND a
+// write-capable GitHub token is present, so a missing token is a no-op rather
+// than a deploy failure.
+type SuggestSkills struct {
+	// Enabled turns the feature on for this consumer. Defaults to false.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// MinConfidence is the lowest pattern confidence that qualifies for a
+	// suggestion: "high" (default), "medium", or "low". Only systemic patterns
+	// are ever considered.
+	MinConfidence string `yaml:"min_confidence,omitempty" json:"min_confidence,omitempty"`
+	// MaxNewPerRun caps how many suggestion PRs are opened in a single fetch.
+	// Defaults to 1 (skill review is a human-paced activity).
+	MaxNewPerRun int `yaml:"max_new_per_run,omitempty" json:"max_new_per_run,omitempty"`
+	// Labels are applied to every suggestion PR. Defaults to ["skill-suggestion"].
+	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
+}
+
+// EffectiveSuggestSkills resolves the skill-suggestion config with defaults
+// applied. Safe on a nil receiver (returns a disabled config).
+func (c *Config) EffectiveSuggestSkills() SuggestSkills {
+	out := SuggestSkills{}
+	if c != nil && c.AI != nil && c.AI.SuggestSkills != nil {
+		out = *c.AI.SuggestSkills
+	}
+	if strings.TrimSpace(out.MinConfidence) == "" {
+		out.MinConfidence = "high"
+	}
+	if out.MaxNewPerRun <= 0 {
+		out.MaxNewPerRun = 1
+	}
+	if len(out.Labels) == 0 {
+		out.Labels = []string{"skill-suggestion"}
+	}
+	return out
 }
 
 // AnalysisConcurrency returns the number of failures to analyze in parallel,

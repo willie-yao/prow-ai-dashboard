@@ -205,6 +205,18 @@ func loadOne(path string) (Skill, error) {
 	if err != nil {
 		return Skill{}, err
 	}
+	sk, err := ParseAndValidate(data)
+	if err != nil {
+		return Skill{}, err
+	}
+	return sk, nil
+}
+
+// ParseAndValidate decodes one recipe from YAML, then validates and compiles
+// every regex. It is the single-recipe entry point used by callers that
+// generate a recipe (e.g. skill suggestions) and need to reject an invalid
+// draft before writing it.
+func ParseAndValidate(data []byte) (Skill, error) {
 	var sk Skill
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
 	dec.KnownFields(true)

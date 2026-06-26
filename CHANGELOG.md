@@ -22,6 +22,22 @@ for how to pin a release.
 
 ### Added
 
+- Optional **self-improving skills** (`ai.suggest_skills`): after each fetch,
+  the engine drafts a diagnostic skill recipe for any systemic recurring pattern
+  that no existing skill covers, and opens a **draft PR** adding
+  `skills/<id>.yaml` to the dashboard repo for review. Off by default; enable
+  with `ai.suggest_skills.enabled: true`. Reuses the configured AI provider to
+  decide coverage (trigger prefilter + an LLM confirm) and draft the recipe,
+  validates the draft against the skills schema before proposing, and dedupes by
+  a hidden marker so a pattern is never suggested twice. Needs a `SKILL_TOKEN`
+  secret (contents + pull-requests write on the dashboard repo; a dedicated
+  token like `ISSUE_TOKEN`, so the deploy job's default permissions stay
+  read-only). See [docs/skills.md](docs/skills.md#auto-suggesting-recipes).
+- New internal `ghpr` helper extracts the onboard scaffold's one-commit
+  "open a PR from a file-set" flow (GitHub Git Data API) so onboarding and skill
+  suggestions share it, with seams (draft, labels, commit author, DCO sign-off)
+  for a future source-repo fix-PR feature.
+
 - New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid
   dashboard name or a storage bucket. It verifies discovery actually finds jobs,
   infers `categories` from the job names, and writes a ready-to-review scaffold
