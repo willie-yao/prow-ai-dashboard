@@ -32,39 +32,73 @@ else is reused from the engine at deploy time.
 
 The `onboard` subcommand generates this whole file set for you. It verifies your
 discovery config actually finds jobs, infers `categories` from the job names,
-and writes a ready-to-review scaffold (`project.yaml`, both workflows, a
-`prompts/system.md` stub, and a `CHECKLIST.md` of the manual steps). It performs
-no network writes and never touches secrets.
+and produces a ready-to-review scaffold (`project.yaml`, both workflows, a
+`prompts/system.md` draft, and a `CHECKLIST.md` of the manual steps). It never
+touches secrets.
+
+There are two ways to run it, from least to most setup.
+
+### Option A: one command, no clone (`go run` from the module)
 
 ```bash
-git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
-cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
-
-export GITHUB_TOKEN=$(gh auth token)   # avoids the anonymous API rate limit
-/tmp/fetcher onboard \
+export GITHUB_TOKEN=$(gh auth token)   # reads the source repo's docs + your jobs
+# Optional: drafts prompts/system.md. If you set AI_TOKEN, you must also set
+# AI_ENDPOINT and AI_MODEL for your chat-completions provider (the engine assumes
+# no default endpoint); see docs/ai-providers.md. Omit all three to write a stub.
+export AI_TOKEN=...
+export AI_ENDPOINT="https://<your-provider>/chat/completions"
+export AI_MODEL="<your-model-id>"
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
   -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<code-repo-under-test>" \
   -out ./my-dashboard
 ```
 
-For a non-kubernetes Prow (a project-dedicated bucket, optionally behind
-gcsweb), swap the discovery selector:
+This writes a local scaffold directory you review and push yourself. To skip the
+local copy and have onboard open the PR for you, swap `-out` for `-open-pr`. It
+uses `GITHUB_TOKEN` for write access to the dashboard repo (needs
+`contents:write` + `pull-requests:write`) and lands all files in one commit on a
+new branch:
 
 ```bash
-/tmp/fetcher onboard \
-  -bucket "<bucket>" [-gcsweb-base "https://gcsweb.<project>.io/s3"] \
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
-  -source-repo "<owner>/<code-repo>" \
-  -out ./my-dashboard
+  -source-repo "<owner>/<code-repo-under-test>" \
+  -open-pr
 ```
 
-Then **review the output**: fill in the `prompts/system.md` stub with
-project-specific knowledge (the biggest lever on analysis quality), trim or
-reorder the inferred `categories`, and follow `CHECKLIST.md` for the GitHub
-configuration (enable Pages, set `AI_TOKEN`). The sections below are the manual
-reference for each generated field if you prefer to write them by hand or to
-understand what the scaffold produced.
+For a non-kubernetes Prow (a project-dedicated bucket, optionally behind
+gcsweb), swap the discovery selector in either command:
+
+```bash
+  -bucket "<bucket>" [-gcsweb-base "https://gcsweb.<project>.io/s3"] \
+```
+
+### Option B: clone and build
+
+```bash
+git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
+cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
+/tmp/fetcher onboard -testgrid ... -dashboard-repo ... -source-repo ... -out ./my-dashboard
+```
+
+**The `prompts/system.md` draft.** When `AI_TOKEN` is set (the credential for
+your chat-completions endpoint, alongside the required `AI_ENDPOINT` and
+`AI_MODEL` for your provider, same as the fetcher; see
+[ai-providers.md](ai-providers.md)), onboard reads the source repo's own docs
+(README, `docs/`, architecture/contributing material) and drafts a real
+`prompts/system.md` grounded in them: the architecture, where evidence lives, and
+known transient classes. Without a token (or with `-no-prompt`), it writes a stub
+with TODOs instead. Either way the result is **a draft to review**, not a
+finished prompt; prompt quality is the biggest lever on analysis depth.
+
+Then **review the output**: refine `prompts/system.md`, trim or reorder the
+inferred `categories`, and follow `CHECKLIST.md` for the GitHub configuration
+(enable Pages, set the deploy-time `AI_TOKEN` secret). The sections below are the
+manual reference for each generated field if you prefer to write them by hand or
+to understand what the scaffold produced.
 
 ## Step 0: sweep the jobs first
 

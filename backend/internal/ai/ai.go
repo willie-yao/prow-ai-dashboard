@@ -7,6 +7,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -102,6 +103,25 @@ func (c *Client) ModelName() string { return c.model }
 // Cache returns the underlying cache so callers can persist it.
 func (c *Client) Cache() *Cache {
 	return c.cache
+}
+
+// Complete sends a single tool-free chat completion (a system + user message)
+// and returns the assistant's text. It is the simple, non-agentic entry point
+// for callers that just need a one-shot generation (e.g. onboard's prompt
+// drafting). The request is bounded only by ctx.
+func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
+	messages := []agChatMessage{
+		{Role: "system", Content: strPtr(system)},
+		{Role: "user", Content: strPtr(user)},
+	}
+	resp, err := c.callChatWithTools(ctx, messages, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == nil {
+		return "", fmt.Errorf("empty completion response")
+	}
+	return *resp.Choices[0].Message.Content, nil
 }
 
 // modelsResponse is the subset of the OpenAI-compatible /v1/models payload we

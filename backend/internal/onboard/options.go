@@ -31,4 +31,26 @@ type Options struct {
 
 	// OutDir is where the scaffold is written.
 	OutDir string
+
+	// --- AI prompt drafting (optional) ---
+
+	// AIToken authenticates the chat-completions endpoint used to draft
+	// prompts/system.md. When empty, onboard writes the stub instead.
+	AIToken string
+	// AIEndpoint / AIModel are the chat-completions URL and model id of the
+	// provider used to draft prompts/system.md. Both are required when AIToken
+	// is set; the engine assumes no default provider.
+	AIEndpoint string
+	AIModel    string
+	// GitHubToken authenticates source-repo doc reads (avoids the anonymous
+	// rate limit) and, with --open-pr, opening the scaffold PR.
+	GitHubToken string
+	// NoPrompt forces the stub even when an AI token is available (skip the
+	// model call).
+	NoPrompt bool
+
+	// OpenPR opens a pull request against the dashboard repo with the scaffold
+	// instead of writing a local directory. Requires a GitHub token with write
+	// access to the dashboard repo (GitHubToken).
+	OpenPR bool
 }

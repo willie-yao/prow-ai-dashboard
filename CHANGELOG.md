@@ -25,9 +25,17 @@ for how to pin a release.
 - New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid
   dashboard name or a storage bucket. It verifies discovery actually finds jobs,
   infers `categories` from the job names, and writes a ready-to-review scaffold
-  (`project.yaml`, both workflows, a `prompts/system.md` stub, and a manual
+  (`project.yaml`, both workflows, a `prompts/system.md` draft, and a manual
   `CHECKLIST.md`), validating the generated config against the engine's own
-  loader before writing. No network writes, no secrets touched. See
+  loader before writing. When `AI_TOKEN` (plus the provider's `AI_ENDPOINT` and
+  `AI_MODEL`, both required since the engine assumes no default endpoint) is set,
+  it drafts `prompts/system.md` from the source repo's own docs (architecture,
+  where evidence lives, known transient classes); otherwise it writes a stub. By
+  default it writes a local directory and makes no GitHub writes; pass
+  `-open-pr` to open a scaffold PR against the dashboard repo instead (one
+  commit on a new branch), using `GITHUB_TOKEN`. It runs without a clone via
+  `go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest
+  onboard ...`. See
   [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#fast-start-scaffold-it-with-onboard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (≥3 consecutive
@@ -39,6 +47,17 @@ for how to pin a release.
   across runs rather than re-created. Recovered findings get a "recovered"
   comment (and optionally a close). See
   [docs/github-issues.md](docs/github-issues.md).
+
+### Changed
+
+- `AI_TOKEN` is no longer allowed to fall back to `GITHUB_TOKEN`. It is the
+  credential for the configured chat-completions endpoint (a Copilot PAT, an
+  OpenAI/NVIDIA key, a self-hosted placeholder, etc.) and must be set explicitly
+  to enable AI analysis; a GitHub token is unrelated to most users' model
+  endpoint and the Actions-provided `GITHUB_TOKEN` cannot authenticate to a model
+  provider anyway. Deployed consumers already pass `AI_TOKEN`, so they are
+  unaffected; only local runs that relied on the implicit fallback now need
+  `AI_TOKEN` set.
 
 ## [1.0.0-beta.4] - 2026-06-26
 

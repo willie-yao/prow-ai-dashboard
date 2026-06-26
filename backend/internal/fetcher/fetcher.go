@@ -113,12 +113,10 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
+	// AI_TOKEN authenticates the configured chat-completions endpoint.
 	aiToken := os.Getenv("AI_TOKEN")
 	if opts.EnableAI && aiToken == "" {
-		aiToken = os.Getenv("GITHUB_TOKEN")
-	}
-	if opts.EnableAI && aiToken == "" {
-		log.Println("Warning: -ai enabled but no AI_TOKEN or GITHUB_TOKEN set, disabling AI analysis")
+		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		opts.EnableAI = false
 	}
 
