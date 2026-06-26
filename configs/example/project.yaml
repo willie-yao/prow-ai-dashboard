@@ -96,8 +96,9 @@ branding:
 # See docs/writing-prompts.md.
 #
 # endpoint, model, and headers target any OpenAI-compatible chat completions
-# API. Defaults point at GitHub Copilot. See docs/ai-providers.md for
-# Nvidia Dynamo / Azure OpenAI / OpenAI / Ollama snippets.
+# API. Both endpoint and model are required (the engine has no default
+# provider). See docs/ai-providers.md for Nvidia Dynamo / Azure OpenAI /
+# OpenAI / Ollama snippets.
 #
 # Keep private or preview identifiers out of this public file by omitting
 # them here and setting AI_ENDPOINT / AI_MODEL via repo variables on the

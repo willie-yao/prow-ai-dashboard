@@ -289,14 +289,13 @@ func (i Issues) HasTrigger(name string) bool {
 // to call, optional request headers, analysis concurrency, and the inlined
 // agentic loop tuning.
 type AI struct {
-	// Endpoint is the OpenAI-compatible chat-completions URL. When unset,
-	// reads AI_ENDPOINT env, then defaults to GitHub Copilot. Excluded
-	// from manifest.json.
+	// Endpoint is the OpenAI-compatible chat-completions URL. Required when
+	// AI is enabled (the engine assumes no default provider); falls back to
+	// the AI_ENDPOINT env var when unset here. Excluded from manifest.json.
 	Endpoint string `yaml:"endpoint,omitempty" json:"-"`
 
-	// Model is the model identifier the provider expects. When unset,
-	// reads AI_MODEL env, then defaults to the engine's Copilot model.
-	// MUST be set when pointing at any non-Copilot provider. Excluded
+	// Model is the model identifier the provider expects. Required when AI is
+	// enabled; falls back to the AI_MODEL env var when unset here. Excluded
 	// from manifest.json.
 	Model string `yaml:"model,omitempty" json:"-"`
 

@@ -29,13 +29,14 @@ rather than silently degrading.
 
 ## Configuration
 
-All knobs are inlined directly under `ai:` in `project.yaml`. Every field is
-optional; the agentic loop runs with engine defaults when none are set:
+All knobs are inlined directly under `ai:` in `project.yaml`. `endpoint` and
+`model` are required when AI is enabled (the engine has no default provider);
+every other field is optional and runs with engine defaults when unset:
 
 ```yaml
 ai:
-  endpoint: ...                 # optional; env AI_ENDPOINT / default Copilot
-  model: ...                    # optional; env AI_MODEL / default Copilot model
+  endpoint: ...                 # required when AI is enabled; or env AI_ENDPOINT
+  model: ...                    # required when AI is enabled; or env AI_MODEL
   concurrency: 1                # parallel analyses (raise for endpoints you control)
   max_iters: 15                 # tool-call rounds per failure
   timeout: 5m                   # per-failure agentic wall-clock timeout
@@ -197,14 +198,19 @@ In rough order of impact when stepping down from a frontier hosted model:
 
 ### Presets
 
+Every preset still requires `endpoint` and `model` (omitted below for brevity);
+set them in `project.yaml` or via `AI_ENDPOINT` / `AI_MODEL`.
+
 **Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot, OpenAI, or
-Azure). This is the CAPZ dashboard: the defaults are enough, so set only the
-tools. A frontier model investigates deeply and writes concrete fixes without
-the guardrails, and the provider is shared and rate-limited, so leave
-`concurrency` at `1`.
+Azure). This is the CAPZ dashboard: the tuning defaults are enough, so set just
+the endpoint, model, and tools. A frontier model investigates deeply and writes
+concrete fixes without the guardrails, and the provider is shared and
+rate-limited, so leave `concurrency` at `1`.
 
 ```yaml
 ai:
+  endpoint: "https://api.githubcopilot.com/chat/completions"
+  model: "claude-sonnet-4.5"
   tools: [filesystem, k8s]
   # everything else defaults: no floors, critique off, concurrency 1,
   # single_tool_call off.

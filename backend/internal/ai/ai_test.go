@@ -120,13 +120,15 @@ func TestExtractJSON(t *testing.T) {
 
 // ---------- Pluggable endpoint / header tests ----------
 
-func TestNewClientWithOptionsDefaults(t *testing.T) {
+func TestNewClientWithOptionsNoDefaulting(t *testing.T) {
+	// Endpoint and Model are used verbatim; the engine applies no default
+	// provider, so empty options stay empty.
 	c := NewClientWithOptions(Options{Token: "x", CacheDir: t.TempDir()})
-	if c.Endpoint() != ModelsAPIURL {
-		t.Errorf("default endpoint = %q, want %q", c.Endpoint(), ModelsAPIURL)
+	if c.Endpoint() != "" {
+		t.Errorf("endpoint = %q, want empty (no default)", c.Endpoint())
 	}
-	if c.ModelName() != Model {
-		t.Errorf("default model = %q, want %q", c.ModelName(), Model)
+	if c.ModelName() != "" {
+		t.Errorf("model = %q, want empty (no default)", c.ModelName())
 	}
 }
 

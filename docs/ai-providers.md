@@ -3,17 +3,23 @@
 The dashboard's AI analysis is provider-agnostic. The fetcher speaks plain
 OpenAI chat-completions over HTTPS, so anything that exposes a
 `POST /chat/completions` endpoint will work: GitHub Copilot, OpenAI, Azure
-OpenAI, Nvidia Dynamo / NIMs, vLLM, Ollama, or a self-hosted proxy.
+OpenAI, Nvidia Dynamo / NIMs, vLLM, Ollama, or a self-hosted proxy. There is
+**no default provider**: you must configure an endpoint and model explicitly
+(in `project.yaml` or via env), or AI analysis fails fast with a clear error.
 
 Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 
 ```yaml
 ai:
-  endpoint: "..."         # Optional. Chat-completions URL. Defaults to Copilot.
-  model: "..."            # Optional. Model identifier the endpoint expects.
+  endpoint: "..."         # Required. Chat-completions URL (e.g. Copilot, OpenAI, vLLM).
+  model: "..."            # Required. Model identifier the endpoint expects.
   headers:                # Optional. Extra HTTP headers merged into every call.
     Some-Header: "value"
 ```
+
+Both `endpoint` and `model` are required when AI is enabled; provide them here
+or via the `AI_ENDPOINT` / `AI_MODEL` env vars (see below). For GitHub Copilot,
+the endpoint is `https://api.githubcopilot.com/chat/completions`.
 
 Set the bearer token via the `AI_TOKEN` secret in the GitHub Actions workflow
 (see the [reusable workflow README](../README.md)). The token is sent as
@@ -63,7 +69,7 @@ gh variable set AI_MODEL    --repo your-org/your-consumer-repo
 gh variable set AI_ENDPOINT --repo your-org/your-consumer-repo
 ```
 
-Resolution order is `project.yaml` field > env var > engine default, so
+Resolution order is `project.yaml` field > env var, with no engine default, so
 yaml entries still win if you ever need to override per-repo. Sourcing
 the inputs from `vars.*` (instead of hardcoding in the workflow file)
 keeps the values out of the public repo source.
@@ -74,10 +80,10 @@ regardless of where the values came from, so private model labels never
 reach the deployed GitHub Pages site even if a future change accidentally
 puts them back in yaml.
 
-## GitHub Copilot (default endpoint)
+## GitHub Copilot
 
-Leave `endpoint` unset to target Copilot. `AI_TOKEN` is a fine-grained PAT
-with the `copilot_chat` user permission. Set `model` explicitly to a model
+Set `endpoint` to the Copilot chat-completions URL. `AI_TOKEN` is a fine-grained
+PAT with the `copilot_chat` user permission. Set `model` explicitly to a model
 your Copilot plan exposes; a public model id keeps the config reproducible
 for anyone reading the repo:
 
@@ -92,8 +98,8 @@ fetch (one agentic investigation per failure) consumes request and token
 allowance. The free individual tier works for trying it out but has a limited
 monthly allowance; organizations need paid licenses. Model availability shifts
 over time and varies by plan, so set `model` explicitly to one your plan
-exposes (current options include the Claude Sonnet and GPT-5 families). If you
-leave `model` unset the engine falls back to a built-in default.
+exposes (current options include the Claude Sonnet and GPT-5 families). Both
+`endpoint` and `model` are required; the engine has no built-in default.
 
 The fetcher automatically sends `Copilot-Integration-Id: copilot-developer-cli`
 when (and only when) the endpoint's host is `*.githubcopilot.com`.

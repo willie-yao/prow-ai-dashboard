@@ -17,13 +17,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-const (
-	// ModelsAPIURL is the GitHub Copilot chat completions endpoint.
-	ModelsAPIURL = "https://api.githubcopilot.com/chat/completions"
-	// Model is the default model; override via Options.Model or AI_MODEL env.
-	Model = "claude-sonnet-4.5"
-)
-
 // callDelay throttles consecutive API calls. var (not const) so tests can
 // shrink it; production callers should not touch this.
 var callDelay = 500 * time.Millisecond
@@ -38,13 +31,14 @@ type Client struct {
 	cache        *Cache
 }
 
-// Options configures a Client. Empty values fall back to the Copilot defaults.
+// Options configures a Client. Endpoint and Model are required; the engine
+// assumes no default provider.
 type Options struct {
 	Token    string
 	CacheDir string
-	// Endpoint is the chat-completions URL. Defaults to ModelsAPIURL.
+	// Endpoint is the chat-completions URL the provider serves.
 	Endpoint string
-	// Model is the model identifier the provider expects. Defaults to Model.
+	// Model is the model identifier the provider expects.
 	Model string
 	// ExtraHeaders are merged into every request after the defaults. Use
 	// this for provider-specific routing headers or to override the default
@@ -52,24 +46,9 @@ type Options struct {
 	ExtraHeaders map[string]string
 }
 
-// NewClient creates a Client using the Copilot defaults. Kept for callers
-// that don't need the new provider knobs.
-func NewClient(token string, cacheDir string) *Client {
-	return NewClientWithOptions(Options{Token: token, CacheDir: cacheDir})
-}
-
-// NewClientWithOptions creates a Client from explicit options, applying
-// Copilot defaults for any empty fields.
+// NewClientWithOptions creates a Client from explicit options. Endpoint and
+// Model are used verbatim; callers are responsible for setting them.
 func NewClientWithOptions(opts Options) *Client {
-	endpoint := opts.Endpoint
-	if endpoint == "" {
-		endpoint = ModelsAPIURL
-	}
-	model := opts.Model
-	if model == "" {
-		model = Model
-	}
-	// Clone the default transport so proxy support (ProxyFromEnvironment),
 	// TLS, and dial defaults are preserved; only enlarge the idle-connection
 	// pool so concurrent analyses (see project.AI.Concurrency) reuse
 	// connections to one endpoint instead of churning them.
@@ -86,9 +65,9 @@ func NewClientWithOptions(opts Options) *Client {
 		httpClient: &http.Client{
 			Transport: transport,
 		},
-		apiURL:       endpoint,
+		apiURL:       opts.Endpoint,
 		token:        opts.Token,
-		model:        model,
+		model:        opts.Model,
 		extraHeaders: opts.ExtraHeaders,
 		cache:        NewCache(opts.CacheDir),
 	}
