@@ -1,12 +1,14 @@
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
+import Collapse from "@mui/material/Collapse";
 import Divider from "@mui/material/Divider";
 import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import Typography from "@mui/material/Typography";
 import ReportProblem from "@mui/icons-material/ReportProblem";
 import Insights from "@mui/icons-material/Insights";
-import { useMemo } from "react";
+import ExpandMore from "@mui/icons-material/ExpandMore";
+import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
@@ -21,6 +23,14 @@ const MAX_ITEMS = 10;
 // test-level regressions below.
 const MAX_PATTERNS = 5;
 
+// Persist the expanded/collapsed choice across visits. Defaults to expanded.
+const OPEN_KEY = "prow-dashboard.needs-attention-open";
+
+function readOpenPref(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(OPEN_KEY) !== "false";
+}
+
 interface ItemGroup {
   label: string;
   items: TestFlakiness[];
@@ -30,6 +40,17 @@ export function NeedsAttention() {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const { data, loading } = useFlakinessReport();
+  const [open, setOpen] = useState(readOpenPref);
+
+  function toggleOpen() {
+    setOpen((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(OPEN_KEY, String(next));
+      }
+      return next;
+    });
+  }
 
   // Backend already filters to systemic verdicts and ranks them (confidence,
   // then builds), so just drop any missing a job link and cap for display.
@@ -78,47 +99,152 @@ export function NeedsAttention() {
 
   return (
     <Panel elevation={0} sx={{ borderRadius: "12px", overflow: "hidden" }}>
-      <Box
-        sx={{
-          p: { xs: 2, sm: 2.5 },
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-        }}
-      >
-        <ReportProblem color="warning" fontSize="small" />
-        <Typography variant="headline" component="h2" sx={{ fontSize: "1.25rem" }}>
-          Needs Attention ({totalItems})
-        </Typography>
-      </Box>
+      <Typography variant="headline" component="h2" sx={{ m: 0, fontSize: "1.25rem" }}>
+        <Box
+          component="button"
+          type="button"
+          onClick={toggleOpen}
+          aria-expanded={open}
+          aria-label={`Needs Attention, ${totalItems} item${totalItems === 1 ? "" : "s"}, click to ${open ? "collapse" : "expand"}`}
+          sx={{
+            width: "100%",
+            appearance: "none",
+            border: 0,
+            background: "transparent",
+            cursor: "pointer",
+            textAlign: "left",
+            font: "inherit",
+            color: "inherit",
+            p: { xs: 2, sm: 2.5 },
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            "&:hover": {
+              bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
+            },
+          }}
+        >
+          <ReportProblem color="warning" fontSize="small" />
+          <Box component="span">Needs Attention ({totalItems})</Box>
+          <ExpandMore
+            sx={{
+              ml: "auto",
+              color: "text.secondary",
+              transition: (t) =>
+                t.transitions.create("transform", { duration: t.transitions.duration.short }),
+              transform: open ? "rotate(0deg)" : "rotate(-90deg)",
+            }}
+          />
+        </Box>
+      </Typography>
 
-      <List
-        disablePadding
-        sx={{
-          maxHeight: "60vh",
-          overflowY: "auto",
-          px: { xs: 2, sm: 2.5 },
-          pb: { xs: 2, sm: 2.5 },
-        }}
-      >
-        {recurring.length > 0 && (
-          <Box component="li" sx={{ listStyle: "none" }}>
-            <Typography
-              variant="label"
-              component="p"
-              color="text.secondary"
-              sx={{ py: 1, textTransform: "uppercase" }}
-            >
-              Recurring Patterns
-            </Typography>
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <List
+          disablePadding
+          sx={{
+            maxHeight: "60vh",
+            overflowY: "auto",
+            px: { xs: 2, sm: 2.5 },
+            pb: { xs: 2, sm: 2.5 },
+          }}
+        >
+          {recurring.length > 0 && (
+            <Box component="li" sx={{ listStyle: "none" }}>
+              <Typography
+                variant="label"
+                component="p"
+                color="text.secondary"
+                sx={{ py: 1, textTransform: "uppercase" }}
+              >
+                Recurring Patterns
+              </Typography>
 
-            {recurring.map((pattern) => {
-              const confColor = pattern.confidence === "low" ? undefined : "warning";
-              return (
+              {recurring.map((pattern) => {
+                const confColor = pattern.confidence === "low" ? undefined : "warning";
+                return (
+                  <ListItemButton
+                    key={pattern.job_id ?? pattern.subject}
+                    component={RouterLink}
+                    to={`/job/${encodeURIComponent(pattern.job_id ?? "")}`}
+                    sx={{
+                      gap: 1.5,
+                      px: 1,
+                      py: 1,
+                      borderRadius: "8px",
+                      color: "inherit",
+                      textDecoration: "none",
+                      "&:hover": {
+                        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
+                      },
+                    }}
+                  >
+                    <Insights
+                      sx={{ fontSize: 18, color: "warning.main", flexShrink: 0, mt: "2px" }}
+                    />
+
+                    <Box sx={{ minWidth: 0, flex: 1 }}>
+                      <Typography variant="caption" color="text.secondary" noWrap>
+                        {shortJobName(pattern.subject, filePrefix)}
+                      </Typography>
+                      <Typography variant="body2" color="text.primary" noWrap>
+                        {pattern.shared_root_cause || pattern.summary}
+                      </Typography>
+                    </Box>
+
+                    <Box
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Chip
+                        size="small"
+                        label={`${pattern.builds_analyzed} builds`}
+                        sx={{
+                          height: 22,
+                          bgcolor: "action.selected",
+                          color: "text.secondary",
+                          fontWeight: 600,
+                          display: { xs: "none", sm: "flex" },
+                        }}
+                      />
+                      <Chip
+                        size="small"
+                        label={pattern.confidence}
+                        sx={{
+                          height: 22,
+                          fontWeight: 600,
+                          ...(confColor
+                            ? { bgcolor: (theme) => soft(theme, confColor, 0.15), color: `${confColor}.main` }
+                            : { bgcolor: "action.selected", color: "text.secondary" }),
+                        }}
+                      />
+                    </Box>
+                  </ListItemButton>
+                );
+              })}
+            </Box>
+          )}
+
+          {groups.map((group, gi) => (
+            <Box key={group.label} component="li" sx={{ listStyle: "none" }}>
+              {(gi > 0 || recurring.length > 0) && <Divider sx={{ my: 1 }} />}
+              <Typography
+                variant="label"
+                component="p"
+                color="text.secondary"
+                sx={{ py: 1, textTransform: "uppercase" }}
+              >
+                {group.label}
+              </Typography>
+
+              {group.items.map((item) => (
                 <ListItemButton
-                  key={pattern.job_id ?? pattern.subject}
+                  key={`${item.job_id}/${item.test_name}`}
                   component={RouterLink}
-                  to={`/job/${encodeURIComponent(pattern.job_id ?? "")}`}
+                  to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
                   sx={{
                     gap: 1.5,
                     px: 1,
@@ -131,16 +257,25 @@ export function NeedsAttention() {
                     },
                   }}
                 >
-                  <Insights
-                    sx={{ fontSize: 18, color: "warning.main", flexShrink: 0, mt: "2px" }}
+                  <Box
+                    sx={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      flexShrink: 0,
+                      bgcolor:
+                        item.classification === "flaky"
+                          ? "warning.main"
+                          : "error.main",
+                    }}
                   />
 
                   <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Typography variant="caption" color="text.secondary" noWrap>
-                      {shortJobName(pattern.subject, filePrefix)}
+                      {shortJobName(item.job_name, filePrefix)}
                     </Typography>
                     <Typography variant="body2" color="text.primary" noWrap>
-                      {pattern.shared_root_cause || pattern.summary}
+                      {shortTestName(item.test_name)}
                     </Typography>
                   </Box>
 
@@ -150,130 +285,43 @@ export function NeedsAttention() {
                       alignItems: "center",
                       gap: 1,
                       flexShrink: 0,
+                      minWidth: 0,
                     }}
                   >
-                    <Chip
-                      size="small"
-                      label={`${pattern.builds_analyzed} builds`}
-                      sx={{
-                        height: 22,
-                        bgcolor: "action.selected",
-                        color: "text.secondary",
-                        fontWeight: 600,
-                        display: { xs: "none", sm: "flex" },
-                      }}
-                    />
-                    <Chip
-                      size="small"
-                      label={pattern.confidence}
-                      sx={{
-                        height: 22,
-                        fontWeight: 600,
-                        ...(confColor
-                          ? { bgcolor: (theme) => soft(theme, confColor, 0.15), color: `${confColor}.main` }
-                          : { bgcolor: "action.selected", color: "text.secondary" }),
-                      }}
-                    />
+                    {item.consecutive_failures > 0 && (
+                      <Chip
+                        size="small"
+                        label={`${item.consecutive_failures}×`}
+                        sx={{
+                          height: 22,
+                          bgcolor: (theme) => soft(theme, "error", 0.15),
+                          color: "error.main",
+                          fontWeight: 600,
+                        }}
+                      />
+                    )}
+                    {item.last_failure?.failure_message && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{
+                          display: { xs: "none", sm: "block" },
+                          maxWidth: 200,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {item.last_failure.failure_message}
+                      </Typography>
+                    )}
                   </Box>
                 </ListItemButton>
-              );
-            })}
-          </Box>
-        )}
-
-        {groups.map((group, gi) => (
-          <Box key={group.label} component="li" sx={{ listStyle: "none" }}>
-            {(gi > 0 || recurring.length > 0) && <Divider sx={{ my: 1 }} />}
-            <Typography
-              variant="label"
-              component="p"
-              color="text.secondary"
-              sx={{ py: 1, textTransform: "uppercase" }}
-            >
-              {group.label}
-            </Typography>
-
-            {group.items.map((item) => (
-              <ListItemButton
-                key={`${item.job_id}/${item.test_name}`}
-                component={RouterLink}
-                to={`/job/${encodeURIComponent(item.job_id)}/test/${encodeURIComponent(item.test_name)}${item.last_failure?.build_id ? `?run=${item.last_failure.build_id}` : ""}`}
-                sx={{
-                  gap: 1.5,
-                  px: 1,
-                  py: 1,
-                  borderRadius: "8px",
-                  color: "inherit",
-                  textDecoration: "none",
-                  "&:hover": {
-                    bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
-                  },
-                }}
-              >
-                <Box
-                  sx={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: "50%",
-                    flexShrink: 0,
-                    bgcolor:
-                      item.classification === "flaky"
-                        ? "warning.main"
-                        : "error.main",
-                  }}
-                />
-
-                <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography variant="caption" color="text.secondary" noWrap>
-                    {shortJobName(item.job_name, filePrefix)}
-                  </Typography>
-                  <Typography variant="body2" color="text.primary" noWrap>
-                    {shortTestName(item.test_name)}
-                  </Typography>
-                </Box>
-
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 1,
-                    flexShrink: 0,
-                    minWidth: 0,
-                  }}
-                >
-                  {item.consecutive_failures > 0 && (
-                    <Chip
-                      size="small"
-                      label={`${item.consecutive_failures}×`}
-                      sx={{
-                        height: 22,
-                        bgcolor: (theme) => soft(theme, "error", 0.15),
-                        color: "error.main",
-                        fontWeight: 600,
-                      }}
-                    />
-                  )}
-                  {item.last_failure?.failure_message && (
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{
-                        display: { xs: "none", sm: "block" },
-                        maxWidth: 200,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {item.last_failure.failure_message}
-                    </Typography>
-                  )}
-                </Box>
-              </ListItemButton>
-            ))}
-          </Box>
-        ))}
-      </List>
+              ))}
+            </Box>
+          ))}
+        </List>
+      </Collapse>
     </Panel>
   );
 }
