@@ -4,6 +4,9 @@
 // All orchestration lives in internal/fetcher; this file is just flag
 // parsing and the explicit wiring of the built-in collector factory into the
 // fetcher's collector registry.
+//
+// The `onboard` subcommand scaffolds a new dashboard config from a testgrid
+// dashboard name or a storage bucket (see internal/onboard).
 package main
 
 import (
@@ -15,6 +18,7 @@ import (
 
 	collectorgeneric "github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors/generic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard"
 )
 
 // version is the engine version, overridden at build time via
@@ -22,6 +26,13 @@ import (
 var version = "dev"
 
 func main() {
+	// Subcommand dispatch: `fetcher onboard ...` scaffolds a new project;
+	// everything else is the default data-pipeline run.
+	if len(os.Args) > 1 && os.Args[1] == "onboard" {
+		runOnboard(os.Args[2:])
+		return
+	}
+
 	var opts fetcher.Options
 	flag.StringVar(&opts.ProjectDir, "project-dir", ".", "directory containing project.yaml and prompts/system.md")
 	flag.StringVar(&opts.OutDir, "out", "data", "output directory for JSON files")
@@ -37,6 +48,28 @@ func main() {
 	opts.Collectors.Register("generic", collectorgeneric.Factory)
 
 	if err := fetcher.Run(context.Background(), opts); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runOnboard parses the onboard subcommand flags and scaffolds a new dashboard.
+func runOnboard(args []string) {
+	fs := flag.NewFlagSet("onboard", flag.ExitOnError)
+	var opts onboard.Options
+	fs.StringVar(&opts.TestGrid, "testgrid", "", "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow)")
+	fs.StringVar(&opts.Bucket, "bucket", "", "artifact bucket name for bucket-based discovery (any Prow); alternative to -testgrid")
+	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (e.g. https://gcsweb.istio.io/s3); selects the gcsweb provider")
+	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard (required)")
+	fs.StringVar(&opts.SourceRepo, "source-repo", "", "owner/name of the code repo under test (required)")
+	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from the dashboard repo name)")
+	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from the id)")
+	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
+	fs.StringVar(&opts.EngineRef, "engine-ref", "main", "prow-ai-dashboard ref the generated workflows pin")
+	fs.StringVar(&opts.OutDir, "out", "", "output directory for the scaffold (default: the dashboard repo name)")
+	_ = fs.Parse(args)
+
+	if err := onboard.Run(context.Background(), opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

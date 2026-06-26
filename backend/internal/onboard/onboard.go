@@ -1,0 +1,292 @@
+package onboard
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"text/template"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+)
+
+// k8sCILogsBucket is the default artifact bucket for testgrid (kubernetes
+// ecosystem) discovery.
+const k8sCILogsBucket = "kubernetes-ci-logs"
+
+// Run produces a scaffold for a new dashboard: it verifies the discovery config
+// actually finds jobs, infers categories from those job names, renders the
+// config + workflows + a prompt stub + a manual checklist, validates the
+// generated project.yaml, and writes everything under OutDir. It performs no
+// network writes and touches no secrets.
+func Run(ctx context.Context, opts Options) error {
+	if err := validateOptions(&opts); err != nil {
+		return err
+	}
+
+	// 1. Sweep: build a minimal config and confirm discovery finds jobs.
+	sweepCfg := sweepConfig(opts)
+	jobs, err := discover(ctx, sweepCfg, opts.IncludePresubmits)
+	if err != nil {
+		return fmt.Errorf("job sweep: %w", err)
+	}
+	if len(jobs) == 0 {
+		return fmt.Errorf("discovery found 0 jobs for the given input; check the testgrid dashboard name or bucket before scaffolding")
+	}
+	jobNames := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		jobNames = append(jobNames, j.Name)
+	}
+	sort.Strings(jobNames)
+	fmt.Printf("✓ discovery found %d jobs\n", len(jobNames))
+
+	// 2. Deterministic generation.
+	cats := InferCategories(jobNames)
+	data := buildScaffoldData(opts, cats)
+
+	projectYAML, err := renderProjectYAML(data)
+	if err != nil {
+		return fmt.Errorf("rendering project.yaml: %w", err)
+	}
+
+	// 3. Validate the generated config by round-tripping it through the real
+	//    loader (strict decode + Validate), so we never emit something the
+	//    engine can't load.
+	if err := validateGeneratedYAML(projectYAML); err != nil {
+		return fmt.Errorf("generated project.yaml failed validation: %w", err)
+	}
+
+	// 4. Render the rest.
+	files := map[string]string{"project.yaml": projectYAML}
+	if files[".github/workflows/deploy.yml"], err = render(deployYAMLTmpl, data); err != nil {
+		return err
+	}
+	if files[".github/workflows/clear-cache.yml"], err = render(clearCacheYAMLTmpl, data); err != nil {
+		return err
+	}
+	if files["prompts/system.md"], err = render(systemPromptTmpl, data); err != nil {
+		return err
+	}
+	dashOwner, dashName := splitRepo(opts.DashboardRepo)
+	if files["CHECKLIST.md"], err = render(checklistTmpl, checklistData{
+		Name: data.Name, DashboardOwner: dashOwner, DashboardName: dashName, EngineRef: data.EngineRef,
+	}); err != nil {
+		return err
+	}
+
+	// 5. Write.
+	if err := writeFiles(opts.OutDir, files); err != nil {
+		return err
+	}
+
+	fmt.Printf("\n✓ scaffold written to %s/\n", opts.OutDir)
+	fmt.Printf("  next: review prompts/system.md and project.yaml, then follow CHECKLIST.md\n")
+	if len(cats) > 0 {
+		fmt.Printf("  inferred %d categor%s from job names (review/reorder them)\n", len(cats), plural(len(cats)))
+	}
+	return nil
+}
+
+// validateOptions checks required inputs and fills defaults.
+func validateOptions(opts *Options) error {
+	if (opts.TestGrid == "") == (opts.Bucket == "") {
+		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
+	}
+	if _, _, err := parseRepo(opts.DashboardRepo); err != nil {
+		return fmt.Errorf("--dashboard-repo %w", err)
+	}
+	if _, _, err := parseRepo(opts.SourceRepo); err != nil {
+		return fmt.Errorf("--source-repo %w", err)
+	}
+	if opts.GCSWebBase != "" && opts.Bucket == "" {
+		return fmt.Errorf("--gcsweb-base only applies with --bucket")
+	}
+	if opts.EngineRef == "" {
+		opts.EngineRef = "main"
+	}
+	if opts.OutDir == "" {
+		_, name, _ := parseRepo(opts.DashboardRepo)
+		opts.OutDir = name
+	}
+	return nil
+}
+
+// sweepConfig builds the minimal in-memory config needed to run discovery.
+func sweepConfig(opts Options) *project.Config {
+	cfg := &project.Config{
+		ID:      derivedID(opts),
+		Name:    derivedName(opts),
+		Storage: project.Storage{Provider: provider(opts), Bucket: bucket(opts), Base: opts.GCSWebBase},
+	}
+	if opts.TestGrid != "" {
+		cfg.TestGrid = project.TestGrid{Dashboard: opts.TestGrid}
+	} else {
+		cfg.Discovery = project.Discovery{Source: project.DiscoveryBucket}
+	}
+	return cfg
+}
+
+// discover runs the same job discovery the fetcher uses, by source.
+func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) ([]models.ProwJob, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	if cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {
+		backend, err := storage.New(cfg.StorageConfig(), client)
+		if err != nil {
+			return nil, fmt.Errorf("configuring storage: %w", err)
+		}
+		return prowbuild.DiscoverJobs(ctx, backend, includePresubmits, cfg.Discovery.JobFilters)
+	}
+	jobs, err := jobconfig.FetchJobConfigs(ctx, client, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if includePresubmits {
+		return jobs, nil
+	}
+	periodic := jobs[:0]
+	for _, j := range jobs {
+		if j.JobType == models.JobTypePeriodic {
+			periodic = append(periodic, j)
+		}
+	}
+	return periodic, nil
+}
+
+// scaffoldData assembles the template input from options + inferred categories.
+func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
+	owner, name := splitRepo(opts.DashboardRepo)
+	srcOwner, srcName := splitRepo(opts.SourceRepo)
+	d := scaffoldData{
+		ID:                derivedID(opts),
+		Name:              derivedName(opts),
+		Provider:          provider(opts),
+		Bucket:            bucket(opts),
+		GCSWebBase:        opts.GCSWebBase,
+		Title:             derivedName(opts) + " Prow Dashboard",
+		BasePath:          "/" + name,
+		SiteURL:           "https://" + owner + ".github.io/" + name,
+		SourceOwner:       srcOwner,
+		SourceName:        srcName,
+		Categories:        cats,
+		IncludePresubmits: opts.IncludePresubmits,
+		EngineRef:         opts.EngineRef,
+	}
+	if opts.TestGrid != "" {
+		d.DiscoveryTestGrid = opts.TestGrid
+	} else {
+		d.BucketDiscovery = true
+	}
+	return d
+}
+
+func validateGeneratedYAML(yamlText string) error {
+	dir, err := os.MkdirTemp("", "onboard-validate-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(path, []byte(yamlText), 0o644); err != nil {
+		return err
+	}
+	_, err = project.Load(path)
+	return err
+}
+
+func writeFiles(outDir string, files map[string]string) error {
+	// Preflight: never silently clobber an existing scaffold/repo. If any target
+	// already exists, abort and let the user pick a clean --out (or remove it).
+	for rel := range files {
+		full := filepath.Join(outDir, rel)
+		if _, err := os.Stat(full); err == nil {
+			return fmt.Errorf("refusing to overwrite existing %s; choose an empty --out directory", full)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("checking %s: %w", full, err)
+		}
+	}
+	for rel, content := range files {
+		full := filepath.Join(outDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("writing %s: %w", rel, err)
+		}
+	}
+	return nil
+}
+
+// --- small helpers ---
+
+func provider(opts Options) string {
+	if opts.GCSWebBase != "" {
+		return string(storage.ProviderGCSWeb)
+	}
+	return string(storage.ProviderGCS)
+}
+
+func bucket(opts Options) string {
+	if opts.Bucket != "" {
+		return opts.Bucket
+	}
+	return k8sCILogsBucket
+}
+
+func derivedID(opts Options) string {
+	if opts.ID != "" {
+		return opts.ID
+	}
+	_, name := splitRepo(opts.DashboardRepo)
+	// Strip a trailing dashboard suffix so the id reads like the project.
+	id := strings.TrimSuffix(name, "-prow-ai-dashboard")
+	id = strings.TrimSuffix(id, "-prow-dashboard")
+	if id == "" {
+		id = name
+	}
+	return id
+}
+
+func derivedName(opts Options) string {
+	if opts.Name != "" {
+		return opts.Name
+	}
+	return labelFor(derivedID(opts))
+}
+
+func splitRepo(repo string) (owner, name string) {
+	owner, name, _ = parseRepo(repo)
+	return owner, name
+}
+
+// parseRepo strictly parses "owner/name": exactly one slash, both parts
+// non-empty. Rejects "owner/", "/name", "a/b/c", and the empty string.
+func parseRepo(repo string) (owner, name string, err error) {
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("must be owner/name, got %q", repo)
+	}
+	return parts[0], parts[1], nil
+}
+
+func render(t *template.Template, data any) (string, error) {
+	var b strings.Builder
+	if err := t.Execute(&b, data); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
