@@ -20,6 +20,8 @@ for how to pin a release.
 
 ## [Unreleased]
 
+## [1.0.0-beta.4] - 2026-06-26
+
 ### Added
 
 - New job-level, cross-build **pattern analysis** (always on, no flag). After
@@ -55,6 +57,9 @@ for how to pin a release.
 
 ### Changed
 
+- The landing page's **Needs Attention** box is now collapsible, with its
+  open/closed state remembered across visits, so a long alert list no longer
+  pushes the job grid down the page.
 - `storage.provider` is now required (no implicit `gcs` default), so the config
   is explicit about the backend rather than assuming a provider. Set
   `provider: gcs` for Google Cloud Storage. Consumers already setting a provider
