@@ -70,13 +70,14 @@ func runOnboard(args []string) {
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip AI prompt drafting and always write the prompts/system.md stub")
 	_ = fs.Parse(args)
 
-	// Resolve AI + GitHub credentials from the environment, mirroring the
-	// fetcher: prompt drafting uses AI_TOKEN (falling back to GITHUB_TOKEN) and
-	// optional AI_ENDPOINT / AI_MODEL; source-repo doc reads use GITHUB_TOKEN.
+	// Resolve credentials from the environment. AI_TOKEN is the credential for
+	// whatever chat-completions endpoint is configured (a Copilot PAT, an OpenAI
+	// key, an NVIDIA key, etc.; see docs/ai-providers.md) and is required for
+	// prompt drafting; without it onboard writes the stub. GITHUB_TOKEN is a
+	// separate credential used only to read the source repo's docs (avoids the
+	// anonymous rate limit). The two are intentionally NOT interchangeable: most
+	// users' GitHub token has nothing to do with their model endpoint.
 	opts.AIToken = os.Getenv("AI_TOKEN")
-	if opts.AIToken == "" {
-		opts.AIToken = os.Getenv("GITHUB_TOKEN")
-	}
 	opts.AIEndpoint = os.Getenv("AI_ENDPOINT")
 	opts.AIModel = os.Getenv("AI_MODEL")
 	opts.GitHubToken = os.Getenv("GITHUB_TOKEN")

@@ -43,6 +43,17 @@ for how to pin a release.
   comment (and optionally a close). See
   [docs/github-issues.md](docs/github-issues.md).
 
+### Changed
+
+- `AI_TOKEN` is no longer allowed to fall back to `GITHUB_TOKEN`. It is the
+  credential for the configured chat-completions endpoint (a Copilot PAT, an
+  OpenAI/NVIDIA key, a self-hosted placeholder, etc.) and must be set explicitly
+  to enable AI analysis; a GitHub token is unrelated to most users' model
+  endpoint and the Actions-provided `GITHUB_TOKEN` cannot authenticate to a model
+  provider anyway. Deployed consumers already pass `AI_TOKEN`, so they are
+  unaffected; only local runs that relied on the implicit fallback now need
+  `AI_TOKEN` set.
+
 ## [1.0.0-beta.4] - 2026-06-26
 
 ### Added

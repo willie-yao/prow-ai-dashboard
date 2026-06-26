@@ -40,8 +40,11 @@ no GitHub writes and never touches secrets.
 git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
 cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
 
-export GITHUB_TOKEN=$(gh auth token)   # avoids the anonymous API rate limit
-export AI_TOKEN=$GITHUB_TOKEN          # optional: drafts prompts/system.md (see below)
+export GITHUB_TOKEN=$(gh auth token)   # reads the source repo's docs + your jobs
+# Optional: drafts prompts/system.md. AI_TOKEN is the credential for your
+# chat-completions endpoint (set AI_ENDPOINT / AI_MODEL too if not Copilot);
+# see docs/ai-providers.md. Without it, onboard writes a stub to fill in.
+export AI_TOKEN=...
 /tmp/fetcher onboard \
   -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -60,9 +63,11 @@ gcsweb), swap the discovery selector:
   -out ./my-dashboard
 ```
 
-**The `prompts/system.md` draft.** When an `AI_TOKEN` is set (and optional
-`AI_ENDPOINT` / `AI_MODEL`, same as the fetcher), onboard reads the source repo's
-own docs (README, `docs/`, architecture/contributing material) and drafts a real
+**The `prompts/system.md` draft.** When `AI_TOKEN` is set (the credential for
+your chat-completions endpoint, plus optional `AI_ENDPOINT` / `AI_MODEL` for a
+non-Copilot provider, same as the fetcher; see
+[ai-providers.md](ai-providers.md)), onboard reads the source repo's own docs
+(README, `docs/`, architecture/contributing material) and drafts a real
 `prompts/system.md` grounded in them: the architecture, where evidence lives, and
 known transient classes. Without a token (or with `-no-prompt`), it writes a stub
 with TODOs instead. Either way the result is **a draft to review**, not a
