@@ -623,9 +623,11 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 
-	if eff.PatternAnalysis {
-		analyzePatternsAcrossBuilds(ctx, service, details)
-	}
+	// Always run the job-level pattern pass. It is self-gating (a no-op for any
+	// job that didn't fail in enough builds) and cached, so it costs nothing on
+	// a healthy dashboard and one cheap tool-free call per genuinely-recurring
+	// job otherwise.
+	analyzePatternsAcrossBuilds(ctx, service, details)
 }
 
 // patternMinFailedBuilds is the job-level "recurring" gate: a job is only
@@ -633,10 +635,10 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 // consecutive-failure convention used for persistent-failure classification.
 const patternMinFailedBuilds = 3
 
-// analyzePatternsAcrossBuilds runs the opt-in second pass: for each job that
-// failed in enough recent builds, it correlates one representative analyzed
-// failure per failed build into a single systemic-vs-transient verdict and
-// stores it on the JobDetail. Per-failure analyses are already populated.
+// analyzePatternsAcrossBuilds runs the cross-build pattern pass: for each job
+// that failed in enough recent builds, it correlates one representative
+// analyzed failure per failed build into a single systemic-vs-transient verdict
+// and stores it on the JobDetail. Per-failure analyses are already populated.
 func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, details []models.JobDetail) {
 	for i := range details {
 		d := &details[i]

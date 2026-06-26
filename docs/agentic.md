@@ -47,7 +47,6 @@ ai:
                                 # (auto-enabled when skills/*.yaml recipes are present)
     max_retries: 2              # re-prompt rounds before accepting a still-failing draft
   evidence_injection: false     # on a critique retry, fetch+inject cited-but-unread artifacts
-  pattern_analysis: false       # correlate a job's recent failed builds into one systemic-vs-flake verdict
   tools: [filesystem, k8s]      # registered tool groups exposed to the model
 ```
 
@@ -124,21 +123,6 @@ Which registered tool groups the model can call. Defaults to
 `[filesystem, k8s]`. Narrow to `[filesystem]` for non-Kubernetes projects
 whose artifact tree has no cluster resource YAMLs (the k8s tier-2 tools would
 return empty).
-
-### `pattern_analysis`
-
-Run a second, job-level pass after the per-failure analyses: for every job that
-failed in at least 3 recent builds, correlate one representative analyzed
-failure per failed build into a single verdict on whether those failures share
-one root cause. Off by default. Each per-failure card answers "why did *this*
-build fail"; this pass answers the question a single failure can't: a "transient
-flake" that recurs across most runs is usually a systemic, fixable bug (an
-undersized VM, a tight timeout, a missing image), not random noise. The specific
-failing test/spec may differ between builds; the pass weighs the underlying
-mechanism, not the surface symptom. It costs one extra tool-free model call per
-qualifying job, cached by the failure set so it only re-runs when the failures
-(or their analyses) change. The verdict surfaces as a banner on the job page.
-See [Pattern analysis](#pattern-analysis).
 
 ### `concurrency`
 
@@ -584,9 +568,12 @@ builds gets two separate agentic analyses.
 
 ### Pattern analysis
 
-`pattern_analysis` adds one job-level correlation pass that runs after every
-per-failure analysis in the run is complete (so all per-build root causes are
-available). It is off by default.
+The engine always runs one job-level correlation pass after every per-failure
+analysis in the run is complete (so all per-build root causes are available).
+Like artifact-tree seeding, it is not configurable: it is self-gating (a no-op
+for any job that didn't fail in enough builds) and cached, so it costs nothing
+on a healthy dashboard and one cheap tool-free call per genuinely-recurring job
+otherwise.
 
 For each job, the engine:
 
@@ -604,12 +591,12 @@ For each job, the engine:
    builds it judges to share the cause. The newest 10 representatives are sent.
 
 The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
-prompt version plus each `(buildID, normalized-root-cause)` pair, so the pass
-only re-runs when the failure set or its per-build analyses change. The result
-is stored on the `JobDetail` and surfaces as a banner at the top of the job
-page: a "recurring failure pattern" callout with the shared cause and fix when
-systemic, or a quiet "no shared root cause" note when the failures are genuinely
-independent.
+prompt version plus the exact rendered model input (every representative's build
+ID, failing test, root cause, and failure message), so the pass only re-runs
+when that evidence changes. The result is stored on the `JobDetail` and surfaces
+as a banner at the top of the job page: a "recurring failure pattern" callout
+with the shared cause and fix when systemic, or a quiet "no shared root cause"
+note when the failures are genuinely independent.
 
 This pass does not call tools or read artifacts itself; it reasons purely over
 the per-failure analyses the agentic loop already produced, so its marginal cost
