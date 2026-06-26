@@ -47,4 +47,9 @@ type Options struct {
 	// NoPrompt forces the stub even when an AI token is available (skip the
 	// model call).
 	NoPrompt bool
+
+	// OpenPR opens a pull request against the dashboard repo with the scaffold
+	// instead of writing a local directory. Requires a GitHub token with write
+	// access to the dashboard repo (GitHubToken).
+	OpenPR bool
 }

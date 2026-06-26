@@ -29,9 +29,16 @@ for how to pin a release.
   `CHECKLIST.md`), validating the generated config against the engine's own
   loader before writing. When an `AI_TOKEN` is available it drafts
   `prompts/system.md` from the source repo's own docs (architecture, where
-  evidence lives, known transient classes); otherwise it writes a stub. No
-  GitHub writes, no secrets touched. See
+  evidence lives, known transient classes); otherwise it writes a stub. By
+  default it writes a local directory and makes no GitHub writes; pass
+  `-open-pr` (or use the reusable onboard Action below) to open a scaffold PR
+  against the dashboard repo instead, using `GITHUB_TOKEN`. See
   [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#fast-start-scaffold-it-with-onboard).
+- New **reusable onboard workflow**
+  (`.github/workflows/reusable-onboard.yml`) makes onboarding self-service with
+  no local clone: a new dashboard repo adds a thin `onboard.yml` that calls it,
+  and running it opens a scaffold PR in that repo using the job's automatic
+  `GITHUB_TOKEN`. Optional `AI_TOKEN` secret drafts `prompts/system.md`.
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (≥3 consecutive
   runs). Off by default; enable with an `issues:` block in `project.yaml` plus an

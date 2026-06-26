@@ -32,35 +32,76 @@ else is reused from the engine at deploy time.
 
 The `onboard` subcommand generates this whole file set for you. It verifies your
 discovery config actually finds jobs, infers `categories` from the job names,
-and writes a ready-to-review scaffold (`project.yaml`, both workflows, a
-`prompts/system.md` draft, and a `CHECKLIST.md` of the manual steps). It performs
-no GitHub writes and never touches secrets.
+and produces a ready-to-review scaffold (`project.yaml`, both workflows, a
+`prompts/system.md` draft, and a `CHECKLIST.md` of the manual steps). It never
+touches secrets.
+
+There are three ways to run it, from least to most setup.
+
+### Option A: GitHub Action (no clone, opens a PR for you)
+
+Create the dashboard repo (a README is enough to initialize it), then add one
+thin workflow that calls the reusable onboarder. Run it and review the PR it
+opens against the same repo:
+
+```yaml
+# .github/workflows/onboard.yml
+on: { workflow_dispatch: {} }
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  onboard:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-onboard.yml@main
+    with:
+      testgrid: "<your-testgrid-dashboard-name>"   # or bucket: / gcsweb-base:
+      source-repo: "<owner>/<code-repo-under-test>"
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}   # optional, drafts prompts/system.md
+```
+
+Trigger it from the Actions tab (Run workflow). The job's automatic
+`GITHUB_TOKEN` opens the PR, so enable **Settings > Actions > General > Allow
+GitHub Actions to create and approve pull requests** first. The source repo's
+docs are read with that same token, and `AI_TOKEN` (if set) drafts the prompt.
+
+### Option B: one CLI command (no clone, `go run` from the module)
 
 ```bash
-git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
-cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
-
 export GITHUB_TOKEN=$(gh auth token)   # reads the source repo's docs + your jobs
-# Optional: drafts prompts/system.md. AI_TOKEN is the credential for your
-# chat-completions endpoint (set AI_ENDPOINT / AI_MODEL too if not Copilot);
-# see docs/ai-providers.md. Without it, onboard writes a stub to fill in.
-export AI_TOKEN=...
-/tmp/fetcher onboard \
+export AI_TOKEN=...                     # optional, drafts prompts/system.md
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
   -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<code-repo-under-test>" \
   -out ./my-dashboard
 ```
 
-For a non-kubernetes Prow (a project-dedicated bucket, optionally behind
-gcsweb), swap the discovery selector:
+Add `-open-pr` (instead of `-out`) to have it open the PR itself, using
+`GITHUB_TOKEN` for write access to the dashboard repo (needs `contents:write` +
+`pull-requests:write`):
 
 ```bash
-/tmp/fetcher onboard \
-  -bucket "<bucket>" [-gcsweb-base "https://gcsweb.<project>.io/s3"] \
+go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+  -testgrid "<your-testgrid-dashboard-name>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
-  -source-repo "<owner>/<code-repo>" \
-  -out ./my-dashboard
+  -source-repo "<owner>/<code-repo-under-test>" \
+  -open-pr
+```
+
+For a non-kubernetes Prow (a project-dedicated bucket, optionally behind
+gcsweb), swap the discovery selector in either command:
+
+```bash
+  -bucket "<bucket>" [-gcsweb-base "https://gcsweb.<project>.io/s3"] \
+```
+
+### Option C: clone and build
+
+```bash
+git clone https://github.com/willie-yao/prow-ai-dashboard /tmp/engine
+cd /tmp/engine/backend && go build -o /tmp/fetcher ./cmd/fetcher
+/tmp/fetcher onboard -testgrid ... -dashboard-repo ... -source-repo ... -out ./my-dashboard
 ```
 
 **The `prompts/system.md` draft.** When `AI_TOKEN` is set (the credential for

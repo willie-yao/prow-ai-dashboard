@@ -1,0 +1,146 @@
+name: Reusable Onboard
+
+# Reusable workflow that scaffolds a Prow AI Dashboard and opens a pull request
+# with the generated config in the caller's own repo. A new dashboard repo adds a
+# thin workflow that calls this one; running it discovers the project's jobs and
+# opens a PR adding project.yaml, the deploy/clear-cache workflows, a
+# prompts/system.md (LLM-drafted when AI_TOKEN is set, otherwise a stub), and a
+# CHECKLIST.md. The engine repo is checked out separately for the Go code.
+#
+# Example consumer workflow (.github/workflows/onboard.yml in the new repo):
+#   on: { workflow_dispatch: {} }
+#   permissions:
+#     contents: write
+#     pull-requests: write
+#   jobs:
+#     onboard:
+#       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-onboard.yml@main
+#       with:
+#         testgrid: sig-cluster-lifecycle-cluster-api-provider-azure
+#         source-repo: kubernetes-sigs/cluster-api-provider-azure
+#       secrets:
+#         AI_TOKEN: ${{ secrets.AI_TOKEN }}   # optional, drafts prompts/system.md
+#
+# The repo's Settings > Actions > General must allow GitHub Actions to create and
+# approve pull requests for the automatic GITHUB_TOKEN to open the PR.
+
+on:
+  workflow_call:
+    inputs:
+      source-repo:
+        description: "owner/name of the code repo under test (e.g. kubernetes-sigs/cluster-api-provider-azure)."
+        required: true
+        type: string
+      testgrid:
+        description: "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow). Set this OR bucket."
+        required: false
+        type: string
+        default: ""
+      bucket:
+        description: "artifact bucket name for bucket-based discovery (any Prow). Alternative to testgrid."
+        required: false
+        type: string
+        default: ""
+      gcsweb-base:
+        description: "gcsweb gateway root for the bucket (e.g. https://gcsweb.istio.io/s3). Selects the gcsweb provider."
+        required: false
+        type: string
+        default: ""
+      id:
+        description: "Project id (default: derived from this repo's name)."
+        required: false
+        type: string
+        default: ""
+      name:
+        description: "Project display name (default: derived from the id)."
+        required: false
+        type: string
+        default: ""
+      include-presubmits:
+        description: "Include presubmit jobs in addition to periodics."
+        required: false
+        type: boolean
+        default: false
+      no-prompt:
+        description: "Skip AI prompt drafting and always write the prompts/system.md stub."
+        required: false
+        type: boolean
+        default: false
+      ai-model:
+        description: "Optional AI model identifier passed to the onboarder as AI_MODEL (used only when drafting prompts/system.md)."
+        required: false
+        type: string
+        default: ""
+      ai-endpoint:
+        description: "Optional AI chat-completions URL passed to the onboarder as AI_ENDPOINT (used only when drafting prompts/system.md)."
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: "Runner label."
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      AI_TOKEN:
+        description: "Credential for the chat-completions endpoint. When set, prompts/system.md is LLM-drafted; otherwise a stub is written."
+        required: false
+
+jobs:
+  onboard:
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout engine repo
+        uses: actions/checkout@v4
+        with:
+          repository: willie-yao/prow-ai-dashboard
+          # Build the engine from the exact commit of the reusable workflow the
+          # consumer pinned (uses:@<ref>), so the pinned ref controls both the
+          # pipeline and the code with no separate engine-ref knob.
+          ref: ${{ github.job_workflow_sha }}
+          path: engine
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/backend/go.mod
+          cache-dependency-path: engine/backend/go.sum
+
+      - name: Build fetcher
+        working-directory: engine/backend
+        run: go build -o "$GITHUB_WORKSPACE/fetcher" ./cmd/fetcher/
+
+      - name: Open scaffold PR
+        env:
+          # The automatic token opens the PR in this repo; it has write access
+          # because the job declares contents + pull-requests write permissions.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_TOKEN: ${{ secrets.AI_TOKEN }}
+          AI_MODEL: ${{ inputs.ai-model }}
+          AI_ENDPOINT: ${{ inputs.ai-endpoint }}
+          # Pass all inputs through env (never interpolate ${{ }} into the
+          # script body) so untrusted input values can't inject shell commands.
+          DASHBOARD_REPO: ${{ github.repository }}
+          SOURCE_REPO: ${{ inputs.source-repo }}
+          TESTGRID: ${{ inputs.testgrid }}
+          BUCKET: ${{ inputs.bucket }}
+          GCSWEB_BASE: ${{ inputs.gcsweb-base }}
+          PROJECT_ID: ${{ inputs.id }}
+          PROJECT_NAME: ${{ inputs.name }}
+          INCLUDE_PRESUBMITS: ${{ inputs.include-presubmits }}
+          NO_PROMPT: ${{ inputs.no-prompt }}
+        run: |
+          set -euo pipefail
+          args=(onboard --open-pr
+            -dashboard-repo "$DASHBOARD_REPO"
+            -source-repo "$SOURCE_REPO")
+          [ -n "$TESTGRID" ] && args+=(-testgrid "$TESTGRID")
+          [ -n "$BUCKET" ] && args+=(-bucket "$BUCKET")
+          [ -n "$GCSWEB_BASE" ] && args+=(-gcsweb-base "$GCSWEB_BASE")
+          [ -n "$PROJECT_ID" ] && args+=(-id "$PROJECT_ID")
+          [ -n "$PROJECT_NAME" ] && args+=(-name "$PROJECT_NAME")
+          [ "$INCLUDE_PRESUBMITS" = "true" ] && args+=(-include-presubmits)
+          [ "$NO_PROMPT" = "true" ] && args+=(-no-prompt)
+          "$GITHUB_WORKSPACE/fetcher" "${args[@]}"
