@@ -18,9 +18,8 @@ import { Panel } from "./Panel";
 import type { PatternAnalysis, TestFlakiness } from "../types/dashboard";
 
 const MAX_ITEMS = 10;
-// Recurring patterns are the highest-signal items (confirmed systemic bugs), so
-// they lead the box, but cap them so a noisy fleet can't crowd out the
-// test-level regressions below.
+// Recurring systemic patterns are highest-signal, so they lead the box. Cap
+// them so a noisy fleet cannot crowd out test-level regressions below.
 const MAX_PATTERNS = 5;
 
 // Persist the expanded/collapsed choice across visits. Defaults to expanded.
@@ -52,8 +51,8 @@ export function NeedsAttention() {
     });
   }
 
-  // Backend already filters to systemic verdicts and ranks them (confidence,
-  // then builds), so just drop any missing a job link and cap for display.
+  // Backend already filters to systemic verdicts and ranks by confidence, then
+  // builds. Drop entries missing a job link and cap for display.
   const recurring = useMemo<PatternAnalysis[]>(
     () => (data?.recurring_patterns ?? []).filter((p) => p.job_id).slice(0, MAX_PATTERNS),
     [data],

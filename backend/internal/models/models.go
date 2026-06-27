@@ -1,4 +1,4 @@
-// Package models defines the shared data types for the CAPZ Prow Dashboard.
+// Package models defines shared data types for the Prow AI dashboard.
 package models
 
 import (
@@ -12,7 +12,7 @@ const (
 	JobTypePresubmit = "presubmit"
 )
 
-// ProwJob represents a prow job definition parsed from test-infra YAML configs.
+// ProwJob represents a Prow job definition.
 type ProwJob struct {
 	Name            string `json:"name" yaml:"name"`
 	TabName         string `json:"tab_name"`
@@ -22,23 +22,20 @@ type ProwJob struct {
 	MinimumInterval string `json:"minimum_interval" yaml:"minimum_interval"`
 	Timeout         string `json:"timeout"`
 	ConfigFile      string `json:"config_file"`
-	// JobType is "periodic" or "presubmit". Always stamped by the parser.
+	// JobType is "periodic" or "presubmit".
 	JobType string `json:"job_type"`
 	// Repo is the "org/repo" the job runs against. Populated for presubmits
 	// from the YAML map key; empty for periodics.
 	Repo string `json:"repo"`
-	// JobID is a stable identifier that uniquely distinguishes this job from
-	// a same-named job in a different repo or job type. Computed via
-	// JobIDFor(JobType, Repo, Name) at parse time and propagated to every
-	// downstream wire type. The frontend uses this for routing and file
-	// fetches; cache loaders use it as a map key.
+	// JobID uniquely distinguishes same-named jobs across repos or job types.
+	// The frontend uses it for routing and file fetches; cache loaders use it as
+	// a map key.
 	JobID string `json:"job_id"`
 }
 
 // JobIDFor builds a stable per-job identifier. Periodics use the bare name
-// (Prow guarantees uniqueness within the periodics: list); presubmits use
-// "<repo>/<name>" so same-named jobs in different repos do not collide in
-// caches, search, flakiness, notifications, or AI cache entries.
+// the bare name because Prow periodics are unique. Presubmits use
+// "<repo>/<name>" so same-named jobs do not collide downstream.
 func JobIDFor(jobType, repo, name string) string {
 	if jobType == JobTypePresubmit {
 		return repo + "/" + name
@@ -61,18 +58,14 @@ type BuildInfo struct {
 	BuildLogURL     string    `json:"build_log_url"`
 	// JUnitURLs lists every junit*.xml under the build's artifacts/ dir,
 	// discovered at fetch time. Empty when discovery failed or the build
-	// has no junit output. Order is stable (sorted by full URL) so cache
-	// reuse stays deterministic.
+	// has no junit output. Stable ordering keeps cache reuse deterministic.
 	JUnitURLs []string `json:"junit_urls,omitempty"`
 	// PullNumber is the PR number that triggered this build for presubmits.
 	// Empty for periodics. Required for reconstructing presubmit GCS paths
 	// from cached BuildResults without reparsing the job config.
 	PullNumber string `json:"pull_number,omitempty"`
-	// WebURL is the human-clickable gcsweb directory for this build (e.g.
-	// https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<build>/ for periodics,
-	// or .../pr-logs/pull/<org_repo>/<pr>/<job>/<build>/ for presubmits).
-	// Populated by gcs.FetchBuildInfo so the frontend can link to artifact
-	// directories without recomposing GCS paths from job identity.
+	// WebURL is the human-clickable artifact directory for this build.
+	// The frontend uses it instead of recomposing storage paths from job identity.
 	WebURL string `json:"web_url,omitempty"`
 }
 
@@ -95,9 +88,7 @@ type AIAnalysis struct {
 	Severity      string   `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
 	SuggestedFix  string   `json:"suggested_fix"`
 	RelevantFiles []string `json:"relevant_files,omitempty"`
-	// Mode records the analysis pipeline that produced this result. There is
-	// a single pipeline ("agentic"); the field is retained so entries from a
-	// prior pipeline are detected as stale and re-analyzed.
+	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 
 	// ToolCalls is the number of agent tool invocations made during this
@@ -121,36 +112,23 @@ type AIAnalysis struct {
 	// gate. Only meaningful when the project has critique enabled.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
-	// CritiqueVersion records the critique-contract version under which
-	// this analysis was validated. The build-level shouldReanalyze check
-	// requires version >= the engine's current version when critique is
-	// enabled, so strengthening the gate invalidates older entries.
+	// CritiqueVersion records the critique contract this analysis passed.
+	// Cache gates require the current version when critique is enabled.
 	CritiqueVersion int `json:"critique_version,omitempty"`
 
-	// SkillSetHash is the fingerprint of the consumer's loaded recipe
-	// set at the time this analysis was validated. Edits to triggers /
-	// required-evidence / procedure flip the hash and force re-analysis.
+	// SkillSetHash fingerprints the loaded recipe set for this analysis.
+	// Edits to triggers, required evidence, or procedure force re-analysis.
 	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
-	// PromptHash is the fingerprint of the composed system prompt (engine
-	// base + consumer addendum + response footer) under which this analysis
-	// was produced. The cache-read gates re-analyze when it no longer matches
-	// the current prompt, so editing prompts/system.md refreshes affected
-	// failures on the next run without a manual cache clear.
+	// PromptHash fingerprints the composed system prompt for this analysis.
+	// Prompt edits refresh affected failures on the next run.
 	PromptHash string `json:"prompt_hash,omitempty"`
 
-	// FileLinks maps a cited source-file path (a relevant_files entry or a
-	// path mentioned in the prose) to a GitHub URL that has been verified to
-	// exist (HTTP 200). It is the authoritative allowlist for linking file
-	// references in the UI: a path that is not a key here is rendered without a
-	// link, so a file that lives in a different repo than the project (e.g. an
-	// upstream cluster-api test file cited by a CAPZ job) is never turned into a
-	// broken link. Intentionally not omitempty: a present-but-empty map means
-	// "verified, nothing linkable" (UI suppresses source links), while an absent
-	// field means pre-feature cached data (UI shows only artifact/log links
-	// until the analysis is regenerated). Only source links are tracked here;
-	// GCS artifact and build/machine log links are deterministic and resolved
+	// FileLinks maps cited source-file paths to verified GitHub URLs.
+	// It is the UI allowlist for source links. A present-but-empty map means
+	// verification ran and found nothing linkable; an absent field means the
+	// analysis has not run source-link verification. Artifact links are resolved
 	// client-side.
 	FileLinks map[string]string `json:"file_links"`
 }
@@ -164,16 +142,14 @@ type TestCase struct {
 	FailureBody     string  `json:"failure_body,omitempty"`
 	FailureLocation string  `json:"failure_location,omitempty"`
 	FailureLocURL   string  `json:"failure_location_url,omitempty"`
-	// JUnitFile is the basename (within artifacts/) of the file this case
-	// came from, e.g. "junit.e2e_suite.1.xml" or "junit_runner.xml". Lets
-	// the UI disambiguate same-named cases that show up in different
-	// shards or suites within one build.
+	// JUnitFile is the basename within artifacts/ that this case came from.
+	// The UI uses it to disambiguate same-named cases across shards or suites.
 	JUnitFile  string      `json:"junit_file,omitempty"`
 	AISummary  *AISummary  `json:"ai_summary,omitempty"`
 	AIAnalysis *AIAnalysis `json:"ai_analysis,omitempty"`
 }
 
-// BuildResult is a complete result for a single build: metadata + test cases.
+// BuildResult is a complete result for a single build.
 type BuildResult struct {
 	BuildInfo
 	TestCases    []TestCase `json:"test_cases"`
@@ -219,33 +195,22 @@ type JobDetail struct {
 	JobType string        `json:"job_type"`
 	Repo    string        `json:"repo"`
 	Runs    []BuildResult `json:"runs"`
-	// PatternAnalyses holds cross-build correlations for this job: whether the
-	// recent failed builds share one root cause (a systemic bug surfacing as
-	// flakes) or are genuinely varied. Empty unless ai.pattern_analysis is
-	// enabled and the job failed in enough builds.
+	// PatternAnalyses holds cross-build correlations for this job.
+	// Empty unless the job failed in enough builds for pattern analysis.
 	PatternAnalyses []PatternAnalysis `json:"pattern_analyses,omitempty"`
 }
 
-// PatternAnalysis is a second-pass, job-level correlation across the per-build
-// failure analyses of one job's recent failed builds. It answers the question
-// the per-failure cards can't: are these repeated failures (often each
-// individually dismissed as a "transient flake") actually one recurring,
-// fixable bug? The specific failing test/spec may differ between builds; the
-// shared cause is what matters. Produced only when ai.pattern_analysis is
-// enabled and the job failed in enough builds.
+// PatternAnalysis is a job-level correlation across recent failed builds.
+// It captures whether varied-looking failures share one recurring, fixable
+// cause. The specific failing test may differ between builds.
 type PatternAnalysis struct {
-	// Subject is what the correlated failures belong to (the job's display
-	// name for a job-level pattern).
+	// Subject is what the correlated failures belong to.
 	Subject string `json:"subject"`
-	// JobID identifies the job these failures belong to. Populated when the
-	// verdict is attached so home-page aggregations can link back to the job
-	// page. Empty on the per-job copy is fine (the page already knows its job).
+	// JobID lets home-page aggregations link back to the job page.
 	JobID          string `json:"job_id,omitempty"`
 	GeneratedAt    string `json:"generated_at"`
 	BuildsAnalyzed int    `json:"builds_analyzed"`
-	// Systemic is true when most failures share one underlying cause (so the
-	// "flaky" job is really a recurring bug); false when the failures are
-	// genuinely varied or independently transient.
+	// Systemic is true when most failures share one underlying cause.
 	Systemic bool `json:"systemic"`
 	// Confidence is the model's confidence in the systemic verdict:
 	// "high", "medium", or "low".
@@ -269,7 +234,7 @@ const (
 	ClassificationOneOff     FailureClassification = "one-off"
 )
 
-// TestFlakiness represents flakiness statistics for a single test across all runs of a job.
+// TestFlakiness represents flakiness statistics for one test across a job's runs.
 type TestFlakiness struct {
 	TestName            string                `json:"test_name"`
 	JobName             string                `json:"job_name"`
@@ -311,7 +276,7 @@ type DurationPoint struct {
 	Passed    bool    `json:"passed"`
 }
 
-// SearchEntry represents a searchable item (either a job or a test case).
+// SearchEntry represents a searchable job or test case.
 type SearchEntry struct {
 	Kind     string  `json:"kind"`      // "job" or "test"
 	TestName string  `json:"test_name"` // empty for job entries
@@ -338,10 +303,7 @@ type FlakinessReport struct {
 	MostFlaky          []TestFlakiness `json:"most_flaky"`
 	PersistentFailures []TestFlakiness `json:"persistent_failures"`
 	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
-	// RecurringPatterns holds the systemic, job-level pattern verdicts across
-	// all jobs (a recurring bug surfacing as repeated "flakes"). Populated after
-	// AI analysis so the home page can surface them without loading every job
-	// file. Only systemic verdicts are included; empty when AI is off or no job
-	// has a confirmed recurring pattern.
+	// RecurringPatterns holds systemic job-level verdicts across all jobs.
+	// The home page uses these without loading every job file.
 	RecurringPatterns []PatternAnalysis `json:"recurring_patterns,omitempty"`
 }

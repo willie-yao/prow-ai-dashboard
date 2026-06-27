@@ -20,21 +20,18 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-// k8sCILogsBucket is the default artifact bucket for testgrid (kubernetes
-// ecosystem) discovery.
+// k8sCILogsBucket is the default artifact bucket for Kubernetes TestGrid jobs.
 const k8sCILogsBucket = "kubernetes-ci-logs"
 
-// Run produces a scaffold for a new dashboard: it verifies the discovery config
-// actually finds jobs, infers categories from those job names, renders the
-// config + workflows + a prompt stub + a manual checklist, validates the
-// generated project.yaml, and writes everything under OutDir. It performs no
-// network writes and touches no secrets.
+// Run produces a scaffold for a new dashboard. It verifies discovery, infers
+// categories, renders files, validates project.yaml, and emits the scaffold.
+// It performs no secret writes.
 func Run(ctx context.Context, opts Options) error {
 	if err := validateOptions(&opts); err != nil {
 		return err
 	}
 
-	// 1. Sweep: build a minimal config and confirm discovery finds jobs.
+	// Sweep with a minimal config to confirm discovery finds jobs.
 	sweepCfg := sweepConfig(opts)
 	jobs, err := discover(ctx, sweepCfg, opts.IncludePresubmits)
 	if err != nil {
@@ -50,7 +47,7 @@ func Run(ctx context.Context, opts Options) error {
 	sort.Strings(jobNames)
 	fmt.Printf("✓ discovery found %d jobs\n", len(jobNames))
 
-	// 2. Deterministic generation.
+	// Generate deterministic files from the discovered jobs.
 	cats := InferCategories(jobNames)
 	data := buildScaffoldData(opts, cats)
 
@@ -59,14 +56,12 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("rendering project.yaml: %w", err)
 	}
 
-	// 3. Validate the generated config by round-tripping it through the real
-	//    loader (strict decode + Validate), so we never emit something the
-	//    engine can't load.
+	// Validate generated YAML through the real loader before writing it.
 	if err := validateGeneratedYAML(projectYAML); err != nil {
 		return fmt.Errorf("generated project.yaml failed validation: %w", err)
 	}
 
-	// 4. Render the rest.
+	// Render the remaining scaffold files.
 	files := map[string]string{"project.yaml": projectYAML}
 	if files[".github/workflows/deploy.yml"], err = render(deployYAMLTmpl, data); err != nil {
 		return err
@@ -85,7 +80,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	// 5. Emit: open a PR against the dashboard repo, or write a local scaffold.
+	// Open a PR against the dashboard repo, or write a local scaffold.
 	if opts.OpenPR {
 		title := fmt.Sprintf("Add %s prow-ai-dashboard scaffold", data.Name)
 		httpClient := &http.Client{Timeout: 30 * time.Second}
@@ -127,10 +122,8 @@ func scaffoldPRBody(name string) string {
 		"See `CHECKLIST.md` in this PR for the full steps.", name)
 }
 
-// buildSystemPrompt drafts prompts/system.md from the source repo's docs when
-// an AI token is available, falling back to the stub when AI is disabled, no
-// token is set, or generation fails. A failed (or slow) draft never aborts the
-// scaffold: the stub is always a valid result.
+// buildSystemPrompt drafts prompts/system.md from source docs when AI is
+// available. It falls back to the stub on disabled, missing, slow, or failed AI.
 func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (string, error) {
 	if opts.NoPrompt || opts.AIToken == "" {
 		if opts.AIToken == "" && !opts.NoPrompt {
@@ -148,7 +141,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	fmt.Printf("✦ drafting prompts/system.md from %s/%s docs…\n", srcOwner, srcName)
-	// Empty GitHub token = anonymous public read.
+	// Empty GitHub token means anonymous public reads.
 	docs, err := fetchSourceDocs(ctx, httpClient, srcOwner, srcName, opts.GitHubToken)
 	if err != nil {
 		fmt.Printf("  ⚠ could not read source-repo docs (%v); writing the stub instead\n", err)
@@ -169,7 +162,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 	return composeGeneratedPrompt(data.Name, body), nil
 }
 
-// promptDraftTimeout bounds doc fetch + one generation call.
+// promptDraftTimeout bounds doc fetch and one generation call.
 const promptDraftTimeout = 3 * time.Minute
 
 func validateOptions(opts *Options) error {
@@ -188,9 +181,8 @@ func validateOptions(opts *Options) error {
 	if opts.OpenPR && opts.GitHubToken == "" {
 		return fmt.Errorf("--open-pr needs a GitHub token with write access to the dashboard repo (set GITHUB_TOKEN)")
 	}
-	// When AI drafting will run, require the endpoint and model explicitly: the
-	// engine is provider-agnostic, so we never assume a default chat-completions
-	// endpoint. Without a token (or with --no-prompt) we just write the stub.
+	// AI drafting needs an explicit endpoint and model because the engine has no
+	// default provider. Without AI, the stub is written.
 	if opts.AIToken != "" && !opts.NoPrompt {
 		if opts.AIEndpoint == "" || opts.AIModel == "" {
 			return fmt.Errorf("AI drafting needs AI_ENDPOINT and AI_MODEL set (your provider's chat-completions URL and model id); set both, or unset AI_TOKEN / pass --no-prompt to write the prompts/system.md stub instead")
@@ -247,7 +239,7 @@ func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) 
 	return periodic, nil
 }
 
-// scaffoldData assembles the template input from options + inferred categories.
+// buildScaffoldData assembles template input from options and categories.
 func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 	owner, name := splitRepo(opts.DashboardRepo)
 	srcOwner, srcName := splitRepo(opts.SourceRepo)
@@ -289,8 +281,7 @@ func validateGeneratedYAML(yamlText string) error {
 }
 
 func writeFiles(outDir string, files map[string]string) error {
-	// Preflight: never silently clobber an existing scaffold/repo. If any target
-	// already exists, abort and let the user pick a clean --out (or remove it).
+	// Never silently clobber an existing scaffold or repo.
 	for rel := range files {
 		full := filepath.Join(outDir, rel)
 		if _, err := os.Stat(full); err == nil {
@@ -310,8 +301,6 @@ func writeFiles(outDir string, files map[string]string) error {
 	}
 	return nil
 }
-
-// --- small helpers ---
 
 func provider(opts Options) string {
 	if opts.GCSWebBase != "" {
@@ -353,8 +342,7 @@ func splitRepo(repo string) (owner, name string) {
 	return owner, name
 }
 
-// parseRepo strictly parses "owner/name": exactly one slash, both parts
-// non-empty. Rejects "owner/", "/name", "a/b/c", and the empty string.
+// parseRepo strictly parses owner/name with one slash and non-empty parts.
 func parseRepo(repo string) (owner, name string, err error) {
 	parts := strings.Split(repo, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {

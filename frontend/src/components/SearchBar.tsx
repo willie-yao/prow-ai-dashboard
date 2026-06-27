@@ -44,7 +44,7 @@ export function SearchBar() {
     return fuse.search(query, { limit: 20 });
   }, [fuse, query]);
 
-  // Group results by JobID so a same-named presubmit + periodic don't collide.
+  // Group results by JobID so same-named presubmit and periodic jobs do not collide.
   const grouped = useMemo(() => {
     const groups = new Map<string, { jobName: string; items: { item: SearchEntry; score?: number }[] }>();
     for (const r of results) {
@@ -56,7 +56,7 @@ export function SearchBar() {
     return groups;
   }, [results]);
 
-  // Cmd+K / Ctrl+K shortcut
+  // Global Cmd+K and Ctrl+K shortcut.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -69,7 +69,7 @@ export function SearchBar() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Close on click outside
+  // Close the dropdown on outside clicks.
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -81,7 +81,7 @@ export function SearchBar() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // Close on Escape
+  // Close the dropdown on Escape.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {

@@ -8,19 +8,15 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// TestAnalysisPrompt_CapsHugeFailureMessage verifies that a very large junit
-// failure message (e.g. an AKS KubeRay dump) is clamped before it is embedded
-// in the prompt, so it can't overflow the model's context window on the first
-// request. Regression test for the iter-1 400 "prompt token count exceeds the
-// limit" failures.
+// TestAnalysisPrompt_CapsHugeFailureMessage verifies large JUnit failure
+// messages are clamped before they enter the prompt.
 func TestAnalysisPrompt_CapsHugeFailureMessage(t *testing.T) {
 	huge := "HEAD-MARKER" + strings.Repeat("x", 2*1024*1024) + "TAIL-MARKER"
 	tc := &models.TestCase{Name: "[It] KubeRay RayJob", FailureMessage: huge}
 
 	got := (&Module{}).AnalysisPrompt(context.Background(), nil, &models.BuildResult{}, tc, 1)
 
-	// The message cap is 16KB; the surrounding template adds a little more. The
-	// input is 2MB+, so a clamped prompt is comfortably under 20KB.
+	// The 16KB message cap plus template overhead stays under 20KB.
 	if len(got) > 20*1024 {
 		t.Fatalf("prompt not clamped: len=%d", len(got))
 	}
@@ -38,8 +34,8 @@ func TestAnalysisPrompt_CapsHugeFailureMessage(t *testing.T) {
 	}
 }
 
-// TestAnalysisPrompt_KeepsSmallFailureMessage confirms a normal-sized message
-// is embedded verbatim (no elision).
+// TestAnalysisPrompt_KeepsSmallFailureMessage confirms small messages are
+// embedded verbatim.
 func TestAnalysisPrompt_KeepsSmallFailureMessage(t *testing.T) {
 	msg := "Expected RayJob to complete but it timed out after 10m"
 	tc := &models.TestCase{Name: "[It] KubeRay RayJob", FailureMessage: msg}

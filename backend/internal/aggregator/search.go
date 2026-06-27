@@ -27,10 +27,9 @@ func isSetupTeardown(name string) bool {
 	return false
 }
 
-// BuildSearchIndex creates a searchable index of all unique test cases across all jobs.
+// BuildSearchIndex creates a searchable index of unique tests across jobs.
 // jobResults is keyed by JobID so same-named jobs in different repos do not collide.
 func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, now time.Time) models.SearchIndex {
-	// Build a lookup from JobID to ProwJob metadata.
 	jobMeta := make(map[string]models.ProwJob, len(jobs))
 	for _, j := range jobs {
 		jobMeta[j.JobID] = j
@@ -75,7 +74,7 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 
 	var entries []models.SearchEntry
 
-	// Add job-level entries (searchable by job name and tab name).
+	// Add job entries searchable by job name and tab name.
 	for jobID := range jobResults {
 		meta := jobMeta[jobID]
 		entries = append(entries, models.SearchEntry{
@@ -87,7 +86,7 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 			TabName:  meta.TabName,
 			Branch:   meta.Branch,
 			Category: meta.Category,
-			Status:   meta.TabName, // will be replaced below if we compute overall status
+			Status:   meta.TabName, // placeholder status for job entries
 		})
 	}
 

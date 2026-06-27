@@ -6,16 +6,13 @@ import (
 	"testing"
 )
 
-// TestLoadExampleGolden verifies that configs/example/project.yaml — the
-// docs-only sample shipped with the engine — parses and validates. CAPZ-
-// specific config now lives in the consumer repo, so the engine no longer
-// pins CAPZ values here.
+// TestLoadExampleGolden verifies configs/example/project.yaml parses and validates.
 func TestLoadExampleGolden(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	// backend/internal/project/golden_test.go -> ../../../configs/example/project.yaml
+	// backend/internal/project/golden_test.go maps to ../../../configs/example/project.yaml.
 	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "configs", "example")
 	cfg, prompt, err := LoadDir(dir)
 	if err != nil {

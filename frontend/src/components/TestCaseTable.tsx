@@ -56,7 +56,7 @@ function statusIcon(status: string) {
 // Hide Ginkgo setup/teardown entries unless they failed.
 const setupPatterns = /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/i;
 
-// Highlight Go file:line references in stack traces
+// Highlight Go file:line references in stack traces.
 const goFileLineRe = /([a-zA-Z0-9_/.\-@]+\.go:\d+)/g;
 
 function highlightStackTrace(body: string): (string | ReactElement)[] {

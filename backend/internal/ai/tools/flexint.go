@@ -6,11 +6,11 @@ import (
 	"strconv"
 )
 
-// FlexInt is an int that unmarshals from either a JSON number or a JSON string
-// containing a number (e.g. 5 or "5", and "5.0"/5.0 truncated to 5). Weaker
-// tool-using models frequently encode numeric arguments as strings; accepting
-// both keeps those tool calls from failing on a type technicality and wasting
-// the model's investigation budget. null and empty decode to 0.
+// FlexInt is an int that unmarshals from either a JSON number or a numeric
+// string. Float-shaped values are truncated toward zero. Weaker tool-using
+// models frequently encode numeric arguments as strings; accepting both keeps
+// those tool calls from wasting the model's investigation budget. null and
+// empty decode to 0.
 type FlexInt int
 
 // UnmarshalJSON implements json.Unmarshaler for the lenient int.

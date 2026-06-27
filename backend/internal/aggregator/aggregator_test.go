@@ -8,7 +8,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// helper to build a BuildResult with sensible defaults.
+// makeBuild creates a BuildResult with sensible defaults.
 func makeBuild(id string, started time.Time, passed bool, tests []models.TestCase) models.BuildResult {
 	dur := 300.0
 	total := len(tests)
@@ -145,7 +145,7 @@ func TestComputeJobSummary_FewerThan3Runs_OneFail(t *testing.T) {
 
 	s := ComputeJobSummary(job, runs)
 
-	// With only 1 run that failed, the recent pass rate is 0 → FAILING.
+	// With one failed run, the recent pass rate is 0 and status is FAILING.
 	if s.OverallStatus != "FAILING" {
 		t.Errorf("expected FAILING with single failed run, got %s", s.OverallStatus)
 	}
@@ -163,11 +163,11 @@ func TestComputeJobSummary_PassRates(t *testing.T) {
 
 	s := ComputeJobSummary(job, runs)
 
-	// Last 10 runs: 8 pass / 10 = 0.8 (the two failing tail runs are ignored).
+	// Last 10 runs are 8 pass / 10 = 0.8; failing tail runs are ignored.
 	if s.PassRateRecent < 0.79 || s.PassRateRecent > 0.81 {
 		t.Errorf("expected PassRateRecent ~0.8 over the last 10 runs, got %.4f", s.PassRateRecent)
 	}
-	// 0.8 is between the thresholds → FLAKY.
+	// 0.8 is between the thresholds, so status is FLAKY.
 	if s.OverallStatus != "FLAKY" {
 		t.Errorf("expected FLAKY at 0.8 pass rate, got %s", s.OverallStatus)
 	}
@@ -330,7 +330,7 @@ func TestClassifyFailure_LatestPasses(t *testing.T) {
 
 	info := ClassifyFailure("GoodTest", runs, 3)
 
-	// consecutiveFailures == 0, only 1 historical failure → one-off
+	// consecutiveFailures == 0 with one historical failure is one-off.
 	if info.ConsecutiveFailures != 0 {
 		t.Errorf("expected 0 consecutive failures, got %d", info.ConsecutiveFailures)
 	}

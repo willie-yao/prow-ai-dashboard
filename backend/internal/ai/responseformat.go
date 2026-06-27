@@ -5,10 +5,9 @@ package ai
 // schema; if the model returns anything other than this shape, the fetcher
 // falls back to a Medium-severity placeholder.
 //
-// The wording stays tool-neutral here because both agentic and non-agentic
-// (prebuilt-evidence) consumers receive this footer. Agentic-specific
-// investigation strategy (drill-down, anti-punt enforcement) lives in
-// agToolDocs and is appended only when tools are wired.
+// The wording stays tool-neutral here. Agentic-specific investigation strategy,
+// including drill-down and anti-punt enforcement, lives in agToolDocs and is
+// appended only when tools are wired.
 const ResponseFormatFooter = `## Response Format
 
 Always respond with a single JSON object matching this schema:

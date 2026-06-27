@@ -2,14 +2,13 @@ import Chip, { type ChipProps } from "@mui/material/Chip";
 import { statusToMuiColor, soft } from "../theme";
 
 interface StatusChipProps extends Omit<ChipProps, "color" | "label"> {
-  /** Dashboard status, e.g. "PASSING", "FAILING", "FLAKY", "passed". */
+  /** Dashboard status such as "PASSING", "FAILING", "FLAKY", or "passed". */
   status: string;
-  /** Override the displayed text (defaults to the status itself). */
+  /** Override the displayed text. Defaults to the status itself. */
   label?: string;
 }
 
-// Pill showing a test/job status with the themed color. Replaces the old
-// StatusBadge + statusColor/statusBg helpers.
+// Pill showing a test or job status with themed colors.
 export function StatusChip({ status, label, sx, ...rest }: StatusChipProps) {
   const color = statusToMuiColor(status);
   return (

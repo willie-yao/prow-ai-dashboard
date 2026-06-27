@@ -26,12 +26,12 @@ type fakeTestInfra struct {
 	files map[string]string
 
 	// Knobs for testing failure paths:
-	forceTruncated     bool   // tree response carries truncated=true
-	forcedTreeStatus   int    // nonzero overrides tree response status
-	forcedTreeBody     string // body returned with forcedTreeStatus
-	forcedCommitStatus int    // nonzero overrides /commits/master status
-	failRawPath        string // when set, returns 404 for this exact path
-	extraTreeEntries   []string // extra paths emitted in the tree (e.g. dir entries) for coverage
+	forceTruncated     bool     // tree response carries truncated=true
+	forcedTreeStatus   int      // nonzero overrides tree response status
+	forcedTreeBody     string   // body returned with forcedTreeStatus
+	forcedCommitStatus int      // nonzero overrides /commits/master status
+	failRawPath        string   // when set, returns 404 for this exact path
+	extraTreeEntries   []string // extra paths emitted in the tree for coverage
 
 	rawCalls atomic.Int64
 }
@@ -140,8 +140,7 @@ func periodicJob(name, dashboard string) string {
 
 func TestFetchJobConfigs_DiscoversAcrossDirectoriesAndNames(t *testing.T) {
 	const dashboard = "sig-cluster-lifecycle-cluster-api-provider-azure"
-	// Mirrors the real-world CAPZ case: matching files live in two
-	// different directories AND have different filename prefixes.
+	// Matching files may live in different directories with different prefixes.
 	tf := &fakeTestInfra{files: map[string]string{
 		"config/jobs/kubernetes-sigs/cluster-api-provider-azure/cluster-api-provider-azure-periodics-main.yaml": periodicJob("periodic-cluster-api-provider-azure-e2e", dashboard),
 		"config/jobs/kubernetes/sig-scalability/sig-scalability-periodic-azure.yaml":                            periodicJob("ci-kubernetes-e2e-azure-scalability", dashboard),

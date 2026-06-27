@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Default human-facing URL roots for the gcs provider (kubernetes.io Prow).
+// Default human-facing URL roots for the gcs provider.
 const (
 	defaultGCSObjectBase = "https://storage.googleapis.com"
 	defaultGCSWebBase    = "https://gcsweb.k8s.io/gcs"
@@ -21,8 +21,7 @@ const (
 // circuit-breaker against a confused or malicious range request.
 const perCallCap = 64 * 1024 * 1024 // 64 MB
 
-// gcsBackend reads from native Google Cloud Storage: object GETs (with HTTP
-// Range) against storage.googleapis.com and listings via the GCS JSON API.
+// gcsBackend reads native Google Cloud Storage objects and listings.
 type gcsBackend struct {
 	bucket    string
 	client    *http.Client
@@ -109,7 +108,7 @@ func (b *gcsBackend) ReadRange(ctx context.Context, path string, offset, length 
 		}
 		return sliceFrom(full, offset, length), int64(len(full)), nil
 	}
-	// 206 Partial Content: the body is exactly the requested window.
+	// Partial Content means the body is exactly the requested window.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, length))
 	if err != nil {
 		return nil, 0, fmt.Errorf("read %s: %w", path, err)

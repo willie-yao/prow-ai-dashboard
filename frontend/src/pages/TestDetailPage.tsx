@@ -47,7 +47,7 @@ function normalizeMessage(msg: string): string {
     .trim();
 }
 
-/** Highlight Go file:line references in stack traces */
+/** Highlight Go file:line references in stack traces. */
 const goFileLineRe = /([a-zA-Z0-9_/.\-@]+\.go:\d+)/g;
 
 function highlightStackTrace(body: string): (string | React.ReactElement)[] {
@@ -75,7 +75,7 @@ function highlightStackTrace(body: string): (string | React.ReactElement)[] {
 
 interface TestOccurrence {
   run: BuildResult;
-  testCase: TestCase | null; // null means absent from this run
+  testCase: TestCase | null; // Absent from this run.
 }
 
 interface FailureGroup {
@@ -135,7 +135,7 @@ export function TestDetailPage() {
     searchParams.get("run")
   );
 
-  // Build per-run test occurrences (oldest first for timeline)
+  // Build per-run test occurrences oldest first for the timeline.
   const occurrences: TestOccurrence[] = useMemo(() => {
     if (!data) return [];
     const sorted = [...(data.runs ?? [])].sort(
@@ -148,7 +148,7 @@ export function TestDetailPage() {
     });
   }, [data, testName]);
 
-  // Most recent occurrence that actually has this test
+  // Most recent run containing this test.
   const latestOccurrence = useMemo(() => {
     for (let i = occurrences.length - 1; i >= 0; i--) {
       if (occurrences[i].testCase) return occurrences[i];
@@ -156,14 +156,14 @@ export function TestDetailPage() {
     return null;
   }, [occurrences]);
 
-  // Failure classification
+  // Classify based on the latest streak and past pass/fail mix.
   const classification = useMemo(() => {
     if (!latestOccurrence) return null;
-    // Count consecutive failures from the latest run backwards
+    // Count consecutive failures from the latest run backwards.
     let consecutive = 0;
     for (let i = occurrences.length - 1; i >= 0; i--) {
       const tc = occurrences[i].testCase;
-      if (!tc) continue; // skip runs where test wasn't present
+      if (!tc) continue; // Skip runs where the test was absent.
       if (tc.status === "failed") consecutive++;
       else break;
     }
@@ -182,7 +182,7 @@ export function TestDetailPage() {
     return "One-off";
   }, [occurrences, latestOccurrence]);
 
-  // Failure pattern grouping
+  // Group failure messages after normalizing volatile values.
   const failureGroups: FailureGroup[] = useMemo(() => {
     const failures = occurrences.filter(
       (o) => o.testCase?.status === "failed" && o.testCase?.failure_message
@@ -214,7 +214,7 @@ export function TestDetailPage() {
     (o) => o.testCase?.status === "failed"
   ).length;
 
-  // Selected run
+  // Resolve the selected run from the URL or latest occurrence.
   const effectiveSelectedId =
     selectedBuildId ?? latestOccurrence?.run.build_id ?? null;
   const selectedOccurrence = useMemo(() => {
@@ -289,7 +289,6 @@ export function TestDetailPage() {
 
   return (
     <Stack spacing={{ xs: 3, sm: 4 }}>
-      {/* Breadcrumb */}
       <Breadcrumbs separator="›" sx={{ fontSize: "0.875rem" }}>
         <Link component={RouterLink} to="/" underline="hover" color="text.secondary">
           Dashboard
@@ -307,7 +306,6 @@ export function TestDetailPage() {
         </Typography>
       </Breadcrumbs>
 
-      {/* Test header */}
       <Box>
         <Typography
           variant="headline"
@@ -342,7 +340,7 @@ export function TestDetailPage() {
         </Stack>
       </Box>
 
-      {/* Pass/fail history bar */}
+      {/* History timeline colored by this test's status. */}
       <Box component="section">
         <Typography variant="headline" sx={sectionTitleSx}>
           History
@@ -370,7 +368,7 @@ export function TestDetailPage() {
         />
       </Box>
 
-      {/* Failure pattern grouping */}
+      {/* Grouped failure messages across runs. */}
       {failureGroups.length > 0 && (
         <Box component="section">
           <Typography variant="headline" sx={sectionTitleSx}>
@@ -407,7 +405,7 @@ export function TestDetailPage() {
         </Box>
       )}
 
-      {/* Selected failure detail */}
+      {/* Selected run details for this test. */}
       {selectedRun && selectedTc && (
         <Panel
           component="section"
@@ -479,7 +477,6 @@ export function TestDetailPage() {
               </Box>
             </Box>
 
-            {/* Failure message */}
             {selectedTc.failure_message && (
               <Box
                 component="pre"
@@ -495,7 +492,6 @@ export function TestDetailPage() {
               </Box>
             )}
 
-            {/* Full stack trace */}
             {selectedTc.failure_body && (
               <Accordion
                 disableGutters
@@ -526,7 +522,6 @@ export function TestDetailPage() {
               </Accordion>
             )}
 
-            {/* Source location */}
             {selectedTc.failure_location && (
               <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                 <Place sx={{ fontSize: 16, color: "text.secondary" }} />
@@ -551,7 +546,6 @@ export function TestDetailPage() {
               </Stack>
             )}
 
-            {/* Cluster artifacts */}
             {selectedTc.cluster_artifacts && (
               <Box
                 sx={{
@@ -675,7 +669,7 @@ export function TestDetailPage() {
               </Box>
             )}
 
-            {/* AI analysis panel */}
+            {/* Deep AI analysis. */}
             {selectedTc.ai_analysis && (
               <Box
                 sx={{
@@ -786,7 +780,7 @@ export function TestDetailPage() {
               </Box>
             )}
 
-            {/* AI summary (if no deep analysis) */}
+            {/* AI summary shown only when deep analysis is absent. */}
             {selectedTc.ai_summary && !selectedTc.ai_analysis && (
               <Stack
                 direction="row"
@@ -814,7 +808,7 @@ export function TestDetailPage() {
         </Panel>
       )}
 
-      {/* When a run is selected but the test wasn't present */}
+      {/* When a run is selected but the test was absent. */}
       {selectedRun && !selectedTc && (
         <Panel component="section" sx={{ borderRadius: "12px", p: 4, textAlign: "center" }}>
           <Typography color="text.secondary">

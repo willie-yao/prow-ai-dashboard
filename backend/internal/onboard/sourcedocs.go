@@ -17,9 +17,8 @@ const (
 	maxDocFiles     = 6
 	maxDocFileBytes = 20_000
 	maxDocTotal     = 80_000
-	// maxDocAttempts caps how many ranked candidates we actually try to fetch,
-	// so a repo with thousands of markdown files can't turn doc gathering into a
-	// long sequence of raw requests.
+	// maxDocAttempts caps ranked candidates so large repos do not cause long fetch
+	// sequences.
 	maxDocAttempts = 18
 )
 
@@ -29,11 +28,8 @@ type sourceDoc struct {
 	Text string
 }
 
-// fetchSourceDocs pulls the most relevant markdown docs from the source repo to
-// ground prompt generation: the README, top-level docs, and architecture /
-// contributing material. It is bounded by file count and bytes. Returns an
-// empty slice (not an error) when the repo has no usable docs, so generation
-// can proceed best-effort or fall back.
+// fetchSourceDocs pulls bounded markdown docs from the source repo to ground
+// prompt generation. An empty result is not an error.
 func fetchSourceDocs(ctx context.Context, client *http.Client, owner, repo, token string) ([]sourceDoc, error) {
 	branch, err := defaultBranch(ctx, client, owner, repo, token)
 	if err != nil {
@@ -57,8 +53,7 @@ func fetchSourceDocs(ctx context.Context, client *http.Client, owner, repo, toke
 		if err != nil || strings.TrimSpace(text) == "" {
 			continue
 		}
-		// Hard total budget: never exceed maxDocTotal. Trim the last file to the
-		// remaining budget rather than overshooting by a whole file.
+		// Trim the last file to stay within the total budget.
 		remaining := maxDocTotal - total
 		if len(text) > remaining {
 			text = text[:remaining] + "\n…(truncated)"
@@ -86,8 +81,7 @@ func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token 
 	return out.DefaultBranch, nil
 }
 
-// listMarkdownPaths returns every markdown file path in the repo via the git
-// trees API (one recursive call).
+// listMarkdownPaths returns markdown file paths from one recursive git tree.
 func listMarkdownPaths(ctx context.Context, client *http.Client, owner, repo, branch, token string) ([]string, error) {
 	var out struct {
 		Tree []struct {
@@ -108,8 +102,7 @@ func listMarkdownPaths(ctx context.Context, client *http.Client, owner, repo, br
 	return paths, nil
 }
 
-// excludedDocDir filters out vendored / generated / meta markdown that pollutes
-// the grounding set.
+// excludedDocDir filters out vendored, generated, and meta markdown.
 func excludedDocDir(p string) bool {
 	lp := strings.ToLower(p)
 	for _, prefix := range []string{"vendor/", "third_party/", "thirdparty/", ".github/", "node_modules/"} {

@@ -46,7 +46,7 @@ export function groupByBranch(
 }
 
 /**
- * Build a category-id -> label map, deduplicating by id. Returns just the
+ * Build a category-id to label map, deduplicating by id. Returns just the
  * implicit "Other" entry when the manifest declares no rules.
  */
 export function categoryLabelsFromRules(
@@ -77,9 +77,9 @@ export function categoryOrderFromRules(
 
 /**
  * Build an ordered list of category ids for display. When the manifest
- * declares `category_display_order`, those ids come first (in their declared
- * order), followed by any remaining ids in rule-declaration order, with
- * "other" implicitly last.
+ * declares `category_display_order`, those ids come first in declared order,
+ * followed by any remaining ids in rule-declaration order, with "other"
+ * implicitly last.
  */
 export function categoryDisplayOrder(
   rules: CategoryRule[] | undefined,
@@ -106,15 +106,15 @@ export function categoryDisplayOrder(
 
 /** Split text with inline numbered/bulleted steps into separate lines. */
 export function formatSteps(text: string): string {
-  // Insert newlines before numbered steps: "2." "3." etc (not "1." at start of text)
+  // Insert newlines before numbered steps after the first item.
   let result = text.replace(/\s+(\d+)\.\s/g, (match, num) => {
     return Number(num) > 1 ? `\n${num}. ` : match;
   });
-  // Insert newlines before parenthesized numbers: "(1)" "(2)" etc when preceded by text
+  // Insert newlines before parenthesized step numbers when preceded by prose.
   result = result.replace(/([.!?:])?\s+\((\d+)\)\s/g, (_match, punct, num) => {
     return `${punct || ""}\n(${num}) `;
   });
-  // Insert newlines before bullet markers
+  // Insert newlines before bullet markers.
   result = result.replace(/\s+[-•]\s/g, "\n• ");
   return result;
 }
@@ -127,7 +127,6 @@ export function shortTestName(name: string): string {
     .replace(/^Running the Cluster API E2E tests\s+/, "CAPI: ")
     .replace(/^Conformance Tests\s+/, "Conformance: ")
     .replace(/^Running\s+/, "");
-  // Capitalize first letter
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
@@ -141,22 +140,14 @@ export interface FileToUrlContext {
   buildLogUrl?: string;
   clusterArtifacts?: { machines?: { logs: Record<string, string> }[] };
   /**
-   * Web URL root for the current build (e.g.
-   * `https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<id>/`). When the
-   * cited path does not match a known artifact via other heuristics, we
-   * resolve it as `<webUrl>/<path>` (prepending `artifacts/` when the
-   * path does not already start with it). Lets agent-cited artifact
-   * paths render as clickable links without depending on the
-   * `cluster_artifacts.machines` index.
+   * Web URL root for the current build, such as
+   * `https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<id>/`. Unmatched artifact
+   * paths resolve under this root, with `artifacts/` prepended when needed.
    */
   webUrl?: string;
   /**
-   * Verified GitHub links for source-file citations (cleaned path -> URL),
-   * from the analysis's `file_links`. It is the sole, authoritative source of
-   * source-file links: a cited path links only if it is a key here, so a file
-   * verified absent (e.g. in a different repo) is never turned into a broken
-   * link. Undefined for pre-feature data, in which case the UI shows only
-   * artifact/log links until the analysis is regenerated.
+   * Verified GitHub links for source-file citations keyed by cleaned path.
+   * Source citations link only when present here, so absent files stay plain.
    */
   fileLinks?: Record<string, string>;
 }
@@ -169,7 +160,7 @@ export function fileToUrl(
   const clean = filePath.replace(/\s*\(.*\)$/, "").trim();
   const lower = clean.toLowerCase();
 
-  // Match artifact/log references to actual URLs from context
+  // Match artifact/log references to actual URLs from context.
   if (context) {
     if (/build-log/i.test(lower) && context.buildLogUrl) {
       return context.buildLogUrl;
@@ -201,22 +192,15 @@ export function fileToUrl(
     }
   }
 
-  // Source-file links come from the analysis's verified map (file_links),
-  // built and existence-checked at fetch time. It is the single, generic
-  // source of truth for repo-relative, vanity-import, and owner/repo/path
-  // citations, so the UI carries no project- or ecosystem-specific path
-  // heuristics and never fabricates a link to a file that does not exist.
+  // Source-file links use the backend-verified map. This keeps UI path handling
+  // generic and avoids links to files that do not exist.
   if (context?.fileLinks && context.fileLinks[clean]) {
     return context.fileLinks[clean];
   }
 
-  // Fallback: resolve plausible GCS artifact paths against the build's
-  // web URL. Catches agent-cited paths like
-  // "artifacts/clusters/<name>/machines/<vm>/kubelet.log" or
-  // "clusters/<name>/resources/Foo/bar.yaml". Constrained to the build's
-  // artifact roots (artifacts/ or clusters/) so host-like or repo-doc tokens
-  // (e.g. "example.com/foo.yaml", "docs/book/src/x.md") are not turned into
-  // bogus GCS URLs.
+  // Resolve plausible GCS artifact paths against the build web URL. Only
+  // artifact roots such as artifacts/... or clusters/... are eligible, so
+  // host-like and repo-doc tokens are not turned into bogus GCS URLs.
   if (context?.webUrl) {
     const path = clean.replace(/^\/+/, "");
     const isArtifactRoot = /^(artifacts|clusters)\//.test(path);
@@ -231,7 +215,7 @@ export function fileToUrl(
   return null;
 }
 
-/** Returns sort priority: 0 = GCS artifact, 1 = source repo, 2 = other/unlinked */
+/** Return sort priority: 0 GCS artifact, 1 source repo, 2 other or unlinked. */
 export function fileSortKey(
   filePath: string,
   context?: FileToUrlContext

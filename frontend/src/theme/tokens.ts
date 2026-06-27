@@ -1,8 +1,7 @@
 // Single source of truth for raw color values. Change a color once here and it
-// propagates through the MUI theme to every component. Each scheme exposes the
-// same keys, mirroring the Material Design 3 token names the dashboard already
-// used. To add a brand-new theme, create another ColorTokens object and wire it
-// up in themes.ts.
+// propagates through the MUI theme. Each scheme exposes the same Material Design
+// 3 token keys. To add a theme, create another ColorTokens object and wire it up
+// in themes.ts.
 
 export interface ColorTokens {
   background: string;
@@ -23,13 +22,13 @@ export interface ColorTokens {
   primaryContainer: string;
   onPrimary: string;
 
-  // PASSING (green) -> MUI success
+  // PASSING green maps to MUI success.
   secondary: string;
   secondaryDim: string;
   secondaryContainer: string;
   onSecondary: string;
 
-  // FLAKY (amber) -> MUI warning
+  // FLAKY amber maps to MUI warning.
   tertiary: string;
   tertiaryContainer: string;
   onTertiary: string;
@@ -39,9 +38,8 @@ export interface ColorTokens {
   errorContainer: string;
   onError: string;
 
-  // Pass/fail dot colors for the run visualizations. Tuned to equal perceived
-  // brightness so neither dot appears larger than the other on dark surfaces
-  // (a bright dot blooms; see dotColorFor).
+  // Pass/fail dot colors for run visualizations. Equal perceived brightness
+  // keeps one dot from appearing larger than the other on dark surfaces.
   dotPass: string;
   dotFail: string;
 
@@ -50,13 +48,12 @@ export interface ColorTokens {
 
   surfaceTint: string;
 
-  // Translucent panel background (the old `.glass` look). Stored pre-baked with
-  // alpha per scheme so it switches correctly without runtime alpha() math on a
-  // CSS variable.
+  // Translucent panel background. Stored pre-baked with alpha per scheme so it
+  // switches correctly without runtime alpha math on a CSS variable.
   glass: string;
 }
 
-// Dark palette: the original Material Design 3 dark values from the Stitch mockup.
+// Dark palette from the Material Design 3 values used by the current design.
 export const darkTokens: ColorTokens = {
   background: "#0e0e0e",
   surface: "#0e0e0e",
@@ -91,7 +88,7 @@ export const darkTokens: ColorTokens = {
   onError: "#490006",
 
   // Brightness-matched against the bright mint pass color so a lone failed dot
-  // among passes (e.g. a flaky run) doesn't read as smaller/higher.
+  // among passes does not read as smaller or higher.
   dotPass: "#45c78f",
   dotFail: "#ff8e89",
 
@@ -103,8 +100,7 @@ export const darkTokens: ColorTokens = {
   glass: "rgba(32, 31, 31, 0.8)",
 };
 
-// Light palette: Material Design 3 light values derived from the same hues.
-// Newly authored — expect minor contrast tuning during QA.
+// Light palette uses Material Design 3 values derived from the same hues.
 export const lightTokens: ColorTokens = {
   background: "#fbfbff",
   surface: "#fbfbff",

@@ -1,7 +1,7 @@
 import { createAppTheme } from "./createAppTheme";
 
-// Named-theme registry. Adding another design is a one-line entry here; the app
-// shell reads `defaultTheme`. Swap or extend this to support a theme picker.
+// Named-theme registry. The app shell reads `defaultTheme`; extend this to
+// support additional themes.
 export const themes = {
   default: createAppTheme(),
 } as const;

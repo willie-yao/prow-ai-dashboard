@@ -13,19 +13,17 @@ import (
 	"sync"
 )
 
-// gcsweb caching bounds. gcsweb serves whole objects (no HTTP Range), so we
-// cache fetched bodies to avoid re-downloading the same log for successive
-// ranged/tail/grep reads within a run. Files above cacheFileCap are never
-// cached; caching stops once cacheBudget total bytes are resident.
+// gcsweb caching bounds. gcsweb serves whole objects, so cached bodies avoid
+// re-downloading the same log for ranged, tail, and grep reads within a run.
+// Files above cacheFileCap are never cached; cacheBudget caps resident bytes.
 const (
 	cacheFileCap = 16 * 1024 * 1024  // 16 MB
 	cacheBudget  = 256 * 1024 * 1024 // 256 MB per run
 )
 
-// gcswebBackend reads through a gcsweb HTTP gateway (e.g. gcsweb.istio.io/s3)
-// that fronts a bucket. The same URL serves a raw object (no trailing slash)
-// or an HTML directory listing (trailing slash). HTTP Range is not assumed, so
-// ranged and tail reads fetch the whole object and slice it.
+// gcswebBackend reads through a gcsweb HTTP gateway that fronts a bucket.
+// Raw-object URLs have no trailing slash; directory listings do. HTTP Range is
+// not assumed, so ranged and tail reads fetch whole objects and slice them.
 type gcswebBackend struct {
 	bucket   string
 	client   *http.Client
@@ -57,12 +55,12 @@ func newGCSWebBackend(cfg Config, client *http.Client) *gcswebBackend {
 	}
 }
 
-// objURL is the raw-object URL (no trailing slash).
+// objURL is the raw-object URL with no trailing slash.
 func (b *gcswebBackend) objURL(path string) string {
 	return b.base + "/" + b.bucket + "/" + escapePath(strings.TrimLeft(path, "/"))
 }
 
-// dirURL is the directory-listing URL (trailing slash).
+// dirURL is the directory-listing URL with a trailing slash.
 func (b *gcswebBackend) dirURL(prefix string) string {
 	return b.base + "/" + b.bucket + "/" + escapePath(strings.TrimLeft(prefix, "/"))
 }
@@ -123,13 +121,12 @@ func (b *gcswebBackend) Open(ctx context.Context, path string) (io.ReadCloser, i
 	return io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
 }
 
-// streamCap bounds how many bytes a single streaming read will consume from a
-// gcsweb object, a guard against a runaway/very large object. Tail/range reads
-// past this are best-effort.
+// streamCap bounds bytes consumed by one streaming gcsweb read.
+// Tail and range reads past this cap are best-effort.
 const streamCap = 1 << 30 // 1 GiB
 
-// get issues the raw object GET and returns the response (caller closes Body)
-// plus the Content-Length (-1 if absent).
+// get issues the raw object GET and returns the response plus Content-Length.
+// The caller closes Body. Missing Content-Length is reported as -1.
 func (b *gcswebBackend) get(ctx context.Context, path string) (*http.Response, int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.objURL(path), nil)
 	if err != nil {
@@ -167,7 +164,7 @@ func (b *gcswebBackend) ReadRange(ctx context.Context, path string, offset, leng
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	// Small enough to buffer whole: read, cache, slice.
+	// Small objects can be read, cached, and sliced.
 	if total >= 0 && total <= cacheFileCap {
 		body, err := io.ReadAll(io.LimitReader(resp.Body, cacheFileCap))
 		if err != nil {
@@ -176,9 +173,9 @@ func (b *gcswebBackend) ReadRange(ctx context.Context, path string, offset, leng
 		b.cachePut(path, body)
 		return sliceRange(body, offset, length), int64(len(body)), nil
 	}
-	// Large object: stream past offset, then read length bytes.
+	// Large objects stream past offset, then read length bytes.
 	if _, err := io.CopyN(io.Discard, resp.Body, offset); err != nil {
-		// offset is past EOF (or a short object): nothing to return.
+		// offset is past EOF or a short object.
 		return nil, total, nil
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, length))
@@ -208,7 +205,7 @@ func (b *gcswebBackend) ReadTail(ctx context.Context, path string, maxBytes int6
 		b.cachePut(path, body)
 		return tailOf(body, maxBytes), int64(len(body)), nil
 	}
-	// Large object: stream, keeping only the last maxBytes.
+	// Large objects stream while retaining only the last maxBytes.
 	data, streamed := streamTail(resp.Body, maxBytes)
 	if total < 0 {
 		total = streamed
@@ -237,8 +234,7 @@ func tailOf(body []byte, maxBytes int64) []byte {
 	return body
 }
 
-// streamTail reads r (up to streamCap bytes) keeping only the last maxBytes,
-// returning that tail and the total bytes seen.
+// streamTail reads up to streamCap bytes while retaining the last maxBytes.
 func streamTail(r io.Reader, maxBytes int64) ([]byte, int64) {
 	buf := make([]byte, 0, maxBytes)
 	tmp := make([]byte, 64*1024)
@@ -283,13 +279,12 @@ func (b *gcswebBackend) List(ctx context.Context, prefix string) (*Listing, erro
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", prefix, err)
 	}
-	// The listing's own path under the gcsweb route, decoded. Child entries
-	// are hrefs that extend it by exactly one segment.
+	// Child entries are hrefs that extend the listing path by one segment.
 	u, err := url.Parse(listURL)
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", prefix, err)
 	}
-	basePath := u.Path // e.g. "/s3/<bucket>/<prefix>/"
+	basePath := u.Path // example: "/s3/<bucket>/<prefix>/"
 
 	out := &Listing{}
 	seen := map[string]bool{}
@@ -305,7 +300,7 @@ func (b *gcswebBackend) List(ctx context.Context, prefix string) (*Listing, erro
 		if child == "" || seen[child] {
 			continue
 		}
-		// Immediate children only: one segment, optionally trailing-slashed.
+		// Immediate children only.
 		trimmed := strings.TrimSuffix(child, "/")
 		if strings.Contains(trimmed, "/") {
 			continue

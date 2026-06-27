@@ -29,10 +29,8 @@ type finishedJSON struct {
 	Revision  string `json:"revision"`
 }
 
-// FetchBuildInfo reads started.json and finished.json for the build at loc and
-// returns a populated BuildInfo. If finished.json is missing or unreadable the
-// build is treated as still running: partial info is returned with
-// Result="PENDING" and a zero Finished time.
+// FetchBuildInfo reads started.json and finished.json for the build at loc.
+// Missing or unreadable finished.json returns partial info with Result="PENDING".
 func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (*models.BuildInfo, error) {
 	buildPath := loc.BuildPath()
 
@@ -74,16 +72,12 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 	return info, nil
 }
 
-// junitFileRe matches JUnit XML filenames produced by the test frameworks we
-// have seen: ginkgo (junit.e2e_suite.1.xml), ginkgo's runner report
-// (junit_runner.xml), gotest/k8s sharded outputs (junit_01.xml), and a plain
-// junit.xml. Anchored against the basename of a build's artifacts/ children.
+// junitFileRe matches JUnit XML basenames from common Prow test frameworks.
 var junitFileRe = regexp.MustCompile(`^junit[._-].*\.xml$|^junit\.xml$`)
 
 // DiscoverJUnitPaths lists the build's artifacts/ directory and returns the
 // bucket-relative path of every JUnit XML file, sorted for cache stability.
-// Sub-trees under artifacts/ are not walked. Returns ([], nil) when the
-// directory exists but holds no JUnit files.
+// Subtrees under artifacts/ are not walked.
 func DiscoverJUnitPaths(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, error) {
 	artifactsDir := loc.BuildPath() + "artifacts/"
 	listing, err := b.List(ctx, artifactsDir)

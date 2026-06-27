@@ -9,9 +9,9 @@ interface RunTimelineProps {
   runs: BuildResult[];
   selectedBuildId?: string;
   onSelect: (buildId: string) => void;
-  /** Optional CSS color string per run. If not provided, uses pass/fail from run.passed. */
+  /** CSS color string per run. Defaults to pass/fail from run.passed. */
   colorFn?: (run: BuildResult) => string;
-  /** Optional custom tooltip per run. */
+  /** Custom tooltip per run. */
   tooltipFn?: (run: BuildResult) => string;
 }
 

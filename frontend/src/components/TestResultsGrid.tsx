@@ -29,7 +29,7 @@ function shortDate(dateStr: string): string {
 }
 
 export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
-  // Sort runs oldest→newest (left to right)
+  // Sort runs oldest to newest for left-to-right display.
   const sortedRuns = useMemo(
     () =>
       [...runs].sort(
@@ -42,7 +42,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
   const gridRows = useMemo(() => {
     if (sortedRuns.length === 0) return [];
 
-    // Build a map: testName → status per run index
+    // Track each test's status by run index.
     const testMap = new Map<string, CellStatus[]>();
 
     for (let col = 0; col < sortedRuns.length; col++) {
@@ -55,7 +55,6 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
       }
     }
 
-    // Filter and build rows
     const rows: GridRow[] = [];
 
     for (const [testName, cells] of testMap) {
@@ -63,14 +62,14 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
       const hasPass = cells.some((s) => s === "passed");
       const hasFail = failCount > 0;
 
-      // Filter out skipped-only tests and setup/teardown (unless failed)
+      // Filter out skipped-only tests and setup/teardown unless failed.
       if (!hasPass && !hasFail) continue;
       if (setupPatterns.test(testName) && !hasFail) continue;
 
       rows.push({ testName, failCount, cells });
     }
 
-    // Sort: most failures first, then alphabetical
+    // Sort by failure count, then name.
     rows.sort((a, b) => {
       if (b.failCount !== a.failCount) return b.failCount - a.failCount;
       return a.testName.localeCompare(b.testName);

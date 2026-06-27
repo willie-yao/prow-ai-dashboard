@@ -33,9 +33,8 @@ type BackendFactory struct {
 	browsers map[string]*backendBrowser
 }
 
-// NewBackendFactory returns a Factory over backend. bucketLabel is a
-// human-readable bucket identifier used only in BuildRoot() (for logging and
-// the agentic system-prompt seed).
+// NewBackendFactory returns a Factory over backend. bucketLabel is used only in
+// BuildRoot for logging and the agentic system prompt.
 func NewBackendFactory(backend storage.Backend, bucketLabel string) *BackendFactory {
 	return &BackendFactory{
 		backend:     backend,
@@ -143,7 +142,7 @@ func (b *backendBrowser) Read(ctx context.Context, file string, offset, length i
 	if err != nil {
 		return nil, 0, fmt.Errorf("read %s: %w", clean, err)
 	}
-	// Opportunistically cache when we received the whole (small) file.
+	// Cache only when the whole small file was returned.
 	if offset == 0 && total >= 0 && int64(len(body)) == total && total <= smallFileCacheCap {
 		b.cachePut(clean, body)
 	}
@@ -247,19 +246,16 @@ func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regex
 	return grepStream(limited, size, perCallCap, re, contextLines, maxMatches, maxLineLen), nil
 }
 
-// grepStream scans r for matching lines, returning up to maxMatches with
-// contextLines of context on either side. Lines longer than maxLineLen are
-// truncated. fileSize is the underlying file's full size (or -1 if unknown);
-// maxBytes is the hard cap on bytes consumed from r.
+// grepStream scans r for matching lines with surrounding context. Long lines
+// are truncated, and maxBytes caps consumption from r.
 func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) *GrepResult {
 	out := &GrepResult{FileSize: fileSize}
 
-	// Ring buffer of recent lines for "before" context.
+	// Ring buffer of recent lines for before context.
 	before := make([]string, contextLines)
 	beforeIdx := 0
 
-	// Pending "after" capture: when we record a match, we still need to grab
-	// the next contextLines lines; this counter tracks how many.
+	// Pending after-context capture for each recorded match.
 	type pendingAfter struct {
 		matchIdx int
 		count    int
@@ -277,7 +273,7 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 			line = line[:maxLineLen] + "...<truncated>"
 		}
 
-		// Append "after" context to any pending matches.
+		// Append after context to pending matches.
 		stillPending := pendings[:0]
 		for _, p := range pendings {
 			out.Matches[p.matchIdx].Context = append(
@@ -327,10 +323,8 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 	return out
 }
 
-// countBytesScanned is a conservative estimate: bufio.Scanner doesn't expose
-// underlying-reader bytes consumed directly. We approximate using lines scanned
-// (callers use it for logging, not budget enforcement; the LimitReader already
-// capped the underlying read).
+// countBytesScanned estimates bytes consumed for logging. LimitReader already
+// enforces the read budget.
 func countBytesScanned(maxBytes int64, lines int) int64 {
 	if int64(lines)*80 > maxBytes {
 		return maxBytes

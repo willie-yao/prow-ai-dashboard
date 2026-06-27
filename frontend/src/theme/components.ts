@@ -1,8 +1,7 @@
 import type { Components, Theme } from "@mui/material/styles";
 
-// Global component defaults/overrides that encode the dashboard's look once, so
-// individual components stay lean. Component-specific looks (e.g. the glass
-// panel) live in the shared primitives, not here.
+// Global component defaults that encode the dashboard look once. Shared
+// primitives own component-specific surfaces such as the glass panel.
 export function buildComponents(): Components<Theme> {
   return {
     MuiCssBaseline: {

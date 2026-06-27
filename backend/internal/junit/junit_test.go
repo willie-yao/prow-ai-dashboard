@@ -50,7 +50,7 @@ func TestParse(t *testing.T) {
 		t.Error("expected failure location URL to be generated")
 	}
 
-	// Skipped test (via <skipped> element)
+	// Skipped via <skipped> element.
 	tc = cases[1]
 	if tc.Status != "skipped" {
 		t.Errorf("expected status 'skipped', got %q", tc.Status)
@@ -65,7 +65,7 @@ func TestParse(t *testing.T) {
 		t.Errorf("expected duration 1234.56, got %f", tc.DurationSeconds)
 	}
 
-	// Skipped test (via status attr only, no <skipped> element)
+	// Skipped via status attr only.
 	tc = cases[3]
 	if tc.Status != "skipped" {
 		t.Errorf("expected status 'skipped', got %q", tc.Status)
@@ -166,9 +166,8 @@ func TestParse_SingleTestSuite(t *testing.T) {
 	}
 }
 
-// TestParse_SingleTestSuite_ZeroTestsAttr covers the ClusterLoaderV2 quirk:
-// a bare <testsuite tests="0"> that still lists real testcases (including
-// failures). The parser must trust the elements, not the tests= count.
+// TestParse_SingleTestSuite_ZeroTestsAttr verifies tests="0" suites can still
+// contain real testcases. The parser trusts elements, not the tests count.
 func TestParse_SingleTestSuite_ZeroTestsAttr(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <testsuite name="ClusterLoaderV2" tests="0" failures="1" errors="0" time="100.0">
@@ -193,9 +192,8 @@ func TestParse_SingleTestSuite_ZeroTestsAttr(t *testing.T) {
 	}
 }
 
-// TestParseFile stamps the source basename on every returned case so
-// the UI can disambiguate same-named tests across sharded junit files
-// (e.g. node-e2e's junit_ubuntu01.xml vs junit_runner.xml).
+// TestParseFile stamps the source basename so the UI can disambiguate
+// same-named tests across JUnit files.
 func TestParseFile(t *testing.T) {
 	data := loadFixture(t)
 	cases, err := ParseFile(data, "junit_runner.xml")
@@ -212,9 +210,7 @@ func TestParseFile(t *testing.T) {
 	}
 }
 
-// TestParseFile_PropagatesParseError surfaces malformed XML from the
-// underlying Parse so callers can decide whether to log + continue or
-// abort the build.
+// TestParseFile_PropagatesParseError surfaces malformed XML from Parse.
 func TestParseFile_PropagatesParseError(t *testing.T) {
 	_, err := ParseFile([]byte("<not-valid-xml"), "junit_runner.xml")
 	if err == nil {

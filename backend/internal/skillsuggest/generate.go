@@ -1,8 +1,7 @@
 // Package skillsuggest drafts diagnostic skill recipes for systemic recurring
 // patterns and opens draft PRs adding them to the dashboard repo's skills/
-// directory. It is opt-in (ai.suggest_skills) and idempotent: each suggestion
-// carries a hidden marker so the same pattern is never suggested twice, and a
-// pattern already covered by an existing skill is skipped.
+// directory. It is opt-in through ai.suggest_skills and idempotent through
+// hidden markers and existing-skill checks.
 package skillsuggest
 
 import (
@@ -16,8 +15,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// Completer is the subset of the AI client this package needs (an interface so
-// generation and the covered-check are unit-testable).
+// Completer is the subset of the AI client this package needs.
 type Completer interface {
 	Complete(ctx context.Context, system, user string) (string, error)
 }
@@ -32,8 +30,7 @@ type existingSkill struct {
 
 // coveredCheck asks the model whether the pattern is already handled by one of
 // the existing skills. triggerMatched lists ids whose regex triggers fired on
-// the pattern text (a cheap prefilter that anchors the model). Returns true to
-// skip suggesting. With no existing skills there is nothing to cover.
+// the pattern text. Returns true to skip suggesting.
 func coveredCheck(ctx context.Context, c Completer, existing []existingSkill, triggerMatched []string, p models.PatternAnalysis) (bool, string, error) {
 	if len(existing) == 0 {
 		return false, "", nil
@@ -78,7 +75,7 @@ would be redundant)? Answer with a single line of JSON:
 const coveredSystemPrompt = `You decide whether a newly observed CI failure pattern is already covered by an existing diagnostic "skill" recipe. A recipe covers a pattern when it would fire on the same failure class (same root cause family), even if the wording differs. Answer only with the requested one-line JSON, no prose.`
 
 // generateRecipe drafts a skill recipe YAML for the pattern and validates it
-// against the skills schema. Returns the recipe id (after collision avoidance)
+// against the skills schema. Returns the recipe id after collision avoidance
 // and the YAML file content. An invalid draft is an error so the caller skips
 // it rather than proposing a broken recipe.
 func generateRecipe(ctx context.Context, c Completer, p models.PatternAnalysis, existingIDs []string) (string, string, error) {
@@ -104,8 +101,7 @@ Output ONLY the YAML recipe, no code fence, no commentary.`,
 	if err != nil {
 		return "", "", fmt.Errorf("generated recipe failed validation: %w", err)
 	}
-	// Sanitize the model-chosen id to a safe kebab-case filename (it becomes a
-	// skills/<id>.yaml path), then resolve any collision with an existing recipe.
+	// Sanitize the model-chosen id for skills/<id>.yaml and avoid collisions.
 	safe := sanitizeID(sk.ID)
 	if safe == "" {
 		return "", "", fmt.Errorf("generated recipe id %q is not a usable identifier", sk.ID)
@@ -118,8 +114,8 @@ Output ONLY the YAML recipe, no code fence, no commentary.`,
 	return id, yamlContent, nil
 }
 
-// recipeSystemPrompt teaches the schema. The triggers match the model's DRAFT
-// ANALYSIS text; required_evidence any_of match ARTIFACT PATHS the agent reads.
+// recipeSystemPrompt teaches the schema. Triggers match draft analysis text;
+// required_evidence any_of patterns match artifact paths the agent reads.
 const recipeSystemPrompt = `You write diagnostic "skill" recipes for a Prow CI failure-analysis engine. A recipe is YAML with this schema:
 
 id: kebab-case-identifier            # required, unique

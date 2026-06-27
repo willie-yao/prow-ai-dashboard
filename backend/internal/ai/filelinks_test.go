@@ -12,8 +12,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// newLinkStub returns a server that answers both the file-existence HEAD checks
-// (raw.githubusercontent.com stand-in) and the vanity `?go-get=1` meta lookups.
+// newLinkStub returns a server for file-existence HEAD checks and vanity
+// `?go-get=1` meta lookups.
 // exists is keyed by "/owner/repo/HEAD/path"; vanity is keyed by the module
 // import path and maps to its GitHub repo URL.
 func newLinkStub(t *testing.T, exists map[string]bool, vanity map[string]string) (*httptest.Server, *int32) {
@@ -58,12 +58,11 @@ func withStub(t *testing.T, srv *httptest.Server) {
 // dropped, with no project- or ecosystem-specific knowledge in the code.
 func TestResolveFileLinks_GenericResolution(t *testing.T) {
 	exists := map[string]bool{
-		// project repo (CAPZ) source file
+		// Project repo source file.
 		"/kubernetes-sigs/cluster-api-provider-azure/HEAD/azure/services/vm/spec.go": true,
-		// project file in a dot-named directory (must resolve to the project repo,
-		// not be mistaken for a vanity host)
+		// Dot-named project dir must resolve to the project repo, not vanity.
 		"/kubernetes-sigs/cluster-api-provider-azure/HEAD/.github/workflows/ci.yaml": true,
-		// upstream CAPI file (reached via vanity import, owner/repo, and github.com form)
+		// Upstream CAPI file reached through all supported reference forms.
 		"/kubernetes-sigs/cluster-api/HEAD/test/framework/controlplane_helpers.go": true,
 	}
 	vanity := map[string]string{
@@ -79,18 +78,18 @@ func TestResolveFileLinks_GenericResolution(t *testing.T) {
 		AISummary: &models.AISummary{Summary: "noise calico-system/calico-kube-controllers v1.34.8"},
 		AIAnalysis: &models.AIAnalysis{
 			RelevantFiles: []string{
-				// repo-relative -> project repo (exists)
+				// Repo-relative path exists in the project repo.
 				"azure/services/vm/spec.go",
-				// dot-named project dir -> project repo (not a vanity host)
+				// Dot-named project dir resolves to the project repo.
 				".github/workflows/ci.yaml",
-				// repo-relative but not in project repo -> dropped (no fallback repo)
+				// Repo-relative path outside the project repo is dropped.
 				"test/e2e/clusterctl_upgrade_test.go (lines 1-9)",
-				// owner/repo/path GitHub-form -> resolves to cluster-api
+				// owner/repo/path GitHub form resolves to cluster-api.
 				"kubernetes-sigs/cluster-api/test/framework/controlplane_helpers.go",
-				// explicit github.com/owner/repo/path -> resolves to cluster-api
+				// Explicit github.com/owner/repo/path resolves to cluster-api.
 				"github.com/kubernetes-sigs/cluster-api/test/framework/controlplane_helpers.go",
 			},
-			// vanity import path in prose -> resolves to cluster-api via go-get
+			// Vanity import path in prose resolves via go-get.
 			RootCause:    "fails in sigs.k8s.io/cluster-api/test/framework/controlplane_helpers.go:42",
 			SuggestedFix: "n/a",
 		},
@@ -110,7 +109,7 @@ func TestResolveFileLinks_GenericResolution(t *testing.T) {
 			t.Errorf("links[%q] = %q, want %q", k, links[k], v)
 		}
 	}
-	// Not in the project repo and no fallback -> dropped (no broken link).
+	// Paths outside the project repo are dropped without fallback.
 	if _, ok := links["test/e2e/clusterctl_upgrade_test.go"]; ok {
 		t.Errorf("unverified path must be dropped")
 	}
@@ -135,14 +134,11 @@ func TestResolveFileLinks_CachesChecks(t *testing.T) {
 	s := &Service{}
 	s.SetSourceRepo("o", "r")
 	var headCalls int32
-	// wrap the client to count HEADs
 	client := srv.Client()
 
 	mk := func() *models.TestCase {
 		return &models.TestCase{AIAnalysis: &models.AIAnalysis{RelevantFiles: []string{"test/x.go"}}}
 	}
-	// Count via the stub: replace handler counter is simpler, but reuse exists
-	// path determinism: two runs should hit the server once.
 	_ = headCalls
 	_ = client
 	s.resolveFileLinks(context.Background(), srv.Client(), mk())

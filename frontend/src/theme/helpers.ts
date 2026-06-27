@@ -4,12 +4,9 @@ import { alpha, type Theme } from "@mui/material/styles";
 export type SoftColor = "primary" | "success" | "warning" | "error" | "info";
 
 /**
- * Translucent background helper for the dashboard's many tinted surfaces (e.g.
- * the old `bg-error/10`, `bg-primary/5`). Uses the palette's channel token so it
- * stays correct across light/dark, falling back to `alpha()` if CSS variables
- * are unavailable.
- *
- * @example sx={{ bgcolor: (t) => soft(t, "error", 0.1) }}
+ * Translucent background helper for tinted surfaces. Uses the palette's channel
+ * token so it stays correct across light/dark, falling back to the alpha helper
+ * if CSS variables are unavailable.
  */
 export function soft(theme: Theme, color: SoftColor, opacity: number): string {
   const channel = theme.vars?.palette?.[color]?.mainChannel;
@@ -17,7 +14,7 @@ export function soft(theme: Theme, color: SoftColor, opacity: number): string {
   return alpha(theme.palette[color].main, opacity);
 }
 
-/** Test/job status as reported in the data (case-insensitive). */
+/** Test/job status as reported in the data. Matching is case-insensitive. */
 export type DashboardStatus = string;
 
 /**
@@ -42,8 +39,8 @@ export function statusToMuiColor(
 }
 
 /**
- * Solid theme color for a pass/fail dot or bar (used by the custom
- * visualizations). Returns a CSS color string from the active theme.
+ * Solid theme color for pass/fail dots and bars. Returns a CSS color string
+ * from the active theme.
  */
 export function dotColorFor(
   theme: Theme,

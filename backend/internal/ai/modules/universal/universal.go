@@ -1,8 +1,7 @@
-// Package universal provides the project-agnostic AI module: the only Module
-// implementation. It performs NO upfront evidence fetching; the agentic loop
-// discovers everything via registered tools (filesystem + k8s by default). The
-// prompt is intentionally minimal, just enough context to point the agent at
-// the right build and failing test.
+// Package universal provides the project-agnostic Module implementation. It
+// performs no upfront evidence fetching; the agentic loop discovers everything
+// through registered tools. The prompt is intentionally minimal, just enough to
+// point the agent at the right build and failing test.
 package universal
 
 import (
@@ -24,16 +23,15 @@ func New() *Module { return &Module{} }
 // Name returns "universal".
 func (m *Module) Name() string { return "universal" }
 
-// AnalysisPrompt builds a minimal per-failure prompt. No build log tail,
-// no error grep, no machine logs — the agent is expected to fetch what it
-// needs using list_artifacts / read_artifact / tail_artifact / grep_artifact
-// and (when k8s tools are enabled) discover_clusters / discover_controllers.
+// AnalysisPrompt builds a minimal per-failure prompt. No build log tail, error
+// grep, or machine logs are preloaded; the agent is expected to fetch what it
+// needs through the available tools.
 //
 // The failure message and body are size-capped to keep the prompt small; the
 // agent can tail_artifact the junit file itself if it needs more.
 func (m *Module) AnalysisPrompt(_ context.Context, _ *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
-	// Caps stop a giant ginkgo failure message (MBs on some AKS KubeRay runs)
-	// from overflowing the model window on the first request.
+	// Caps stop giant ginkgo failure messages from overflowing the model window
+	// on the first request.
 	const failureBodyTail = 8 * 1024
 	const failureMessageCap = 16 * 1024
 
@@ -87,10 +85,9 @@ calls, say what you determined and what remains unknown.
 	return sb.String()
 }
 
-// clampHeadTail keeps the head (3/4) and tail (1/4) of s within max bytes with
-// an elision marker between, so both the opening assertion and closing summary
-// survive. Cuts are trimmed to valid UTF-8. Returns s unchanged if max<=0 or it
-// already fits.
+// clampHeadTail keeps the head and tail of s within max bytes with an elision
+// marker between, so both the opening assertion and closing summary survive.
+// Cuts are trimmed to valid UTF-8. Returns s unchanged if max<=0 or it fits.
 func clampHeadTail(s string, max int) string {
 	if max <= 0 || len(s) <= max {
 		return s

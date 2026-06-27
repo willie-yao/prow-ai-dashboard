@@ -240,11 +240,8 @@ func TestRegisterEnablesAllFilesystemTools(t *testing.T) {
 	}
 }
 
-// TestStringEncodedNumericArgsAreAccepted is the regression for the dominant
-// live failure on weaker models: they encode numeric tool arguments as JSON
-// strings ("5" instead of 5). Before FlexInt, these calls failed with
-// "invalid arguments" and burned the model's investigation budget. Every
-// numeric-arg filesystem tool must now accept both forms.
+// TestStringEncodedNumericArgsAreAccepted verifies filesystem tools accept
+// numeric arguments encoded as either numbers or strings.
 func TestStringEncodedNumericArgsAreAccepted(t *testing.T) {
 	b := &fakeBrowser{files: map[string][]byte{
 		"build-log.txt": []byte("line1\nERROR boom\nline3\nline4\n"),

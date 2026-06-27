@@ -13,10 +13,8 @@ import (
 
 // ---------- gcsweb backend ----------
 
-// gcswebServer serves an in-memory object tree the way gcsweb does: a raw body
-// for a file path, and an HTML listing (with the same href shape gcsweb emits)
-// for a path ending in "/". It deliberately ignores Range headers, like the
-// real gcsweb.
+// gcswebServer serves raw file bodies and gcsweb-shaped HTML directory listings.
+// It deliberately ignores Range headers, like the real gcsweb.
 func gcswebServer(t *testing.T, bucket string, objects map[string]string) *httptest.Server {
 	t.Helper()
 	routePrefix := "/s3/" + bucket + "/"
@@ -131,7 +129,7 @@ func TestGCSWebBackend_ReadAndList(t *testing.T) {
 		t.Errorf("tree missing nested files: %v", tree)
 	}
 
-	// URL templates (directory URLs keep their trailing slash).
+	// Directory URLs keep their trailing slash.
 	if got := b.ProwURL("logs/job/1/"); got != "https://prow.example/view/s3/b/logs/job/1/" {
 		t.Errorf("ProwURL = %q", got)
 	}
@@ -229,8 +227,7 @@ func TestGCSBackend_RangeAndList(t *testing.T) {
 	}
 	srv := gcsServer(t, objects)
 	defer srv.Close()
-	// Construct the gcs backend directly so its endpoints point at the test
-	// server (the production constructor hardcodes storage.googleapis.com).
+	// Construct gcsBackend directly so endpoints point at the test server.
 	b := &gcsBackend{
 		bucket:    "b",
 		client:    srv.Client(),

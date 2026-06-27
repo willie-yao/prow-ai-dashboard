@@ -1,4 +1,4 @@
-// Types matching the Go backend JSON output
+// Types matching the backend JSON output.
 
 export interface RunSummary {
   build_id: string;
@@ -63,16 +63,12 @@ export interface AIAnalysis {
   severity: string;
   suggested_fix: string;
   relevant_files?: string[];
-  // Verified GitHub links for cited source files (path -> URL). Present
-  // (possibly empty) on analyses produced with link verification; absent on
-  // older cached data. When present it is authoritative: a repo-relative or
-  // vanity-import path is linked only if it appears here, so files that live
-  // in a different repo than the project are not turned into broken links.
+  // Verified GitHub links for cited source files keyed by cleaned path. When
+  // present, this map is authoritative and absent files stay unlinked.
   file_links?: Record<string, string>;
   mode?: string;
-  // Per-analysis telemetry (Phase L.0). Curator path leaves
-  // tool_calls / gcs_bytes at 0; agentic path stamps all five from
-  // the per-call agentState.
+  // Optional per-analysis telemetry emitted by the backend. Cached analyses may
+  // omit metrics or record zero when a metric is unavailable.
   tool_calls?: number;
   model_bytes?: number;
   gcs_bytes?: number;

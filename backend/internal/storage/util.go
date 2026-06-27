@@ -2,9 +2,8 @@ package storage
 
 import "strings"
 
-// queryEscape percent-encodes a string for use in a URL path or query,
-// matching RFC 3986 unreserved characters. Used instead of url.QueryEscape so
-// spaces become %20 (not +) and "/" is encoded per-segment by escapePath.
+// queryEscape percent-encodes a URL path or query component.
+// Spaces become %20, and escapePath handles slash-separated segments.
 func queryEscape(s string) string {
 	const hex = "0123456789ABCDEF"
 	out := make([]byte, 0, len(s))
@@ -30,10 +29,8 @@ func escapePath(s string) string {
 	return strings.Join(parts, "/")
 }
 
-// joinURL joins a base URL with bucket-relative path segments, collapsing any
-// duplicate slashes between them. A trailing slash on the final segment is
-// preserved, since callers concatenate directory URLs (e.g. the AI's
-// artifact-link base and the notifier's Prow-view base) with relative paths.
+// joinURL joins a base URL with bucket-relative path segments.
+// A trailing slash on the final segment is preserved for directory bases.
 func joinURL(base string, parts ...string) string {
 	out := strings.TrimRight(base, "/")
 	trailing := false

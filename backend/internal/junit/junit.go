@@ -11,7 +11,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// XML structures for JUnit parsing.
+// xmlTestSuites mirrors the JUnit <testsuites> root.
 type xmlTestSuites struct {
 	XMLName    xml.Name       `xml:"testsuites"`
 	TestSuites []xmlTestSuite `xml:"testsuite"`
@@ -47,7 +47,7 @@ type xmlSkipped struct {
 }
 
 // moduleLocationRe matches Go module paths with file:line references.
-// e.g. sigs.k8s.io/cluster-api/test@v1.12.3/framework/controlplane_helpers.go:115
+// Example: sigs.k8s.io/cluster-api/test@v1.12.3/framework/controlplane_helpers.go:115.
 var moduleLocationRe = regexp.MustCompile(
 	`(sigs\.k8s\.io/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*)` + // module path
 		`(?:@(v[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9._-]*))?` + // optional version
@@ -62,8 +62,8 @@ var knownRepos = map[string]string{
 
 // Parse parses JUnit XML data and returns a slice of TestCase models. The
 // resulting TestCases have JUnitFile unset; use ParseFile when the caller
-// knows which file the data came from (multi-junit builds rely on
-// JUnitFile to disambiguate same-named cases across shards/suites).
+// knows which file the data came from. Multi-JUnit builds rely on JUnitFile to
+// disambiguate same-named cases across shards and suites.
 func Parse(data []byte) ([]models.TestCase, error) {
 	// Try parsing as <testsuites> first.
 	var suites xmlTestSuites
@@ -71,10 +71,8 @@ func Parse(data []byte) ([]models.TestCase, error) {
 		return convertSuites(suites.TestSuites), nil
 	}
 
-	// Fall back to a single <testsuite>. Trust the actual <testcase>
-	// elements rather than the self-reported tests= count: ClusterLoaderV2
-	// (the scalability suite) emits <testsuite tests="0"> while still listing
-	// its real testcases, so gating on the count would drop the whole file.
+	// Trust actual <testcase> elements rather than the self-reported tests count.
+	// ClusterLoaderV2 can emit <testsuite tests="0"> while listing real cases.
 	var suite xmlTestSuite
 	if err := xml.Unmarshal(data, &suite); err == nil && len(suite.TestCases) > 0 {
 		return convertSuites([]xmlTestSuite{suite}), nil
@@ -84,8 +82,8 @@ func Parse(data []byte) ([]models.TestCase, error) {
 }
 
 // ParseFile parses JUnit XML data and stamps junitFile on every TestCase.
-// junitFile should be the basename within the build's artifacts/ dir
-// (e.g. "junit_runner.xml"), not a full URL.
+// junitFile should be the basename within the build's artifacts/ dir, not a
+// full URL.
 func ParseFile(data []byte, junitFile string) ([]models.TestCase, error) {
 	cases, err := Parse(data)
 	if err != nil {
@@ -144,10 +142,10 @@ func ExtractFailureLocation(failureBody string) (location string, url string) {
 		return "", ""
 	}
 
-	modulePath := matches[1] // e.g. sigs.k8s.io/cluster-api/test
-	version := matches[2]    // e.g. v1.12.3 or ""
-	filePath := matches[3]   // e.g. /framework/controlplane_helpers.go
-	line := matches[4]       // e.g. 115
+	modulePath := matches[1] // example: sigs.k8s.io/cluster-api/test
+	version := matches[2]    // example: v1.12.3 or ""
+	filePath := matches[3]   // example: /framework/controlplane_helpers.go
+	line := matches[4]       // example: 115
 
 	// Reconstruct the raw location string.
 	location = modulePath
@@ -176,8 +174,8 @@ func ExtractFailureLocation(failureBody string) (location string, url string) {
 		ref = version
 	}
 
-	// Build the full path: subPath (from module) + filePath (from regex).
-	fullPath := subPath + filePath // e.g. /test/framework/controlplane_helpers.go
+	// Build the full path from the module subpath and regex file path.
+	fullPath := subPath + filePath // example: /test/framework/controlplane_helpers.go
 	fullPath = strings.TrimPrefix(fullPath, "/")
 
 	url = fmt.Sprintf("https://github.com/%s/blob/%s/%s#L%s", ghRepo, ref, fullPath, line)

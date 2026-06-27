@@ -115,7 +115,7 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 
 func (f *fakeGitHub) url(n int) string { return f.Server.URL + "/issues/" + strconv.Itoa(n) }
 
-// seedOpenIssue inserts a pre-existing open issue (e.g. from a prior run).
+// seedOpenIssue inserts a pre-existing open issue.
 func (f *fakeGitHub) seedOpenIssue(body string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -258,7 +258,7 @@ func TestReconcile_RecoveryComments(t *testing.T) {
 	}
 	num := m.state.Tracked[key].Number
 
-	// Finding gone this run -> recovery comment, untracked.
+	// Missing finding triggers a recovery comment and untracks it.
 	stats, err := m.Reconcile(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("recover: %v", err)

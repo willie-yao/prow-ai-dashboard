@@ -90,7 +90,7 @@ func TestCollectRecurringPatterns_FiltersAndRanks(t *testing.T) {
 
 	got := collectRecurringPatterns(details)
 
-	// Only systemic verdicts are kept (3 of the 4 with patterns).
+	// Only systemic verdicts are kept.
 	if len(got) != 3 {
 		t.Fatalf("got %d patterns, want 3 (systemic only)", len(got))
 	}

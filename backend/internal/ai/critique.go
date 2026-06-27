@@ -12,9 +12,9 @@ import (
 // Package ai's critique gate runs a deterministic regex pass on the model's
 // final answer and rejects three classes of failure that pure prompt rules
 // don't reliably catch on weaker models:
-//   - punt-shaped suggested_fix (diagnostic imperatives like "check X");
+//   - punt-shaped suggested_fix, such as diagnostic imperatives like "check X";
 //   - artifact citations the agent never actually read;
-//   - matched-recipe evidence the agent didn't fetch (see skills package).
+//   - matched-recipe evidence the agent did not fetch.
 //
 // Rejected drafts are re-prompted with targeted feedback. Drafts that still
 // fail after the configured retry budget are published but not cached, so
@@ -28,9 +28,9 @@ const diagVerbs = `check|verify|investigate|ensure|inspect|examine|confirm|audit
 const diagGerunds = `checking|verifying|investigating|ensuring|inspecting|examining|confirming|auditing|reviewing|determining|monitoring|troubleshooting|debugging|looking\s+into|looking\s+at|analyzing`
 
 // puntPattern is one of four punt shapes. Split across multiple regexes
-// because RE2 has no negative lookahead and the bare-imperative / should-
-// verb shapes need a validation-followup exemption ("verify BY rerunning"
-// is allowed, "verify cloud-init" is not).
+// because RE2 has no negative lookahead and the bare-imperative and should-verb
+// shapes need a validation-followup exemption. "verify BY rerunning" is allowed;
+// "verify cloud-init" is not.
 type puntPattern struct {
 	re                     *regexp.Regexp
 	exemptValidationFollow bool
@@ -42,9 +42,9 @@ type puntPattern struct {
 var validationFollowRE = regexp.MustCompile(`^\s+(?:by|via|through|using|that)\b`)
 
 // puntPatterns:
-//  1. Bare diagnostic imperative at sentence/bullet start ("Check X").
-//  2. "<subject> should/need-to <diag verb>" ("operator needs to verify").
-//  3. "<subject> recommend(s) <diag gerund>" ("we recommend reviewing").
+//  1. Bare diagnostic imperative at sentence or bullet start, such as "Check X".
+//  2. "<subject> should/need-to <diag verb>", such as "operator needs to verify".
+//  3. "<subject> recommend <diag gerund>", or "recommends" for singular subjects.
 //  4. Standalone "recommend <gerund>" at sentence/bullet start.
 var puntPatterns = []puntPattern{
 	{
@@ -103,18 +103,17 @@ func findPunts(text string) []string {
 // currentCritiqueVersion is the schema version of the critique contract.
 // Bumped on material strengthening of the gate so cache entries from a
 // weaker version are invalidated on read. Cosmetic prompt-shape changes
-// do not bump; only behavior changes that would make a previously-cached
-// answer invalid under today's contract.
+// do not bump; only behavior changes that make an existing cached answer
+// invalid under today's contract.
 const currentCritiqueVersion = 4
 
 // artifactCitationRE matches strings in the model's prose that look like
-// Prow artifact filenames. Intentionally narrow on bare basenames (only
-// well-known artifact names) but broader on qualified paths (.log/.txt/
-// .json/.xml under any directory). Source-file extensions on bare basenames
-// (.yaml, .go, .py, .md) are excluded because the model legitimately cites
-// those without reading them via tools (they live in the source repo).
+// Prow artifact filenames. Intentionally narrow on bare basenames, limited to
+// well-known artifact names, but broader on qualified .log, .txt, .json, and
+// .xml paths. Source-file extensions on bare basenames are excluded because the
+// model legitimately cites source files without reading them via tools.
 var artifactCitationRE = regexp.MustCompile(
-	// Qualified path (has a directory) ending in any artifact extension.
+	// Qualified path with a directory ending in any artifact extension.
 	`(?:[A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.(?:log|txt|json|xml)` +
 		// OR a well-known bare artifact basename.
 		`|(?:` +
@@ -130,8 +129,8 @@ var artifactCitationRE = regexp.MustCompile(
 )
 
 // citationStripRE removes line-number and column suffixes the model often
-// appends to artifact citations ("build-log.txt:1720", "manager.log#L42-L50")
-// so the basename matches the form the tool arg actually had.
+// appends to artifact citations, such as "build-log.txt:1720" or
+// "manager.log#L42-L50", so the basename matches the tool arg form.
 var citationStripRE = regexp.MustCompile(`(?::\d+(?:-\d+)?|#L\d+(?:-L?\d+)?)\b`)
 
 // normalizeArtifactCitation cleans up a path-shaped match for comparison
@@ -154,9 +153,9 @@ func normalizeArtifactCitation(s string) string {
 // via read_artifact / tail_artifact / grep_artifact.
 //
 // Calling convention: pass nil for BOTH readsFull and readsBase to disable
-// the check (returns nil). Pass initialized maps (even if empty) to enable
-// it. doAnalyzeAgentic pre-inits both when critique is enabled, so nil
-// only happens in tests that exercise punt-only behavior.
+// the check and return nil. Pass initialized maps, even if empty, to enable it.
+// doAnalyzeAgentic pre-inits both when critique is enabled, so nil only happens
+// in tests that exercise punt-only behavior.
 //
 // Match rules:
 //   - Citation with a directory prefix → require exact full-path match
@@ -167,7 +166,7 @@ func normalizeArtifactCitation(s string) string {
 //     basename.
 //
 // Returns the de-duplicated list of unread citations in input order.
-// Map keys are pre-normalized (lowercase, slash semantics).
+// Map keys are pre-normalized with lowercase slash semantics.
 func findUnreadArtifactCitations(text string, readsFull, readsBase map[string]bool) []string {
 	if readsFull == nil && readsBase == nil {
 		return nil
@@ -269,7 +268,7 @@ func (o critiqueOutcome) Matches() []string {
 	out = append(out, o.PuntMatches...)
 	out = append(out, o.UnreadCitations...)
 	for _, m := range o.MissingSkillEvidence {
-		// "skill:<id>(missing:g1,g2)" so the log line stays one short token per miss.
+		// Keep each skill miss as one short token in logs.
 		ids := make([]string, 0, len(m.Missing))
 		for _, g := range m.Missing {
 			ids = append(ids, g.ID)
@@ -290,13 +289,12 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 }
 
 // critiqueDraft inspects a parsed final answer against the critique contract
-// (punt regex + unread-citation + recipe-driven missing-evidence). Returns
-// Passed=true only when every check passes; on failure, Feedback combines all
-// triggered checks into one message so the model fixes everything in a single
-// retry rather than playing whack-a-mole.
+// against punt, unread-citation, and recipe-driven missing-evidence checks.
+// Returns Passed=true only when every check passes. On failure, Feedback
+// combines all triggered checks so one retry can fix everything.
 //
-// readsFull / readsBase are the agent's actually-fetched artifact paths
-// (full and basename). matchedSkills is the recipe subset whose triggers
+// readsFull and readsBase are the agent's fetched artifact paths, indexed by
+// full path and basename. matchedSkills is the recipe subset whose triggers
 // fired on this draft; pass nil to disable the skill-evidence check.
 func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool, matchedSkills []skills.Skill) critiqueOutcome {
 	puntMatches := findPunts(parsed.SuggestedFix)
@@ -351,13 +349,13 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 
 // pruneAbsentSkillEvidence drops matched-recipe evidence groups whose required
 // evidence does not exist anywhere in the build's artifact tree. Such a recipe
-// is inapplicable to this build (the agent cannot read evidence the build never
-// produced), so its unsatisfiable requirement must not block caching forever.
+// is inapplicable to this build, so its unsatisfiable requirement must not block
+// caching forever.
 // treeSet is the normalized set of every artifact path in the build; pass nil
-// to make this a no-op (preserves the absence-unaware behavior). A group is
-// kept (a genuine miss) only when its evidence exists in the tree but the agent
-// did not read it. After pruning, Passed and Feedback are recomputed against
-// the surviving checks. Returns the number of groups dropped as absent.
+// to make this a no-op. A group is kept as a genuine miss only when its evidence
+// exists in the tree but the agent did not read it. After pruning, Passed and
+// Feedback are recomputed against the surviving checks. Returns the number of
+// groups dropped as absent.
 func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, treeSet map[string]bool) int {
 	if treeSet == nil || len(out.MissingSkillEvidence) == 0 {
 		return 0

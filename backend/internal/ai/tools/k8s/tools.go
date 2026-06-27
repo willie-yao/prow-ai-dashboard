@@ -9,8 +9,8 @@ import (
 )
 
 // Register adds every k8s tool to the registry. Tools are keyed in the
-// registry by their bare name (e.g. "discover_clusters"); the group alias
-// is "k8s" so a consumer can enable the whole tier with one entry.
+// registry by their bare name. The group alias is "k8s" so a consumer can
+// enable the whole tier with one entry.
 func Register(r *tools.Registry) {
 	r.Register(&discoverClustersTool{})
 	r.Register(&findMyClusterTool{})
@@ -357,10 +357,10 @@ func (*resolveControllerLogTool) Schema() tools.Schema {
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"namespace":       map[string]interface{}{"type": "string", "description": "Namespace, e.g. \"capz-system\"."},
-					"deployment":      map[string]interface{}{"type": "string", "description": "Deployment name, e.g. \"capz-controller-manager\"."},
-					"pod_name_regex":  map[string]interface{}{"type": "string", "description": "Optional regex to filter pod names. Default matches any."},
-					"container_log":   map[string]interface{}{"type": "string", "description": "Container log file name (default \"manager.log\").", "default": "manager.log"},
+					"namespace":      map[string]interface{}{"type": "string", "description": "Namespace, e.g. \"capz-system\"."},
+					"deployment":     map[string]interface{}{"type": "string", "description": "Deployment name, e.g. \"capz-controller-manager\"."},
+					"pod_name_regex": map[string]interface{}{"type": "string", "description": "Optional regex to filter pod names. Default matches any."},
+					"container_log":  map[string]interface{}{"type": "string", "description": "Container log file name (default \"manager.log\").", "default": "manager.log"},
 				},
 				"required": []string{"namespace", "deployment"},
 			},
@@ -410,9 +410,8 @@ func (*resolveControllerLogTool) Dispatch(ctx context.Context, env *tools.Env, r
 	}}
 }
 
-// mustUnmarshalPayload decodes a cached JSON payload back into a map; on
-// decode failure (shouldn't happen since we wrote it ourselves) returns
-// an error envelope instead of panicking.
+// mustUnmarshalPayload decodes a cached JSON payload back into a map. On decode
+// failure it returns an error envelope instead of panicking.
 func mustUnmarshalPayload(s string) map[string]interface{} {
 	var out map[string]interface{}
 	if err := json.Unmarshal([]byte(s), &out); err != nil {

@@ -50,7 +50,7 @@ func TestFlexInt_InStruct(t *testing.T) {
 		Lines       FlexInt `json:"lines"`
 		ContextLine FlexInt `json:"context_lines"`
 	}
-	// Mixed: one numeric, one string-encoded (the weak-model pattern).
+	// Mixed numeric and string-encoded values.
 	if err := json.Unmarshal([]byte(`{"lines":"2000","context_lines":5}`), &args); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

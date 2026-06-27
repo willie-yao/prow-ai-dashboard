@@ -15,7 +15,7 @@ type scaffoldData struct {
 	BucketDiscovery   bool   // true for bucket discovery
 	Provider          string // "gcs" or "gcsweb"
 	Bucket            string
-	GCSWebBase        string // gcsweb gateway root (gcsweb provider only)
+	GCSWebBase        string // gcsweb gateway root
 	Title             string
 	BasePath          string
 	SiteURL           string
@@ -206,7 +206,7 @@ https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/releasing.md
 to pin an exact release instead.
 `))
 
-// checklistData is the (slightly different) input the checklist template needs.
+// checklistData is the input the checklist template needs.
 type checklistData struct {
 	Name           string
 	DashboardOwner string

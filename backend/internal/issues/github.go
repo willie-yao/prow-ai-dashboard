@@ -66,12 +66,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	return resp, rb, nil
 }
 
-// SearchOpenIssue finds an open issue in the target repo whose body contains
-// confirmMarker. queryToken is the distinctive search term (the marker's hex
-// token); the full confirmMarker is then matched as a substring to rule out a
-// token-level false positive. Returns the issue number, html URL, and whether
-// one was found. Lets the engine avoid duplicate issues even when local state
-// is lost.
+// SearchOpenIssue finds an open issue whose body contains confirmMarker.
+// queryToken narrows the search, and the full marker check avoids token-level
+// false positives when local state is lost.
 func (c *Client) SearchOpenIssue(ctx context.Context, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
 	q := fmt.Sprintf("repo:%s/%s is:issue is:open %s in:body", c.owner, c.repo, queryToken)
 	path := "/search/issues?per_page=5&q=" + url.QueryEscape(q)
@@ -92,9 +89,7 @@ func (c *Client) SearchOpenIssue(ctx context.Context, queryToken, confirmMarker 
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return 0, "", false, fmt.Errorf("decode search response: %w", err)
 	}
-	// The search API tokenizes the body, so confirm the full marker comment is
-	// actually present before adopting (guards against a token-level false
-	// positive).
+	// GitHub search tokenizes bodies, so confirm the full marker before adoption.
 	for _, it := range out.Items {
 		if strings.Contains(it.Body, confirmMarker) {
 			return it.Number, it.HTMLURL, true, nil

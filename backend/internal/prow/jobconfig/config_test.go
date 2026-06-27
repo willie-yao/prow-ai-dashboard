@@ -11,10 +11,8 @@ import (
 
 const testDashboard = "sig-cluster-lifecycle-cluster-api-provider-azure"
 
-// exampleRules is the canonical project-neutral rule set the engine used to
-// ship as exampleRules. It's intentionally kept here so the
-// parser tests still cover non-trivial categorization without re-coupling
-// the production engine to a fixed rule set.
+// exampleRules keeps parser tests covering non-trivial categorization without
+// coupling production to a fixed rule set.
 var exampleRules = []project.CategoryRule{
 	{Match: "conformance", ID: "conformance", Label: "Conformance"},
 	{Match: "capi-e2e", ID: "capi-e2e", Label: "CAPI E2E"},
@@ -59,12 +57,12 @@ func TestParsePeriodics(t *testing.T) {
 	assertEqual(t, "Repo", j.Repo, "")
 	assertEqual(t, "JobID", j.JobID, "periodic-cluster-api-provider-azure-conformance-main")
 
-	// Second job — e2e → generic "e2e" category (no project-specific override).
+	// Second job: e2e maps to the generic "e2e" category.
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "e2e")
 	assertEqual(t, "jobs[1].MinimumInterval", jobs[1].MinimumInterval, "24h")
 	assertEqual(t, "jobs[1].Timeout", jobs[1].Timeout, "3h")
 
-	// Third job — coverage category.
+	// Third job: coverage category.
 	assertEqual(t, "jobs[2].Category", jobs[2].Category, "coverage")
 }
 
@@ -91,7 +89,7 @@ func TestParsePresubmits(t *testing.T) {
 	assertEqual(t, "Repo", j.Repo, "kubernetes-sigs/cluster-api-provider-azure")
 	assertEqual(t, "JobID", j.JobID, "kubernetes-sigs/cluster-api-provider-azure/pull-cluster-api-provider-azure-e2e")
 
-	// Second presubmit — capi-e2e category.
+	// Second presubmit: capi-e2e category.
 	assertEqual(t, "jobs[1].Category", jobs[1].Category, "capi-e2e")
 	assertEqual(t, "jobs[1].Branch", jobs[1].Branch, "release-1.21")
 	assertEqual(t, "jobs[1].JobType", jobs[1].JobType, models.JobTypePresubmit)
@@ -176,7 +174,7 @@ periodics:
 	if err != nil {
 		t.Fatalf("ParseJobConfig: %v", err)
 	}
-	// No annotations → no testgrid-dashboards → filtered out.
+	// No annotations means no testgrid-dashboards, so the job is filtered out.
 	if len(jobs) != 0 {
 		t.Fatalf("expected 0 jobs, got %d", len(jobs))
 	}
@@ -216,9 +214,8 @@ func TestEmptyInput(t *testing.T) {
 	}
 }
 
-// CAPI-core-style periodics use interval: instead of minimum_interval:.
-// Both forms must produce a non-empty interval so the periodic-only
-// filter doesn't drop them. minimum_interval: wins when both are set.
+// CAPI-core-style periodics may use interval: instead of minimum_interval:.
+// Both forms must populate MinimumInterval; minimum_interval: wins when both exist.
 func TestIntervalFallback(t *testing.T) {
 	yaml := []byte(`
 periodics:
@@ -254,10 +251,8 @@ func assertEqual(t *testing.T, field, got, want string) {
 	}
 }
 
-// A single file may declare both periodics: and presubmits: sections;
-// both should be parsed and each job stamped with the correct JobType.
-// Repo is taken from the presubmits map key for presubmits and is empty
-// for periodics.
+// A file may declare both periodics: and presubmits: sections. Presubmits use
+// the map key as Repo; periodics leave Repo empty.
 func TestParseMixedPeriodicsAndPresubmits(t *testing.T) {
 	yaml := []byte(`
 periodics:
@@ -286,8 +281,7 @@ presubmits:
 	assertEqual(t, "jobs[1].Repo", jobs[1].Repo, "kubernetes-sigs/cluster-api")
 }
 
-// Multiple repos under the same presubmits: section iterate in sorted
-// order so the output is deterministic regardless of map ordering.
+// Multiple repos under the same presubmits: section are sorted for deterministic output.
 func TestParsePresubmits_SortedByRepo(t *testing.T) {
 	yaml := []byte(`
 presubmits:
@@ -319,9 +313,7 @@ presubmits:
 	}
 }
 
-// EffectiveJobType is gone; JobType is now always stamped by the parser.
-// JobIDFor builds a stable identifier that disambiguates same-named jobs
-// across repos and job types.
+// JobIDFor builds a stable identifier across repos and job types.
 func TestJobIDFor(t *testing.T) {
 	cases := []struct {
 		name, jobType, repo, jobName, want string
@@ -340,8 +332,7 @@ func TestJobIDFor(t *testing.T) {
 	}
 }
 
-// Parser stamps JobID using JobIDFor so cache loaders and aggregators can
-// key off a single field without re-deriving it.
+// Parser stamps JobID using JobIDFor so callers can key off one field.
 func TestParseStampsJobID(t *testing.T) {
 	yaml := []byte(`
 periodics:

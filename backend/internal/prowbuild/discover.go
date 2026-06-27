@@ -14,14 +14,13 @@ import (
 // alternative to testgrid-based discovery and suits a bucket dedicated to one
 // project.
 //
-//   - Periodics (and postsubmits, which share the layout) come from the job-name
-//     subdirectories of logs/.
+//   - Periodics and postsubmits come from job-name subdirectories of logs/.
 //   - Presubmits, when includePresubmits is set, come from the job-name
 //     subdirectories of pr-logs/directory/; each job's repo is resolved by
 //     reading one of its index entries.
 //
 // jobFilters, when non-empty, keeps only job names containing one of the
-// substrings (case-insensitive). Omit to take every job in the bucket.
+// substrings case-insensitively. Omit to take every job in the bucket.
 func DiscoverJobs(ctx context.Context, b storage.Backend, includePresubmits bool, jobFilters []string) ([]models.ProwJob, error) {
 	var jobs []models.ProwJob
 
@@ -70,8 +69,8 @@ func DiscoverJobs(ctx context.Context, b storage.Backend, includePresubmits bool
 	return jobs, nil
 }
 
-// matchesFilters reports whether name contains any of the filter substrings
-// (case-insensitive). An empty filter list matches everything.
+// matchesFilters reports whether name contains any filter substring.
+// An empty filter list matches everything.
 func matchesFilters(name string, filters []string) bool {
 	if len(filters) == 0 {
 		return true
@@ -88,8 +87,7 @@ func matchesFilters(name string, filters []string) bool {
 // resolvePresubmitRepo reads the newest index entry under
 // pr-logs/directory/<job>/ and returns the job's "org/repo". The bucket index
 // only encodes "<org>_<repo>" in the entry body, so the first underscore is
-// treated as the org/repo separator (org and repo names use hyphens, not
-// underscores, across Prow).
+// treated as the org/repo separator.
 func resolvePresubmitRepo(ctx context.Context, b storage.Backend, jobName string) (string, bool) {
 	listing, err := b.List(ctx, "pr-logs/directory/"+jobName+"/")
 	if err != nil {

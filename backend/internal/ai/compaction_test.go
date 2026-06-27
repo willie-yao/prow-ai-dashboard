@@ -81,7 +81,7 @@ func TestCompactMessages_ElidesOldestKeepsRecentAndPreamble(t *testing.T) {
 	if isStubbed(out[1].Content) || *out[1].Content != "analyze this failure" {
 		t.Errorf("task must be preserved")
 	}
-	// The most recent tool result should still be full (recent-3 preference).
+	// The most recent tool result stays full due to the recent-3 preference.
 	last := out[len(out)-1]
 	if last.Role != "tool" || isStubbed(last.Content) {
 		t.Errorf("most recent tool result should be kept verbatim, got stubbed=%v", isStubbed(last.Content))

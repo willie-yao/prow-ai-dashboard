@@ -132,7 +132,7 @@ func TestRecoveryDetection(t *testing.T) {
 		TestName:         "TestRecovered",
 	}
 
-	// Report with no persistent failures → recovery.
+	// Report with no persistent failures triggers recovery.
 	report := makeReport(nil)
 	stats, err := n.ProcessFailures(context.Background(), report, nil)
 	if err != nil {
@@ -321,7 +321,7 @@ func TestGracefulEmptyWebhookURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessFailures: %v", err)
 	}
-	// Should count as new alert even though webhook is empty (postWebhook returns nil).
+	// Empty webhook still records a new alert because postWebhook returns nil.
 	if stats.NewAlerts != 1 {
 		t.Fatalf("expected 1 new alert, got %d", stats.NewAlerts)
 	}
@@ -439,7 +439,7 @@ func TestRecoveryCardFormat(t *testing.T) {
 		TestName:         "TestRecoveryCard",
 	}
 
-	report := makeReport(nil) // no persistent failures → recovery
+	report := makeReport(nil) // no persistent failures, so recovery
 	_, err := n.ProcessFailures(context.Background(), report, nil)
 	if err != nil {
 		t.Fatalf("ProcessFailures: %v", err)
