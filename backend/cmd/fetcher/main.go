@@ -1,12 +1,11 @@
 // Command fetcher is the dashboard data pipeline. It loads a project
 // configuration, discovers Prow jobs, fetches build results from GCS, runs
 // optional AI failure analysis, and writes JSON for the frontend to render.
-// All orchestration lives in internal/fetcher; this file is just flag
-// parsing and the explicit wiring of the built-in collector factory into the
-// fetcher's collector registry.
+// Orchestration lives in internal/fetcher; this file handles flags and
+// registers the built-in collector.
 //
-// The `onboard` subcommand scaffolds a new dashboard config from a testgrid
-// dashboard name or a storage bucket (see internal/onboard).
+// The onboard subcommand scaffolds a new dashboard config from a TestGrid
+// dashboard name or storage bucket.
 package main
 
 import (
@@ -21,13 +20,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard"
 )
 
-// version is the engine version, overridden at build time via
-// -ldflags "-X main.version=<tag>". Defaults to "dev" for local builds.
+// version is the engine version. Builds can override it with
+// -ldflags "-X main.version=<tag>"; local builds use "dev".
 var version = "dev"
 
 func main() {
-	// Subcommand dispatch: `fetcher onboard ...` scaffolds a new project;
-	// everything else is the default data-pipeline run.
+	// Dispatch the only subcommand before parsing pipeline flags.
 	if len(os.Args) > 1 && os.Args[1] == "onboard" {
 		runOnboard(os.Args[2:])
 		return
@@ -71,7 +69,7 @@ func runOnboard(args []string) {
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo with the scaffold instead of writing a local directory (needs GITHUB_TOKEN write access)")
 	_ = fs.Parse(args)
 
-	// AI_TOKEN authenticates the chat-completions endpoint (prompt drafting);
+	// AI_TOKEN authenticates the chat-completions endpoint for prompt drafting.
 	// GITHUB_TOKEN reads the source repo's docs.
 	opts.AIToken = os.Getenv("AI_TOKEN")
 	opts.AIEndpoint = os.Getenv("AI_ENDPOINT")

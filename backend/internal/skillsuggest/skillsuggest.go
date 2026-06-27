@@ -17,7 +17,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// keyPrefix namespaces a suggestion's dedup key (one per recurring pattern).
+// keyPrefix namespaces suggestion dedup keys.
 const keyPrefix = "skill-suggest::"
 
 // markerPrefix tags the hidden HTML comment embedded in every suggestion PR so
@@ -54,8 +54,7 @@ type Manager struct {
 	state     *State
 }
 
-// State persists which patterns already have a suggestion PR, so a still-open
-// suggestion is never re-proposed.
+// State persists suggestion PRs so open suggestions are not re-proposed.
 type State struct {
 	// Repo scopes the state; state for a different repo is discarded on load.
 	Repo    string               `json:"repo,omitempty"`
@@ -139,7 +138,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			continue // already suggested
 		}
 
-		// Already covered by an existing skill? (cheap trigger prefilter + LLM)
+		// Check whether an existing skill already covers this pattern.
 		matched := m.triggerMatches(p)
 		covered, reason, err := coveredCheck(ctx, m.completer, existing, matched, p)
 		if err != nil {
@@ -185,14 +184,12 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			Labels:       m.opts.Labels,
 		})
 		if url == "" {
-			// The PR was not opened at all (hard failure); retry next run.
+			// Retry next run if the PR did not open.
 			log.Printf("  ⚠ failed to open suggestion PR for %q: %v", p.Subject, err)
 			continue
 		}
 		if err != nil {
-			// The PR opened but a follow-up (e.g. labeling) failed. Track it
-			// anyway so we don't reopen a duplicate, and still count it against
-			// the per-run cap.
+			// Track opened PRs even when a follow-up such as labeling failed.
 			log.Printf("  ⚠ suggestion PR opened with a warning for %q: %v", p.Subject, err)
 		}
 		m.state.Tracked[key] = TrackedPR{URL: url, OpenedAt: now()}
@@ -221,7 +218,7 @@ func (m *Manager) existingSkills() []existingSkill {
 }
 
 // triggerMatches returns the ids of existing skills whose triggers fire on the
-// pattern text (the cheap prefilter feeding the covered-check).
+// pattern text before the covered-check.
 func (m *Manager) triggerMatches(p models.PatternAnalysis) []string {
 	if m.existing == nil {
 		return nil
@@ -254,11 +251,8 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
-// keyFor is the stable dedup identity of a pattern: the job plus a fingerprint
-// of the shared root cause. Folding in the cause means a DIFFERENT systemic
-// cause later on the same job is suggested separately, while a recurrence of the
-// SAME cause stays deduped. JobID is preferred; the subject is the fallback when
-// a verdict lacks a job id.
+// keyFor is the stable dedup identity: job plus shared-root-cause fingerprint.
+// Distinct causes on the same job get separate suggestions.
 func keyFor(p models.PatternAnalysis) string {
 	job := p.JobID
 	if strings.TrimSpace(job) == "" {

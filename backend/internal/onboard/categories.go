@@ -8,8 +8,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-// maxCategories caps the inferred set so a noisy fleet doesn't produce a wall
-// of one-job rules. The human reviews and trims.
+// maxCategories caps inferred rules so noisy fleets stay reviewable.
 const maxCategories = 8
 
 // tokenSplit breaks a job name into lowercase tokens on any non-alphanumeric
@@ -17,28 +16,22 @@ const maxCategories = 8
 var tokenSplit = regexp.MustCompile(`[^a-z0-9]+`)
 
 // noiseToken matches tokens that carry no grouping signal: pure numbers,
-// version/branch markers, the Prow job-kind prefixes, and "other" (the engine's
-// reserved fallback id, which Validate rejects). These never become categories.
-// (Tokens like "e2e"/"ci" are intentionally NOT treated as noise: they can be
-// meaningful groupings, and the all-jobs and frequency checks already demote
-// truly ubiquitous tokens.)
+// version markers, Prow job-kind prefixes, and the reserved "other" id.
+// Tokens like "e2e" and "ci" can be meaningful, so frequency checks handle them.
 var noiseToken = regexp.MustCompile(`^(\d+|v\d.*|release|main|master|periodic|presubmit|other)$`)
 
 // InferCategories proposes an ordered set of {match, id, label} rules by
 // clustering the job names on their distinguishing tokens. It is deterministic
 // and meant as a reviewable starting point, not a perfect taxonomy: a token
-// that partitions the fleet (appears in several jobs but not all, and isn't
-// version/branch noise) becomes a category, most specific first so the
-// engine's first-match-wins ordering keeps narrow groups ahead of broad ones.
-// Returns nil when no token groups the jobs usefully (a flat grid, which is a
-// valid config).
+// that partitions the fleet becomes a category. Narrow groups come first to
+// match the engine's first-match-wins semantics. Returns nil for a flat grid.
 func InferCategories(jobNames []string) []project.CategoryRule {
 	n := len(jobNames)
 	if n < 2 {
 		return nil
 	}
 
-	// token -> set of job indices that contain it.
+	// Map each token to the job indices containing it.
 	tokenJobs := map[string]map[int]bool{}
 	for i, name := range jobNames {
 		seen := map[string]bool{}
@@ -54,9 +47,7 @@ func InferCategories(jobNames []string) []project.CategoryRule {
 		}
 	}
 
-	// Candidate tokens: appear as a distinct token in at least 2 jobs but not in
-	// every job (a token shared by all is the common prefix, not a
-	// distinguisher).
+	// Candidate tokens appear in at least 2 jobs but not every job.
 	var candTokens []string
 	for tok, jobs := range tokenJobs {
 		if len(jobs) >= 2 && len(jobs) < n {
@@ -64,11 +55,8 @@ func InferCategories(jobNames []string) []project.CategoryRule {
 		}
 	}
 
-	// Coverage is computed with the engine's runtime semantics: a category rule
-	// matches a job by case-insensitive SUBSTRING (project.Categorize), so e.g.
-	// "api" also matches "capi" jobs. Ordering and greedy selection use this
-	// real match set, not the exact-token set, so the proposed rules classify
-	// the jobs the way they actually will at runtime.
+	// Use runtime substring semantics so proposed rules classify jobs the same
+	// way project.Categorize will.
 	lowerNames := make([]string, n)
 	for i, name := range jobNames {
 		lowerNames[i] = strings.ToLower(name)
@@ -91,7 +79,7 @@ func InferCategories(jobNames []string) []project.CategoryRule {
 	for _, tok := range candTokens {
 		cands = append(cands, cand{token: tok, jobs: substringJobs(tok)})
 	}
-	// Most specific first (fewest matches), then alphabetical for stability.
+	// Most specific first, then alphabetical for stability.
 	sort.Slice(cands, func(i, j int) bool {
 		if len(cands[i].jobs) != len(cands[j].jobs) {
 			return len(cands[i].jobs) < len(cands[j].jobs)
@@ -129,8 +117,7 @@ func InferCategories(jobNames []string) []project.CategoryRule {
 	return rules
 }
 
-// labelFor renders a token as a human label: hyphen/underscore to space and
-// title-cased, with common acronyms upper-cased.
+// labelFor renders a token as a title-cased label with known acronyms.
 func labelFor(token string) string {
 	parts := strings.FieldsFunc(token, func(r rune) bool { return r == '-' || r == '_' })
 	for i, p := range parts {

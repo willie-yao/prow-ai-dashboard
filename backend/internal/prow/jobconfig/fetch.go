@@ -23,12 +23,11 @@ var (
 	apiBaseURL = "https://api.github.com/repos/kubernetes/test-infra/"
 )
 
-// configJobsPrefix scopes discovery to the prow job tree. Anything outside
-// (e.g. config/testgrids/, prow/ scripts) is not authoritative for jobs.
+// configJobsPrefix scopes discovery to the Prow job tree.
 const configJobsPrefix = "config/jobs/"
 
 // downloadWorkers caps how many raw.githubusercontent.com requests can be in
-// flight concurrently. 10 keeps total time around 5-10s for ~600 files on a
+// flight concurrently. 10 keeps total time around 5 to 10s for about 600 files on a
 // typical runner while staying well under any plausible CDN burst limits.
 const downloadWorkers = 10
 
@@ -105,10 +104,9 @@ type gitTreeResponse struct {
 	} `json:"tree"`
 }
 
-// listConfigJobsYAMLs returns sorted repo-relative paths of every YAML blob
-// under configJobsPrefix in the given commit's recursive tree. Truncated
-// responses are a hard error: silently under-discovering jobs would be worse
-// than a loud failure that points the operator at the cap.
+// listConfigJobsYAMLs returns sorted repo-relative YAML paths under
+// configJobsPrefix. Truncated responses are a hard error so job discovery never
+// silently misses part of the tree.
 func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) ([]string, error) {
 	url := apiBaseURL + "git/trees/" + sha + "?recursive=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -157,7 +155,7 @@ func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) (
 }
 
 // downloadAndParseAll fetches every candidate file in parallel from
-// raw.githubusercontent.com (pinned to the same SHA) and runs them through
+// raw.githubusercontent.com pinned to the same SHA and runs them through
 // ParseJobConfig, which keeps only jobs whose testgrid-dashboards annotation
 // contains cfg.TestGrid.Dashboard. The first file-level error cancels every
 // in-flight goroutine and is returned to the caller.
@@ -242,9 +240,8 @@ func downloadRaw(ctx context.Context, client *http.Client, sha, file string) ([]
 }
 
 // addGitHubAuth attaches the GITHUB_TOKEN when present. The token bumps the
-// API rate limit from 60/hr (anonymous) to 5000/hr (authenticated). It is
-// optional so local `make fetch-data-quick` works without setup, but warned
-// about: 60/hr is uncomfortably low for an iteration loop.
+// API rate limit from 60 per hour anonymous to 5000 per hour authenticated.
+// It is optional so local `make fetch-data-quick` works without setup.
 func addGitHubAuth(req *http.Request) {
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -262,9 +259,7 @@ func snippet(body []byte) string {
 }
 
 // DerivePeriodicPrefix returns the longest "periodic-<x>-" prefix shared by a
-// strict majority of periodic jobs in the input, or "" when no such prefix
-// exists. Used as a display-only hint for the frontend to strip a project's
-// common boilerplate from job names. Presubmits are ignored.
+// strict majority of periodic jobs. Presubmits are ignored.
 func DerivePeriodicPrefix(jobs []models.ProwJob) string {
 	const periodic = "periodic-"
 	var names []string
@@ -277,7 +272,7 @@ func DerivePeriodicPrefix(jobs []models.ProwJob) string {
 		return ""
 	}
 
-	// Count every "periodic-<tok-...->" prefix (ending at each '-' boundary)
+	// Count every "periodic-<tok-...->" prefix ending at each hyphen boundary
 	// across all periodic job names, then pick the longest one shared by a
 	// strict majority. Stripping a longer prefix tightens display while the
 	// majority threshold prevents over-stripping in dashboards with mixed

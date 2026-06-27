@@ -9,10 +9,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 )
 
-// TestPuntRE_SanityTable mirrors the 12-case sanity check used to
-// validate the Python A/B harness regex in build_ab_l4s1.py. Keeping
-// the table identical means a future regex tweak that breaks Python /
-// Go agreement will surface in CI.
+// TestPuntRE_SanityTable mirrors the Python harness cases so Go and Python
+// regex behavior stay aligned.
 func TestPuntRE_SanityTable(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -111,12 +109,8 @@ func TestCritiqueDraft_PassedReturnsEmptyFeedback(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_FeedbackQuotesOffendingText verifies that on
-// failure the feedback message quotes the model's own suggested_fix
-// and lists the matched phrases. The model needs to see exactly what
-// tripped the gate so it can re-emit something different — a vague
-// "you punted, try again" feedback would just reproduce the same
-// punt.
+// TestCritiqueDraft_FeedbackQuotesOffendingText verifies failure feedback quotes
+// the draft and lists matched phrases.
 func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 	bad := "Check the AzureMachine status. Verify cloud-init."
 	out := critiqueDraft(analysisResponse{SuggestedFix: bad}, nil, nil, nil)
@@ -131,7 +125,7 @@ func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 			t.Errorf("Feedback should list matched phrase %q\nfeedback:\n%s", m, out.Feedback)
 		}
 	}
-	// Re-state the two allowed shapes so the retry has a clear target.
+	// Restate the allowed shapes so retries have a clear target.
 	for _, anchor := range []string{
 		"CONCRETE remediation",
 		"No remediation possible from available evidence",
@@ -143,28 +137,23 @@ func TestCritiqueDraft_FeedbackQuotesOffendingText(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_FeedbackDeduplicatesMatches: a punt that hits the
-// regex 5x on the same phrase (e.g. "check ... check ... check")
-// should only quote that phrase once in the feedback message to keep
-// the user-message short.
+// TestCritiqueDraft_FeedbackDeduplicatesMatches verifies repeated matches are
+// listed once in feedback.
 func TestCritiqueDraft_FeedbackDeduplicatesMatches(t *testing.T) {
 	repeat := "Check A. Check B. Check C. Check D."
 	out := critiqueDraft(analysisResponse{SuggestedFix: repeat}, nil, nil, nil)
 	if out.Passed {
 		t.Fatalf("expected punt")
 	}
-	// Conservatively: feedback should contain "Check" but not list it
-	// four separate times in the "matched: ..." block.
+	// Feedback should contain "Check" but not list it four times.
 	matchedSection := out.Feedback[strings.Index(out.Feedback, "(matched:"):]
 	if strings.Count(strings.ToLower(matchedSection), `"check"`) > 1 {
 		t.Errorf("Feedback should list 'Check' once, got:\n%s", matchedSection)
 	}
 }
 
-// TestCritiqueDraft_EmptySuggestedFixPasses: edge case. An empty
-// suggested_fix can't punt by definition (nothing to match). The
-// upstream caller is responsible for treating empty fixes as a
-// separate quality signal; critique just checks for punt patterns.
+// TestCritiqueDraft_EmptySuggestedFixPasses verifies empty suggested_fix passes
+// this punt-pattern check.
 func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
 	out := critiqueDraft(analysisResponse{SuggestedFix: ""}, nil, nil, nil)
 	if !out.Passed {
@@ -174,12 +163,8 @@ func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
 
 // --- Hallucination + import-path checks ---
 
-// TestNormalizeArtifactCitation pins the cleaning rules: line-number
-// suffixes are stripped, OS-style backslashes are normalized to slashes,
-// case is lowered, wrapping punctuation/quotes/backticks are trimmed,
-// and leading "./" or "/" is removed. The writer (recordSuccessfulRead)
-// and reader (findUnreadArtifactCitations) both go through this so
-// any mismatch becomes a real bug instead of a silent miss.
+// TestNormalizeArtifactCitation covers the shared citation-cleaning rules used
+// by read tracking and unread-citation detection.
 func TestNormalizeArtifactCitation(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -204,10 +189,8 @@ func TestNormalizeArtifactCitation(t *testing.T) {
 	}
 }
 
-// TestFindUnreadArtifactCitations covers the citation-matching rules:
-// qualified paths require full-path match, bare basenames match any
-// read with the same basename, and source files (.go/.yaml) are not
-// flagged. Nil maps disable the check (used by punt-only tests).
+// TestFindUnreadArtifactCitations covers full-path matches, basename matches,
+// source-file exclusions, and nil-map disabling.
 func TestFindUnreadArtifactCitations(t *testing.T) {
 	t.Run("nil maps disable check", func(t *testing.T) {
 		if got := findUnreadArtifactCitations("the manager.log shows an error", nil, nil); got != nil {
@@ -277,17 +260,14 @@ func TestFindUnreadArtifactCitations(t *testing.T) {
 	})
 }
 
-// TestFindHallucinatedImportPaths pins the import-path heuristic: GOPATH-
-// shaped prefixes are flagged, repo-relative paths pass.
-// TestCritiqueDraft_HallucinationOnly verifies that a clean-fix
-// answer that nonetheless cites an unread artifact still fails critique.
-// Both signals must be clean for Passed=true.
+// TestCritiqueDraft_HallucinationOnly verifies unread artifact citations fail
+// critique even when the punt check passes.
 func TestCritiqueDraft_HallucinationOnly(t *testing.T) {
 	parsed := analysisResponse{
 		RootCause:    "The boot.log on the third control plane shows DNS failure.",
 		SuggestedFix: "Update kustomize/cluster-template.yaml to match the vnet peering name; reapply.",
 	}
-	// Reads empty (initialized, not nil) so the hallucination check fires.
+	// Empty initialized reads make the unread-citation check fire.
 	out := critiqueDraft(parsed, map[string]bool{}, map[string]bool{}, nil)
 	if out.Passed {
 		t.Fatalf("expected fail on hallucinated citation, got passed: %+v", out)
@@ -306,11 +286,8 @@ func TestCritiqueDraft_HallucinationOnly(t *testing.T) {
 	}
 }
 
-// TestArtifactCitationRE_BroadenedCoverage pins the broadened-coverage
-// rebuilds: artifact-shaped .txt / .json paths are flagged when
-// qualified with a directory (so source-file false positives are
-// minimized) and junit filenames using ".", "-" or "_" separators are
-// all caught.
+// TestArtifactCitationRE_BroadenedCoverage covers qualified .txt/.json artifact
+// paths and JUnit filename variants.
 func TestArtifactCitationRE_BroadenedCoverage(t *testing.T) {
 	cases := []struct {
 		text     string
@@ -344,12 +321,8 @@ func TestArtifactCitationRE_BroadenedCoverage(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_CitesRealReleaseURL_Passes guards against the
-// regression this check's removal fixed: the model legitimately cites a
-// real upstream release asset (e.g. the clusterctl core-components.yaml
-// download) in prose for provenance. The old import-path heuristic flagged
-// that real URL as a fabricated import and rejected otherwise-grounded
-// analyses, which collapsed the agentic cache rate. Such a draft must pass.
+// TestCritiqueDraft_CitesRealReleaseURL_Passes verifies real upstream release
+// URLs are not flagged as fabricated import paths.
 func TestCritiqueDraft_CitesRealReleaseURL_Passes(t *testing.T) {
 	parsed := analysisResponse{
 		RootCause:    "clusterctl failed to apply https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.11.11/core-components.yaml because the management cluster could not reach the registry.",
@@ -386,11 +359,8 @@ func loadSkillsForTest(t *testing.T, recipes map[string]string) *skills.Set {
 	return set
 }
 
-// TestCritiqueDraft_SkillMatchEvidenceSatisfied_Passes is the happy
-// path: a recipe matches the draft, but the agent has read artifacts
-// that satisfy every required-evidence group. Critique should pass
-// even though the recipe matched, because the contract is "if it
-// matches, the evidence must be present", not "if it matches, fail".
+// TestCritiqueDraft_SkillMatchEvidenceSatisfied_Passes verifies matched recipes
+// pass when every required-evidence group is satisfied.
 func TestCritiqueDraft_SkillMatchEvidenceSatisfied_Passes(t *testing.T) {
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook-tls": `
@@ -420,11 +390,8 @@ required_evidence:
 	}
 }
 
-// TestCritiqueDraft_SkillMatchMissingEvidence_FailsAndQuotesProcedure
-// covers the central invariant: when a recipe matches but the
-// agent hasn't read the required evidence, critique fails with a
-// feedback block that names the recipe, lists the missing groups,
-// and quotes the procedure.
+// TestCritiqueDraft_SkillMatchMissingEvidence_FailsAndQuotesProcedure verifies
+// missing required evidence fails and quotes the recipe procedure.
 func TestCritiqueDraft_SkillMatchMissingEvidence_FailsAndQuotesProcedure(t *testing.T) {
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook-tls": `
@@ -450,7 +417,7 @@ procedure: |
 		RootCause:    "Webhook x509 failure suggests cert-manager misconfiguration.",
 		SuggestedFix: "Patch the cert-manager Certificate and reapply.",
 	}
-	// Agent has read NOTHING relevant.
+	// Agent has read no relevant evidence.
 	reads := map[string]bool{"build-log.txt": true}
 	out := critiqueDraft(parsed, reads, map[string]bool{"build-log.txt": true}, set.Match("x509"))
 	if out.Passed {
@@ -485,10 +452,8 @@ procedure: |
 	}
 }
 
-// TestCritiqueDraft_SkillMatchPartialEvidence_FlagsOnlyMissing
-// verifies that when only some groups are missing, only those are
-// surfaced in the outcome. Prevents a regression where the formatter
-// might quote satisfied groups as missing.
+// TestCritiqueDraft_SkillMatchPartialEvidence_FlagsOnlyMissing verifies only
+// missing groups are surfaced.
 func TestCritiqueDraft_SkillMatchPartialEvidence_FlagsOnlyMissing(t *testing.T) {
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook-tls": `
@@ -519,14 +484,13 @@ required_evidence:
 		t.Errorf("Feedback should mention missing group: %s", out.Feedback)
 	}
 	if strings.Contains(out.Feedback, "cert-config") {
-		// satisfied group should NOT be surfaced
+		// Satisfied groups should not be surfaced.
 		t.Errorf("Feedback unexpectedly mentions satisfied group cert-config: %s", out.Feedback)
 	}
 }
 
-// TestCritiqueDraft_NilSkillsDisablesCheck verifies that passing nil for
-// matchedSkills disables the skill-evidence check entirely, even if the draft
-// would otherwise have matched a recipe.
+// TestCritiqueDraft_NilSkillsDisablesCheck verifies nil matchedSkills disables
+// the skill-evidence check.
 func TestCritiqueDraft_NilSkillsDisablesCheck(t *testing.T) {
 	parsed := analysisResponse{
 		RootCause:    "Webhook x509 failure.",
@@ -541,10 +505,8 @@ func TestCritiqueDraft_NilSkillsDisablesCheck(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_MultipleSkillsMatchSurfaceAll verifies that when
-// multiple recipes match, each contributes its own miss block. The
-// loop budget needs to know the total count so the formatter must
-// surface all of them, not collapse them.
+// TestCritiqueDraft_MultipleSkillsMatchSurfaceAll verifies each matching recipe
+// contributes its own miss block.
 func TestCritiqueDraft_MultipleSkillsMatchSurfaceAll(t *testing.T) {
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
@@ -584,11 +546,8 @@ required_evidence:
 	}
 }
 
-// TestCritiqueDraft_SkillCombinesWithPuntAndHallucination verifies
-// the multi-section feedback contract: the three remaining critique
-// categories (punt, unread citations, missing skill evidence) can fire
-// together and each produces its own section. Ensures the model gets one
-// combined feedback message rather than playing whack-a-mole across rounds.
+// TestCritiqueDraft_SkillCombinesWithPuntAndHallucination verifies punt, unread
+// citation, and missing-evidence sections can appear together.
 func TestCritiqueDraft_SkillCombinesWithPuntAndHallucination(t *testing.T) {
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
@@ -603,8 +562,7 @@ required_evidence:
 		RootCause:    "x509 failure visible in build-log.txt and machine-foo/boot.log.",
 		SuggestedFix: "Check the cert and verify the webhook secret.", // bare-imperative punt
 	}
-	// build-log.txt is read; machine-foo/boot.log is NOT read → unread
-	// citation.
+	// build-log.txt is read; machine-foo/boot.log is not.
 	out := critiqueDraft(parsed,
 		map[string]bool{"build-log.txt": true},
 		map[string]bool{"build-log.txt": true},
@@ -654,8 +612,7 @@ required_evidence:
 		RootCause:    "x509 webhook validation failed; see build-log.txt.",
 		SuggestedFix: "Regenerate the webhook serving certificate and redeploy.",
 	}
-	// build-log.txt read so the unread check is clean; the cert-config group
-	// is unsatisfied (no config/webhook/*.yaml read).
+	// build-log.txt read keeps unread-citation clean; cert-config remains unsatisfied.
 	out := critiqueDraft(parsed,
 		map[string]bool{"build-log.txt": true},
 		map[string]bool{"build-log.txt": true},

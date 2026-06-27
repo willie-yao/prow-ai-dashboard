@@ -56,7 +56,7 @@ func searchJobs() []models.ProwJob {
 }
 
 func TestBuildSearchIndex_Deduplication(t *testing.T) {
-	// Same test name appears in multiple runs of the same job → one entry.
+	// Same test name across runs of one job yields one entry.
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
@@ -83,7 +83,7 @@ func TestBuildSearchIndex_Deduplication(t *testing.T) {
 }
 
 func TestBuildSearchIndex_StatusFromLatestRun(t *testing.T) {
-	// Latest run (newest) has passed, older run had failed → status should be "passed".
+	// Latest run passed, so status should be "passed".
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
@@ -111,7 +111,7 @@ func TestBuildSearchIndex_StatusFromLatestRun(t *testing.T) {
 	if found.Status != "passed" {
 		t.Errorf("Status = %q, want %q", found.Status, "passed")
 	}
-	// fail_rate = 1 failure / 2 appearances = 0.5
+	// fail_rate is 1 failure over 2 appearances.
 	if found.FailRate != 0.5 {
 		t.Errorf("FailRate = %f, want 0.5", found.FailRate)
 	}
@@ -174,19 +174,19 @@ func TestBuildSearchIndex_SetupTeardownExclusion(t *testing.T) {
 		names[e.TestName] = true
 	}
 
-	// SynchronizedBeforeSuite passed → excluded
+	// Passing SynchronizedBeforeSuite is excluded.
 	if names["[SynchronizedBeforeSuite] setup"] {
 		t.Error("passing SynchronizedBeforeSuite should be excluded")
 	}
-	// AfterSuite passed → excluded
+	// Passing AfterSuite is excluded.
 	if names["[AfterSuite] cleanup"] {
 		t.Error("passing AfterSuite should be excluded")
 	}
-	// BeforeSuite failed → included
+	// Failed BeforeSuite is included.
 	if !names["[BeforeSuite] init"] {
 		t.Error("failed BeforeSuite should be included")
 	}
-	// Normal test → included
+	// Normal test is included.
 	if !names["TestNormal"] {
 		t.Error("TestNormal should be included")
 	}
@@ -213,11 +213,11 @@ func TestBuildSearchIndex_SortOrder(t *testing.T) {
 
 	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
 
-	// 2 job entries + 3 test entries = 5 total
+	// 2 job entries plus 3 test entries.
 	if len(idx.Entries) != 5 {
 		t.Fatalf("expected 5 entries, got %d", len(idx.Entries))
 	}
-	// Filter to test entries only for sort order check
+	// Filter to test entries only for sort order checks.
 	var testEntries []models.SearchEntry
 	for _, e := range idx.Entries {
 		if e.Kind == "test" {
@@ -250,11 +250,10 @@ func TestBuildSearchIndex_JobMetadata(t *testing.T) {
 
 	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
 
-	// 1 job entry + 1 test entry = 2
+	// 1 job entry plus 1 test entry.
 	if len(idx.Entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(idx.Entries))
 	}
-	// Find the test entry
 	var e models.SearchEntry
 	for _, entry := range idx.Entries {
 		if entry.Kind == "test" {

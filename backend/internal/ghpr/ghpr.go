@@ -1,8 +1,5 @@
-// Package ghpr opens a pull request that adds or updates a set of files in one
-// clean commit, using the GitHub Git Data API. It is shared by the onboard
-// scaffold flow and the skill-suggestion flow, and is built with seams (commit
-// author, DCO sign-off, draft, fork target) for a future source-repo fix-PR
-// feature.
+// Package ghpr opens pull requests that add or update files in one commit using
+// the GitHub Git Data API. It is shared by onboarding and skill suggestions.
 package ghpr
 
 import (
@@ -31,7 +28,7 @@ type Client struct {
 	base       string
 }
 
-// NewClient builds a Client. httpClient may be nil (defaults to a 30s client).
+// NewClient builds a Client. A nil httpClient defaults to a 30s client.
 func NewClient(httpClient *http.Client, token string) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
@@ -47,19 +44,18 @@ type Request struct {
 	// Files maps repo-relative path to file content. Existing paths are
 	// overwritten in the new commit; others are carried over from the base.
 	Files map[string]string
-	// BranchPrefix names the throwaway head branch; a unix-time + random
-	// suffix is appended for uniqueness (e.g. "onboard/scaffold").
+	// BranchPrefix names the throwaway head branch. A unix-time and random suffix
+	// are appended for uniqueness.
 	BranchPrefix string
 	Title        string
 	Body         string
 	// Draft opens the PR as a draft.
 	Draft bool
-	// Labels are applied to the PR after creation (the pulls API can't set
-	// them at creation time). Optional.
+	// Labels are applied to the PR after creation. The pulls API cannot set them
+	// at creation time.
 	Labels []string
-	// AuthorName / AuthorEmail set the commit author. Empty uses the token's
-	// own identity. SignOff appends a DCO "Signed-off-by" trailer matching the
-	// author (both are seams for the source-repo fix-PR feature).
+	// AuthorName and AuthorEmail set the commit author. Empty uses the token's
+	// identity. SignOff appends a DCO "Signed-off-by" trailer for that author.
 	AuthorName  string
 	AuthorEmail string
 	SignOff     bool
@@ -95,7 +91,7 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 		return "", err
 	}
 	if len(req.Labels) > 0 {
-		// Best-effort: a labeling failure shouldn't discard an opened PR.
+		// A labeling failure should not discard an opened PR.
 		if err := c.addLabels(ctx, req.Owner, req.Repo, number, req.Labels); err != nil {
 			return htmlURL, fmt.Errorf("PR %s opened but labeling failed: %w", htmlURL, err)
 		}
@@ -217,8 +213,7 @@ func (c *Client) createPR(ctx context.Context, owner, repo, title, body, head, b
 	return out.Number, out.HTMLURL, err
 }
 
-// addLabels applies labels to an open PR (via the shared issues endpoint, since
-// the pulls API can't set labels at creation).
+// addLabels applies labels through the shared issues endpoint.
 func (c *Client) addLabels(ctx context.Context, owner, repo string, number int, labels []string) error {
 	return c.post(ctx, c.url(owner, repo, fmt.Sprintf("issues/%d/labels", number)),
 		map[string]any{"labels": labels}, nil)
@@ -282,10 +277,8 @@ func truncate(s string, max int) string {
 }
 
 // SearchOpenPR finds an open PR in owner/repo whose body contains confirmMarker.
-// queryToken is the distinctive search term (e.g. the marker's hex token); the
-// full confirmMarker is then matched as a substring to rule out a token-level
-// false positive. Lets callers avoid opening a duplicate PR even when local
-// state is lost.
+// queryToken narrows the search. The full confirmMarker is checked to avoid
+// token-level false positives when local state is lost.
 func (c *Client) SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
 	q := fmt.Sprintf("repo:%s/%s is:pr is:open %s in:body", owner, repo, queryToken)
 	searchURL := c.base + "/search/issues?per_page=5&q=" + url.QueryEscape(q)
@@ -299,8 +292,7 @@ func (c *Client) SearchOpenPR(ctx context.Context, owner, repo, queryToken, conf
 	if err := c.get(ctx, searchURL, &out); err != nil {
 		return 0, "", false, err
 	}
-	// The search API tokenizes the body, so confirm the full marker is actually
-	// present before adopting (guards against a token-level false positive).
+	// GitHub search tokenizes bodies, so confirm the full marker before adoption.
 	for _, it := range out.Items {
 		if strings.Contains(it.Body, confirmMarker) {
 			return it.Number, it.HTMLURL, true, nil

@@ -76,11 +76,10 @@ export function DashboardPage() {
     if (!data) return [];
     const set = new Set(data.jobs.map((j) => j.branch).filter(Boolean));
     return Array.from(set).sort((a, b) => {
-      // "main" always first
+      // Keep "main" first.
       if (a === "main") return -1;
       if (b === "main") return 1;
-      // Release branches: sort descending (newest first)
-      // Extract version numbers for proper numeric comparison
+      // Sort release branches newest first with numeric version comparison.
       const aMatch = a.match(/(\d+)\.(\d+)/);
       const bMatch = b.match(/(\d+)\.(\d+)/);
       if (aMatch && bMatch) {

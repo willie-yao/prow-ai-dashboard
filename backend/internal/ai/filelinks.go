@@ -14,42 +14,40 @@ import (
 // File-link verification. The UI links file citations in an analysis to GitHub,
 // but a bare path like "test/e2e/clusterctl_upgrade_test.go" is ambiguous: it
 // may live in the project's own repo or in an upstream repo, and guessing wrong
-// produces a broken link. Browsers can't probe GitHub (CORS), so the fetcher
-// resolves each cited source path to a repo and verifies it exists (HTTP 200)
-// against raw.githubusercontent.com, recording only the links that resolve. The
+// produces a broken link. Browsers can't probe GitHub because of CORS, so the
+// fetcher resolves each cited source path to a repo and verifies it exists with
+// HTTP 200 against raw.githubusercontent.com, recording only the links that resolve. The
 // UI then links a path only if it is present in the verified map.
 //
 // Resolution is generic: nothing here knows about any specific project or
-// ecosystem. A path is resolved against, in order, (1) the project's own source
-// repo (branding.source_repo); (2) a Go vanity import host via the standard
-// `?go-get=1` meta tag, when the first segment is a host; (3) an
-// "owner/repo/path" GitHub reference. The first interpretation that verifies
-// wins.
+// ecosystem. A path is resolved against the project's own source repo, then a
+// Go vanity import host via `?go-get=1` when the first segment is a host, then
+// an "owner/repo/path" GitHub reference. The first interpretation that verifies wins.
 
-// trailingParenRe strips a trailing "(...)" annotation (e.g. "(lines 10-20)")
-// before resolving; mirrors the frontend's fileToUrl cleaning.
+// trailingParenRe strips a trailing parenthetical annotation, such as a line
+// annotation, before resolving. Mirrors the frontend's fileToUrl cleaning.
 var trailingParenRe = regexp.MustCompile(`\s*\(.*\)$`)
 
 // pathTokenRe extracts candidate file paths from prose: one or more
 // "/"-separated segments ending in a known extension. Mirrors the frontend
 // PATH_RE so the keys it produces match the tokens the UI looks up. Only
-// source-file extensions are verified as GitHub links (see sourceExtRe).
+// source-file extensions are verified as GitHub links.
 var pathTokenRe = regexp.MustCompile(`(?:[\w.-]+/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf)\b`)
 
-// sourceExtRe matches the file extensions that denote source files (as opposed
-// to run artifacts, which the UI links against the build's GCS tree).
+// sourceExtRe matches source-file extensions. Run artifacts are linked against
+// the build's GCS tree.
 var sourceExtRe = regexp.MustCompile(`\.(?:go|yaml|yml|sh|json|tpl|md)$`)
 
-// goImportMetaRe extracts the go-import meta tag's content (which may span
-// multiple lines): "<import-prefix> <vcs> <repo-url>".
+// goImportMetaRe extracts the go-import meta tag's content. It may span
+// multiple lines and has shape "<import-prefix> <vcs> <repo-url>".
 var goImportMetaRe = regexp.MustCompile(`(?s)<meta\s+name="go-import"\s+content="([^"]+)"`)
 
 // maxLinkCandidates caps verification work per analysis against pathological
 // prose.
 const maxLinkCandidates = 60
 
-// rawContentBase / goGetScheme are the origins used to verify file existence
-// and resolve vanity imports. Vars so tests can point them at a stub server.
+// rawContentBase and goGetScheme are origins for file-existence checks and
+// vanity import resolution. Vars so tests can point them at a stub server.
 var (
 	rawContentBase = "https://raw.githubusercontent.com"
 	goGetScheme    = "https://"
@@ -59,8 +57,8 @@ var (
 // gathers candidate source paths from relevant_files and the analysis prose,
 // resolves each to a verified GitHub blob URL, and returns only the paths that
 // resolve. The map is always non-nil so the published JSON carries
-// "file_links": {...} (an empty map still means "verified, nothing to link",
-// distinct from absent on pre-feature data).
+// "file_links": {...}. An empty map means "verified, nothing to link" and is
+// distinct from absent on older data.
 func (s *Service) resolveFileLinks(ctx context.Context, client *http.Client, tc *models.TestCase) map[string]string {
 	links := map[string]string{}
 	if tc.AIAnalysis == nil {
@@ -105,8 +103,8 @@ func (s *Service) resolveFileLinks(ctx context.Context, client *http.Client, tc 
 }
 
 // resolveSourceLink resolves a cleaned source path to a verified GitHub blob
-// URL, trying the project repo, then (for a leading host segment) an explicit
-// github.com path or a Go vanity import, then an owner/repo/path reference.
+// URL, trying the project repo, then for a leading host segment an explicit
+// github.com path or Go vanity import, then an owner/repo/path reference.
 // Returns ok=false if nothing verifies.
 func (s *Service) resolveSourceLink(ctx context.Context, client *http.Client, clean string) (string, bool) {
 	segs := strings.Split(clean, "/")
@@ -115,15 +113,15 @@ func (s *Service) resolveSourceLink(ctx context.Context, client *http.Client, cl
 	}
 
 	// The project's own repo, with the path as cited. Tried first so a project
-	// directory whose name contains a dot (e.g. ".github/workflows/...") is not
+	// directory whose name contains a dot, such as ".github/workflows", is not
 	// mistaken for a vanity host below.
 	if s.sourceRepoOwner != "" && s.sourceRepoName != "" &&
 		s.verifyGitHubFile(ctx, client, s.sourceRepoOwner, s.sourceRepoName, clean) {
 		return blobURL(s.sourceRepoOwner, s.sourceRepoName, clean), true
 	}
 
-	// A leading host segment (contains a dot) denotes an explicit github.com
-	// path or a Go vanity import path, e.g. "sigs.k8s.io/cluster-api/...".
+	// A leading host segment containing a dot denotes an explicit github.com
+	// path or a Go vanity import path.
 	if strings.Contains(segs[0], ".") {
 		if segs[0] == "github.com" && len(segs) >= 4 {
 			owner, repo, inRepo := segs[1], segs[2], strings.Join(segs[3:], "/")

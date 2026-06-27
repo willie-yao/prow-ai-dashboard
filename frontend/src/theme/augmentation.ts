@@ -1,10 +1,10 @@
-// TypeScript module augmentation so our custom palette keys and typography
-// variants are first-class citizens of the MUI theme (usable via `sx`, the
-// `theme.palette.*` API, and the Typography `variant` prop).
+// TypeScript module augmentation for custom palette keys and typography
+// variants. This makes them available through `sx`, `theme.palette`, and the
+// Typography `variant` prop.
 import type * as React from "react";
 
-// Extra surface-container levels MD3 exposes that MUI's default palette lacks.
-// MUI gives us background.default + background.paper; these fill in the rest.
+// MUI's default palette only has background.default and background.paper; these
+// fill in the remaining MD3 surface-container levels.
 export interface SurfacePalette {
   main: string;
   dim: string;

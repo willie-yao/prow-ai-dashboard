@@ -10,10 +10,8 @@ import (
 // provider-agnostic flavor-substring matcher tries first; on miss, the
 // CAPZ-flavored rules table fills in. Returns nil when no cluster matches.
 //
-// Behavior is ported verbatim from collectors/capi/discover.go so existing
-// CAPZ + CAPI core dashboards keep the same test→cluster mapping. The rules
-// table stays here as the engine default; a future change can make it
-// project-overridable without touching this signature.
+// The CAPZ-flavored rules table preserves current CAPZ and CAPI core
+// test-to-cluster mapping as the engine default.
 func MapTestToCluster(testName string, clusters []Cluster) *Cluster {
 	if len(clusters) == 0 {
 		return nil
@@ -74,10 +72,8 @@ func MapTestToCluster(testName string, clusters []Cluster) *Cluster {
 	return nil
 }
 
-// clusterFlavorRules maps test name keywords to cluster directory name
-// fragments. Ported verbatim from collectors/capi/discover.go. CAPZ-flavored
-// today; kept as the engine default until a real consumer requests
-// per-project override.
+// clusterFlavorRules maps test name keywords to cluster directory fragments.
+// CAPZ-flavored rules are the engine default fallback.
 var clusterFlavorRules = []struct {
 	testKeywords    []string
 	clusterKeywords []string

@@ -50,7 +50,7 @@ func (f *fakeCompleter) Complete(_ context.Context, system, _ string) (string, e
 type fakePR struct {
 	opened      []ghpr.Request
 	openErr     error
-	openURL     string // url returned alongside openErr (partial success)
+	openURL     string // url returned alongside openErr
 	searchURL   string
 	searchFound bool
 	searchErr   error
@@ -241,8 +241,7 @@ func TestExtractYAML_StripsFence(t *testing.T) {
 }
 
 func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
-	// OpenPR returns a url plus an error (e.g. labeling failed). The PR exists,
-	// so it must be tracked and counted against the cap (not retried/duplicated).
+	// OpenPR can return a URL plus an error; the created PR still counts.
 	pr := &fakePR{openErr: errLabel, openURL: "https://github.com/o/r/pull/9"}
 	c := &fakeCompleter{covered: `{"covered": false}`, recipe: validRecipe}
 	m := newManager(t, pr, c, nil, Options{})

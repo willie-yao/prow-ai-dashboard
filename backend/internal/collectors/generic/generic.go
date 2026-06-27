@@ -1,7 +1,7 @@
 // Package generic provides a no-op artifact collector for projects that do
 // not have a project-specific artifact layout. The dashboard still works:
 // failed tests simply have no ClusterArtifacts attached and the UI renders
-// only the build log + JUnit data.
+// only the build log and JUnit data.
 package generic
 
 import (

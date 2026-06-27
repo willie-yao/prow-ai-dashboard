@@ -6,25 +6,19 @@ import { formatSteps, fileToUrl, type FileToUrlContext } from "../lib/utils";
 interface RichTextProps {
   text: string;
   /**
-   * Run non-code segments through formatSteps (insert line breaks before
-   * numbered steps and bullets). Use for multi-line analysis prose; leave off
-   * for short one-line summaries.
+   * Format non-code segments as multi-line analysis prose by inserting breaks
+   * before numbered steps and bullets. Leave false for short summaries.
    */
   steps?: boolean;
   /**
-   * When provided, code spans and bare file paths in the prose that resolve to
-   * a known prow artifact or source file are rendered as links. Resolution goes
-   * through fileToUrl, which is deterministic and returns null for anything it
-   * can't confidently map (versions, line-number citations, error messages,
-   * resource names), so unresolvable tokens stay plain and links are never
-   * fabricated.
+   * Render code spans and bare file paths as links only when they resolve to a
+   * known prow artifact or source file. Unresolvable tokens stay plain.
    */
   fileCtx?: FileToUrlContext;
 }
 
-// CodeSpan styling matches markdown inline code: a monospace pill with a subtle
-// fill. fontSize is relative so it scales with the surrounding Typography
-// variant (body2, caption, ...).
+// Inline code uses a monospace pill and relative font size so it scales with
+// surrounding Typography.
 const codeSx = {
   fontFamily: "monospace",
   fontSize: "0.85em",
@@ -44,7 +38,7 @@ const codeLinkSx = {
   "&:hover": { textDecorationColor: "inherit" },
 } as const;
 
-// A bare path linked inline in prose: monospace + link color, no pill, so dense
+// Bare paths use monospace link styling without a pill, so dense
 // prose with many paths stays readable.
 const pathLinkSx = {
   fontFamily: "monospace",
@@ -57,25 +51,21 @@ const pathLinkSx = {
 // Inline-code span splitter: capture groups land on odd indices.
 const CODE_SPLIT = /`([^`]+)`/g;
 
-// basename shortens a linked file path to its final segment for display, so
-// long paths don't clutter the prose. The full path is kept in the link's
-// title (hover) and the href is unchanged. A path with no separator is
-// returned as-is.
+// basename shortens linked paths to their final segment. The full path stays in
+// title and href.
 function basename(path: string): string {
   const i = path.lastIndexOf("/");
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
-// Candidate file path in free prose: one or more "/"-separated segments ending
-// in a known source/artifact extension. Requiring a slash and an extension
-// keeps it conservative; fileToUrl makes the final keep/drop decision so no
-// broken links are produced. A trailing line ref (":120", ":120-130") is left
-// out of the match so the path still resolves.
+// Candidate file path in prose: slash-separated segments ending in a known
+// source or artifact extension. Trailing line refs such as :120 or :120-130 are
+// excluded so the path still resolves.
 const PATH_RE =
   /(?:[\w.-]+\/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf)\b/g;
 
-// Linkify resolvable bare file paths in a prose string. Returns the raw string
-// when nothing resolves (keeps the parent's whiteSpace: pre-line intact).
+// Linkify resolvable bare file paths in prose. Return the raw string when
+// nothing resolves so the parent's pre-line whitespace handling stays intact.
 function linkifyPaths(
   text: string,
   fileCtx: FileToUrlContext | undefined,
@@ -112,11 +102,9 @@ function linkifyPaths(
 }
 
 /**
- * Render AI analysis text with markdown-style inline `code` spans (filenames,
- * error messages, variable names, etc.) as styled inline code, and link both
- * code spans and bare file paths that resolve to a real prow artifact or source
- * file (when fileCtx is supplied). Everything else renders verbatim, so callers
- * keep whiteSpace: "pre-line" on the container to preserve newlines.
+ * Render AI analysis text with markdown-style inline `code` spans as styled
+ * code. Code spans and bare paths become links only when fileCtx resolves them
+ * to a real prow artifact or source file. Everything else renders verbatim.
  */
 export function RichText({ text, steps = false, fileCtx }: RichTextProps) {
   const parts = text.split(CODE_SPLIT);

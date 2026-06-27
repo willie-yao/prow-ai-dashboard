@@ -1,7 +1,6 @@
-// Package ai provides a generic chat-completion client and the agentic
-// tool-calling analysis loop. The per-failure seed prompt is built by the
-// universal Module (internal/ai/modules/universal); Module + Client are
-// composed by Service, which orchestrates a single test failure's analysis.
+// Package ai provides a chat-completion client and the agentic tool-calling
+// analysis loop. Service composes the universal Module and Client to analyze a
+// single test failure.
 package ai
 
 import (
@@ -17,8 +16,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// callDelay throttles consecutive API calls. var (not const) so tests can
-// shrink it; production callers should not touch this.
+// callDelay throttles consecutive API calls. It is a var so tests can shrink it;
+// production callers should not touch it.
 var callDelay = 500 * time.Millisecond
 
 // Client calls an OpenAI chat-completions compatible API for AI analysis.
@@ -49,19 +48,17 @@ type Options struct {
 // NewClientWithOptions creates a Client from explicit options. Endpoint and
 // Model are used verbatim; callers are responsible for setting them.
 func NewClientWithOptions(opts Options) *Client {
-	// TLS, and dial defaults are preserved; only enlarge the idle-connection
-	// pool so concurrent analyses (see project.AI.Concurrency) reuse
-	// connections to one endpoint instead of churning them.
+	// Preserve TLS and dial defaults. Only enlarge the idle pool so concurrent
+	// analyses reuse connections to one endpoint instead of churning them.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 32
 	transport.MaxIdleConnsPerHost = 16
 	return &Client{
 		// No client-level Timeout: per-request deadlines come from the
 		// caller's context. The agentic loop runs every chat call under the
-		// per-failure budget (ai.agentic.timeout, default 5m), and the
-		// /v1/models probe sets its own short sub-context. A fixed timeout
-		// here would silently override that budget and prematurely kill
-		// legitimately slow responses from reasoning/self-hosted endpoints.
+		// per-failure budget from ai.agentic.timeout. The /v1/models probe sets
+		// its own short sub-context. A fixed timeout here would override those
+		// budgets and prematurely kill slow reasoning or self-hosted responses.
 		httpClient: &http.Client{
 			Transport: transport,
 		},
@@ -73,10 +70,10 @@ func NewClientWithOptions(opts Options) *Client {
 	}
 }
 
-// Endpoint returns the configured chat-completions URL (mainly for logging).
+// Endpoint returns the configured chat-completions URL.
 func (c *Client) Endpoint() string { return c.apiURL }
 
-// ModelName returns the configured model identifier (mainly for logging).
+// ModelName returns the configured model identifier.
 func (c *Client) ModelName() string { return c.model }
 
 // Cache returns the underlying cache so callers can persist it.
@@ -84,10 +81,9 @@ func (c *Client) Cache() *Cache {
 	return c.cache
 }
 
-// Complete sends a single tool-free chat completion (a system + user message)
-// and returns the assistant's text. It is the simple, non-agentic entry point
-// for callers that just need a one-shot generation (e.g. onboard's prompt
-// drafting). The request is bounded only by ctx.
+// Complete sends a tool-free chat completion with system and user messages and
+// returns the assistant's text. It is the one-shot generation entry point for
+// callers such as prompt drafting. The request is bounded only by ctx.
 func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
 	messages := []agChatMessage{
 		{Role: "system", Content: strPtr(system)},
@@ -104,8 +100,8 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 }
 
 // modelsResponse is the subset of the OpenAI-compatible /v1/models payload we
-// care about. vLLM / TRT-LLM (Dynamo) report the served model's context window
-// here; the field is absent on providers that don't (e.g. Copilot).
+// care about. vLLM and TRT-LLM report the served model's context window here;
+// providers such as Copilot omit it.
 type modelsResponse struct {
 	Data []struct {
 		ID            string `json:"id"`
@@ -114,10 +110,9 @@ type modelsResponse struct {
 }
 
 // DetectContextWindowTokens queries the endpoint's /v1/models and returns the
-// served model's context window in tokens. Returns ok=false (and the caller
-// should fall back to defaults) when the endpoint doesn't expose /v1/models,
-// doesn't report context_window, or errors. Best-effort: one short GET, no
-// retries.
+// served model's context window in tokens. Returns ok=false when the endpoint
+// does not expose /v1/models, does not report context_window, or errors.
+// Best effort: one short GET, no retries.
 func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
 	modelsURL, ok := modelsURLFor(c.apiURL)
 	if !ok {
@@ -223,8 +218,8 @@ func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *mode
 	return summary, analysis
 }
 
-// firstSentence returns the first sentence (or first 200 chars) of s, used to
-// derive a list-view summary when the model omits an explicit "summary" field.
+// firstSentence returns the first sentence of s, capped at 200 chars. It derives
+// a list-view summary when the model omits "summary".
 func firstSentence(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {

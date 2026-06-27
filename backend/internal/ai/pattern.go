@@ -21,9 +21,9 @@ const patternPromptVersion = 1
 // call, keeping the prompt bounded for a test that failed in many builds.
 const maxPatternBuilds = 10
 
-// PatternFailure is one build's analyzed failure of a job, the input to the
-// cross-failure correlation. FailingTest is the specific test/spec that failed
-// in this build (may differ build to build).
+// PatternFailure is one build's analyzed job failure, used as input to
+// cross-failure correlation. FailingTest is the specific test or spec that
+// failed in this build and may differ across builds.
 type PatternFailure struct {
 	BuildID        string
 	FailingTest    string
@@ -69,13 +69,13 @@ Respond with ONLY a JSON object, no prose, no code fences:
 // job into a single PatternAnalysis. It makes one tool-free model call and
 // caches the verdict keyed by the exact model input, so it only re-runs when
 // the evidence changes. Returns nil when there is too little to correlate
-// (fewer than two analyzed builds).
+// when there are fewer than two analyzed builds.
 func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, failures []PatternFailure) (*models.PatternAnalysis, error) {
 	if len(failures) < 2 {
 		return nil, nil
 	}
-	// Deterministic order (newest-first by build ID, which is monotonic) and a
-	// stable cap so the prompt and cache key don't churn run to run.
+	// Deterministic newest-first order and a stable cap keep the prompt and
+	// cache key from churning run to run.
 	sort.Slice(failures, func(i, j int) bool { return failures[i].BuildID > failures[j].BuildID })
 	if len(failures) > maxPatternBuilds {
 		failures = failures[:maxPatternBuilds]
@@ -83,9 +83,8 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 
 	userPrompt := buildPatternUserPrompt(subject, failures)
 
-	// Key the verdict to the exact model input (prompt version + the rendered
-	// user prompt), so any change to the evidence the model saw - not just the
-	// root cause - invalidates the entry.
+	// Key the verdict to the exact model input, including prompt version and
+	// rendered user prompt, so any evidence change invalidates the entry.
 	key := patternCacheKey(s.module.Name(), jobID, subject, userPrompt)
 	if raw, ok := s.client.cache.Get(key); ok {
 		var cached patternResponse
@@ -116,10 +115,8 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	return buildPatternAnalysis(subject, len(failures), parsed), nil
 }
 
-// validPatternResponse rejects empty or self-contradictory verdicts (e.g. a
-// bare "{}" that unmarshals to a low-confidence "not systemic" with no prose,
-// or a systemic claim with no named cause) so they are neither cached nor
-// published as a misleading banner.
+// validPatternResponse rejects empty or self-contradictory verdicts so they are
+// neither cached nor published as a misleading banner.
 func validPatternResponse(p patternResponse) bool {
 	if strings.TrimSpace(p.Summary) == "" {
 		return false

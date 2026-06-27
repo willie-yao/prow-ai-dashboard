@@ -25,11 +25,8 @@ import (
 
 // ---------- Test scaffolding ----------
 
-// newTestRegistry returns a tools.Registry preloaded with the filesystem
-// tier so tests exercise the real dispatch path. K8s tools are intentionally
-// omitted: the in-memory fakeBrowser doesn't model GCS layout deeply enough
-// for cluster discovery, and the filesystem tier is sufficient to validate
-// the agentic loop end-to-end.
+// newTestRegistry returns a filesystem registry so tests hit real dispatch.
+// K8s tools are omitted because fakeBrowser does not model discovery paths.
 func newTestRegistry(t *testing.T) (*tools.Registry, []string) {
 	t.Helper()
 	r := tools.NewRegistry()
@@ -41,8 +38,7 @@ func newTestRegistry(t *testing.T) (*tools.Registry, []string) {
 	return r, enabled
 }
 
-// newTestAgenticInputs bundles the per-call agentic context for tests. Keeps
-// the test bodies readable without repeating the boilerplate.
+// newTestAgenticInputs builds per-call agentic inputs for tests.
 func newTestAgenticInputs(t *testing.T, browser artifacts.Browser, opts AgenticOptions) AgenticInputs {
 	t.Helper()
 	registry, enabled := newTestRegistry(t)
@@ -153,10 +149,8 @@ func (b *fakeBrowser) Grep(_ context.Context, p string, re *regexp.Regexp, _, ma
 	}, nil
 }
 
-// scriptedChatServer returns an httptest.Server that responds with a queue of
-// pre-canned responses. Each request pops one response. The handler can be
-// reprogrammed by direct assignment to handler if a test needs custom
-// per-call logic (e.g. error responses).
+// scriptedChatServer returns an httptest.Server with queued chat responses.
+// Each request pops one response; tests can push custom status codes.
 type scriptedChatServer struct {
 	*httptest.Server
 	mu        sync.Mutex
@@ -184,8 +178,7 @@ func newScriptedChatServer(t *testing.T) *scriptedChatServer {
 			status = s.statuses[0]
 			s.statuses = s.statuses[1:]
 		}
-		// Capture the request body so tests can assert what the loop sent
-		// (e.g. how many tool_calls the echoed history carries).
+		// Capture the request body so tests can assert echoed history.
 		reqBody, _ := io.ReadAll(r.Body)
 		s.requests = append(s.requests, reqBody)
 		w.Header().Set("Content-Type", "application/json")
@@ -219,8 +212,7 @@ func chatRespToolCall(id, name string, args map[string]interface{}) string {
 	)
 }
 
-// chatRespTwoToolCalls builds a response that invokes two tools in one
-// assistant message (parallel tool calls), used to exercise SingleToolCall.
+// chatRespTwoToolCalls builds a parallel tool-call response for SingleToolCall tests.
 func chatRespTwoToolCalls(id1, name1, id2, name2 string) string {
 	mk := func(id, name string) string {
 		args, _ := json.Marshal(`{"path":""}`)
@@ -287,8 +279,7 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	if atomic.LoadInt32(&srv.calls) != 2 {
 		t.Errorf("call count = %d, want 2", srv.calls)
 	}
-	// Telemetry: one tool call (list_artifacts), non-zero modelBytes
-	// (tool result echoed back to the model), elapsed > 0, cache_hit false.
+	// Telemetry records one tool call, echoed model bytes, elapsed time, and no cache hit.
 	if analysis.ToolCalls != 1 {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
 	}
@@ -316,7 +307,7 @@ func TestAgentic_CacheHit(t *testing.T) {
 	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	// Second call should hit the cache and NOT increment server calls.
+	// Second call hits cache and does not increment server calls.
 	_, a2, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -395,7 +386,7 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 	if analysis.Mode != AgenticMode {
 		t.Errorf("mode = %q", analysis.Mode)
 	}
-	// Critically, do NOT cache fallbacks. Re-running should hit the server again.
+	// Fallbacks are not cached; retry should hit the server again.
 	srv.push(200, chatRespFinal("still not json"))
 	srv.push(200, chatRespFinal("still not json"))
 	before := atomic.LoadInt32(&srv.calls)
@@ -454,18 +445,16 @@ func TestTryParseAnalysis(t *testing.T) {
 
 // ---------- MinToolCalls floor ----------
 
-// TestAgentic_MinToolCalls_NudgeForcesInvestigation verifies the loop refuses
-// a tools-free final answer when state.calls < MinToolCalls and instead nudges
-// the model. After the nudge, the model issues a tool call and produces a
-// final, which is accepted and cached.
+// TestAgentic_MinToolCalls_NudgeForcesInvestigation verifies a tools-free final
+// is rejected until the min-tool-call floor is met.
 func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// Round 1: model tries to finalize immediately with NO tool calls.
+	// Round 1: model tries to finalize immediately with no tool calls.
 	final1 := `{"summary":"made up","is_transient":false,"root_cause":"premature guess","severity":"High","suggested_fix":"x","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final1))
-	// Round 2 (after nudge): model calls list_artifacts.
+	// Round 2: after the nudge, model calls list_artifacts.
 	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
 	// Round 3: model finalizes with the post-investigation answer.
 	final2 := `{"summary":"real cause","is_transient":false,"root_cause":"found in build-log.txt line 42","severity":"High","suggested_fix":"fix it","relevant_files":["build-log.txt"]}`
@@ -495,8 +484,7 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
 	}
 
-	// Floor met (1 >= 1) so the answer should be cached: second call hits
-	// the cache and the server is not called again.
+	// Floor is met, so the second call hits cache and skips the server.
 	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:nudge1", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -506,19 +494,16 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	}
 }
 
-// TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters is a
-// regression for a subtle bug: if the loop rejected a tools-free answer (to
-// nudge), the rejected content must not be reused as finalContent after the
-// loop exhausts MaxIters. Without the fix, tryParseAnalysis would succeed on
-// the stale rejected JSON and the wrong answer would be returned.
+// TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters verifies rejected
+// tools-free JSON is not reused when MaxIters is exhausted.
 func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// Round 1: tools-free with valid JSON; we will reject this (calls=0 < min=2).
+	// Round 1: tools-free valid JSON is rejected because calls=0 < min=2.
 	rejected := `{"summary":"REJECTED","is_transient":false,"root_cause":"premature","severity":"High","suggested_fix":"x","relevant_files":[]}`
 	srv.push(200, chatRespFinal(rejected))
-	// Rounds 2+ (after nudge): model only ever calls tools, never finalizes.
+	// Rounds 2+: after the nudge, model only calls tools and never finalizes.
 	// MaxIters=3 means we get exactly 2 more chat calls. Both are tool calls.
 	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
 	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
@@ -545,8 +530,7 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 
 // ---------- MinGCSBytes floor ----------
 
-// bigPayload returns a deterministic byte slice of the requested size, used
-// to drive fakeBrowser.Read past the per-test MinGCSBytes floor.
+// bigPayload returns deterministic bytes for MinGCSBytes floor tests.
 func bigPayload(n int) []byte {
 	out := make([]byte, n)
 	for i := range out {
@@ -555,10 +539,8 @@ func bigPayload(n int) []byte {
 	return out
 }
 
-// TestAgentic_MinGCSBytes_NudgeForcesMoreReading verifies that a model
-// satisfying MinToolCalls but with no GCS bytes read is nudged, and that
-// after subsequent reads cross the byte floor the answer is accepted and
-// cached.
+// TestAgentic_MinGCSBytes_NudgeForcesMoreReading verifies acceptance waits for
+// reads that cross the byte floor.
 func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -568,7 +550,7 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 	// Round 2: tools-free finalize with gcsBytes still 0.
 	premature := `{"summary":"shallow","is_transient":false,"root_cause":"unknown","severity":"Medium","suggested_fix":"x","relevant_files":[]}`
 	srv.push(200, chatRespFinal(premature))
-	// Round 3 (after nudge): read_artifact returning 16 KB so gcsBytes
+	// Round 3: after the nudge, read_artifact returns 16 KB so gcsBytes
 	// crosses the 15 KB floor.
 	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
 	// Round 4: tools-free with substantive content.
@@ -596,7 +578,7 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 		t.Errorf("call count = %d, want 4 (list + premature final + read + final)", got)
 	}
 
-	// Floor met → cached. Re-run hits cache.
+	// Floor is met; re-run hits cache.
 	_, _, err = client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:gcsnudge", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -642,12 +624,8 @@ func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 	}
 }
 
-// TestEnginePrompts_ProjectAgnostic guards the engine/consumer split: the
-// engine-side prompts (BasePrompt, agToolDocs, the floors nudge) must not name
-// any specific project's artifacts or components. Per-project file names and
-// failure patterns belong in the consumer's prompts/system.md, which is
-// appended between BasePrompt and the response-format footer. A regression here
-// means project knowledge leaked back into the shared engine prompt.
+// TestEnginePrompts_ProjectAgnostic guards the engine/consumer split. Engine
+// prompts must not name project-specific artifacts or components.
 func TestEnginePrompts_ProjectAgnostic(t *testing.T) {
 	forbidden := []string{
 		"CAPZ", "CAPI", "AzureMachine", "azureserviceoperator",
@@ -670,9 +648,8 @@ func TestEnginePrompts_ProjectAgnostic(t *testing.T) {
 	}
 }
 
-// to the finalize prompt. Without it, weaker models answered the injected
-// evidence in prose, the finalize round failed to parse, and otherwise-grounded
-// drafts were published but never cached.
+// TestForceFinalizePrompt_JSONOnlyAnchor pins the JSON-only instruction used
+// when forced finalization retries after evidence injection.
 func TestForceFinalizePrompt_JSONOnlyAnchor(t *testing.T) {
 	for _, s := range []string{
 		"Output ONLY the JSON object",
@@ -684,9 +661,8 @@ func TestForceFinalizePrompt_JSONOnlyAnchor(t *testing.T) {
 	}
 }
 
-// TestResponseFormatFooter_TransientAnchors pins the transient guidance so
-// it defers to the project's named transient classes rather than blanket-
-// biasing toward is_transient=false (which buried the consumer's rules).
+// TestResponseFormatFooter_TransientAnchors pins guidance that defers to the
+// project's named transient classes.
 func TestResponseFormatFooter_TransientAnchors(t *testing.T) {
 	required := []string{
 		"even if you could keep digging",
@@ -697,8 +673,7 @@ func TestResponseFormatFooter_TransientAnchors(t *testing.T) {
 			t.Errorf("ResponseFormatFooter missing transient anchor %q\nfull text:\n%s", s, ResponseFormatFooter)
 		}
 	}
-	// The old blanket bias must not creep back: it overrode the consumer's
-	// explicit transient list and produced false "real bug" verdicts.
+	// A blanket false bias would override the consumer's transient list.
 	forbidden := "When in doubt, set is_transient=false"
 	if strings.Contains(ResponseFormatFooter, forbidden) {
 		t.Errorf("ResponseFormatFooter reintroduced the blanket bias %q", forbidden)
@@ -775,9 +750,9 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// Round 1: punt-shaped final → critique fails → re-prompt.
+	// Round 1: punt-shaped final fails critique and re-prompts.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
-	// Round 2 (after critique feedback): clean final → critique passes.
+	// Round 2: after critique feedback, clean final passes critique.
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -821,16 +796,14 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	}
 }
 
-// TestAgentic_Critique_ExhaustedAcceptedNotCached verifies the anti-thrash
-// behavior: a model that keeps emitting punts exhausts its retries, the
-// last draft is published, but it is NOT cached so the next run gets a
-// fresh attempt (same pattern as MinToolCalls stubborn-model).
+// TestAgentic_Critique_ExhaustedAcceptedNotCached verifies repeated punt
+// drafts publish the last answer but skip caching.
 func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// Three punts: original + 2 retries (CritiqueMaxRetries=2). All fail
-	// critique. Loop accepts the last one and skips the cache write.
+	// Three punts: original plus 2 retries. All fail critique, so the last
+	// answer is accepted without a cache write.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(puntyFinalJSON))
@@ -857,9 +830,8 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 		t.Errorf("expected punt-shaped final to be published, got %q", summary.Summary)
 	}
 
-	// Critique-failing answer must NOT be cached. Push three more punts
-	// and re-run; we should see all three consumed (cache miss → server
-	// hit on second analysis too).
+	// Critique-failing answers are not cached. A second analysis consumes
+	// all three new server responses.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(puntyFinalJSON))
@@ -875,10 +847,8 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 	}
 }
 
-// TestAgentic_Critique_Disabled_NoBehaviorChange verifies the default
-// (CritiqueEnabled=false) path: a punt-shaped final is accepted as-is
-// and cached so consumers that don't
-// opt in see no change.
+// TestAgentic_Critique_Disabled_NoBehaviorChange verifies a punt-shaped final
+// is accepted and cached when critique is disabled.
 func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -905,7 +875,7 @@ func TestAgentic_Critique_Disabled_NoBehaviorChange(t *testing.T) {
 		t.Errorf("expected unmodified punt-shaped final, got %q", summary.Summary)
 	}
 
-	// Cached: second call must hit cache (no critique gate when disabled).
+	// Second call hits cache because the critique gate is disabled.
 	_, hit, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, opts),
 		"agentic:test:critique-disabled", "sys", "user")
@@ -941,7 +911,7 @@ func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 		t.Fatalf("first call should hit server once, got %d", got)
 	}
 
-	// Enable critique. Cached CritiquePassed=false → invalidate → re-analyze.
+	// Enable critique. Cached CritiquePassed=false invalidates and re-analyzes.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 	on := AgenticOptions{
@@ -966,18 +936,13 @@ func TestAgentic_Critique_CacheInvalidatesUncritiqued(t *testing.T) {
 	}
 }
 
-// TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies the
-// When the loop maxes out without ever returning a
-// tools-free message, runFinalizeRound produces the final answer. That
-// output must be critique-checked too, otherwise a punt-shaped
-// finalize-round result publishes-but-never-caches and re-analyzes on
-// every fetcher run (cost blow-up).
+// TestAgentic_Critique_FinalizeRoundOutputCritiqued verifies forced-finalize
+// output is critique-checked before publish and cache.
 func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// MaxIters=2: model only ever calls tools, never finalizes inside
-	// the loop. Loop exits via MaxIters → runFinalizeRound fires.
+	// MaxIters=2: model only calls tools, so MaxIters triggers runFinalizeRound.
 	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
 	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
 	// runFinalizeRound: model emits a clean (non-punt) final.
@@ -1002,17 +967,12 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 	if summary.Summary != "deep" {
 		t.Errorf("expected finalize-round clean answer, got %q", summary.Summary)
 	}
-	// The clean answer must have passed the post-loop critique check
-	// AND been stamped onto AIAnalysis so the build-cache layer can
-	// serve it without re-invalidating next run.
+	// The clean answer must be stamped onto AIAnalysis for build-cache reuse.
 	if !analysis.CritiquePassed {
 		t.Errorf("CritiquePassed = false, want true (finalize-round clean answer must be critique-checked)")
 	}
 
-	// Cache: a critique-passing finalize-round answer must cache
-	// normally. Without the post-loop critique check, state.critiquePassed
-	// would stay false → cache write blocked → next run re-analyzes.
-	// With the fix, cache hits and the server is not called again.
+	// Critique-passing finalize-round answers cache normally.
 	_, hit, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, browser, opts),
 		"agentic:test:finalize-clean", "sys", "user")
@@ -1030,25 +990,19 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 	}
 }
 
-// TestAgentic_Critique_RetryAllowsToolCallThenFinal verifies the
-// When the model responds to critique feedback with
-// a tool call before re-emitting, the bumped maxIters must have room
-// for the tool round AND the new final. With the old maxIters++ this
-// test would fail because the tool call consumed the only extra
-// iteration and the re-final would fall into runFinalizeRound.
+// TestAgentic_Critique_RetryAllowsToolCallThenFinal verifies critique retry
+// budget covers a tool round followed by a new final answer.
 func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// Round 1: model emits a punt-shaped final → critique fails →
-	// re-prompt. With critiqueRetryIters=3 the loop now has room for
-	// the tool call + clean final, without resorting to runFinalizeRound.
+	// Round 1: punt-shaped final fails critique and re-prompts.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	// Round 2: model reads an artifact in response to critique feedback.
 	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
 		"path": "build-log.txt", "offset": 0, "length": 256,
 	}))
-	// Round 3: model re-emits with the clean final → critique passes.
+	// Round 3: model re-emits with a clean final that passes critique.
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -1056,10 +1010,8 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 		files: map[string][]byte{"build-log.txt": []byte("the error context\n")},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
-	// MaxIters=1 so we ONLY have room for one initial iteration; the
-	// critique retry budget must do the rest. Without the +3 retry
-	// bump, the tool call (round 2) would max us out and force a
-	// finalize-round which would bypass the in-loop critique state.
+	// MaxIters=1 leaves only one initial iteration; the critique retry budget
+	// must cover the tool call and clean final.
 	opts := AgenticOptions{
 		MaxIters:           1,
 		ModelByteBudget:    100_000,
@@ -1085,11 +1037,8 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_FeedbackTruncatesLongFix verifies that:
-// a pathologically long suggested_fix must be truncated in the quoted
-// portion of the feedback message so retries don't balloon the
-// conversation history. Matched phrases are still listed separately
-// and not truncated.
+// TestCritiqueDraft_FeedbackTruncatesLongFix verifies long quoted fixes are
+// truncated while matched phrases remain listed.
 func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 	// Build a long fix that triggers the punt regex.
 	prefix := "Check the AzureMachine status. "
@@ -1115,29 +1064,25 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 
 // --- Hallucination + import-path integration tests ---
 
-// hallucinatedFinalJSON: clean suggested_fix (passes punt regex), but
-// cites manager.log which has not been read. Tests the new gate.
+// hallucinatedFinalJSON has a clean suggested_fix but cites unread manager.log.
 const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"manager.log shows the controller failed to reconcile the AzureMachine","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":[]}`
 
-// readThenCleanFinalJSON: same clean fix, but root_cause cites build-log.txt
-// which the model HAS read in this scenario. Should pass critique.
+// readThenCleanFinalJSON cites build-log.txt, which the model has read.
 const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"]}`
 
-// TestAgentic_HallucinationRetry exercises the happy path:
-// the model cites manager.log without reading it → critique fails on
-// hallucination (not punt) → loop appends feedback → model reads
-// build-log.txt and re-emits with a citation that matches → passes.
+// TestAgentic_HallucinationRetry verifies an unread-citation critique can
+// recover after the model reads and cites a matching artifact.
 func TestAgentic_HallucinationRetry(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
 	// Round 1: model emits final citing manager.log (never read).
 	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
-	// Round 2 (after critique feedback): model reads build-log.txt.
+	// Round 2: after critique feedback, model reads build-log.txt.
 	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
 		"path": "build-log.txt", "offset": 0, "length": 256,
 	}))
-	// Round 3: re-emit citing build-log.txt → passes.
+	// Round 3: re-emit citing build-log.txt, which passes.
 	srv.push(200, chatRespFinal(readThenCleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -1173,16 +1118,13 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 	}
 }
 
-// TestAgentic_CacheInvalidatedByCritiqueVersionBump asserts that an entry
-// #4: a cache entry stamped with CritiquePassed=true but CritiqueVersion=0
-// written under an older critique contract version must be invalidated when
-// currentCritiqueVersion advances. Otherwise consumers that
-// upgrade the engine would never get the strengthened gate applied.
+// TestAgentic_CacheInvalidatedByCritiqueVersionBump verifies cache entries with
+// stale critique versions are invalidated.
 func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
-	// First call: clean fix, no citations → passes critique.
+	// First call: clean fix with no citations passes critique.
 	noCitations := `{"summary":"deep","is_transient":false,"root_cause":"vnet peering misconfigured","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 42; reapply.","relevant_files":["kustomize/cluster-template.yaml"]}`
 	srv.push(200, chatRespFinal(noCitations))
 
@@ -1206,8 +1148,7 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 		t.Fatalf("first call: CritiquePassed=%v CritiqueVersion=%d, want %d", analysis.CritiquePassed, analysis.CritiqueVersion, currentCritiqueVersion)
 	}
 
-	// Simulate a Step-2-era cache entry by rewriting the per-failure
-	// cache directly: same payload, but CritiqueVersion=0.
+	// Simulate a stale cache entry by rewriting CritiqueVersion to 0.
 	raw, ok := client.Cache().Get(key)
 	if !ok {
 		t.Fatalf("first call should have written cache entry")
@@ -1221,7 +1162,7 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 		t.Fatalf("re-write cache: %v", err)
 	}
 
-	// Second call: cache read must reject the v0 entry → re-analyze.
+	// Second call rejects the v0 entry and re-analyzes.
 	srv.push(200, chatRespFinal(noCitations))
 	before := atomic.LoadInt32(&srv.calls)
 	_, analysis2, err := client.doAnalyzeAgentic(context.Background(),
@@ -1263,18 +1204,8 @@ func loadAgenticSkillsForTest(t *testing.T, recipes map[string]string) *skills.S
 	return set
 }
 
-// TestAgentic_CacheInvalidatedBySkillSetHashChange covers the
-// recipe-set cache-invalidation contract: a cache entry written under one
-// skill set must be invalidated when the consumer edits a recipe
-// (changing the SkillSetHash). The currentCritiqueVersion bump cannot
-// catch this because the engine-side contract didn't change; only the
-// consumer's recipe set did. Without the hash check, a recipe edit
-// would never re-run analysis for existing entries.
-//
-// Setup mirrors TestAgentic_CacheInvalidatedByCritiqueVersionBump: a
-// first call writes a cache entry, the entry's SkillSetHash is
-// rewritten to simulate an older recipe set, and the second call
-// must re-analyze instead of serving from cache.
+// TestAgentic_CacheInvalidatedBySkillSetHashChange verifies recipe edits
+// invalidate entries stamped with a different SkillSetHash.
 func TestAgentic_CacheInvalidatedBySkillSetHashChange(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1320,8 +1251,7 @@ required_evidence:
 		t.Fatalf("first call: SkillSetHash = %q, want %q", analysis.SkillSetHash, set.Hash())
 	}
 
-	// Sanity: a second call with the SAME set should serve from
-	// cache (no model hit).
+	// A second call with the same set should serve from cache.
 	before := atomic.LoadInt32(&srv.calls)
 	_, _, err = client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
 	if err != nil {
@@ -1331,9 +1261,7 @@ required_evidence:
 		t.Errorf("second call with same set hit model; expected cache hit")
 	}
 
-	// Now simulate a consumer recipe edit by loading a different set
-	// (same id, different trigger → different hash). The cached entry's
-	// SkillSetHash no longer matches → must re-analyze.
+	// Simulate a consumer recipe edit by loading a set with a different hash.
 	edited := loadAgenticSkillsForTest(t, map[string]string{
 		"unrelated": `
 id: unrelated-recipe
@@ -1396,7 +1324,7 @@ func TestLimitToolCalls(t *testing.T) {
 // TestAgentic_SingleToolCall_EchoesOneToolCall verifies that when the model
 // returns two parallel tool calls and SingleToolCall is on, the loop executes
 // only the first and the echoed history sent on the next request carries a
-// single tool_call (required by chat templates that reject multiple).
+// single tool_call for chat templates that reject multiple.
 func TestAgentic_SingleToolCall_EchoesOneToolCall(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1434,8 +1362,8 @@ func TestAgentic_SingleToolCall_EchoesOneToolCall(t *testing.T) {
 	}
 }
 
-// TestAgentic_ParallelToolCalls_DefaultEchoesBoth confirms the default (off)
-// behavior is unchanged: both parallel tool calls are executed and echoed.
+// TestAgentic_ParallelToolCalls_DefaultEchoesBoth confirms the default executes
+// and echoes both parallel tool calls.
 func TestAgentic_ParallelToolCalls_DefaultEchoesBoth(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -1580,20 +1508,16 @@ func TestAgentic_EvidenceInjection_OffByDefault(t *testing.T) {
 	}
 }
 
-// TestAgentic_EvidenceInjection_PostLoopRetry exercises the post-loop path:
-// the model exhausts its iterations on tool calls (never returning a tools-
-// free final), gets force-finalized with a draft citing an unread artifact,
-// and EvidenceInjection drives one finalize retry that embeds the fetched
-// content so the model can re-ground its answer.
+// TestAgentic_EvidenceInjection_PostLoopRetry verifies evidence injection also
+// works for forced-finalize retries.
 func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 
 	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
-	// Iter 1: a tool call (keeps the loop from getting a tools-free final).
+	// Iter 1: a tool call keeps the loop from getting a tools-free final.
 	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
-	// Iter 2 (maxIters=2 reached after this): another tool call, so the loop
-	// ends without a tools-free final and force-finalizes.
+	// Iter 2: another tool call reaches MaxIters and forces finalization.
 	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
 	// Forced finalize: draft cites an unread artifact (clean fix).
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per `+citePath+`","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`))
@@ -1615,8 +1539,7 @@ func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	// The last request (the injection-driven finalize) must embed the fetched
-	// artifact content.
+	// Injection-driven finalize must embed the fetched artifact content.
 	last := string(srv.requests[len(srv.requests)-1])
 	if !strings.Contains(last, "POSTLOOP_MARKER") {
 		t.Errorf("post-loop injection retry should embed the fetched artifact content")
@@ -1626,14 +1549,12 @@ func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
 	}
 }
 
-// TestAgentic_EvidenceInjection_ResolvesBareBasename verifies Phase 2 basename
-// resolution: a draft cites a bare basename (no directory) that the agent
-// never read; the engine walks the tree, resolves the basename to a real path,
-// fetches it, and injects the content.
+// TestAgentic_EvidenceInjection_ResolvesBareBasename verifies unread bare
+// basenames are resolved by walking the artifact tree.
 func TestAgentic_EvidenceInjection_ResolvesBareBasename(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Round 1: cites a BARE basename (no slash) with a clean fix.
+	// Round 1: cites a bare basename with a clean fix.
 	round1 := `{"summary":"s","is_transient":false,"root_cause":"failure visible in controller-manager.log","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
 	round2 := `{"summary":"deep","is_transient":false,"root_cause":"reconcile error confirmed; vnet mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(round1))
@@ -1662,14 +1583,12 @@ func TestAgentic_EvidenceInjection_ResolvesBareBasename(t *testing.T) {
 	}
 }
 
-// TestAgentic_EvidenceInjection_PrefetchesSkillEvidence verifies Phase 2 skill
-// pre-fetch: a matched skill requires evidence the agent never read; the engine
-// resolves the skill's required-evidence pattern to a real path, fetches it,
-// and injects it on the retry.
+// TestAgentic_EvidenceInjection_PrefetchesSkillEvidence verifies missing skill
+// evidence can be resolved, fetched, and injected on retry.
 func TestAgentic_EvidenceInjection_PrefetchesSkillEvidence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Draft triggers the skill (mentions "x509") but reads no evidence.
+	// Draft triggers the x509 skill but reads no evidence.
 	round1 := `{"summary":"s","is_transient":false,"root_cause":"x509 webhook failure","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
 	round2 := `{"summary":"deep","is_transient":false,"root_cause":"x509 webhook failure grounded in the cert-manager config","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(round1))
@@ -1793,25 +1712,23 @@ func TestAgentic_SeedArtifactTree_NoOpOnEmptyTree(t *testing.T) {
 	}
 }
 
-// TestAgentic_SeedArtifactTree_ByteCapped verifies the seed is bounded by a
-// byte budget (a fraction of the model/context budget), not just the path
-// count, so a build with many long paths can't overflow the window on iter 1.
-// Regression test for the AKS-KubeRay-class prompt-overflow 400s.
+// TestAgentic_SeedArtifactTree_ByteCapped verifies the seed is bounded by byte
+// budget, not just path count, so long paths cannot overflow the first request.
 func TestAgentic_SeedArtifactTree_ByteCapped(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 
-	// 60 long, sortable paths (~500 bytes each ≈ 30KB total). With a small
-	// model budget the seed byte budget is ~3KB, so only the first handful fit.
+	// 60 long, sortable paths total about 30KB. With a small model budget the
+	// seed byte budget is about 3KB, so only the first handful fit.
 	files := map[string][]byte{}
 	for i := 0; i < 60; i++ {
 		p := fmt.Sprintf("artifacts/clusters/c/p%03d/%s.log", i, strings.Repeat("x", 470))
 		files[p] = []byte("y")
 	}
 	browser := &fakeBrowser{files: files}
-	// ModelByteBudget 20000 -> artifactTreeSeedBytes = 15% = 3000 bytes.
+	// ModelByteBudget 20000 yields artifactTreeSeedBytes = 15% = 3000 bytes.
 	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 20_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 
 	_, _, err := client.doAnalyzeAgentic(context.Background(),
@@ -1855,7 +1772,7 @@ required_evidence:
     any_of: ["config/webhook/.*\\.yaml"]
 `,
 	})
-	// Build tree has NO config/webhook/*.yaml -> evidence absent.
+	// Build tree lacks config/webhook/*.yaml, so evidence is absent.
 	browser := &fakeBrowser{files: map[string][]byte{
 		"build-log.txt": []byte("x509 error"),
 		"artifacts/clusters/bootstrap/logs/capz-system/capz-controller-manager/m.log": []byte("y"),
@@ -1877,15 +1794,13 @@ required_evidence:
 	}
 }
 
-// TestAgentic_SkillEvidencePresentButUnread_DoesNotCache is the contrast: the
-// required evidence DOES exist in the build but the agent never read it, so the
-// recipe legitimately fails and the draft is published but not cached.
+// TestAgentic_SkillEvidencePresentButUnread_DoesNotCache verifies existing but
+// unread required evidence keeps the draft uncached.
 func TestAgentic_SkillEvidencePresentButUnread_DoesNotCache(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
-	// Pushed twice: critique fails (evidence present, unread) and the loop
-	// may re-prompt before accepting-but-not-caching.
+	// Identical finals keep the scripted server deterministic.
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
@@ -1900,7 +1815,7 @@ required_evidence:
     any_of: ["config/webhook/.*\\.yaml"]
 `,
 	})
-	// Build tree CONTAINS the required evidence; the agent never read it.
+	// Build tree contains the required evidence, but the agent never read it.
 	browser := &fakeBrowser{files: map[string][]byte{
 		"build-log.txt":                 []byte("x509 error"),
 		"config/webhook/manifests.yaml": []byte("webhooks:"),
@@ -1922,13 +1837,8 @@ required_evidence:
 	}
 }
 
-// TestChatClient_BoundedByContextNotFixedTimeout verifies the chat client
-// imposes no fixed per-request timeout: a call is bounded only by the caller's
-// context (the per-failure agentic budget, ai.agentic.timeout). The same slow
-// endpoint is cancelled under a tight deadline but succeeds under a generous
-// one, proving no short client-level timeout pre-empts the budget. Regression
-// guard for slow reasoning/self-hosted endpoints whose decode outlived the old
-// fixed 60s client timeout.
+// TestChatClient_BoundedByContextNotFixedTimeout verifies chat calls are bounded
+// only by the caller's context, not by a fixed client timeout.
 func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 	shrinkCallDelay(t)
 	const serverDelay = 150 * time.Millisecond
@@ -1945,8 +1855,6 @@ func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 	c := newAgenticTestClient(t, srv.URL)
 
 	// The client must carry no fixed timeout; the context is the only bound.
-	// This is the direct regression guard: reintroducing any client-level
-	// Timeout would fail here even if the behavioral checks below still pass.
 	if c.httpClient.Timeout != 0 {
 		t.Fatalf("chat client must have no fixed Timeout, got %v", c.httpClient.Timeout)
 	}
@@ -1958,8 +1866,7 @@ func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 		t.Fatal("expected a context-deadline error under a tight deadline, got nil")
 	}
 
-	// Generous deadline (> server delay): the same slow endpoint succeeds,
-	// proving no fixed client timeout caps the request below the budget.
+	// Generous deadline (> server delay): the same slow endpoint succeeds.
 	okCtx, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel2()
 	resp, err := c.callChatWithTools(okCtx, nil, nil, nil)

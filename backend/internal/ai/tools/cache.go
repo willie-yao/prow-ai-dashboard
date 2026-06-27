@@ -22,7 +22,7 @@ func NewCache() *Cache {
 	return &Cache{store: map[string]string{}}
 }
 
-// Get returns (value, true) if present.
+// Get returns the stored value and true if present.
 func (c *Cache) Get(key string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

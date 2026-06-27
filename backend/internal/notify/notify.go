@@ -1,5 +1,5 @@
-// Package notify sends Slack notifications for persistent test failures
-// via incoming webhooks, with de-duplication and recovery tracking.
+// Package notify sends Slack notifications for persistent test failures through
+// incoming webhooks, with deduplication and recovery tracking.
 package notify
 
 import (
@@ -47,9 +47,8 @@ type Stats struct {
 	Recoveries int
 }
 
-// NewNotifier creates a Notifier and loads existing state from stateFile if it exists.
-// prowURLBase is the GCS-bucket-aware Prow view prefix (trailing slash) used to
-// build "view in Prow" links, e.g. "https://prow.k8s.io/view/gs/kubernetes-ci-logs/logs/".
+// NewNotifier creates a Notifier and loads existing state from stateFile.
+// prowURLBase is the trailing-slashed Prow view prefix for artifact links.
 func NewNotifier(webhookURL, stateFile, dashboardBaseURL, prowURLBase string) *Notifier {
 	n := &Notifier{
 		webhookURL:       webhookURL,
@@ -89,18 +88,18 @@ func (n *Notifier) SaveState() error {
 	return os.WriteFile(n.stateFile, data, 0644)
 }
 
-// notificationKey returns the de-duplication key for a test. Uses JobID so
+// notificationKey returns the deduplication key for a test. It uses JobID so
 // presubmits and periodics with the same job name do not collide.
 func notificationKey(jobID, testName string) string {
 	return jobID + "::" + testName
 }
 
 // ProcessFailures compares current persistent failures against state and sends
-// Teams notifications for new failures, changed error hashes, and recoveries.
+// Slack notifications for new failures, changed error hashes, and recoveries.
 func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessReport, jobDetails []models.JobDetail) (Stats, error) {
 	var stats Stats
 
-	// Build map of current persistent failures (consecutive >= 3).
+	// Current persistent failures require at least 3 consecutive failures.
 	current := make(map[string]models.TestFlakiness)
 	for _, tf := range report.PersistentFailures {
 		if tf.ConsecutiveFailures >= 3 {
@@ -109,10 +108,8 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 		}
 	}
 
-	// Build AI analysis lookup from job details.
 	aiLookup := buildAILookup(jobDetails)
 
-	// Check current persistent failures against state.
 	for key, tf := range current {
 		existing, wasNotified := n.state.Notified[key]
 
@@ -122,7 +119,6 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 		}
 
 		if !wasNotified {
-			// NEW: send failure notification.
 			summary, rootCause := lookupAI(aiLookup, tf.JobID, tf.TestName)
 			if err := n.sendFailureAlert(ctx, tf, summary, rootCause); err != nil {
 				log.Printf("  ⚠ Failed to send alert for %s: %v", key, err)
@@ -137,7 +133,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 				TestName:         tf.TestName,
 			}
 		} else if currentHash != existing.ErrorHash {
-			// CHANGED: failure mode changed, send new notification.
+			// Notify again when the failure mode changes.
 			summary, rootCause := lookupAI(aiLookup, tf.JobID, tf.TestName)
 			if err := n.sendFailureAlert(ctx, tf, summary, rootCause); err != nil {
 				log.Printf("  ⚠ Failed to send changed-alert for %s: %v", key, err)
@@ -152,10 +148,10 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 				TestName:         tf.TestName,
 			}
 		}
-		// Same error hash still failing → skip (already notified).
+		// Same error hash still failing has already been notified.
 	}
 
-	// Check for recoveries: entries in state that are NOT in current persistent failures.
+	// Recover state entries absent from current persistent failures.
 	for key, nf := range n.state.Notified {
 		if _, stillFailing := current[key]; !stillFailing {
 			if err := n.sendRecoveryAlert(ctx, nf); err != nil {
@@ -170,7 +166,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 	return stats, nil
 }
 
-// aiKey creates a lookup key for AI analysis results.
+// aiEntry stores AI text used in notifications.
 type aiEntry struct {
 	Summary   string
 	RootCause string
@@ -186,7 +182,7 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 				}
 				key := notificationKey(jd.JobID, tc.Name)
 				if _, exists := lookup[key]; exists {
-					continue // keep first (most recent run comes first)
+					continue // keep the first entry, since runs are newest-first
 				}
 				var entry aiEntry
 				if tc.AISummary != nil {
@@ -270,13 +266,12 @@ func (n *Notifier) sendFailureAlert(ctx context.Context, tf models.TestFlakiness
 		"text": map[string]string{"type": "mrkdwn", "text": fmt.Sprintf("*🤖 AI Analysis:*\n%s", truncate(aiText, 500))},
 	})
 
-	// Links
 	linkParts := []string{fmt.Sprintf("<%s|View on Dashboard>", dashboardURL)}
 	if prowURL != "" {
 		linkParts = append(linkParts, fmt.Sprintf("<%s|View in Prow>", prowURL))
 	}
 	blocks = append(blocks, map[string]interface{}{
-		"type": "actions",
+		"type":     "actions",
 		"elements": slackButtons(linkParts),
 	})
 
@@ -311,7 +306,7 @@ func (n *Notifier) sendRecoveryAlert(ctx context.Context, nf NotifiedFailure) er
 func slackButtons(links []string) []map[string]interface{} {
 	var elements []map[string]interface{}
 	for _, link := range links {
-		// Extract URL and text from Slack mrkdwn link format <url|text>
+		// Slack mrkdwn links use <url|text>.
 		parts := strings.SplitN(strings.Trim(link, "<>"), "|", 2)
 		if len(parts) == 2 {
 			elements = append(elements, map[string]interface{}{

@@ -119,7 +119,7 @@ func TestFetchBuildInfo_RunningAndFinished(t *testing.T) {
 		t.Errorf("urls: web=%q log=%q", info.WebURL, info.BuildLogURL)
 	}
 
-	// Missing finished.json -> PENDING.
+	// Missing finished.json means PENDING.
 	loc.BuildID = "200"
 	info, err = FetchBuildInfo(ctx, b, loc)
 	if err != nil {
@@ -225,8 +225,7 @@ func TestDiscoverJobs_BucketDriven(t *testing.T) {
 		if j.JobID == "" {
 			t.Errorf("job %q has empty JobID", j.Name)
 		}
-		// TabName is the field the UI renders as the card title, so bucket
-		// discovery must populate it (there is no testgrid-tab-name here).
+		// Bucket discovery must populate TabName when testgrid-tab-name is absent.
 		if j.TabName != j.Name {
 			t.Errorf("job %q TabName = %q, want = Name", j.Name, j.TabName)
 		}

@@ -16,7 +16,7 @@ type BuildInput struct {
 	JobDetails   []models.JobDetail
 	Triggers     []string // project.IssueTrigger* values to include
 	Labels       []string
-	DashboardURL string // branding.site_url (no trailing slash needed)
+	DashboardURL string // branding.site_url without a trailing slash
 }
 
 // BuildSpecs assembles the issue specs for the enabled triggers. Each spec
@@ -136,8 +136,8 @@ func hasTrigger(triggers []string, name string) bool {
 	return false
 }
 
-// --- AI root-cause lookup (mirrors notify.buildAILookup, kept local so the
-// issues package stays self-contained) ---
+// AI root-cause lookup mirrors notify.buildAILookup while keeping this package
+// self-contained.
 
 type aiEntry struct {
 	Summary   string
@@ -156,7 +156,7 @@ func buildAILookup(jobDetails []models.JobDetail) map[string]aiEntry {
 				}
 				key := aiKey(jd.JobID, tc.Name)
 				if _, exists := lookup[key]; exists {
-					continue // keep first (most recent run comes first)
+					continue // keep the first entry, since runs are newest-first
 				}
 				var entry aiEntry
 				if tc.AISummary != nil {

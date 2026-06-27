@@ -9,8 +9,7 @@ interface ErrorStateProps {
   onRetry?: () => void;
 }
 
-// Centered error message with an optional retry button. Replaces the error +
-// retry block that was duplicated across the pages.
+// Centered error message with an optional retry button.
 export function ErrorState({
   title = "Something went wrong",
   message,

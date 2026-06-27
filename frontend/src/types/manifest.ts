@@ -1,6 +1,6 @@
-// Manifest mirrors backend/internal/project.Config (JSON form).
-// The fetcher writes this to data/manifest.json on every run; the
-// frontend loads it once at app boot via ManifestProvider.
+// Manifest mirrors the backend project config JSON. The fetcher writes it to
+// data/manifest.json on every run, and ManifestProvider loads it once at app
+// boot.
 
 export interface SourceRepo {
   owner: string;
@@ -46,8 +46,8 @@ export interface Manifest {
   branding: Branding;
   categories?: CategoryRule[];
   category_display_order?: string[];
-  // Display-only hint derived at fetch time: the longest periodic-<x>-
-  // prefix shared by a majority of discovered periodic jobs. Used by
-  // shortJobName to strip boilerplate from job names in the UI.
+  // Display-only hint derived at fetch time: the longest periodic-<x>- prefix
+  // shared by a majority of discovered periodic jobs. Used by shortJobName to
+  // strip boilerplate from job names in the UI.
   short_name_prefix?: string;
 }

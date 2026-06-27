@@ -25,7 +25,7 @@ func TestInferCategories_GroupsAndOrders(t *testing.T) {
 		t.Fatal("expected some categories")
 	}
 
-	ids := map[string]int{} // id -> position
+	ids := map[string]int{} // id to position
 	for i, r := range rules {
 		ids[r.ID] = i
 		// id and match are the bare token; label is human-cased.
@@ -40,8 +40,7 @@ func TestInferCategories_GroupsAndOrders(t *testing.T) {
 			t.Errorf("expected a %q category, got %v", want, ids)
 		}
 	}
-	// Specific-before-broad: "aks"/"conformance"/"capi" (2 jobs each) precede
-	// the broad "e2e" (which spans most jobs).
+	// Specific categories precede the broad "e2e" category.
 	if pos, ok := ids["e2e"]; ok {
 		for _, narrow := range []string{"aks", "conformance", "capi"} {
 			if ids[narrow] >= pos {
@@ -64,7 +63,7 @@ func TestInferCategories_FiltersNoiseAndUbiquitous(t *testing.T) {
 			t.Errorf("noise/ubiquitous token %q became a category", r.ID)
 		}
 	}
-	// "proj" and "e2e" appear in ALL jobs -> not distinguishers -> excluded.
+	// "proj" and "e2e" appear in all jobs, so they are excluded.
 }
 
 func TestInferCategories_EdgeCases(t *testing.T) {
@@ -75,7 +74,7 @@ func TestInferCategories_EdgeCases(t *testing.T) {
 		t.Errorf("single job: want nil, got %v", r)
 	}
 	// Two identical-shape jobs differing only by version: no distinguishing
-	// token -> flat grid (nil).
+	// token, so the result is a flat grid.
 	if r := InferCategories([]string{"job-main", "job-release-1-23"}); len(r) != 0 {
 		t.Errorf("no distinguisher: want nil, got %v", r)
 	}
@@ -93,8 +92,7 @@ func TestInferCategories_RespectsCap(t *testing.T) {
 }
 
 func TestInferCategories_NeverEmitsReservedOther(t *testing.T) {
-	// "other" is the engine's reserved fallback id; a token "other" must never
-	// become a category (project.Validate would reject it).
+	// "other" is reserved fallback id and must never become a category.
 	jobs := []string{
 		"periodic-proj-other-main", "periodic-proj-other-release-1-23",
 		"periodic-proj-foo-main",
@@ -113,8 +111,7 @@ func TestInferCategories_SubstringCoverage(t *testing.T) {
 		"periodic-capi-e2e-main", "periodic-capi-e2e-release-1-23",
 	}
 	// Both jobs share "capi" and "e2e" as exact tokens but those appear in ALL
-	// jobs, so there's no distinguisher -> flat grid. Just assert it stays valid
-	// (no panic, no reserved/whitespace ids) and produces a loadable set.
+	// jobs, so there is no distinguisher. Assert it stays valid and loadable.
 	rules := InferCategories(jobs)
 	for _, r := range rules {
 		if strings.TrimSpace(r.ID) != r.ID || r.ID == "" {
@@ -269,9 +266,8 @@ func TestValidateOptions_DefaultsOutDir(t *testing.T) {
 	}
 }
 
-// TestValidateOptions_AIProviderExplicit checks that AI drafting requires both
-// the endpoint and model (no assumed default), but -no-prompt or a full provider
-// config passes.
+// TestValidateOptions_AIProviderExplicit checks AI drafting requires endpoint
+// and model unless -no-prompt is set.
 func TestValidateOptions_AIProviderExplicit(t *testing.T) {
 	t.Run("full provider ok", func(t *testing.T) {
 		opts := testOpts()
@@ -289,8 +285,8 @@ func TestValidateOptions_AIProviderExplicit(t *testing.T) {
 	})
 }
 
-// confirms the engine's own LoadDir accepts it: the prompt stub is non-empty
-// (LoadDir rejects an empty prompt) and the config validates.
+// TestScaffold_LoadsViaLoadDir confirms the rendered scaffold loads with a
+// non-empty prompt and valid config.
 func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 	data := buildScaffoldData(testOpts(), InferCategories([]string{
 		"periodic-myproj-e2e-main", "periodic-myproj-e2e-release-1-23",

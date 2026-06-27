@@ -55,7 +55,7 @@ func TestCollectorRegistry_DefaultsToGeneric(t *testing.T) {
 		return &stubCollector{name: "generic"}, nil
 	})
 
-	// No artifacts section → CollectorName() returns "generic".
+	// Missing artifacts section defaults CollectorName to "generic".
 	cfg := &project.Config{}
 	got, err := r.Build(cfg, nil, nil)
 	if err != nil || got.Name() != "generic" {

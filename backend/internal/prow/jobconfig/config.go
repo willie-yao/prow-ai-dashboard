@@ -41,17 +41,14 @@ type presubmitsFile struct {
 	Presubmits map[string][]rawJob `yaml:"presubmits"`
 }
 
-// ParseJobConfig parses a Prow YAML config file and returns the jobs whose
-// testgrid-dashboards annotation contains the given dashboard. filename is
-// recorded in each returned ProwJob's ConfigFile field. categories controls
-// the substring-to-category mapping applied to each job's name; pass
-// project.DefaultCategories for the engine default set.
+// ParseJobConfig parses Prow YAML and returns jobs whose testgrid-dashboards
+// annotation contains the given dashboard. filename is recorded in ConfigFile.
+// categories controls substring-to-category mapping; nil leaves jobs ungrouped.
 //
 // Both `periodics:` and `presubmits:` top-level sections are recognized.
 // Files containing only one of the two are the common case; files that
 // declare both are also supported and emit both shapes. Returned jobs carry
-// JobType ("periodic" or "presubmit") and, for presubmits, Repo ("org/repo"
-// taken from the presubmits map key).
+// JobType and, for presubmits, Repo from the presubmits map key.
 func ParseJobConfig(data []byte, filename, dashboard string, categories []project.CategoryRule) ([]models.ProwJob, error) {
 	var pf periodicsFile
 	if err := yaml.Unmarshal(data, &pf); err != nil {
@@ -101,12 +98,8 @@ func matchesDashboard(r rawJob, dashboard string) bool {
 }
 
 func convertJob(r rawJob, filename, jobType, repo string, categories []project.CategoryRule) models.ProwJob {
-	// Prow periodics may schedule with either minimum_interval, interval,
-	// or cron. The engine only models a single interval string, so prefer
-	// the explicit minimum_interval when present, otherwise fall back to
-	// interval. Cron-scheduled periodics fall through with an empty
-	// interval; they are kept (filtered correctly by JobType, not by
-	// interval).
+	// The engine models one interval string. Prefer minimum_interval, then
+	// interval. Cron-only periodics keep an empty interval.
 	interval := r.MinimumInterval
 	if interval == "" {
 		interval = r.Interval

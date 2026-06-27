@@ -1,21 +1,20 @@
 package onboard
 
-// Options configures a scaffold run. One discovery selector (TestGrid or
-// Bucket) is required, plus the dashboard and source repos.
+// Options configures a scaffold run. One discovery selector is required, plus
+// the dashboard and source repos.
 type Options struct {
-	// TestGrid is the testgrid-dashboards annotation value (kubernetes-ecosystem
-	// Prow). Mutually exclusive with Bucket.
+	// TestGrid is the testgrid-dashboards annotation value for Kubernetes Prow.
+	// Mutually exclusive with Bucket.
 	TestGrid string
-	// Bucket is the artifact bucket name for bucket-based discovery (any Prow).
+	// Bucket is the artifact bucket name for bucket-based discovery.
 	Bucket string
-	// GCSWebBase, when set with Bucket, selects the gcsweb provider and is the
-	// gateway root (e.g. https://gcsweb.istio.io/s3). Empty means native gcs.
+	// GCSWebBase selects the gcsweb provider for bucket discovery.
+	// Empty means native gcs.
 	GCSWebBase string
 
-	// DashboardRepo is "owner/name" of the repo that will publish the dashboard
-	// (drives branding.base_path and site_url).
+	// DashboardRepo is the owner/name repo that will publish the dashboard.
 	DashboardRepo string
-	// SourceRepo is "owner/name" of the code under test (branding.source_repo).
+	// SourceRepo is the owner/name repo for the code under test.
 	SourceRepo string
 
 	// ID/Name override the derived project identity. Optional.
@@ -25,14 +24,13 @@ type Options struct {
 	// IncludePresubmits widens the sweep to presubmit jobs.
 	IncludePresubmits bool
 
-	// EngineRef is the prow-ai-dashboard ref the generated workflows pin
-	// (defaults to "main").
+	// EngineRef is the prow-ai-dashboard ref the generated workflows pin.
 	EngineRef string
 
 	// OutDir is where the scaffold is written.
 	OutDir string
 
-	// --- AI prompt drafting (optional) ---
+	// AI prompt drafting is optional.
 
 	// AIToken authenticates the chat-completions endpoint used to draft
 	// prompts/system.md. When empty, onboard writes the stub instead.
@@ -42,15 +40,13 @@ type Options struct {
 	// is set; the engine assumes no default provider.
 	AIEndpoint string
 	AIModel    string
-	// GitHubToken authenticates source-repo doc reads (avoids the anonymous
-	// rate limit) and, with --open-pr, opening the scaffold PR.
+	// GitHubToken authenticates source-repo doc reads and scaffold PR creation.
 	GitHubToken string
-	// NoPrompt forces the stub even when an AI token is available (skip the
-	// model call).
+	// NoPrompt forces the stub even when an AI token is available.
 	NoPrompt bool
 
 	// OpenPR opens a pull request against the dashboard repo with the scaffold
 	// instead of writing a local directory. Requires a GitHub token with write
-	// access to the dashboard repo (GitHubToken).
+	// access to the dashboard repo.
 	OpenPR bool
 }

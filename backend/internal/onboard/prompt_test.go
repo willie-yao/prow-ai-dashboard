@@ -90,7 +90,7 @@ func TestComposeGeneratedPrompt_HasHeaderAndBody(t *testing.T) {
 }
 
 func TestGeneratePromptBody_RejectsMissingSections(t *testing.T) {
-	// Non-empty but missing the required sections -> error (caller falls back).
+	// Non-empty output missing required sections errors so the caller can fall back.
 	c := &stubCompleter{out: "## Architecture\nonly one section here"}
 	if _, err := generatePromptBody(context.Background(), c, "P", nil); err == nil {
 		t.Error("expected error when required sections are missing")

@@ -1,8 +1,8 @@
 import { styled } from "@mui/material/styles";
 import Paper from "@mui/material/Paper";
 
-// Translucent "glass" surface that replaces the old `.glass` utility. Use it for
-// cards, dropdowns and any raised panel. Override radius/padding via `sx`.
+// Translucent surface for cards, dropdowns and raised panels. Override
+// radius and padding via `sx`.
 // Cast back to `typeof Paper` so it keeps Paper's polymorphic `component` prop.
 export const Panel = styled(Paper)(({ theme }) => ({
   backgroundColor: (theme.vars ?? theme).palette.surface.glass,

@@ -8,8 +8,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 )
 
-// completer is the slice of *ai.Client the generator needs (an interface so the
-// generator is unit-testable).
+// completer is the subset of *ai.Client the generator needs.
 type completer interface {
 	Complete(ctx context.Context, system, user string) (string, error)
 }
@@ -34,7 +33,7 @@ Infrastructure flakes that should be classified transient (NOT turned into a "re
 Rules: output only the markdown body starting at "## Architecture". No preamble, no code fences around the whole thing, no closing remarks.`
 
 // generatePromptBody asks the model to draft the system.md body from the source
-// docs. Returns the markdown body (the "## Architecture..." sections).
+// docs. Returns the markdown body starting at "## Architecture".
 func generatePromptBody(ctx context.Context, c completer, projectName string, docs []sourceDoc) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Project: %s\n\n", projectName)
@@ -54,8 +53,7 @@ func generatePromptBody(ctx context.Context, c completer, projectName string, do
 	if body == "" {
 		return "", fmt.Errorf("model returned an empty prompt body")
 	}
-	// Require the three sections we asked for; a body missing them is malformed
-	// (the caller falls back to the stub rather than ship a poor prompt).
+	// Require the three sections so malformed drafts fall back to the stub.
 	for _, h := range []string{"## Architecture", "## Where the evidence lives", "## Known transient"} {
 		if !strings.Contains(body, h) {
 			return "", fmt.Errorf("generated prompt missing required section %q", h)

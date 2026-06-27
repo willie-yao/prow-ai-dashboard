@@ -1,10 +1,7 @@
 // Package skills implements the consumer-owned diagnostic recipe registry.
 //
-// A Skill is a YAML recipe declaring regex triggers (which mark the recipe
-// applicable when the model's draft analysis matches), required-evidence
-// groups (artifact-path patterns the agent must satisfy by actually reading
-// matching artifacts), and a human-readable procedure quoted back to the
-// model when evidence is missing.
+// A Skill is a YAML recipe with regex triggers, required-evidence groups, and a
+// human-readable procedure quoted back to the model when evidence is missing.
 //
 // Recipes live in <project_dir>/skills/*.yaml. The directory is optional;
 // any present recipe must parse and compile cleanly or Load returns an error.
@@ -33,7 +30,7 @@ type Skill struct {
 	// in critique feedback, so pick something human-meaningful.
 	ID string `yaml:"id"`
 
-	// Name is an optional longer label (defaults to ID).
+	// Name is an optional longer label. Defaults to ID.
 	Name string `yaml:"name,omitempty"`
 
 	// Description is one-line guidance for the recipe author. Not shown
@@ -67,7 +64,7 @@ type Skill struct {
 // artifact path the agent successfully read.
 type EvidenceGroup struct {
 	// ID identifies the group within the recipe. Surfaced in feedback;
-	// recommended kebab-case (e.g. cert-manager-config).
+	// recommended kebab-case, such as cert-manager-config.
 	ID string `yaml:"id"`
 
 	// Description is the human-readable phrase shown in feedback.
@@ -88,8 +85,8 @@ type Set struct {
 	hash   string
 }
 
-// Skills returns the underlying recipes in load order (priority desc,
-// then ID asc). Callers may iterate but should not mutate.
+// Skills returns recipes in load order, priority desc then ID asc. Callers may
+// iterate but should not mutate.
 func (s *Set) Skills() []Skill {
 	if s == nil {
 		return nil
@@ -127,8 +124,8 @@ func (s *Set) Match(text string) []Skill {
 
 // Satisfied reports whether the evidence group is met by the set of
 // successfully-read artifact paths. reads is the same path set the
-// critique gate uses for findUnreadArtifactCitations (lowercase,
-// slash-normalized full paths).
+// critique gate uses for findUnreadArtifactCitations: lowercase,
+// slash-normalized full paths.
 func (g EvidenceGroup) Satisfied(reads map[string]bool) bool {
 	if len(g.anyOfREs) == 0 || len(reads) == 0 {
 		return false
@@ -214,8 +211,7 @@ func loadOne(path string) (Skill, error) {
 
 // ParseAndValidate decodes one recipe from YAML, then validates and compiles
 // every regex. It is the single-recipe entry point used by callers that
-// generate a recipe (e.g. skill suggestions) and need to reject an invalid
-// draft before writing it.
+// generate a recipe and need to reject an invalid draft before writing it.
 func ParseAndValidate(data []byte) (Skill, error) {
 	var sk Skill
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))

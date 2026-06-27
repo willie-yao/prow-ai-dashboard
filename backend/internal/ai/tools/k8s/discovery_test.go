@@ -10,10 +10,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
-// fakeBrowser is an in-memory artifacts.Browser shaped like a CAPI-style
-// build tree. dirs maps "" or "trailing/slashed/" parent paths to immediate
-// child subdir names (with their own trailing slashes). files maps fully
-// qualified file paths to byte content.
+// fakeBrowser is an in-memory artifacts.Browser shaped like a CAPI-style build
+// tree. dirs maps parent paths to child subdirs; files maps full paths to bytes.
 type fakeBrowser struct {
 	dirs  map[string][]string
 	files map[string][]byte
@@ -186,9 +184,7 @@ func TestListMachineLogsFiltersAndOrders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Files present in fixture: boot.log, kubelet.log, journal.log, cloud-init.log (empty).
-	// knownMachineLogs order is boot, cloud-init-output, cloud-init, kubelet, kube-apiserver, journal, ...
-	// We expect output ordered by knownMachineLogs priority, filtered to files actually present.
+	// Output is ordered by knownMachineLogs priority and filtered to present files.
 	wantNames := []string{"boot.log", "cloud-init.log", "kubelet.log", "journal.log"}
 	if len(logs) != len(wantNames) {
 		t.Fatalf("expected %d logs, got %d: %+v", len(wantNames), len(logs), logs)
@@ -198,7 +194,7 @@ func TestListMachineLogsFiltersAndOrders(t *testing.T) {
 			t.Errorf("log[%d] = %q, want %q (full=%v)", i, logs[i].Name, want, logs)
 		}
 	}
-	// cloud-init.log was a zero-byte file in the fixture; verify size flows through.
+	// Zero-byte cloud-init.log should keep size 0.
 	if logs[1].Size != 0 {
 		t.Errorf("cloud-init.log size = %d, want 0", logs[1].Size)
 	}
@@ -213,9 +209,7 @@ func TestDiscoverControllersAllNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Expect (capz-system, capz-controller-manager),
-	// (capz-system, azureserviceoperator-controller-manager),
-	// (capi-system, capi-controller-manager).
+	// Expect two capz-system controllers and one capi-system controller.
 	if len(controllers) != 3 {
 		t.Fatalf("expected 3 controllers, got %d: %+v", len(controllers), controllers)
 	}

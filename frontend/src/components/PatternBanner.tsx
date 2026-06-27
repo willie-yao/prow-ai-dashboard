@@ -10,10 +10,9 @@ import { RichText } from "./RichText";
 import { soft } from "../theme";
 
 /**
- * PatternBanner surfaces the job-level cross-build correlation: whether the
- * job's recent failed builds share one root cause (a recurring bug surfacing as
- * "flakes") or are genuinely independent. Prominent when systemic, subtle when
- * not. Rendered only when ai.pattern_analysis produced a verdict.
+ * PatternBanner surfaces job-level cross-build correlation. It distinguishes a
+ * shared root cause from independent failures and renders only when
+ * ai.pattern_analysis produced a verdict.
  */
 export function PatternBanner({
   pattern,

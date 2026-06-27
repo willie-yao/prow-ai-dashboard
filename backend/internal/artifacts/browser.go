@@ -1,6 +1,5 @@
 // Package artifacts provides a read-only Browser over a single Prow build's
-// GCS artifact tree. One Browser instance is bound to one (bucket, job,
-// build); construct a fresh Browser per build via a Factory.
+// artifact tree. Each Browser is bound to one bucket, job, and build.
 package artifacts
 
 import (
@@ -16,23 +15,19 @@ import (
 // to the build root. Implementations MUST enforce path safety: reject
 // absolute paths, ".." segments, control characters, backslashes, or URLs.
 type Browser interface {
-	// BuildRoot returns a human-readable identifier for the build (used
-	// for logging and as a system-prompt seed; not a URL).
+	// BuildRoot returns a human-readable build identifier for logs and prompts.
 	BuildRoot() string
 
 	// List returns the immediate children of dir, paths relative to the
 	// build root. Empty dir lists the build root.
 	List(ctx context.Context, dir string) (*Listing, error)
 
-	// ListTree returns every artifact path under the build, relative to the
-	// build root (no directory prefix), so the paths can be passed straight
-	// to Read/Tail/Grep. Bounded by maxPaths; the returned bool is true when
-	// the listing was truncated at that cap. Lets callers hand the model the
-	// real artifact paths up front instead of having it guess.
+	// ListTree returns artifact paths relative to the build root.
+	// The returned bool is true when maxPaths truncated the listing.
 	ListTree(ctx context.Context, maxPaths int) (paths []string, truncated bool, err error)
 
 	// Read fetches a byte range of a file. Returns the bytes plus the
-	// total file size (or -1 if unknown).
+	// total file size, or -1 when unknown.
 	Read(ctx context.Context, file string, offset, length int) ([]byte, int64, error)
 
 	// Tail returns the last lines of a file using a suffix-range fetch
@@ -47,16 +42,15 @@ type Browser interface {
 
 // Factory creates per-build Browser instances.
 //
-// buildPrefix is the bucket-relative, trailing-slashed directory of the
-// build (e.g. "logs/<job>/<build>/"). displayName is a human-readable label
-// for logging and the agentic system prompt (not a URL).
+// buildPrefix is the bucket-relative, trailing-slashed build directory.
+// displayName is a human-readable label for logging and prompts.
 type Factory interface {
 	ForBuild(buildPrefix, displayName string) Browser
 }
 
 // Listing is the result of Browser.List.
 type Listing struct {
-	// Dir is the directory that was listed (trailing-slashed except root).
+	// Dir is the directory that was listed, trailing-slashed except root.
 	Dir string
 	// Dirs lists subdirectory names, trailing-slashed.
 	Dirs  []string
@@ -73,7 +67,7 @@ type FileInfo struct {
 
 // TailResult is the result of Browser.Tail.
 type TailResult struct {
-	// FileSize is the total size of the file, or -1 if unknown.
+	// FileSize is the total size of the file, or -1 when unknown.
 	FileSize int64
 	// LinesReturned is the number of lines actually included in Content.
 	LinesReturned int
@@ -95,7 +89,7 @@ type GrepResult struct {
 type GrepMatch struct {
 	// LineNo is 1-based.
 	LineNo int
-	// Context lines already prefixed with "> " (match) or "  " (context).
+	// Context lines are prefixed with "> " for matches or "  " for context.
 	Context []string
 }
 
@@ -107,10 +101,9 @@ var ErrUnsafePath = errors.New("unsafe path")
 var pathDangerousRe = regexp.MustCompile(`[\x00-\x1f\\]`)
 
 // SafePath validates a user-supplied path and returns its cleaned form
-// relative to the build root. The returned path never starts with "/" and
-// never contains "..". Empty input returns ("", nil) which implementations
-// should treat as the build root. Implementations SHOULD call this on
-// every public path argument.
+// relative to the build root. The returned path never starts with "/" or
+// contains "..". Empty input returns a root path. Implementations should call
+// this on every public path argument.
 func SafePath(p string) (string, error) {
 	if p == "" {
 		return "", nil

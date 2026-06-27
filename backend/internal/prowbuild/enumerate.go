@@ -11,8 +11,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-// ListRecentBuilds returns up to count most-recent Builds for job, newest
-// first.
+// ListRecentBuilds returns up to count builds for job, newest first.
 //
 // For periodics it lists logs/<job>/ and treats each numeric subdirectory as a
 // build ID.
@@ -20,7 +19,7 @@ import (
 // For presubmits it lists pr-logs/directory/<job>/, a flat index of
 // <buildID>.txt files spanning every PR that has triggered this job, where each
 // .txt body is the path pr-logs/pull/<org_repo>/<pr#>/<job>/<buildID>. Build IDs
-// are sorted descending and resolved (sequentially) by reading their .txt body.
+// are sorted descending and resolved by reading their .txt body.
 // Resolutions are validated against the job's Repo + Name + buildID so a
 // same-named presubmit in a different repo cannot bleed in; invalid candidates
 // are skipped until count valid Builds are gathered or candidates run out.
@@ -110,11 +109,9 @@ func listPresubmitCandidateIDs(ctx context.Context, b storage.Backend, prefix st
 	return ids, nil
 }
 
-// splitPresubmitRef extracts the [pr-logs, pull, <org_repo>, <pr#>, <job>,
-// <buildID>] segments from a pr-logs/directory/<job>/<id>.txt body. The body is
-// either a bucket-relative path (k8s GCS) or an absolute gs://, s3:// (or other)
-// URL (e.g. Istio), so it anchors on the "pr-logs/pull/" marker rather than the
-// string start.
+// splitPresubmitRef extracts the pr-logs/pull segments from an index entry.
+// It anchors on "pr-logs/pull/" because entries may be bucket-relative paths or
+// absolute storage URLs.
 func splitPresubmitRef(body string) ([]string, bool) {
 	body = strings.TrimSpace(body)
 	idx := strings.Index(body, "pr-logs/pull/")
@@ -130,7 +127,7 @@ func splitPresubmitRef(body string) ([]string, bool) {
 
 // resolvePresubmitPath reads pr-logs/directory/<job>/<buildID>.txt and returns
 // the pull number if the body resolves to a path matching the expected
-// (repoSeg, jobName, buildID). Any mismatch or read error returns ok=false.
+// expected repo segment, job name, and build ID. Any mismatch returns ok=false.
 func resolvePresubmitPath(ctx context.Context, b storage.Backend, indexPrefix, buildID, expectedRepoSeg, expectedJobName string) (string, bool) {
 	body, err := storage.ReadAll(ctx, b, indexPrefix+buildID+".txt")
 	if err != nil {

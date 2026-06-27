@@ -1,15 +1,13 @@
-// Package k8s implements tier-2 agent tools that encode Kubernetes-shape
-// navigation primitives on top of the universal artifact Browser. These
-// tools cover the discovery work the legacy capi collector did eagerly
-// (cluster discovery, per-machine logs, controller logs) but expose it as
-// lazy, on-demand calls so the agent only pays for what it needs.
+// Package k8s implements tier-2 agent tools that encode Kubernetes-shaped
+// navigation primitives on top of the universal artifact Browser. These tools
+// expose cluster discovery, per-machine logs, and controller logs as lazy calls
+// so the agent only pays for what it needs.
 //
 // The tools live behind the same Browser interface as the filesystem tools,
 // so they remain GCS-implementation-agnostic and can be tested against
-// fakes. The discovery helpers are stateless pure functions over a
-// Browser; the cluster→test matcher is provider-agnostic with a
-// CAPZ-flavored fallback so existing dashboards keep working without
-// per-project rule tables.
+// fakes. The discovery helpers are stateless pure functions over a Browser. The
+// cluster-to-test matcher is provider-agnostic with a CAPZ-flavored fallback so
+// existing dashboards keep working without per-project rule tables.
 package k8s
 
 import (
@@ -20,8 +18,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
-// Group is the alias used in config to enable all k8s tools at once
-// (e.g. agentic.tools: [filesystem, k8s]).
+// Group is the alias used in config to enable all k8s tools at once.
 const Group = "k8s"
 
 // clustersRoot is the relative path under a build root where CAPI-shaped
@@ -30,9 +27,9 @@ const Group = "k8s"
 // non-K8s builds degrade cleanly.
 const clustersRoot = "artifacts/clusters/"
 
-// bootstrapDir is the management ("bootstrap") cluster's artifact dir, which
-// holds controller-manager logs and is NOT a workload cluster. Filtered out
-// of discover_clusters; surfaced by discover_controllers.
+// bootstrapDir is the management cluster's artifact dir. It holds controller
+// manager logs and is not a workload cluster. discover_clusters filters it out;
+// discover_controllers surfaces it.
 const bootstrapDir = "bootstrap"
 
 // knownMachineLogs lists the per-machine log files we look for inside each
@@ -64,7 +61,7 @@ type Machine struct {
 }
 
 // Controller represents one controller deployment under a namespace under
-// the bootstrap (management) cluster's log tree.
+// the bootstrap management cluster's log tree.
 type Controller struct {
 	Namespace  string `json:"namespace"`
 	Deployment string `json:"deployment"`
@@ -79,17 +76,15 @@ type LogFile struct {
 }
 
 // DiscoverClusters lists workload-cluster subdirectories under
-// artifacts/clusters/. The "bootstrap" dir is excluded (it holds management
-// controller logs, not workload state; use DiscoverControllers for that).
-// Returns an empty slice (not an error) when the artifacts/clusters/ tree
-// is missing, so the caller can treat absence as "not a CAPI-shaped build"
-// without special-casing 404.
+// artifacts/clusters/. The "bootstrap" dir is excluded because it holds
+// management controller logs, not workload state. Returns an empty slice when
+// the artifacts/clusters/ tree is missing, so callers can treat absence as "not
+// a CAPI-shaped build" without special-casing 404.
 func DiscoverClusters(ctx context.Context, b artifacts.Browser) ([]Cluster, error) {
 	listing, err := b.List(ctx, clustersRoot)
 	if err != nil {
-		// 404 / missing tree is the dominant "error" here; treat as empty.
-		// Real failures (transient network, etc) will recur on the next
-		// tool call and surface there.
+		// Missing tree is the dominant "error" here; treat it as empty. Real
+		// failures will recur on the next tool call and surface there.
 		return nil, nil
 	}
 	var out []Cluster
@@ -203,8 +198,9 @@ func DiscoverControllers(ctx context.Context, b artifacts.Browser, namespace str
 // ResolveControllerLog drills into a controller dir to find a concrete
 // container-log file path. Walks
 // artifacts/clusters/bootstrap/logs/<ns>/<deployment>/<pod>/ for the first
-// pod whose name matches podNameRe (nil means any) and returns the path to
-// the named container log (default "manager.log") plus the pod name.
+// pod whose name matches podNameRe and returns the path to the named container
+// log plus the pod name. nil podNameRe matches any pod; empty containerLog
+// defaults to "manager.log".
 // Returns nil when nothing matches.
 func ResolveControllerLog(ctx context.Context, b artifacts.Browser, namespace, deployment string, podNameRe *regexp.Regexp, containerLog string) (*LogFile, string, error) {
 	if containerLog == "" {

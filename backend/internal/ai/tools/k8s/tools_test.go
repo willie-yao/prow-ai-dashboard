@@ -32,9 +32,7 @@ func mustDispatch(t *testing.T, tool tools.Tool, env *tools.Env, args interface{
 	return res.Payload
 }
 
-// numAs reads a numeric payload field that may be int (fresh) or float64
-// (JSON-round-tripped from cache). Keeps tests focused on values rather
-// than encoding paths.
+// numAs reads a numeric payload field that may be int or cache-round-tripped float64.
 func numAs(v interface{}) int {
 	switch n := v.(type) {
 	case int:
@@ -179,9 +177,8 @@ func TestDiscoverControllersDispatchCachesByNamespace(t *testing.T) {
 	env := envWith("")
 	tool := &discoverControllersTool{}
 
-	// Prime the empty-namespace cache, then swap the browser. A second
-	// call with the same namespace should hit the cache. A call with a
-	// different namespace should still hit the (now-broken) browser.
+	// Prime the empty-namespace cache, then swap the browser. Same namespace
+	// should hit cache; a different namespace should hit the failing browser.
 	_ = mustDispatch(t, tool, env, map[string]string{"namespace": ""})
 	env.Browser = &fakeBrowser{}
 

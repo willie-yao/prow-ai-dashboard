@@ -1,7 +1,6 @@
 // Package filesystem implements tier-1 agent tools that give the model raw
 // access to a build's GCS artifact tree. These tools are universal across
-// every project shape (CAPI, k/k, kops, kubelet, etc.) because the prow
-// artifact convention is itself universal.
+// every project shape because the Prow artifact convention is universal.
 //
 // Tools:
 //
@@ -12,8 +11,7 @@
 //	find_artifacts(pattern, root?, ...)   - bounded path search by basename regex
 //
 // The tools live in their own package so the registry can be tested without
-// importing the rest of the AI loop, and so future tool packages
-// (tools/k8s, tools/junit, ...) follow the same shape.
+// importing the AI loop and future tool packages can follow the same shape.
 package filesystem
 
 import (
@@ -25,8 +23,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 )
 
-// Group is the alias used in config to enable all filesystem tools at once
-// (e.g. agentic.tools: [filesystem, k8s]).
+// Group is the alias used in config to enable all filesystem tools at once.
 const Group = "filesystem"
 
 // Register adds every tool in this package to the given registry.
@@ -171,8 +168,8 @@ func (*tailTool) Schema() tools.Schema {
 	}
 }
 
-// tailMaxBytes leaves enough headroom inside the per-call 32KB tool budget
-// (see ai/agentic.go) for the envelope overhead.
+// tailMaxBytes leaves headroom inside the per-call 32KB tool budget for the
+// envelope overhead.
 const tailMaxBytes = 32*1024 - 256
 
 func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
@@ -308,7 +305,7 @@ func (*findTool) Schema() tools.Schema {
 }
 
 // ErrFindTruncated is exported so tests can verify the bounded-walk
-// behavior; callers (the loop) just see truncated=true in the payload.
+// behavior; the loop just sees truncated=true in the payload.
 var ErrFindTruncated = errors.New("find_artifacts: walk truncated")
 
 func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
@@ -358,7 +355,7 @@ func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 
 		listing, err := env.Browser.List(ctx, head.dir)
 		if err != nil {
-			// Skip unlistable subtrees (likely 404 / unsafe path).
+			// Skip unlistable subtrees such as missing or unsafe paths.
 			continue
 		}
 		for _, f := range listing.Files {
@@ -402,10 +399,8 @@ func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	return tools.Result{Payload: payload}
 }
 
-// joinPath joins a directory and child name, preserving the trailing slash
-// convention used by Browser.List (dir is "" or trailing-slashed). Returns
-// dir+name; if name itself already ends in "/" (a sub-directory entry) the
-// result also ends in "/".
+// joinPath joins a directory and child name, preserving Browser.List's trailing
+// slash convention. If name already ends in "/", the result also ends in "/".
 func joinPath(dir, name string) string {
 	if dir == "" {
 		return name

@@ -1,6 +1,6 @@
 // Package aggregator computes per-job and per-test aggregate statistics
-// from build results, including pass rates, overall status, and failure
-// classification (persistent vs flaky vs one-off).
+// from build results, including pass rates, overall status, and persistent,
+// flaky, or one-off failure classifications.
 package aggregator
 
 import (
@@ -27,8 +27,7 @@ type FailureInfo struct {
 	ErrorHash           string
 }
 
-// ComputeJobSummary computes an aggregated JobSummary for a ProwJob given its
-// build results (sorted newest-first).
+// ComputeJobSummary computes a JobSummary from newest-first build results.
 func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.JobSummary {
 	summary := models.JobSummary{
 		ProwJob:    job,
@@ -39,11 +38,9 @@ func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.Job
 		return summary
 	}
 
-	// LastRun
 	last := BuildRunSummary(runs[0])
 	summary.LastRun = &last
 
-	// RecentRuns (up to maxRecentRuns)
 	limit := len(runs)
 	if limit > maxRecentRuns {
 		limit = maxRecentRuns
@@ -64,7 +61,7 @@ func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.Job
 // pass rate over the last passRateRecentRuns runs:
 //   - PASSING when the recent pass rate is at least passingThreshold
 //   - FAILING when it is at or below failingThreshold
-//   - FLAKY otherwise (a mix of passes and failures)
+//   - FLAKY otherwise
 func computeOverallStatus(runs []models.BuildResult) string {
 	if len(runs) == 0 {
 		return "FLAKY"
@@ -114,14 +111,13 @@ func BuildRunSummary(result models.BuildResult) models.RunSummary {
 }
 
 // ClassifyFailure examines the most recent runs to determine whether a test's
-// failure is persistent, flaky, or a one-off. threshold is the number of
-// consecutive failures required to be classified as persistent.
+// failure is persistent, flaky, or a one-off. threshold sets the consecutive
+// failure count required for a persistent classification.
 func ClassifyFailure(testName string, runs []models.BuildResult, threshold int) FailureInfo {
 	if threshold <= 0 {
 		threshold = 3
 	}
 
-	// Gather per-run pass/fail status for this specific test.
 	type testOutcome struct {
 		failed  bool
 		message string
@@ -169,7 +165,7 @@ func ClassifyFailure(testName string, runs []models.BuildResult, threshold int) 
 		}
 	}
 
-	// Check for flakiness: if there's a mix of pass and fail in the outcomes.
+	// Mixed pass and fail outcomes are flaky unless the failure was one-off.
 	failCount := 0
 	passCount := 0
 	for _, o := range outcomes {
@@ -208,7 +204,7 @@ func ClassifyFailure(testName string, runs []models.BuildResult, threshold int) 
 // numericRegex matches integers and decimal numbers.
 var numericRegex = regexp.MustCompile(`\b\d[\d.]*\b`)
 
-// timestampRegex matches common timestamp patterns like 2026-03-15T10:30:00Z.
+// timestampRegex matches timestamps like 2026-03-15T10:30:00Z.
 var timestampRegex = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*`)
 
 // whitespaceRegex matches runs of whitespace.
@@ -217,7 +213,7 @@ var whitespaceRegex = regexp.MustCompile(`\s+`)
 // NormalizeErrorMessage normalizes an error message for similarity comparison.
 func NormalizeErrorMessage(msg string) string {
 	s := strings.TrimSpace(msg)
-	// Replace timestamps first (they contain numbers).
+	// Replace timestamps before numeric values so dates stay grouped.
 	s = timestampRegex.ReplaceAllString(s, "<timestamp>")
 	// Replace remaining numeric values.
 	s = numericRegex.ReplaceAllString(s, "<num>")
@@ -227,7 +223,7 @@ func NormalizeErrorMessage(msg string) string {
 }
 
 // HashError returns the first 8 hex characters of the SHA-256 hash of
-// the given normalised message, for use as a deduplication key.
+// the normalized message for use as a deduplication key.
 func HashError(normalizedMsg string) string {
 	h := sha256.Sum256([]byte(normalizedMsg))
 	return fmt.Sprintf("%x", h[:4])

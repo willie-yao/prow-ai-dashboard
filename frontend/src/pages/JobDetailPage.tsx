@@ -45,7 +45,7 @@ export function JobDetailPage() {
 
   const testCases: TestCase[] = selectedRun?.test_cases ?? [];
 
-  // Pass rate over the most recent runs (up to 10).
+  // Pass rate over the most recent 10 runs.
   const passRateRecent = useMemo(() => {
     if (runs.length === 0) return null;
     const recent = runs.slice(0, 10);

@@ -12,14 +12,11 @@ import (
 )
 
 // CollectorFactory constructs a collectors.Collector from project config and
-// the shared deps every collector needs (the storage backend, HTTP client).
-// Factories are registered with a *CollectorRegistry at startup; cmd/fetcher
-// wires the built-in factories explicitly so tests can compose their own
-// registries.
+// shared dependencies.
 type CollectorFactory func(cfg *project.Config, backend storage.Backend, client *http.Client) (collectors.Collector, error)
 
-// CollectorRegistry maps a collector name (project.yaml artifacts.collector)
-// to its factory. The zero value is not usable; use NewCollectorRegistry.
+// CollectorRegistry maps artifacts.collector names to factories.
+// The zero value is not usable; use NewCollectorRegistry.
 type CollectorRegistry struct {
 	factories map[string]CollectorFactory
 }

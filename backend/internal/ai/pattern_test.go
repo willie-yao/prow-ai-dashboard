@@ -120,9 +120,9 @@ func TestAnalyzePattern_ConfidenceNormalized(t *testing.T) {
 func TestAnalyzePattern_IncompleteVerdictRejected(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Empty object -> no summary -> rejected, not cached.
+	// Empty object has no summary, so it is rejected and not cached.
 	srv.push(200, chatRespFinal(`{}`))
-	// systemic with no root cause -> rejected.
+	// Systemic verdict with no root cause is rejected.
 	srv.push(200, chatRespFinal(`{"systemic":true,"confidence":"high","summary":"x"}`))
 	s := newPatternTestService(t, srv.URL)
 
@@ -147,8 +147,7 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 		t.Error("expected cache key to change when the evidence changes")
 	}
 
-	// A changed failure message (same root cause) also changes the key, since
-	// the model saw different evidence.
+	// A changed failure message also changes the key because evidence differs.
 	msgChanged := patternFailures(3)
 	msgChanged[0].FailureMessage = "a totally different symptom"
 	k3 := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", msgChanged))
@@ -156,7 +155,7 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 		t.Error("expected cache key to change when a failure message changes")
 	}
 
-	// Same inputs -> stable key.
+	// Same inputs produce a stable key.
 	if patternCacheKey("kubernetes", "job", "job", p1) != k1 {
 		t.Error("expected stable cache key for identical inputs")
 	}

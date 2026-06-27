@@ -1,7 +1,6 @@
-// Package fetcher contains the orchestration that cmd/fetcher invokes:
-// loading project config, discovering jobs, fetching builds (with caching),
-// running AI failure analysis, and writing dashboard output. The cmd binary
-// is just flag parsing plus registry wiring; everything else lives here.
+// Package fetcher contains the orchestration invoked by cmd/fetcher:
+// loading project config, discovering jobs, fetching builds, running AI
+// analysis, and writing dashboard output.
 package fetcher
 
 import (
@@ -41,32 +40,27 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-// Options is the parsed, validated invocation for a single fetcher run.
-// Callers (cmd/fetcher) construct it from flags and wire the built-in
-// collector and AI module factories before calling Run.
+// Options is the parsed invocation for a single fetcher run.
+// cmd/fetcher constructs it from flags and wires collector factories before Run.
 type Options struct {
 	ProjectDir   string
 	OutDir       string
 	BuildsPerJob int
 	Workers      int
 	Timeout      time.Duration
-	// IncludePresubmits, when true, fetches presubmit jobs in addition
-	// to periodics. ORed with cfg.Source.IncludePresubmits: either source
-	// turning it on enables presubmits. The workflow input cannot
-	// override the consumer's yaml choice to OFF.
+	// IncludePresubmits fetches presubmit jobs in addition to periodics.
+	// It is combined with cfg.Source.IncludePresubmits, so either source can
+	// enable presubmits.
 	IncludePresubmits bool
 	EnableAI          bool
 	Collectors        *CollectorRegistry
-	// Version is the engine's own version string (e.g. "v1.2.0"), embedded at
-	// build time. Logged at startup and compared against the config's
-	// min_engine_version. Empty/"dev" disables the comparison.
+	// Version is the engine version embedded at build time.
+	// Empty or "dev" disables min_engine_version comparison.
 	Version string
 }
 
-// Run executes the full pipeline: load → discover → fetch → aggregate →
-// optionally analyze with AI → write output → optionally notify. Per-job
-// fetch errors are logged but do not abort the run; only startup failures
-// (config load, collector wiring) return an error.
+// Run executes the full pipeline: load, discover, fetch, aggregate, analyze,
+// write output, and notify. Per-job fetch errors are logged but do not abort.
 func Run(ctx context.Context, opts Options) error {
 	if opts.Collectors == nil {
 		return fmt.Errorf("fetcher.Options.Collectors registry is required")
@@ -98,10 +92,8 @@ func Run(ctx context.Context, opts Options) error {
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		opts.EnableAI = false
 	}
-	// The engine assumes no default provider: AI analysis needs an explicit
-	// endpoint and model (project.yaml ai.endpoint/ai.model or AI_ENDPOINT/
-	// AI_MODEL env). Fail fast on a misconfiguration rather than silently
-	// publishing a dashboard with no analysis.
+	// AI needs an explicit endpoint and model. Fail fast rather than publishing a
+	// dashboard with missing analysis.
 	if opts.EnableAI {
 		if aiEndpoint(cfg) == "" || aiModel(cfg) == "" {
 			return fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
@@ -120,7 +112,7 @@ func Run(ctx context.Context, opts Options) error {
 		aiSystemPrompt = ai.ComposeSystemPrompt(prompt)
 
 		// Load consumer-owned recipes from <project_dir>/skills/*.yaml.
-		// A missing directory returns an empty Set (recipes are opt-in).
+		// A missing directory returns an empty Set.
 		// Parse or regex compile errors are hard startup errors.
 		set, err := skills.Load(opts.ProjectDir)
 		if err != nil {
@@ -148,8 +140,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	log.Printf("Using artifact collector: %s", collector.Name())
 
-	// Step 1: Discover jobs, either from test-infra (testgrid) or by listing
-	// the artifact bucket's own job indexes.
+	// Discover jobs from test-infra or from the artifact bucket's indexes.
 	var jobs []models.ProwJob
 	includePresubmits := opts.IncludePresubmits || cfg.Source.IncludePresubmits
 	switch cfg.EffectiveDiscoverySource() {
@@ -159,8 +150,7 @@ func Run(ctx context.Context, opts Options) error {
 		if err != nil {
 			return fmt.Errorf("discovering jobs from bucket: %w", err)
 		}
-		// Bucket discovery has no job-config YAML, so assign categories from
-		// the project rules here (the testgrid path does this at parse time).
+		// Bucket discovery has no job-config YAML, so assign categories here.
 		for i := range jobs {
 			jobs[i].Category = cfg.Categorize(jobs[i].Name)
 		}
@@ -187,8 +177,7 @@ func Run(ctx context.Context, opts Options) error {
 	// hand-maintain the prefix.
 	cfg.ShortNamePrefix = jobconfig.DerivePeriodicPrefix(jobs)
 
-	// Step 2: For each job, discover builds and fetch results. Cached data
-	// is reused for completed builds; only PENDING runs are re-fetched.
+	// Fetch each job's builds. Cached completed builds are reused.
 	cachedJobs := loadCachedJobDetails(opts.OutDir)
 
 	type jobResult struct {
@@ -234,7 +223,7 @@ func Run(ctx context.Context, opts Options) error {
 		log.Printf("Warning: %d jobs had fetch errors", len(fetchErrors))
 	}
 
-	// Step 3: Aggregate.
+	// Aggregate job summaries.
 	now := time.Now().UTC()
 	dashboard := models.Dashboard{GeneratedAt: now}
 	var details []models.JobDetail
@@ -253,8 +242,7 @@ func Run(ctx context.Context, opts Options) error {
 		})
 	}
 
-	// Step 4: Flakiness report + search index. Maps keyed by JobID so
-	// same-named jobs across repos do not overwrite each other.
+	// Build flakiness and search data keyed by JobID.
 	jobResultMap := make(map[string][]models.BuildResult, len(results))
 	for _, r := range results {
 		if r.job.Name == "" {
@@ -269,12 +257,10 @@ func Run(ctx context.Context, opts Options) error {
 	searchIndex := aggregator.BuildSearchIndex(jobResultMap, jobs, now)
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
 
-	// Step 5: AI failure analysis (optional).
+	// Run AI failure analysis when enabled.
 	if opts.EnableAI {
 		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, aiToken, opts.OutDir, aiSystemPrompt, aiSkillSet)
-		// Surface the systemic, job-level pattern verdicts on the home page by
-		// folding them into the flakiness report (which the landing page
-		// already loads). Done here, after AI attached them to details.
+		// Fold systemic job-level verdicts into flakiness.json for the home page.
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {
 			log.Printf("🔗 %d systemic recurring pattern(s) surfaced on the home page", n)
@@ -286,7 +272,7 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("writing output: %w", err)
 	}
 
-	// Step 6: Slack/Teams notifications for persistent failures (optional).
+	// Send Slack notifications for persistent failures when configured.
 	if slackWebhookURL := os.Getenv("SLACK_WEBHOOK_URL"); slackWebhookURL != "" {
 		notifier := notify.NewNotifier(
 			slackWebhookURL,
@@ -307,14 +293,10 @@ func Run(ctx context.Context, opts Options) error {
 		log.Println("Notifications: skipped (no SLACK_WEBHOOK_URL)")
 	}
 
-	// Step 7: auto-file GitHub issues for systemic patterns / persistent
-	// failures (optional). Off unless enabled in config AND an ISSUE_TOKEN is
-	// present; either missing is a no-op, never a deploy failure.
+	// Auto-file GitHub issues when enabled and ISSUE_TOKEN is present.
 	processIssues(ctx, cfg, flakinessReport, details, opts.OutDir)
 
-	// Step 8: draft skill-recipe PRs for systemic recurring patterns no existing
-	// skill covers (optional). Off unless enabled AND AI ran AND a write-capable
-	// SKILL_TOKEN is present; any missing piece is a no-op, never a failure.
+	// Draft skill-recipe PRs when enabled, AI ran, and SKILL_TOKEN is present.
 	if opts.EnableAI {
 		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, aiSkillSet, aiToken, opts.OutDir)
 	}
@@ -324,7 +306,7 @@ func Run(ctx context.Context, opts Options) error {
 }
 
 // processIssues reconciles the project's highest-signal findings into GitHub
-// issues on the configured target repo. Gated on issues.enabled + ISSUE_TOKEN.
+// issues on the configured target repo. Gated on issues.enabled and ISSUE_TOKEN.
 func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, outDir string) {
 	if cfg.Issues == nil || !cfg.Issues.Enabled {
 		return
@@ -369,10 +351,8 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 }
 
 // processSkillSuggestions drafts skill-recipe PRs for systemic recurring
-// patterns no existing skill covers. Gated on ai.suggest_skills.enabled, a
-// SKILL_TOKEN secret (contents+pull-requests write on the dashboard repo), and
-// GITHUB_REPOSITORY (the dashboard repo, which GitHub Actions sets to the caller
-// repo). Any missing piece is a no-op.
+// patterns no existing skill covers. Gated on ai.suggest_skills.enabled,
+// SKILL_TOKEN, and GITHUB_REPOSITORY. Any missing piece is a no-op.
 func processSkillSuggestions(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, skillSet *skills.Set, aiToken, outDir string) {
 	if cfg.AI == nil || cfg.AI.SuggestSkills == nil || !cfg.AI.SuggestSkills.Enabled {
 		return
@@ -428,8 +408,8 @@ func splitOwnerName(slug string) (owner, name string, ok bool) {
 	return parts[0], parts[1], true
 }
 
-// loadCachedJobDetails loads existing per-job JSON files from the output
-// dir and returns a map of JobID → cached BuildResults (keyed by build ID).
+// loadCachedJobDetails loads existing per-job JSON files from the output dir.
+// The returned map is JobID to build ID to cached BuildResult.
 func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResult {
 	cached := make(map[string]map[string]models.BuildResult)
 	jobsDir := filepath.Join(outDir, "jobs")
@@ -451,7 +431,7 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 		}
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
 		for _, r := range detail.Runs {
-			// Only cache completed builds (not PENDING).
+			// Only cache completed builds.
 			if r.Result != "PENDING" && r.Result != "" {
 				builds[r.BuildID] = r
 			}
@@ -495,10 +475,8 @@ func fetchJobRunsCached(ctx context.Context, backend storage.Backend, cfg *proje
 	return runs, nil
 }
 
-// fetchBuildResult fetches metadata and JUnit XML for a single build, then
-// delegates per-test artifact discovery to the configured collector (a no-op
-// for the default generic collector; the agentic loop fetches what it needs
-// via tools).
+// fetchBuildResult fetches metadata and JUnit XML for a single build.
+// Per-test artifact discovery is delegated to the configured collector.
 func fetchBuildResult(ctx context.Context, backend storage.Backend, collector collectors.Collector, job *models.ProwJob, build prowbuild.Build) (*models.BuildResult, error) {
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: job.JobType, Repo: job.Repo},
@@ -557,28 +535,20 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, collector co
 	return result, nil
 }
 
-// Budget auto-sizing factors. The agentic loop needs a client-side byte
-// budget to compact the conversation before it hits the endpoint's hard
-// context limit (Dynamo/TRT-LLM 500s on overflow rather than degrading). The
-// engine derives the budgets from the model's reported context window so they
-// are not configurable per deployment. Budgets are in bytes; the window is in
-// tokens.
+// Budget auto-sizing factors. The agentic loop needs client-side byte budgets
+// before endpoints with hard context limits fail on overflow. Budgets derive
+// from the reported context window and are not deployment-configurable.
 const (
-	avgBytesPerToken       = 4  // rough bytes/token for logs/JSON/English text
+	avgBytesPerToken       = 4  // rough bytes per token for logs, JSON, and prose
 	modelBudgetWindowPct   = 50 // evidence-gathering cap ~= half the window
-	contextBudgetWindowPct = 75 // compaction guard ~= 3/4 the window (response + estimate headroom)
+	contextBudgetWindowPct = 75 // compaction guard ~= 3/4 the window for response headroom
 
-	// fallbackModelByteBudget is used when the endpoint doesn't report a
-	// context window (e.g. GitHub Copilot's /v1/models). Matches the
-	// historical default. The compaction guard stays off (0) in that case,
-	// which is safe for large-window models and the only prior behavior.
+	// fallbackModelByteBudget is used when the endpoint does not report a
+	// context window. The compaction guard stays off in that case.
 	fallbackModelByteBudget = 300_000
 
 	// gcsByteBudget is the fixed aggregate ceiling on bytes fetched from GCS
-	// across one analysis. Not configurable: it's a runaway-fetch safety cap,
-	// not a tuning knob (per-call fetches are already capped at 64 MB, and
-	// max_iters + timeout bound the loop). Rarely approached in practice
-	// (~MBs per analysis).
+	// across one analysis. It is a runaway-fetch safety cap, not a tuning knob.
 	gcsByteBudget = 1_000_000_000
 )
 
@@ -605,24 +575,18 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 
 	module := universal.New()
 	service := ai.NewService(aiClient, module, systemPrompt, consecutiveMap)
-	// Used to resolve and verify repo-relative file citations against the
-	// project's own GitHub repo (branding.source_repo).
+	// Resolve and verify repo-relative file citations against branding.source_repo.
 	service.SetSourceRepo(cfg.Branding.SourceRepo.Owner, cfg.Branding.SourceRepo.Name)
 
 	eff := cfg.AI.EffectiveAgentic()
-	// Recipe files feed the critique gate, so shipping them is the opt-in
-	// for both the recipes and the gate they need: auto-enable critique when
-	// recipes are present (an explicit critique block still supplies
-	// max_retries via EffectiveAgentic).
+	// Recipes feed the critique gate, so their presence auto-enables critique.
+	// An explicit critique block still supplies max_retries.
 	if !eff.Critique.Enabled && skillSet != nil && len(skillSet.Skills()) > 0 {
 		eff.Critique.Enabled = true
 		log.Printf("🧪 %d skill recipe(s) present; auto-enabling the critique gate they feed", len(skillSet.Skills()))
 	}
-	// Size the byte budgets from the endpoint's reported context window. The
-	// window is the source of truth (Dynamo enforces it as a hard limit), so
-	// these are derived, not configured. Falls back to a static model budget
-	// with compaction off when the endpoint doesn't report a window (e.g.
-	// Copilot).
+	// Size byte budgets from the endpoint's reported context window.
+	// Fall back to a static model budget with compaction off when absent.
 	modelByteBudget := fallbackModelByteBudget
 	contextByteBudget := 0
 	if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
@@ -647,8 +611,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	}
 	enabled, err := registry.Enable(toolNames)
 	if err != nil {
-		// Without tools there is no analysis path; failures will be marked
-		// AI-unavailable when Analyze finds no browser/registry configured.
+		// Without tools there is no analysis path.
 		log.Printf("⚠ Tool registry enable failed (%v); AI analysis will mark failures unavailable", err)
 	} else {
 		service.EnableAgentic(ai.AgenticOptions{
@@ -664,8 +627,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			SingleToolCall:     eff.SingleToolCall,
 			EvidenceInjection:  eff.EvidenceInjection,
 		}, factory, registry, enabled)
-		// Hand the loaded recipe set to the service. nil-safe; with no
-		// recipes the service skips skill matching.
+		// nil is safe; without recipes the service skips skill matching.
 		service.SetSkills(skillSet)
 		critiqueLog := "off"
 		if eff.Critique.Enabled {
@@ -699,11 +661,8 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	// Flatten the failed test cases into a work list so they can be analyzed
-	// by a bounded worker pool. Each analysis is independent and writes only
-	// its own *TestCase; the AI cache, per-build tool caches, and the
-	// tools-unsupported flag are all internally synchronized, so the only
-	// cross-goroutine state here is the transientSkipped counter (atomic).
+	// Flatten failed test cases into independent work for a bounded worker pool.
+	// Shared AI state is internally synchronized; transientSkipped is atomic.
 	type aiWork struct {
 		jobID       string
 		buildPrefix string
@@ -760,22 +719,17 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 
-	// Always run the job-level pattern pass. It is self-gating (a no-op for any
-	// job that didn't fail in enough builds) and cached, so it costs nothing on
-	// a healthy dashboard and one cheap tool-free call per genuinely-recurring
-	// job otherwise.
+	// Always run the job-level pattern pass. It self-gates on failed build count
+	// and is cached.
 	analyzePatternsAcrossBuilds(ctx, service, details)
 }
 
-// patternMinFailedBuilds is the job-level "recurring" gate: a job is only
-// pattern-analyzed once it has this many completed failed builds. Matches the
-// consecutive-failure convention used for persistent-failure classification.
+// patternMinFailedBuilds gates job-level recurring pattern analysis.
+// It matches the persistent-failure consecutive count.
 const patternMinFailedBuilds = 3
 
-// analyzePatternsAcrossBuilds runs the cross-build pattern pass: for each job
-// that failed in enough recent builds, it correlates one representative
-// analyzed failure per failed build into a single systemic-vs-transient verdict
-// and stores it on the JobDetail. Per-failure analyses are already populated.
+// analyzePatternsAcrossBuilds correlates representative failures across failed
+// builds into one systemic-vs-transient verdict per job.
 func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, details []models.JobDetail) {
 	for i := range details {
 		d := &details[i]
@@ -802,10 +756,8 @@ func analyzePatternsAcrossBuilds(ctx context.Context, service *ai.Service, detai
 	}
 }
 
-// collectRecurringPatterns gathers the systemic, job-level pattern verdicts
-// across all jobs into one list for the home page, ranked highest-signal first
-// (by confidence, then by number of builds the verdict spans). Non-systemic
-// verdicts are excluded: only confirmed recurring bugs warrant attention.
+// collectRecurringPatterns gathers systemic job-level verdicts for the home
+// page, sorted by confidence and span.
 func collectRecurringPatterns(details []models.JobDetail) []models.PatternAnalysis {
 	var out []models.PatternAnalysis
 	for i := range details {
@@ -840,7 +792,7 @@ func confidenceRank(c string) int {
 	}
 }
 
-// countFailedBuilds counts a job's completed (non-pending) failed builds.
+// countFailedBuilds counts a job's completed failed builds.
 func countFailedBuilds(d *models.JobDetail) int {
 	n := 0
 	for i := range d.Runs {
@@ -852,10 +804,8 @@ func countFailedBuilds(d *models.JobDetail) int {
 	return n
 }
 
-// gatherPatternFailures picks one representative analyzed failure per failed
-// build of a job: the most severe failed test case that has an AIAnalysis. The
-// transient classification is carried through (it's exactly what the pattern
-// pass reconsiders across builds).
+// gatherPatternFailures picks the most severe analyzed failure from each failed
+// build. The transient classification is carried into the pattern pass.
 func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
 	var out []ai.PatternFailure
 	for i := range d.Runs {
@@ -907,10 +857,8 @@ func severityRank(sev string) int {
 	}
 }
 
-// aiEndpoint returns the configured AI chat-completions URL, or "" if neither
-// is set. The project.yaml `ai.endpoint` field wins; otherwise the AI_ENDPOINT
-// env var is used so consumers can supply the value via a GitHub Actions
-// variable rather than committing it to the repo.
+// aiEndpoint returns the configured AI chat-completions URL.
+// project.yaml wins over AI_ENDPOINT.
 func aiEndpoint(cfg *project.Config) string {
 	if cfg.AI != nil && cfg.AI.Endpoint != "" {
 		return cfg.AI.Endpoint
@@ -918,8 +866,7 @@ func aiEndpoint(cfg *project.Config) string {
 	return os.Getenv("AI_ENDPOINT")
 }
 
-// shortHash returns a short prefix of the SkillSet hash, suitable for
-// startup log lines. Empty input → empty output.
+// shortHash returns a short SkillSet hash prefix for startup logs.
 func shortHash(h string) string {
 	if len(h) == 0 {
 		return ""
@@ -930,9 +877,8 @@ func shortHash(h string) string {
 	return h[:8]
 }
 
-// aiModel returns the configured AI model identifier, or "" if neither is set.
-// The project.yaml `ai.model` field wins; otherwise the AI_MODEL env var is
-// used so consumers can keep internal-only model labels out of the public repo.
+// aiModel returns the configured AI model identifier.
+// project.yaml wins over AI_MODEL.
 func aiModel(cfg *project.Config) string {
 	if cfg.AI != nil && cfg.AI.Model != "" {
 		return cfg.AI.Model

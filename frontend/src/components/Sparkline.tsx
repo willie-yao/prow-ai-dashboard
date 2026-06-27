@@ -10,7 +10,7 @@ interface SparklineProps {
 }
 
 export function Sparkline({ runs, jobID }: SparklineProps) {
-  // Show newest on the right: recent_runs is newest-first, so take first 8 and reverse
+  // recent_runs is newest-first; reverse the displayed subset so newest is rightmost.
   const recent = runs.slice(0, 8).reverse();
 
   return (

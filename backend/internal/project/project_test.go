@@ -103,9 +103,7 @@ branding:
 }
 
 func TestParseRejectsLegacySourcePaths(t *testing.T) {
-	// test_infra_paths / file_prefix were removed when discovery moved
-	// to dashboard-driven code search. Strict YAML parsing must reject
-	// them so stale consumer configs surface a clear error at startup.
+	// Legacy source path fields must fail strict YAML parsing with a clear error.
 	const legacy = `
 id: x
 name: x
@@ -534,7 +532,7 @@ func TestAgentic_Effective(t *testing.T) {
 		if !got.Critique.Enabled {
 			t.Error("Critique.Enabled = false, want true")
 		}
-		// MaxRetries omitted in input → falls back to default 2.
+		// Omitted MaxRetries falls back to default 2.
 		if got.Critique.MaxRetries != 2 {
 			t.Errorf("Critique.MaxRetries = %d, want default 2", got.Critique.MaxRetries)
 		}
@@ -547,8 +545,7 @@ func TestAgentic_Effective(t *testing.T) {
 	})
 }
 
-// agenticEqual compares two Agentic structs without using ==, which would
-// fail to compile once Tools (a slice) was added.
+// agenticEqual compares Agentic structs without using == because Tools is a slice.
 func agenticEqual(a, b Agentic) bool {
 	return a.MaxIters == b.MaxIters &&
 		a.Timeout == b.Timeout &&
@@ -606,8 +603,8 @@ func TestValidate_EvidenceInjectionRequiresCritique(t *testing.T) {
 	}
 }
 
-// TestParse_AgenticInlineFields confirms the agentic tuning parses from flat
-// keys directly under ai: (no nested agentic: block).
+// TestParse_AgenticInlineFields confirms agentic tuning parses from flat keys
+// directly under ai:.
 func TestParse_AgenticInlineFields(t *testing.T) {
 	yml := validYAML + "\nai:\n  max_iters: 20\n  tools: [filesystem]\n"
 	c, err := parse(strings.NewReader(yml))
@@ -697,7 +694,7 @@ func TestCategorize(t *testing.T) {
 			t.Errorf("Categorize(%q) = %q, want %q", tc.name, got, tc.want)
 		}
 	}
-	// No rules -> ungrouped (empty category, not "other").
+	// No rules means ungrouped, with an empty category instead of "other".
 	if got := (&Config{}).Categorize("anything"); got != "" {
 		t.Errorf("Categorize with no rules = %q, want empty", got)
 	}

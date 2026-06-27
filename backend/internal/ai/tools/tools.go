@@ -1,17 +1,16 @@
 // Package tools defines the agentic tool interface and registry used by the
 // AI loop. Tools are stateless from the model's perspective: each call is
-// context-bound server-side (via ToolEnv) so the agent never sees bucket,
-// job, or build identifiers in tool schemas.
+// context-bound server-side via Env so the agent never sees bucket, job, or
+// build identifiers in tool schemas.
 //
 // The registry supports two ways to enable tools:
 //
 //	tools: [filesystem, k8s]          // enable whole groups
 //	tools: [filesystem, k8s.discover_clusters]  // mix groups and individual tools
 //
-// Tier-1 tools (group "filesystem") give the model raw artifact-tree access.
-// Tier-2 tools (group "k8s") encode Kubernetes-shape navigation primitives
-// (cluster discovery, machine logs, controller logs) so the agent does not
-// have to compose them from list/read/tail on every project.
+// Tier-1 tools in group "filesystem" give the model raw artifact-tree access.
+// Tier-2 tools in group "k8s" encode Kubernetes-shaped navigation primitives so
+// the agent does not have to compose them from list/read/tail on every project.
 package tools
 
 import (
@@ -46,9 +45,9 @@ type FunctionDecl struct {
 //
 // BudgetExhausted is a typed signal so the agentic loop can stamp
 // AIAnalysis.BudgetExhausted without string-matching error messages.
-// BytesFetched is GCS bytes actually pulled by this call (added to the
-// per-analysis GCS budget); zero when nothing was fetched (e.g. error,
-// cache hit, listing-only call).
+// BytesFetched is GCS bytes pulled by this call and added to the per-analysis
+// GCS budget. Zero means nothing was fetched, such as an error, cache hit, or
+// listing-only call.
 //
 // A tool that wants to surface an error to the model uses ErrPayload as a
 // shortcut; the loop will still apply the envelope.
@@ -63,10 +62,10 @@ func ErrPayload(msg string) Result {
 	return Result{Payload: map[string]interface{}{"error": msg}}
 }
 
-// Tool is the unit of agent capability. Name() must be unique within the
-// registry; Group() is the alias consumers can enable in bulk
-// (e.g. "filesystem", "k8s"). Schema() is included in every chat request
-// that exposes this tool; Dispatch is invoked once per model tool_call.
+// Tool is the unit of agent capability. Name must be unique within the
+// registry; Group is the alias consumers can enable in bulk. Schema is included
+// in every chat request that exposes this tool; Dispatch is invoked once per
+// model tool_call.
 type Tool interface {
 	Name() string
 	Group() string
@@ -75,30 +74,27 @@ type Tool interface {
 }
 
 // Env is the per-analysis context passed to every Tool. It deliberately
-// does not expose the agent's loop state (iteration counter, model bytes,
-// pending messages) so tools cannot mutate loop internals.
+// does not expose the agent's loop state, so tools cannot mutate loop
+// internals.
 type Env struct {
 	// Browser is the per-build artifact view. Always non-nil.
 	Browser artifacts.Browser
 
 	// Cache is a per-build memoization layer. Tools should use it to cache
-	// expensive discovery results (cluster listings, controller-log
-	// enumerations, etc.) so 50 failed tests in the same build do not pay
-	// the same GCS cost 50 times.
+	// expensive discovery results so 50 failed tests in the same build do not
+	// pay the same GCS cost 50 times.
 	//
-	// Keys are typed as "tool/args" (callers compose); values are
-	// caller-defined (typically marshaled JSON). The cache is shared
-	// across all failures of one build and is bounded by the host
-	// process's memory rather than a hard cap (the entries are listings
-	// + URL maps, kilobytes each, not log content).
+	// Keys are typed as "tool/args"; callers compose them. Values are caller
+	// defined and typically marshaled JSON. The cache is shared across all
+	// failures of one build and is bounded by process memory rather than a hard
+	// cap. Entries are listings and URL maps, not log content.
 	Cache *Cache
 
-	// WebURLBase is the GCSweb-style base URL of the build root (e.g.
-	// "https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<build>/"). Used by
-	// k8s tools to render web_url fields alongside path fields so the
-	// frontend can keep linking to artifacts without ClusterArtifacts.
-	// May be empty when the caller doesn't know the web URL; tools must
-	// degrade gracefully (omit web_url, still return path).
+	// WebURLBase is the GCSweb-style base URL of the build root. Used by k8s
+	// tools to render web_url fields alongside path fields so the frontend can
+	// keep linking to artifacts without ClusterArtifacts. May be empty when the
+	// caller does not know the web URL; tools must omit web_url and still return
+	// path.
 	WebURLBase string
 
 	// RemainingModelBytes / RemainingGCSBytes report budgets at dispatch
@@ -110,8 +106,8 @@ type Env struct {
 }
 
 // Registry maps tool names to Tool implementations and tracks groups for
-// bulk enablement. A Registry is constructed per agentic call (cheap) so
-// per-failure config differences can be honored.
+// bulk enablement. A Registry is constructed per agentic call so per-failure
+// config differences can be honored.
 type Registry struct {
 	tools  map[string]Tool
 	groups map[string][]string // group → tool names
@@ -125,7 +121,7 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register adds a Tool. Duplicate names panic (programmer error).
+// Register adds a Tool. Duplicate names panic as programmer errors.
 func (r *Registry) Register(t Tool) {
 	if _, dup := r.tools[t.Name()]; dup {
 		panic("tools: duplicate tool name: " + t.Name())
@@ -144,7 +140,7 @@ func (r *Registry) Enable(entries []string) ([]string, error) {
 		if e == "" {
 			continue
 		}
-		// Individual tool name (always contains "."): "k8s.discover_clusters"
+		// Individual tool name, always containing ".": "k8s.discover_clusters"
 		if strings.Contains(e, ".") {
 			_, name, _ := strings.Cut(e, ".")
 			if _, ok := r.tools[name]; !ok {
@@ -171,8 +167,8 @@ func (r *Registry) Enable(entries []string) ([]string, error) {
 }
 
 // Schemas returns the OpenAI tool definitions for the given enabled names,
-// sorted by name for determinism (so equivalent configs produce equivalent
-// system prompts and cache keys).
+// sorted by name for determinism so equivalent configs produce equivalent
+// system prompts and cache keys.
 func (r *Registry) Schemas(enabled []string) []Schema {
 	out := make([]Schema, 0, len(enabled))
 	for _, n := range enabled {

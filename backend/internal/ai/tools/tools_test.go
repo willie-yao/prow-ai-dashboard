@@ -152,9 +152,7 @@ func TestCacheConcurrentSafe(t *testing.T) {
 		}(w)
 	}
 	wg.Wait()
-	// We don't assert exact length because keys collide intentionally
-	// (10 per writer, 8 writers, 80 distinct). Just sanity-check it
-	// didn't deadlock or panic.
+	// Keys collide intentionally, so only sanity-check for deadlock or panic.
 	if c.Len() == 0 {
 		t.Error("concurrent writers produced no entries")
 	}

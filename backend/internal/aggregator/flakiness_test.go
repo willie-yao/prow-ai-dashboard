@@ -8,7 +8,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// makeFlakyBuild is a helper that creates a BuildResult with a given test case.
+// makeFlakyBuild creates a BuildResult with the provided tests.
 func makeFlakyBuild(buildID string, started time.Time, passed bool, tests []models.TestCase) models.BuildResult {
 	dur := 300.0
 	total := len(tests)
@@ -66,7 +66,7 @@ func flakyHoursAgo(h int) time.Time {
 // ---------- ComputeTestFlakiness tests ----------
 
 func TestComputeTestFlakiness_FlipRate(t *testing.T) {
-	// Pattern: fail, pass, fail, pass (newest first) → 3 flips out of 3 transitions = 1.0
+	// fail, pass, fail, pass newest-first yields 3 flips over 3 transitions.
 	runs := []models.BuildResult{
 		makeFlakyBuild("4", flakyHoursAgo(1), false, []models.TestCase{makeTC("TestA", "failed", 1.0, "err")}),
 		makeFlakyBuild("3", flakyHoursAgo(2), true, []models.TestCase{makeTC("TestA", "passed", 1.5, "")}),
@@ -85,7 +85,7 @@ func TestComputeTestFlakiness_FlipRate(t *testing.T) {
 	if tf.Passes != 2 {
 		t.Errorf("Passes = %d, want 2", tf.Passes)
 	}
-	// 3 transitions, all are flips → flip_rate = 1.0
+	// All 3 transitions are flips.
 	if math.Abs(tf.FlipRate-1.0) > 0.001 {
 		t.Errorf("FlipRate = %f, want 1.0", tf.FlipRate)
 	}
@@ -95,7 +95,7 @@ func TestComputeTestFlakiness_FlipRate(t *testing.T) {
 }
 
 func TestComputeTestFlakiness_NoFlips(t *testing.T) {
-	// Pattern: fail, fail, fail (newest first) → 0 flips / 2 transitions = 0.0
+	// fail, fail, fail newest-first yields no flips.
 	runs := []models.BuildResult{
 		makeFlakyBuild("3", flakyHoursAgo(1), false, []models.TestCase{makeTC("TestB", "failed", 1.0, "err")}),
 		makeFlakyBuild("2", flakyHoursAgo(2), false, []models.TestCase{makeTC("TestB", "failed", 1.0, "err")}),
@@ -113,7 +113,7 @@ func TestComputeTestFlakiness_NoFlips(t *testing.T) {
 }
 
 func TestComputeTestFlakiness_ConsecutiveFailures(t *testing.T) {
-	// Pattern: fail, fail, pass, fail (newest first) → 2 consecutive from latest
+	// fail, fail, pass, fail newest-first yields 2 consecutive latest failures.
 	runs := []models.BuildResult{
 		makeFlakyBuild("4", flakyHoursAgo(1), false, []models.TestCase{makeTC("TestC", "failed", 1.0, "err4")}),
 		makeFlakyBuild("3", flakyHoursAgo(2), false, []models.TestCase{makeTC("TestC", "failed", 1.0, "err3")}),
@@ -126,7 +126,7 @@ func TestComputeTestFlakiness_ConsecutiveFailures(t *testing.T) {
 	if tf.ConsecutiveFailures != 2 {
 		t.Errorf("ConsecutiveFailures = %d, want 2", tf.ConsecutiveFailures)
 	}
-	// FirstFailedAt should be the oldest in the streak (build 3, hoursAgo(2))
+	// FirstFailedAt should be the oldest failure in the streak.
 	expectedTime := flakyHoursAgo(2).UTC().Format(time.RFC3339)
 	if tf.FirstFailedAt != expectedTime {
 		t.Errorf("FirstFailedAt = %q, want %q", tf.FirstFailedAt, expectedTime)
@@ -134,7 +134,7 @@ func TestComputeTestFlakiness_ConsecutiveFailures(t *testing.T) {
 }
 
 func TestComputeTestFlakiness_Classification(t *testing.T) {
-	// 5 consecutive failures → persistent
+	// Five consecutive failures classify as persistent.
 	runs := []models.BuildResult{
 		makeFlakyBuild("5", flakyHoursAgo(1), false, []models.TestCase{makeTC("TestD", "failed", 1.0, "timeout")}),
 		makeFlakyBuild("4", flakyHoursAgo(2), false, []models.TestCase{makeTC("TestD", "failed", 1.0, "timeout")}),
@@ -169,7 +169,7 @@ func TestComputeTestFlakiness_ErrorPatternGrouping(t *testing.T) {
 	if len(tf.ErrorPatterns) != 2 {
 		t.Fatalf("ErrorPatterns length = %d, want 2", len(tf.ErrorPatterns))
 	}
-	// The first pattern (sorted by count desc) should have count 2.
+	// First pattern is sorted by count desc and should have count 2.
 	if tf.ErrorPatterns[0].Count != 2 {
 		t.Errorf("ErrorPatterns[0].Count = %d, want 2", tf.ErrorPatterns[0].Count)
 	}
@@ -328,8 +328,8 @@ func TestComputeFlakinessReport_PersistentFailures(t *testing.T) {
 
 func TestComputeFlakinessReport_RecentlyBroken(t *testing.T) {
 	now := flakyBaseTime
-	// TestRecent started failing 1 hour ago → within 48h.
-	// TestOld has been failing since 72 hours ago → outside 48h.
+	// TestRecent started failing 1 hour ago, within 48h.
+	// TestOld has been failing since 72 hours ago, outside 48h.
 	jobResults := map[string][]models.BuildResult{
 		"job1": {
 			makeFlakyBuild("4", flakyHoursAgo(1), false, []models.TestCase{
@@ -408,7 +408,7 @@ func TestComputeFlakinessReport_MultipleJobs(t *testing.T) {
 		t.Fatalf("MostFlaky length = %d, want 2 (one from each job)", len(report.MostFlaky))
 	}
 
-	// Verify both jobs are represented.
+	// Both jobs should be represented.
 	jobs := make(map[string]bool)
 	for _, tf := range report.MostFlaky {
 		jobs[tf.JobName] = true

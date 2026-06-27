@@ -13,12 +13,12 @@ import (
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9\-_]`)
 
-// SanitizeFilename replaces characters that are not alphanumeric, '-', or '_' with '-'.
+// SanitizeFilename replaces unsafe filename characters with hyphens.
 func SanitizeFilename(name string) string {
 	return unsafeChars.ReplaceAllString(name, "-")
 }
 
-// writeJSON marshals v as indented JSON and writes it to path, creating parent dirs as needed.
+// writeJSON writes indented JSON and creates parent directories as needed.
 func writeJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -35,9 +35,8 @@ func WriteDashboard(dir string, dashboard models.Dashboard) error {
 	return writeJSON(filepath.Join(dir, "dashboard.json"), dashboard)
 }
 
-// WriteJobDetail writes a per-job detail file to dir/jobs/{sanitized-job-id}.json.
-// Keying by JobID prevents same-named presubmit/periodic pairs (or same-named
-// presubmits across repos) from overwriting each other on disk.
+// WriteJobDetail writes a per-job detail file under dir/jobs.
+// Keying by JobID prevents same-named jobs from overwriting each other.
 func WriteJobDetail(dir string, detail models.JobDetail) error {
 	name := SanitizeFilename(detail.JobID) + ".json"
 	return writeJSON(filepath.Join(dir, "jobs", name), detail)
@@ -54,7 +53,7 @@ func WriteSearchIndex(dir string, index models.SearchIndex) error {
 }
 
 // WriteManifest writes manifest.json with the resolved project config so the
-// frontend knows its title, base path, repo links, etc. at runtime.
+// frontend knows its title, base path, and repo links at runtime.
 func WriteManifest(dir string, cfg *project.Config) error {
 	return writeJSON(filepath.Join(dir, "manifest.json"), cfg)
 }

@@ -1,6 +1,6 @@
 // Package issues opens and maintains GitHub issues for the dashboard's
 // highest-signal findings: systemic recurring patterns and persistent test
-// failures. It is opt-in (project.yaml `issues:` + an ISSUE_TOKEN secret) and
+// failures. It is opt-in through project.yaml `issues:` and ISSUE_TOKEN, and
 // idempotent: each tracked finding carries a hidden marker so the same issue is
 // reused across runs, and recovered findings get a closing comment.
 package issues
@@ -21,8 +21,8 @@ import (
 // per-key token after it lets the search-based dedup find the issue again.
 const markerPrefix = "prow-ai-dashboard-key"
 
-// Key prefixes namespacing the two finding kinds, so recovery can be scoped to
-// only the triggers that actually ran this fetch.
+// Key prefixes namespace finding kinds so recovery can be scoped to triggers
+// evaluated by this fetch.
 const (
 	KeyPrefixPattern    = "pattern::"
 	KeyPrefixPersistent = "persistent::"
@@ -30,7 +30,7 @@ const (
 
 // RecoverPrefixesFor maps enabled trigger names to the key prefixes whose
 // tracked issues may be recovered this run. A finding kind that isn't enabled
-// (or wasn't evaluated) is left untouched rather than wrongly marked recovered.
+// not evaluated is left untouched rather than wrongly marked recovered.
 func RecoverPrefixesFor(triggers []string) []string {
 	var out []string
 	for _, t := range triggers {
@@ -46,8 +46,7 @@ func RecoverPrefixesFor(triggers []string) []string {
 
 // IssueSpec is the desired issue for one finding.
 type IssueSpec struct {
-	// Key is the stable dedup identity of the finding (e.g.
-	// "pattern::<jobID>" or "persistent::<jobID>::<testName>").
+	// Key is the stable dedup identity of the finding.
 	Key    string
 	Title  string
 	Body   string
@@ -59,15 +58,13 @@ func markerFor(key string) string {
 	return fmt.Sprintf("<!-- %s:%s -->", markerPrefix, hex.EncodeToString(sum[:8]))
 }
 
-// markerToken returns just the hex token (for the search query, which matches
-// body words rather than the full comment syntax).
+// markerToken returns the hex token used for GitHub body search.
 func markerToken(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:8])
 }
 
-// State persists which findings already have an issue, so the common case
-// (finding still active, issue already filed) does no API calls.
+// State persists filed issues so an active tracked finding needs no API calls.
 type State struct {
 	// Repo is the "owner/name" the tracked numbers belong to. State for a
 	// different target repo is discarded on load, so changing issues.repo never
@@ -83,8 +80,7 @@ type TrackedIssue struct {
 	FirstFiledAt string `json:"first_filed_at"`
 }
 
-// gh is the subset of the GitHub client the manager needs (an interface so the
-// manager is unit-testable, satisfied by *Client).
+// gh is the subset of the GitHub client the manager needs.
 type gh interface {
 	SearchOpenIssue(ctx context.Context, queryToken, confirmMarker string) (int, string, bool, error)
 	CreateIssue(ctx context.Context, title, body string, labels []string) (int, string, error)
@@ -97,10 +93,9 @@ type Options struct {
 	CommentOnRecovery bool
 	CloseOnRecovery   bool
 	MaxNewPerRun      int
-	// RecoverPrefixes limits which key prefixes may be recovered this run (see
-	// RecoverPrefixesFor). A tracked key whose prefix isn't listed is left
-	// as-is, so a disabled or un-evaluated trigger never wrongly resolves its
-	// issues.
+	// RecoverPrefixes limits which key prefixes may be recovered this run.
+	// A tracked key outside the set is left as-is so disabled or skipped
+	// triggers never wrongly resolve their issues.
 	RecoverPrefixes []string
 }
 
@@ -121,8 +116,8 @@ type Stats struct {
 }
 
 // NewManager builds a Manager and loads prior state from stateFile if present.
-// targetRepo ("owner/name") scopes the state: state for a different repo is
-// discarded so issue numbers are never mixed across repos.
+// targetRepo scopes state by owner/name so issue numbers are never mixed
+// across repos.
 func NewManager(client gh, stateFile, targetRepo string, opts Options) *Manager {
 	m := &Manager{
 		client:     client,
@@ -145,8 +140,7 @@ func (m *Manager) loadState() {
 		log.Printf("Warning: failed to parse issue state: %v", err)
 		return
 	}
-	// Discard state that belongs to a different target repo: its issue numbers
-	// are meaningless (and dangerous to comment/close) against this repo.
+	// Discard state for a different target repo so issue numbers are not reused.
 	if s.Repo != "" && s.Repo != m.targetRepo {
 		log.Printf("Issues: target repo changed (%s -> %s); starting issue state fresh", s.Repo, m.targetRepo)
 		return
@@ -206,9 +200,8 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		log.Printf("  📝 filed issue #%d for %s", num, key)
 	}
 
-	// Recoveries: tracked findings no longer present, limited to the trigger
-	// namespaces actually evaluated this run so a disabled/un-run trigger never
-	// wrongly resolves its issues.
+	// Recover tracked findings that are absent from trigger namespaces evaluated
+	// by this run.
 	for key, tracked := range m.state.Tracked {
 		if _, stillActive := current[key]; stillActive {
 			continue

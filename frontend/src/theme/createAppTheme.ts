@@ -8,10 +8,10 @@ import { darkTokens, lightTokens, type ColorTokens } from "./tokens";
 import { buildComponents } from "./components";
 
 // Map raw MD3 tokens onto MUI palette slots. Semantic mapping:
-//   primary (blue)   -> primary
-//   secondary (green, PASSING) -> success
-//   tertiary (amber, FLAKY)    -> warning
-//   error (red)      -> error
+//   primary blue tokens -> primary
+//   secondary green PASSING tokens -> success
+//   tertiary amber FLAKY tokens -> warning
+//   error red tokens -> error
 // The extra surface-container levels live under the custom `surface` key.
 function paletteFromTokens(t: ColorTokens): PaletteOptions {
   return {
@@ -68,22 +68,20 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
 
 const typography = {
   fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
-  // The root html font-size is 17px (see index.css). Keep MUI's default
-  // htmlFontSize of 16 so its rem-based variants scale by 17/16, matching the
-  // sizes the old Tailwind UI rendered on the same 17px root.
+  // The root html font-size is 17px in index.css. Keeping MUI's htmlFontSize at
+  // 16 preserves the dashboard's rem scale.
   htmlFontSize: 16,
   h1: { fontWeight: 800, letterSpacing: "-0.02em" },
   h2: { fontWeight: 700, letterSpacing: "-0.01em" },
   h3: { fontWeight: 700, letterSpacing: "-0.01em" },
-  // Page titles and stat counts (old `text-3xl`).
+  // Page titles and stat counts.
   h4: { fontWeight: 700, fontSize: "1.875rem" },
   h5: { fontWeight: 600 },
-  // Sub-section headings and empty/error titles (old `text-lg`).
+  // Sub-section headings and empty/error titles.
   h6: { fontWeight: 600, fontSize: "1.125rem" },
   button: { fontWeight: 600 },
-  // Custom variants mirroring the old `font-headline` / `font-label` utilities.
-  // headline defaults to the common section-heading size (old `text-lg`); call
-  // sites override fontSize via `sx` for larger titles or smaller card titles.
+  // Custom variants for reusable section titles and compact labels. Call sites
+  // override fontSize via `sx` for larger titles or smaller card titles.
   headline: {
     fontFamily: '"Inter", sans-serif',
     fontWeight: 700,
@@ -99,10 +97,10 @@ const typography = {
   },
 };
 
-// Build the dashboard theme. Light + dark color schemes are generated from the
-// token sets and switched at runtime via a class selector (see useColorScheme
-// in the app shell). To create a different theme, pass different token sets or
-// add a new factory and register it in themes.ts.
+// Build the dashboard theme. Light and dark schemes are generated from token
+// sets and switched at runtime by the class selector used by useColorScheme in
+// the app shell. To create another theme, pass different token sets or register
+// a new factory in themes.ts.
 export function createAppTheme(
   tokens: { light: ColorTokens; dark: ColorTokens } = {
     light: lightTokens,

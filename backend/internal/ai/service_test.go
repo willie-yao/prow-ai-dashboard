@@ -73,8 +73,7 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
 	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
-	// Test case already has a stale analysis cached on it with a mode that
-	// is not the current agentic mode (e.g. from an older engine).
+	// Test case already has a cached analysis with a foreign mode.
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale summary"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale root cause", Mode: "old-mode"}
@@ -126,10 +125,8 @@ func TestService_CacheKeyShape(t *testing.T) {
 	}
 }
 
-// TestService_ShouldReanalyze_PromptHash verifies that a prompt change
-// invalidates a cached analysis (so editing prompts/system.md refreshes results
-// on the next run without a manual cache clear), while a matching prompt is
-// reused. The check is independent of critique, since the prompt is always sent.
+// TestService_ShouldReanalyze_PromptHash verifies prompt changes invalidate
+// cached analysis while matching prompts are reused.
 func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
 	s := &Service{systemPrompt: "engine base + my prompt"}
 	// Meets the (zero) floors and is agentic mode, so only the prompt gate
@@ -144,8 +141,7 @@ func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
 	if !s.shouldReanalyze(mk(PromptFingerprint("engine base + an OLD prompt"))) {
 		t.Error("changed prompt hash should force re-analysis")
 	}
-	// A pre-feature entry (no stamped hash) re-analyzes once, like other
-	// version-gated invalidations on upgrade.
+	// Unstamped entries re-analyze once.
 	if !s.shouldReanalyze(mk("")) {
 		t.Error("unstamped (pre-feature) entry should re-analyze once")
 	}
@@ -153,17 +149,12 @@ func TestService_ShouldReanalyze_PromptHash(t *testing.T) {
 
 // ---------- tools-unsupported (no fallback) ----------
 
-// TestService_ToolsUnsupported_SetsUnavailable covers the no-fallback
-// invariant: a tools-unsupported endpoint must surface as "unavailable"
-// (there is no tools-free analysis path). The first failure trips
-// ErrToolsUnsupported and is marked unavailable; the second failure
-// short-circuits without any HTTP call because the run-scoped
-// tools-unsupported flag stuck.
+// TestService_ToolsUnsupported_SetsUnavailable verifies tools-unsupported
+// endpoints mark failures unavailable and short-circuit subsequent failures.
 func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	// Only one server push: the agentic 400. The second Analyze() must
-	// short-circuit before issuing a request.
+	// Only one server push: the second Analyze short-circuits before HTTP.
 	srv.push(400, `{"error":{"message":"function calling not supported"}}`)
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -190,11 +181,8 @@ func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	}
 }
 
-// TestService_ShouldReanalyze_FloorTable covers the build-level cache
-// invalidation: a stale non-agentic cached mode always reanalyzes, and an
-// agentic-mode analysis recording fewer tool calls than MinToolCalls OR fewer
-// GCS bytes than MinGCSBytes must not be trusted (shouldReanalyze returns
-// true) so the loop runs again and the new floor can take effect.
+// TestService_ShouldReanalyze_FloorTable covers cache invalidation for mode
+// mismatches and agentic floor changes.
 func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -250,8 +238,7 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 		&fakeFactory{}, registry, enabled,
 	)
 
-	// Pre-floor cached agentic analysis with ToolCalls=0 already attached to
-	// the test case (as it would be after loading data/jobs/*.json).
+	// Pre-floor cached agentic analysis with ToolCalls=0 is already attached.
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale zero-tool"}
 	tc.AIAnalysis = &models.AIAnalysis{RootCause: "stale", Mode: AgenticMode, ToolCalls: 0}
@@ -266,10 +253,7 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	}
 }
 
-// newServiceTestRegistry returns a filesystem-only registry usable in
-// service-level tests. K8s tier is omitted because none of these tests
-// drive cluster discovery; agentic loops here exit on the first chat
-// response (either ErrToolsUnsupported or a final JSON message).
+// newServiceTestRegistry returns a filesystem-only registry for service tests.
 func newServiceTestRegistry(t *testing.T) (*tools.Registry, []string) {
 	t.Helper()
 	r := tools.NewRegistry()
@@ -289,16 +273,14 @@ func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 	return &fakeBrowser{}
 }
 
-// Ensure stubModule satisfies the Module interface (compile-time check).
+// Compile-time interface checks.
 var _ Module = (*stubModule)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)
 
 // ---------- setUnavailable retry semantics ----------
 
-// TestSetUnavailable_RetrySemantics verifies that an engine-written
-// "unavailable" summary is replaced on a later attempt (so a stale error from
-// an earlier run does not persist once an errored failure is re-analyzed),
-// while a transient classification or a real summary is preserved.
+// TestSetUnavailable_RetrySemantics verifies unavailable summaries are replaced
+// on retry while transient and real summaries are preserved.
 func TestSetUnavailable_RetrySemantics(t *testing.T) {
 	s := &Service{}
 
