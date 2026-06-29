@@ -266,7 +266,7 @@ live deploy.
   composed prompt and what makes a good project addendum.
 - `docs/ai-providers.md` - endpoint shape requirements (OpenAI-style chat
   completions + function calling) and per-provider notes
-  (Copilot, OpenAI, Azure OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...).
+  (Copilot, OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...).
 
 ## When in doubt
 

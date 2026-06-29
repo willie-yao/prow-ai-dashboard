@@ -36,6 +36,9 @@ for how to pin a release.
   and made `docs/onboarding-a-new-project.md` the one entry point, leading with
   the `onboard` scaffold. The README is restructured and now indexes every doc,
   and local-development setup moved to a new `docs/development.md`.
+- Made the docs provider-agnostic: replaced Azure/CAPZ-specific examples with
+  generic ones, keeping Azure OpenAI only where it documents a supported
+  endpoint shape.
 
 ### Added
 

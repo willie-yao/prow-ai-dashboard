@@ -110,7 +110,7 @@ name: Webhook TLS failure
 # Optional one-line guidance to the recipe author. Not shown to the
 # model; documentation only.
 description: |
-  CAPZ bootstrap webhook fails with x509 errors during workload-cluster
+  CAPI bootstrap webhook fails with x509 errors during workload-cluster
   create.
 
 # Optional priority for ordering when multiple recipes match. Higher

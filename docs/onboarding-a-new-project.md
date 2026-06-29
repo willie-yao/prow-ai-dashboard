@@ -365,7 +365,7 @@ re-baseline everything at once, run the **Clear AI Cache** workflow first.)
 
 ## Optional: chat-completions endpoint unreachable from GitHub-hosted runners
 
-If your endpoint is private (Azure Private Endpoint, K8s ClusterIP service,
+If your endpoint is private (a cloud private endpoint, a K8s ClusterIP service,
 on-prem inference), GitHub-hosted runners cannot reach it. Two options:
 
 **Fetch locally, publish pre-fetched data.** Set `skip-fetch: true` under

@@ -58,8 +58,8 @@ A dashboard is shaped by three things:
 
 **Configuration & authoring**
 - [AI providers](docs/ai-providers.md): point the engine at any
-  OpenAI-compatible endpoint, such as Copilot, OpenAI, Azure, Dynamo/NIM, vLLM,
-  or Ollama.
+  OpenAI-compatible endpoint, such as Copilot, OpenAI, Dynamo/NIM, vLLM, or
+  Ollama.
 - [Writing prompts](docs/writing-prompts.md): author the required
   `prompts/system.md`.
 - [Agentic loop](docs/agentic.md): how the model browses artifacts via
