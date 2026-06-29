@@ -70,6 +70,8 @@ A dashboard is shaped by three things:
   highest-signal failures.
 - [Skills](docs/skills.md): author diagnostic recipes, and auto-suggest new
   ones for recurring patterns.
+- [Fix PRs](docs/fix-prs.md): draft a minimal code fix for a recurring failure
+  and open a guardrailed draft PR against the source repo.
 
 **Operations**
 - [In-cluster runner](docs/self-hosted-runner-in-cluster.md): run the deploy on
