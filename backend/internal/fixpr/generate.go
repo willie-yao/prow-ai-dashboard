@@ -4,10 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/build/constraint"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
+	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -322,15 +328,16 @@ func lineCount(s string) int {
 	return strings.Count(s, "\n") + 1
 }
 
-// validateSyntax parse-checks each changed file by extension, so an edit that
-// leaves the file syntactically broken is dropped rather than proposed.
-// Extensions without a validator are skipped.
+// validateSyntax checks each changed file by extension: Go is parse- and
+// (best-effort) type-checked, YAML and JSON are decoded. An edit that leaves the
+// file broken is dropped rather than proposed. Extensions without a validator
+// are skipped.
 func validateSyntax(files map[string]string) error {
 	for path, content := range files {
 		switch ext(strings.ToLower(path)) {
 		case ".go":
-			if _, err := parser.ParseFile(token.NewFileSet(), path, content, parser.SkipObjectResolution); err != nil {
-				return fmt.Errorf("edited %s is not valid Go: %w", path, err)
+			if err := checkGo(path, content); err != nil {
+				return err
 			}
 		case ".yaml", ".yml":
 			dec := yaml.NewDecoder(strings.NewReader(content))
@@ -352,6 +359,109 @@ func validateSyntax(files map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// checkGo parse-checks an edited Go file, then runs a best-effort go/types
+// check. It only type-checks stdlib-only files with no build constraint (by
+// //go:build comment or GOOS/GOARCH filename); otherwise it stays parse-only,
+// since external deps and sibling package files aren't available in this runner.
+func checkGo(path, content string) error {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, content, parser.ParseComments|parser.SkipObjectResolution)
+	if err != nil {
+		return fmt.Errorf("edited %s is not valid Go: %w", path, err)
+	}
+	if hasBuildConstraint(file) || hasFilenameConstraint(path) || importsNonStdlib(file) {
+		return nil
+	}
+	var firstErr error
+	inconclusive := false
+	conf := types.Config{
+		Importer: importer.Default(),
+		Error: func(e error) {
+			msg := e.Error()
+			// Errors that stem from same-package context this single-file view
+			// can't see are inconclusive, so a good fix is never dropped.
+			if strings.Contains(msg, "undefined") ||
+				strings.Contains(msg, "undeclared") ||
+				strings.Contains(msg, "missing method") ||
+				strings.Contains(msg, "ambiguous selector") ||
+				strings.Contains(msg, "could not import") {
+				inconclusive = true
+				return
+			}
+			if firstErr == nil {
+				firstErr = e
+			}
+		},
+	}
+	_, _ = conf.Check(file.Name.Name, fset, []*ast.File{file}, nil)
+	if inconclusive {
+		return nil
+	}
+	if firstErr != nil {
+		return fmt.Errorf("edited %s has a type error: %w", path, firstErr)
+	}
+	return nil
+}
+
+// importsNonStdlib reports whether the file imports any package outside the
+// standard library, identified by a dot in the import path's first segment.
+func importsNonStdlib(file *ast.File) bool {
+	for _, imp := range file.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			return true
+		}
+		first, _, _ := strings.Cut(p, "/")
+		if strings.Contains(first, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasBuildConstraint reports whether the file carries a build constraint, in
+// which case it may be written for a different build context than this runner's.
+func hasBuildConstraint(file *ast.File) bool {
+	for _, cg := range file.Comments {
+		for _, c := range cg.List {
+			if constraint.IsGoBuild(c.Text) || constraint.IsPlusBuild(c.Text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasFilenameConstraint reports whether the path uses a GOOS or GOARCH filename
+// suffix (e.g. foo_linux.go, foo_arm64.go), Go's implicit build constraint.
+func hasFilenameConstraint(p string) bool {
+	name := strings.TrimSuffix(path.Base(p), ".go")
+	parts := strings.Split(name, "_")
+	if n := len(parts); n > 1 && parts[n-1] == "test" {
+		parts = parts[:n-1]
+	}
+	if len(parts) < 2 {
+		return false
+	}
+	last := parts[len(parts)-1]
+	return knownGOOS[last] || knownGOARCH[last]
+}
+
+var knownGOOS = map[string]bool{
+	"aix": true, "android": true, "darwin": true, "dragonfly": true,
+	"freebsd": true, "hurd": true, "illumos": true, "ios": true, "js": true,
+	"linux": true, "nacl": true, "netbsd": true, "openbsd": true, "plan9": true,
+	"solaris": true, "wasip1": true, "windows": true, "zos": true,
+}
+
+var knownGOARCH = map[string]bool{
+	"386": true, "amd64": true, "amd64p32": true, "arm": true, "arm64": true,
+	"arm64be": true, "armbe": true, "loong64": true, "mips": true, "mips64": true,
+	"mips64le": true, "mips64p32": true, "mips64p32le": true, "mipsle": true,
+	"ppc": true, "ppc64": true, "ppc64le": true, "riscv": true, "riscv64": true,
+	"s390": true, "s390x": true, "sparc": true, "sparc64": true, "wasm": true,
 }
 
 // renderDiff produces a simple, human-readable per-edit diff for the PR body.

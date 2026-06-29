@@ -23,7 +23,11 @@ suggested fix, the engine:
    **exactly once** in the file. Anything ambiguous or not found is rejected, so
    a fix is never applied fuzzily.
 4. **Parse-checks** each edited file (Go, YAML, JSON) and drops the fix if an
-   edit left it syntactically broken.
+   edit left it syntactically broken. Go files also get a best-effort in-process
+   type check; it skips when the file's imports or symbols can't be resolved in
+   the deploy runner (the source module isn't downloaded and sibling package
+   files aren't fetched), so a good fix is never dropped for lack of context, and
+   only a definite type error in a fully resolved file fails.
 5. **Reviews** the change with a second LLM call (a skeptical reviewer that flags
    wrong logic, undefined symbols, or a change that doesn't address the root
    cause). On objections it re-prompts the edit step up to `critique_retries`
@@ -36,7 +40,8 @@ touches more than `max_files`, no longer parses, or the reviewer keeps rejecting
 it) is dropped and logged. No partial or speculative changes are ever pushed.
 
 > **Note on correctness.** The engine verifies the edit is *safe* (real file,
-> unique anchor, minimal scope, still parses) and runs an LLM review, but it does
+> unique anchor, minimal scope, still parses, and type-checks where resolvable)
+> and runs an LLM review, but it does
 > not compile the change, run tests, or guarantee it fixes the failure. A fix PR
 > is a reviewed **draft starting point**, not a verified patch; Prow CI and a
 > human reviewer are the correctness gate (a draft PR won't run CI or merge

@@ -41,7 +41,9 @@ for how to pin a release.
   chosen from the repo's **real file tree** (keyword-ranked) so the model can't
   invent a path; **anchored search/replace** edits are applied only on an exact
   single match and bounded by `max_files`; each edited file is **parse-checked**
-  (Go/YAML/JSON) and the fix is dropped if an edit broke it; a second LLM
+  (Go/YAML/JSON, with a best-effort in-process Go type check that skips when
+  symbols or imports can't be resolved in the runner) and the fix is dropped if
+  an edit broke it; a second LLM
   **review** (`critique_retries`, default 1; optionally a separate
   `critique_endpoint`/`critique_model`) re-prompts on concrete defects and drops
   the fix if unresolved; draft-only; a dedicated `FIX_TOKEN` (a CLA-signed

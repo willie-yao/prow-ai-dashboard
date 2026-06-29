@@ -231,6 +231,81 @@ func TestGenerateFix_DropsBrokenSyntax(t *testing.T) {
 	}
 }
 
+func TestCheckGo(t *testing.T) {
+	// Valid, stdlib-only Go passes.
+	if err := checkGo("a.go", "package x\n\nimport \"fmt\"\n\nfunc F() { fmt.Println(\"hi\") }\n"); err != nil {
+		t.Errorf("valid Go unexpected error: %v", err)
+	}
+	// A definite type error in a fully resolved file fails.
+	if err := checkGo("a.go", "package x\n\nfunc F() { var n int = \"str\"; _ = n }\n"); err == nil || !strings.Contains(err.Error(), "type error") {
+		t.Errorf("expected a type error, got %v", err)
+	}
+	// An unused import (file no longer compiles) is a definite error.
+	if err := checkGo("a.go", "package x\n\nimport \"fmt\"\n\nfunc F() {}\n"); err == nil {
+		t.Errorf("expected an unused-import error")
+	}
+	// A syntax error is still caught.
+	if err := checkGo("a.go", "package x\nfunc F( {}\n"); err == nil || !strings.Contains(err.Error(), "not valid Go") {
+		t.Errorf("expected a parse error, got %v", err)
+	}
+
+	// Inconclusive cases must be skipped (return nil) to never false-drop a good
+	// fix for lack of package/dependency context.
+	skipCases := map[string]string{
+		"unresolved external import":  "package x\n\nimport \"k8s.io/does/not/exist\"\n\nfunc F() { exist.Bar() }\n",
+		"undefined sibling symbol":    "package x\n\nfunc F() { helperFromSibling() }\n",
+		"method on a sibling type":    "package x\n\ntype T struct{}\n\nfunc F() { T{}.M() }\n",
+		"sibling interface satisfier": "package x\n\ntype I interface{ M() }\ntype T struct{}\n\nvar _ I = T{}\n",
+		"sibling const array length":  "package x\n\ntype A [N]int\n",
+		"ambiguous promoted selector": "package x\n\ntype A struct{ M int }\ntype B struct{ M int }\ntype T struct {\n\tA\n\tB\n}\n\nfunc F(t T) { _ = t.M }\n",
+		"non-stdlib import disables":  "package x\n\nimport \"k8s.io/foo\"\n\nfunc F() { var n int = \"s\"; _ = n; foo.Bar() }\n",
+		"build-tagged file skipped":   "//go:build linux\n\npackage x\n\nfunc F() { var n int = \"s\"; _ = n }\n",
+	}
+	for name, src := range skipCases {
+		if err := checkGo("a.go", src); err != nil {
+			t.Errorf("%s should be skipped, got %v", name, err)
+		}
+	}
+
+	// A GOOS/GOARCH filename suffix is an implicit build constraint, so the file
+	// is parse-only even with a blatant type error (it may target another GOOS).
+	if err := checkGo("scope_linux.go", "package x\n\nfunc F() { var n int = \"s\"; _ = n }\n"); err != nil {
+		t.Errorf("platform-suffixed file should be skipped, got %v", err)
+	}
+}
+
+func TestHasFilenameConstraint(t *testing.T) {
+	cases := map[string]bool{
+		"client_linux.go":        true,
+		"client_amd64.go":        true,
+		"client_linux_amd64.go":  true,
+		"client_windows_test.go": true,
+		"client.go":              false,
+		"endpoint.go":            false,
+		"cluster_scope.go":       false,
+		"client_test.go":         false,
+		"linux.go":               false,
+	}
+	for name, want := range cases {
+		if got := hasFilenameConstraint(name); got != want {
+			t.Errorf("hasFilenameConstraint(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestGenerateFix_DropsTypeError(t *testing.T) {
+	goFile := "package x\n\nfunc Reconcile() int { return wait(30) }\n\nfunc wait(s int) int { return s }\n"
+	c := &fakeCompleter{
+		locate: `{"files": ["controllers/r.go"]}`,
+		// The edit makes wait() receive a string where an int is required.
+		edit: `{"rationale": "tune", "edits": [{"file": "controllers/r.go", "old": "return wait(30)", "new": "return wait(\"30\")"}]}`,
+	}
+	src := &fakeSource{files: map[string]string{"controllers/r.go": goFile}}
+	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "type error") {
+		t.Errorf("expected a type-error drop, got %v", err)
+	}
+}
+
 // ---- critique loop ----
 
 func critiqueParams(c Completer, src sourceReader, retries int) genParams {
