@@ -59,6 +59,31 @@ type Request struct {
 	AuthorName  string
 	AuthorEmail string
 	SignOff     bool
+	// Fork opens the PR via fork-and-PR: the branch is pushed to a fork under the
+	// token's identity (created on demand) and the PR is opened cross-fork
+	// against Owner/Repo's default branch. For proposing changes to a repo the
+	// token can't write to.
+	Fork bool
+	// Base pins the commit the change is built on. When set, OpenPR commits
+	// against it instead of re-resolving the default branch, so a caller that
+	// read content at a specific commit commits against the same snapshot.
+	Base *Base
+}
+
+// Base is the commit a PR is built on: its branch, head SHA, and tree SHA.
+type Base struct {
+	Branch  string
+	HeadSHA string
+	TreeSHA string
+}
+
+// ResolveBase returns the repo's current default-branch base.
+func (c *Client) ResolveBase(ctx context.Context, owner, repo string) (Base, error) {
+	branch, head, tree, err := c.baseRef(ctx, owner, repo)
+	if err != nil {
+		return Base{}, err
+	}
+	return Base{Branch: branch, HeadSHA: head, TreeSHA: tree}, nil
 }
 
 // OpenPR commits the request's files to a new branch and opens a PR against the
@@ -70,23 +95,47 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 	if len(req.Files) == 0 {
 		return "", fmt.Errorf("no files to commit")
 	}
-	branch, headSHA, baseTree, err := c.baseRef(ctx, req.Owner, req.Repo)
+
+	// Push to a fork under the token identity, or to the target repo directly.
+	pushOwner, pushRepo := req.Owner, req.Repo
+	headPrefix := ""
+	if req.Fork {
+		login, err := c.authedLogin(ctx)
+		if err != nil {
+			return "", fmt.Errorf("resolving fork identity: %w", err)
+		}
+		fo, fr, err := c.ensureFork(ctx, req.Owner, req.Repo, login)
+		if err != nil {
+			return "", fmt.Errorf("ensuring a fork of %s/%s: %w", req.Owner, req.Repo, err)
+		}
+		pushOwner, pushRepo, headPrefix = fo, fr, fo+":"
+	}
+
+	// Commit against the pinned base, or the default branch. A fork shares the
+	// upstream object DB, so an upstream tree/commit SHA is valid on the fork.
+	var branch, headSHA, baseTree string
+	if req.Base != nil {
+		branch, headSHA, baseTree = req.Base.Branch, req.Base.HeadSHA, req.Base.TreeSHA
+	} else {
+		var err error
+		branch, headSHA, baseTree, err = c.baseRef(ctx, req.Owner, req.Repo)
+		if err != nil {
+			return "", err
+		}
+	}
+	tree, err := c.createTree(ctx, pushOwner, pushRepo, baseTree, req.Files)
 	if err != nil {
 		return "", err
 	}
-	tree, err := c.createTree(ctx, req.Owner, req.Repo, baseTree, req.Files)
-	if err != nil {
-		return "", err
-	}
-	commit, err := c.createCommit(ctx, req.Owner, req.Repo, commitMessage(req), tree, headSHA, req)
+	commit, err := c.createCommit(ctx, pushOwner, pushRepo, commitMessage(req), tree, headSHA, req)
 	if err != nil {
 		return "", err
 	}
 	newBranch := fmt.Sprintf("%s-%d-%s", req.BranchPrefix, time.Now().Unix(), randomSuffix())
-	if err := c.createRef(ctx, req.Owner, req.Repo, "refs/heads/"+newBranch, commit); err != nil {
+	if err := c.createRef(ctx, pushOwner, pushRepo, "refs/heads/"+newBranch, commit); err != nil {
 		return "", err
 	}
-	number, htmlURL, err := c.createPR(ctx, req.Owner, req.Repo, req.Title, req.Body, newBranch, branch, req.Draft)
+	number, htmlURL, err := c.createPR(ctx, req.Owner, req.Repo, req.Title, req.Body, headPrefix+newBranch, branch, req.Draft)
 	if err != nil {
 		return "", err
 	}
@@ -97,6 +146,65 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 		}
 	}
 	return htmlURL, nil
+}
+
+// forkPollAttempts and forkPollInterval bound the wait for an async fork to
+// become queryable. var (not const) so tests can shrink them.
+var (
+	forkPollAttempts = 30
+	forkPollInterval = 2 * time.Second
+)
+
+// authedLogin returns the login of the user the token authenticates as (the
+// fork owner).
+func (c *Client) authedLogin(ctx context.Context) (string, error) {
+	var u struct {
+		Login string `json:"login"`
+	}
+	if err := c.get(ctx, c.base+"/user", &u); err != nil {
+		return "", err
+	}
+	if u.Login == "" {
+		return "", fmt.Errorf("could not resolve the token's user login")
+	}
+	return u.Login, nil
+}
+
+// ensureFork creates (or reuses) a fork of owner/repo under the token identity
+// and returns the fork's owner and name once it is queryable. The forks POST is
+// idempotent; forking is async, so it polls until the fork repo exists.
+func (c *Client) ensureFork(ctx context.Context, owner, repo, login string) (string, string, error) {
+	var fork struct {
+		Name  string `json:"name"`
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	}
+	if err := c.do(ctx, http.MethodPost, c.url(owner, repo, "forks"), map[string]any{}, &fork,
+		http.StatusAccepted, http.StatusOK, http.StatusCreated); err != nil {
+		return "", "", err
+	}
+	forkOwner, forkRepo := fork.Owner.Login, fork.Name
+	if forkOwner == "" {
+		forkOwner = login
+	}
+	if forkRepo == "" {
+		forkRepo = repo
+	}
+	for i := 0; i < forkPollAttempts; i++ {
+		var probe struct {
+			DefaultBranch string `json:"default_branch"`
+		}
+		if err := c.get(ctx, c.url(forkOwner, forkRepo, ""), &probe); err == nil && probe.DefaultBranch != "" {
+			return forkOwner, forkRepo, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		case <-time.After(forkPollInterval):
+		}
+	}
+	return "", "", fmt.Errorf("fork %s/%s not ready after polling", forkOwner, forkRepo)
 }
 
 // commitMessage uses the PR title as the commit subject, adding a DCO sign-off

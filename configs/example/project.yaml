@@ -167,6 +167,31 @@ ai:
   #   max_new_per_run: 1          # default 1
   #   labels: [skill-suggestion]  # default [skill-suggestion]
 
+  # Optional: agent-proposed fix PRs. After each fetch, for a systemic recurring
+  # pattern with a concrete fix, the engine drafts a minimal anchored edit and
+  # opens a DRAFT PR against the source repo via fork-and-PR. Off by default and
+  # the highest-risk feature (writes code upstream). Needs a FIX_TOKEN secret: a
+  # CLA-signed contributor's PAT that can fork the source repo. author_name and
+  # author_email MUST be that CLA-signed identity (EasyCLA/DCO). Start with
+  # dry_run to inspect proposals. See docs/fix-prs.md.
+  # fix_prs:
+  #   enabled: true
+  #   author_name: "Jane Maintainer"     # required: CLA-signed identity
+  #   author_email: "jane@example.com"   # required: matches that GitHub account
+  #   repo:                       # defaults to branding.source_repo
+  #     owner: "kubernetes-sigs"
+  #     name: "cluster-api-provider-azure"
+  #   fork: true                  # true (default): fork-and-PR (repo you don't own);
+  #                               # false: direct branch + same-repo PR (repo you own)
+  #   min_confidence: high        # default high
+  #   max_files: 3                # default 3 (bounded change scope)
+  #   max_new_per_run: 1          # default 1
+  #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
+  #   dry_run: true               # propose to fix_previews.json without a PR
+  #   critique_retries: 1         # LLM review re-prompts before dropping (default 1; 0 disables)
+  #   critique_endpoint: "..."    # optional: review with a different endpoint/model
+  #   critique_model: "..."       #   (e.g. a stronger reviewer); token via FIX_CRITIQUE_TOKEN
+
 # Optional: auto-file GitHub issues for systemic recurring patterns and
 # persistent failures. Off by default. Active only when enabled AND an
 # ISSUE_TOKEN secret (issues:write on the target repo) is wired in the deploy

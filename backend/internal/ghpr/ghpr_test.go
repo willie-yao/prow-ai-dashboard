@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGitHub is an in-memory GitHub git-data + pulls API for tests.
@@ -22,6 +23,8 @@ type fakeGitHub struct {
 	prBase        string
 	prTitle       string
 	prDraft       bool
+	forkCreated   bool   // set when POST /forks is called
+	treeOwnerRepo string // owner/repo path the tree was created under
 }
 
 func newFakeGitHub(t *testing.T, defaultBranch string) *fakeGitHub {
@@ -36,6 +39,17 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	p := r.URL.Path
 	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(p, "/user"):
+		writeJSON(w, 200, map[string]any{"login": "forker"})
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/forks"):
+		f.forkCreated = true
+		writeJSON(w, 202, map[string]any{"name": "r", "owner": map[string]any{"login": "forker"}})
+	case r.Method == http.MethodGet && strings.HasSuffix(p, "/repos/forker/r"):
+		if !f.forkCreated {
+			http.Error(w, "not found", 404)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"default_branch": "main"})
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/repos/o/r"):
 		writeJSON(w, 200, map[string]any{"default_branch": f.defaultBranch})
 	case r.Method == http.MethodGet && strings.Contains(p, "/git/ref/heads/"):
@@ -59,6 +73,7 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		for _, e := range in.Tree {
 			f.createdTree[e.Path] = e.Content
 		}
+		f.treeOwnerRepo = strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/git/trees")
 		writeJSON(w, 201, map[string]any{"sha": "newtree"})
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/git/commits"):
 		var in struct {
@@ -183,5 +198,52 @@ func TestOpenPR_NoFiles(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "no files") {
 		t.Errorf("expected a no-files error, got %v", err)
+	}
+}
+
+func TestOpenPR_ForkFlow(t *testing.T) {
+	// Shrink the fork-readiness poll so the test doesn't wait on real intervals.
+	oldInterval := forkPollInterval
+	forkPollInterval = time.Millisecond
+	t.Cleanup(func() { forkPollInterval = oldInterval })
+
+	f := newFakeGitHub(t, "main")
+	url, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r",
+		Files:        map[string]string{"templates/x.yaml": "fixed"},
+		BranchPrefix: "fix",
+		Title:        "Fix the thing",
+		Body:         "body",
+		Draft:        true,
+		Fork:         true,
+		AuthorName:   "Jane Maintainer",
+		AuthorEmail:  "jane@example.com",
+		SignOff:      true,
+	})
+	if err != nil {
+		t.Fatalf("OpenPR fork: %v", err)
+	}
+	if url != "https://github.com/o/r/pull/7" {
+		t.Errorf("url = %q", url)
+	}
+	if !f.forkCreated {
+		t.Errorf("fork was not created")
+	}
+	// The branch is pushed to the fork (forker/r), not upstream.
+	if f.treeOwnerRepo != "forker/r" {
+		t.Errorf("tree pushed to %q, want forker/r", f.treeOwnerRepo)
+	}
+	// The PR head is cross-fork (forker:branch) against the upstream base.
+	if !strings.HasPrefix(f.prHead, "forker:fix-") {
+		t.Errorf("PR head = %q, want forker:fix-*", f.prHead)
+	}
+	if f.prBase != "main" {
+		t.Errorf("PR base = %q, want main (upstream default)", f.prBase)
+	}
+	if !f.prDraft {
+		t.Errorf("fork PR should be a draft")
+	}
+	if !strings.Contains(f.commitMessage, "Signed-off-by: Jane Maintainer <jane@example.com>") {
+		t.Errorf("commit message missing sign-off: %q", f.commitMessage)
 	}
 }
