@@ -34,7 +34,8 @@ for how to pin a release.
 
 - Consolidated getting started into a single path: removed `docs/quickstart.md`
   and made `docs/onboarding-a-new-project.md` the one entry point, leading with
-  the `onboard` scaffold. The README is restructured and now indexes every doc.
+  the `onboard` scaffold. The README is restructured and now indexes every doc,
+  and local-development setup moved to a new `docs/development.md`.
 
 ### Added
 

@@ -35,38 +35,19 @@ private, see the escape hatches in
 [onboarding](docs/onboarding-a-new-project.md) and
 [in-cluster runners](docs/self-hosted-runner-in-cluster.md).
 
-## Architecture
+## What you configure
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ This repo (prow-ai-dashboard) - engine                           │
-│                                                                  │
-│   backend/    Go fetcher + collectors + AI modules               │
-│   frontend/   React UI (built per-project at deploy time)        │
-│   docs/       onboarding-a-new-project.md, ai-providers.md ...   │
-│   configs/    example/ - docs-only sample, no live config        │
-│   .github/    reusable-deploy.yml, reusable-clear-cache.yml      │
-└──────────────────────────────────────────────────────────────────┘
-                              │ uses: @main
-                              ▼
-┌──────────────────────────────────────────────────────────────────┐
-│ Host repo (dedicated or shared with the project's own code)      │
-│                                                                  │
-│   <project_dir>/project.yaml         bucket, branding, AI        │
-│   <project_dir>/prompts/system.md    mandatory project addendum  │
-│   .github/workflows/deploy.yml       ~20 lines                   │
-│   secrets:  AI_TOKEN, SLACK_WEBHOOK_URL                          │
-│   GitHub Pages:                      built site + cached data    │
-└──────────────────────────────────────────────────────────────────┘
-```
+A dashboard is shaped by three things:
 
-Three extension points:
-
-- **`project.yaml`**: bucket, dashboard, branding, AI provider, features.
-- **`prompts/system.md`**: project-specific AI knowledge. Mandatory; the
-  fetcher hard-errors if it is missing when `-ai` is enabled.
+- **`project.yaml`**: bucket, dashboard, branding, AI provider, and feature
+  toggles. See [`configs/example/project.yaml`](configs/example/project.yaml)
+  for every field.
+- **`prompts/system.md`**: project-specific AI knowledge. Mandatory; the fetcher
+  hard-errors if it is missing when `-ai` is enabled.
 - **Engine collectors and AI modules** in `backend/internal/collectors/` and
-  `backend/internal/ai/modules/`, selected by `project.yaml`.
+  `backend/internal/ai/modules/`, selected by `project.yaml`. The engine itself,
+  a Go fetcher in `backend/` and a React UI in `frontend/`, is built per project
+  at deploy time; you never fork it.
 
 ## Documentation
 
@@ -95,27 +76,16 @@ Three extension points:
   a self-hosted runner to reach a private, in-cluster AI endpoint.
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
 
+**Development**
+- [Local development](docs/development.md): build, test, and run the fetcher
+  against a consumer repo locally.
+
 ## Adding a project
 
 See [onboarding](docs/onboarding-a-new-project.md). In short: add `project.yaml`
 and `prompts/system.md` to a repo, add a `deploy.yml` calling
 `reusable-deploy.yml@main` as shown above, set the `AI_TOKEN` secret, and enable
 GitHub Pages with **Source: GitHub Actions**. No engine PR required.
-
-## Local development
-
-```bash
-make build && make test              # backend
-make fe-install && make dev          # frontend at http://localhost:5173 with HMR
-
-# Run the fetcher against a consumer repo: a dir holding project.yaml and
-# prompts/system.md. Output lands in frontend/public/data/, which the dev
-# server serves. Add -ai with AI_TOKEN / AI_ENDPOINT / AI_MODEL for summaries.
-make fetch-data PROJECT_DIR=../your-consumer-repo
-```
-
-Frontend-only iteration: drop pre-built JSON from a deployed site into
-`frontend/public/data/`, then `make dev`.
 
 ## License
 
