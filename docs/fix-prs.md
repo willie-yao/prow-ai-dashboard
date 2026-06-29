@@ -22,12 +22,20 @@ suggested fix, the engine:
    find and its replacement), and applies each edit only if its anchor matches
    **exactly once** in the file. Anything ambiguous or not found is rejected, so
    a fix is never applied fuzzily.
-4. Opens a **draft PR** via fork-and-PR with the change, the rendered diff, and a
+4. **Parse-checks** each edited file (Go, YAML, JSON) and drops the fix if an
+   edit left it syntactically broken.
+5. Opens a **draft PR** via fork-and-PR with the change, the rendered diff, and a
    review checklist in the body.
 
 A fix that can't be grounded at any step (no such file, anchor doesn't match,
-touches more than `max_files`) is dropped and logged. No partial or speculative
-changes are ever pushed.
+touches more than `max_files`, or no longer parses) is dropped and logged. No
+partial or speculative changes are ever pushed.
+
+> **Note on correctness.** The engine verifies the edit is *safe* (real file,
+> unique anchor, minimal scope, still parses) but does not compile it, run tests,
+> or confirm it fixes the failure. A fix PR is a reviewed **draft starting
+> point**, not a verified patch; Prow CI and a human reviewer are the correctness
+> gate (a draft PR won't run CI or merge without a maintainer's approval).
 
 ## Two modes: fork-and-PR vs direct
 

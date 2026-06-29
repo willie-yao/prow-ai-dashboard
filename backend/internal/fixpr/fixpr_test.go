@@ -174,6 +174,44 @@ func TestRankCandidates_ExtensionAloneExcluded(t *testing.T) {
 	}
 }
 
+func TestValidateSyntax(t *testing.T) {
+	ok := []map[string]string{
+		{"a.yaml": "key: val\n"},
+		{"a.yaml": "a: 1\n---\nb: 2\n"}, // multi-doc
+		{"a.go": "package x\n\nfunc F() {}\n"},
+		{"a.json": `{"k": 1}`},
+		{"a.sh": "this is $(not validated"}, // no validator -> skipped
+	}
+	for _, f := range ok {
+		if err := validateSyntax(f); err != nil {
+			t.Errorf("validateSyntax(%v) unexpected error: %v", f, err)
+		}
+	}
+	bad := []struct{ file, content, want string }{
+		{"a.yaml", "diskType: [unclosed\n", "not valid YAML"},
+		{"a.go", "package x\nfunc F( {}\n", "not valid Go"},
+		{"a.json", `{"k": }`, "not valid JSON"},
+	}
+	for _, c := range bad {
+		err := validateSyntax(map[string]string{c.file: c.content})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("validateSyntax(%s) = %v, want %q", c.file, err, c.want)
+		}
+	}
+}
+
+func TestGenerateFix_DropsBrokenSyntax(t *testing.T) {
+	// The edit turns valid YAML into an unclosed flow sequence.
+	c := &fakeCompleter{
+		locate: `{"files": ["templates/cluster.yaml"]}`,
+		edit:   `{"rationale": "break it", "edits": [{"file": "templates/cluster.yaml", "old": "diskType: StandardSSD_LRS", "new": "diskType: [unclosed"}]}`,
+	}
+	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
+	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "not valid YAML") {
+		t.Errorf("expected broken-YAML drop, got %v", err)
+	}
+}
+
 func TestApplyEdits_AnchorNotFound(t *testing.T) {
 	_, err := applyEdits(map[string]string{"f": "hello"}, []edit{{File: "f", Old: "absent", New: "x"}}, 2)
 	if err == nil || !strings.Contains(err.Error(), "not found") {

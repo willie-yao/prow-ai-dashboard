@@ -40,14 +40,16 @@ for how to pin a release.
   fork-and-PR. Off by default and heavily guardrailed: the target file(s) are
   chosen from the repo's **real file tree** (keyword-ranked) so the model can't
   invent a path; **anchored search/replace** edits are applied only on an exact
-  single match and bounded by `max_files`; draft-only; a dedicated `FIX_TOKEN`
-  (a CLA-signed contributor PAT) authors the commit under that identity with a
-  DCO `Signed-off-by`; idempotent marker dedup; and a `max_new_per_run` cap. A
-  `dry_run` mode runs the full pipeline and writes proposed diffs to
-  `fix_previews.json` without opening any PR. `fork: false` (default `true`)
-  switches from fork-and-PR to a direct branch + same-repo PR for a source repo
-  you own. The `ghpr` helper gained fork-and-PR support (fork on demand,
-  cross-fork draft PR) for this. See [docs/fix-prs.md](docs/fix-prs.md).
+  single match and bounded by `max_files`; each edited file is **parse-checked**
+  (Go/YAML/JSON) and the fix is dropped if an edit broke it; draft-only; a
+  dedicated `FIX_TOKEN` (a CLA-signed contributor PAT) authors the commit under
+  that identity with a DCO `Signed-off-by`; idempotent marker dedup; and a
+  `max_new_per_run` cap. A `dry_run` mode runs the full pipeline and writes
+  proposed diffs to `fix_previews.json` without opening any PR. `fork: false`
+  (default `true`) switches from fork-and-PR to a direct branch + same-repo PR
+  for a source repo you own. The `ghpr` helper gained fork-and-PR support (fork
+  on demand, cross-fork draft PR) for this. See
+  [docs/fix-prs.md](docs/fix-prs.md).
 
 - Optional **self-improving skills** (`ai.suggest_skills`): after each fetch,
   the engine drafts a diagnostic skill recipe for any systemic recurring pattern

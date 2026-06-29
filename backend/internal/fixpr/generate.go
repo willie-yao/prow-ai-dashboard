@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/parser"
+	"go/token"
+	"io"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -70,6 +75,9 @@ func generateFix(ctx context.Context, c Completer, source sourceReader, owner, r
 	}
 	changed, err := applyEdits(contents, edits, maxFiles)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateSyntax(changed); err != nil {
 		return nil, err
 	}
 	return &proposedFix{
@@ -233,6 +241,38 @@ func lineCount(s string) int {
 		return 0
 	}
 	return strings.Count(s, "\n") + 1
+}
+
+// validateSyntax parse-checks each changed file by extension, so an edit that
+// leaves the file syntactically broken is dropped rather than proposed.
+// Extensions without a validator are skipped.
+func validateSyntax(files map[string]string) error {
+	for path, content := range files {
+		switch ext(strings.ToLower(path)) {
+		case ".go":
+			if _, err := parser.ParseFile(token.NewFileSet(), path, content, parser.SkipObjectResolution); err != nil {
+				return fmt.Errorf("edited %s is not valid Go: %w", path, err)
+			}
+		case ".yaml", ".yml":
+			dec := yaml.NewDecoder(strings.NewReader(content))
+			for {
+				var doc any
+				err := dec.Decode(&doc)
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return fmt.Errorf("edited %s is not valid YAML: %w", path, err)
+				}
+			}
+		case ".json":
+			var doc any
+			if err := json.Unmarshal([]byte(content), &doc); err != nil {
+				return fmt.Errorf("edited %s is not valid JSON: %w", path, err)
+			}
+		}
+	}
+	return nil
 }
 
 // renderDiff produces a simple, human-readable per-edit diff for the PR body.
