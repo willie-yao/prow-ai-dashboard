@@ -40,9 +40,7 @@ type Options struct {
 	// SourceOwner / SourceName are the repo fix PRs target.
 	SourceOwner string
 	SourceName  string
-	// Fork uses fork-and-PR (the branch goes to a fork under the token's
-	// identity, cross-fork PR) when true; a direct branch + same-repo PR when
-	// false (for a source repo the token can write to).
+	// Fork uses fork-and-PR when true, else a direct branch + same-repo PR.
 	Fork bool
 	// AuthorName / AuthorEmail are the CLA-signed commit author identity.
 	AuthorName  string
@@ -165,9 +163,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		return stats, nil
 	}
 
-	// Pin one upstream snapshot: read file content, apply edits, and commit all
-	// against the same base commit, so an upstream push mid-run can't make us
-	// commit stale content (silently reverting an intervening change).
+	// Pin one upstream commit so the reads, edits, and commit share a snapshot.
 	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
 	if err != nil {
 		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
@@ -179,8 +175,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 	for _, p := range work {
 		key := keyFor(p)
 
-		// Dry-run: propose without any GitHub writes or state, so each run shows
-		// the current proposal. Cap previews per run.
+		// Dry-run: propose without GitHub writes or state, capped per run.
 		if m.opts.DryRun {
 			if stats.Previewed >= m.opts.MaxNewPerRun {
 				break
@@ -241,8 +236,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			continue
 		}
 		if err != nil {
-			// The PR opened but a follow-up (e.g. labeling) failed. Track it so
-			// we don't reopen a duplicate, and still count it against the cap.
+			// PR opened but a follow-up (e.g. labeling) failed; still track it.
 			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
 		}
 		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
@@ -278,9 +272,8 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
-// keyFor is the stable dedup identity of a pattern: the job plus a fingerprint
-// of the shared root cause, so a different cause on the same job is proposed
-// separately while a recurrence of the same cause stays deduped.
+// keyFor is the dedup identity of a pattern: the job plus a fingerprint of the
+// shared root cause, so distinct causes on one job dedupe separately.
 func keyFor(p models.PatternAnalysis) string {
 	job := p.JobID
 	if strings.TrimSpace(job) == "" {

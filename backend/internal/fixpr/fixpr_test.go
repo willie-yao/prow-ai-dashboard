@@ -239,8 +239,7 @@ func newManager(t *testing.T, pr prClient, c Completer, src sourceReader, opts O
 	if opts.AuthorName == "" {
 		opts.AuthorName, opts.AuthorEmail = "Jane", "jane@example.com"
 	}
-	// Default to fork-and-PR, matching EffectiveFixPRs; a test can flip
-	// m.opts.Fork afterward to exercise the direct mode.
+	// Default to fork-and-PR; tests can flip m.opts.Fork for direct mode.
 	opts.Fork = true
 	return NewManager(pr, c, src, filepath.Join(t.TempDir(), "state.json"), opts)
 }

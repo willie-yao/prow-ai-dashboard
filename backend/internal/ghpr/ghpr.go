@@ -59,29 +59,25 @@ type Request struct {
 	AuthorName  string
 	AuthorEmail string
 	SignOff     bool
-	// Fork opens the PR via the fork-and-PR flow: Owner/Repo is the upstream
-	// target the token may not have write access to. The branch is pushed to a
-	// fork under the token's own identity (created on demand) and the PR is
-	// opened cross-fork (head fork:branch) against the upstream default branch.
-	// Used for proposing changes to a source repo.
+	// Fork opens the PR via fork-and-PR: the branch is pushed to a fork under the
+	// token's identity (created on demand) and the PR is opened cross-fork
+	// against Owner/Repo's default branch. For proposing changes to a repo the
+	// token can't write to.
 	Fork bool
-	// Base pins the upstream commit the change is built on. When set, OpenPR
-	// commits against it instead of re-resolving the default branch, so a caller
-	// that read file content at a specific commit commits against that same
-	// snapshot. Resolve it with ResolveBase.
+	// Base pins the commit the change is built on. When set, OpenPR commits
+	// against it instead of re-resolving the default branch, so a caller that
+	// read content at a specific commit commits against the same snapshot.
 	Base *Base
 }
 
-// Base is an upstream commit a PR is built on: its branch, head commit SHA, and
-// the tree that commit points at.
+// Base is the commit a PR is built on: its branch, head SHA, and tree SHA.
 type Base struct {
 	Branch  string
 	HeadSHA string
 	TreeSHA string
 }
 
-// ResolveBase returns the repo's current default-branch base, so a caller can
-// read file content and later commit against the same snapshot.
+// ResolveBase returns the repo's current default-branch base.
 func (c *Client) ResolveBase(ctx context.Context, owner, repo string) (Base, error) {
 	branch, head, tree, err := c.baseRef(ctx, owner, repo)
 	if err != nil {
@@ -100,8 +96,7 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 		return "", fmt.Errorf("no files to commit")
 	}
 
-	// Resolve where the branch is pushed (a fork under the token identity, or the
-	// target repo directly) and the cross-fork head prefix for the PR.
+	// Push to a fork under the token identity, or to the target repo directly.
 	pushOwner, pushRepo := req.Owner, req.Repo
 	headPrefix := ""
 	if req.Fork {
@@ -116,9 +111,8 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 		pushOwner, pushRepo, headPrefix = fo, fr, fo+":"
 	}
 
-	// Base the commit on the upstream default branch (or the caller-pinned base).
-	// A fork shares the upstream object database, so referencing the upstream
-	// tree/commit SHA when building the commit on the fork is valid.
+	// Commit against the pinned base, or the default branch. A fork shares the
+	// upstream object DB, so an upstream tree/commit SHA is valid on the fork.
 	var branch, headSHA, baseTree string
 	if req.Base != nil {
 		branch, headSHA, baseTree = req.Base.Branch, req.Base.HeadSHA, req.Base.TreeSHA

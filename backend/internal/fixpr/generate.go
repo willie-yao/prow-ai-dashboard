@@ -33,11 +33,10 @@ type proposedFix struct {
 	rationale string
 }
 
-// generateFix turns a systemic pattern into a validated minimal edit: locate the
-// target file(s) by choosing from the repo's REAL file tree (so the model can't
-// hallucinate a path), fetch their current content, ask for anchored edits, and
-// apply them (exact-match-once). Any step that can't be grounded returns an error
-// so the caller drops the fix rather than proposing something unsafe.
+// generateFix turns a pattern into a validated minimal edit: pick target
+// file(s) from the repo's real tree, fetch them, propose anchored edits, and
+// apply them (exact-match-once). Any ungrounded step returns an error so the
+// caller drops the fix.
 func generateFix(ctx context.Context, c Completer, source sourceReader, owner, repo, ref string, p models.PatternAnalysis, maxFiles int) (*proposedFix, error) {
 	tree, err := source.ListTree(ctx, owner, repo, ref)
 	if err != nil {
@@ -82,9 +81,8 @@ func generateFix(ctx context.Context, c Completer, source sourceReader, owner, r
 
 const locateSystemPrompt = `You identify which source files a known CI failure fix should touch. You are given a candidate list of REAL repository file paths. Choose the smallest set of paths FROM THAT LIST that must change to fix the failure, preferring configuration, template, or manifest files. You MUST only return paths that appear verbatim in the candidate list; if none fit, return an empty list. Answer only with one-line JSON, no prose.`
 
-// locateTargets asks the model to choose target file(s) from the real candidate
-// paths, capped at maxFiles. Picks not present in the candidate set are rejected
-// so a hallucinated path can never slip through.
+// locateTargets has the model pick target file(s) from the candidate paths,
+// capped at maxFiles. Picks outside the candidate set are rejected.
 func locateTargets(ctx context.Context, c Completer, p models.PatternAnalysis, candidates []string, maxFiles int) ([]string, error) {
 	user := fmt.Sprintf(`Recurring failure pattern:
 - subject: %s
@@ -165,9 +163,8 @@ The "old" snippet for each edit MUST appear exactly once in that file.`,
 	return v.Edits, strings.TrimSpace(v.Rationale), nil
 }
 
-// Edit-scope caps keep a "fix" a minimal change: a model can't satisfy
-// exact-match-once by anchoring on (and replacing) the whole file or a huge
-// block.
+// Scope caps that keep a fix minimal (so exact-match-once can't be abused with a
+// whole-file or oversized anchor).
 const (
 	maxEdits             = 20   // anchored edits per fix
 	maxEditBytes         = 8192 // per old/new snippet
@@ -175,8 +172,7 @@ const (
 )
 
 // applyEdits applies each anchored edit, requiring its "old" snippet to match
-// exactly once in the current file content, and enforces minimal-change scope
-// caps. Returns only the changed files.
+// exactly once, within the scope caps. Returns only the changed files.
 func applyEdits(orig map[string]string, edits []edit, maxFiles int) (map[string]string, error) {
 	if len(edits) > maxEdits {
 		return nil, fmt.Errorf("fix proposes %d edits, exceeds the cap of %d", len(edits), maxEdits)
@@ -201,8 +197,7 @@ func applyEdits(orig map[string]string, edits []edit, maxFiles int) (map[string]
 		if len(e.Old) > maxEditBytes || len(e.New) > maxEditBytes {
 			return nil, fmt.Errorf("edit for %s is too large (snippet exceeds %d bytes); fixes must be minimal", e.File, maxEditBytes)
 		}
-		// Reject a whole-file rewrite: the anchor must be a fragment, not the
-		// entire file content.
+		// Reject a whole-file rewrite; the anchor must be a fragment.
 		if strings.TrimSpace(e.Old) == strings.TrimSpace(cur) {
 			return nil, fmt.Errorf("edit for %s rewrites the whole file; fixes must be minimal anchored changes", e.File)
 		}
@@ -321,7 +316,6 @@ var (
 
 // rankCandidates returns the repo paths most relevant to the pattern, scored by
 // keyword overlap with the failure text plus directory/extension preferences.
-// Grounding the locate step in real paths stops the model from inventing files.
 func rankCandidates(tree []string, p models.PatternAnalysis) []string {
 	keywords := extractKeywords(p.SharedRootCause + " " + p.SuggestedFix + " " + p.Subject + " " + p.Summary)
 	type scored struct {
@@ -344,10 +338,8 @@ func rankCandidates(tree []string, p models.PatternAnalysis) []string {
 				break
 			}
 		}
-		// A path qualifies only with a real signal: a keyword match or a
-		// preferred directory. A matching extension alone is not enough, so an
-		// empty/weak keyword set can't admit arbitrary files (and exclude the
-		// true target); fail closed instead.
+		// Require a real signal (keyword or preferred dir); a matching extension
+		// alone is not enough.
 		if keywordHits == 0 && !dirPreferred {
 			continue
 		}

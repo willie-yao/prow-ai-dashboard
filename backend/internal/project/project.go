@@ -357,11 +357,9 @@ type FixPRs struct {
 	// Repo is the source repo to open fix PRs against. Defaults to
 	// branding.source_repo.
 	Repo *SourceRepo `yaml:"repo,omitempty" json:"repo,omitempty"`
-	// Fork controls how the fix branch reaches the source repo. true (the
-	// default) uses fork-and-PR: the branch is pushed to a fork under the
-	// token's identity and a cross-fork PR is opened (for a source repo you
-	// don't own). false pushes the branch directly to the source repo and opens
-	// a same-repo PR (for a source repo you own/maintain). Excluded from
+	// Fork controls how the fix branch reaches the source repo. true (default)
+	// uses fork-and-PR (for a repo you don't own); false pushes the branch
+	// directly and opens a same-repo PR (for a repo you own). Excluded from
 	// manifest.json.
 	Fork *bool `yaml:"fork,omitempty" json:"-"`
 	// AuthorName / AuthorEmail are the commit author identity. Required when

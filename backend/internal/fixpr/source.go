@@ -137,9 +137,7 @@ func (s *httpSource) ListTree(ctx context.Context, owner, repo, ref string) ([]s
 	}
 	paths := make([]string, 0, len(out.Tree))
 	for _, e := range out.Tree {
-		// Only regular files (100644) and executables (100755). Symlinks
-		// (120000) and submodules are also type "blob" but must not be edited
-		// as regular files.
+		// Regular files and executables only; skip symlinks/submodules.
 		if e.Type == "blob" && (e.Mode == "100644" || e.Mode == "100755") {
 			paths = append(paths, e.Path)
 		}

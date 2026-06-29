@@ -467,8 +467,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		log.Printf("🛠️ Fix PRs (%s/%s): %d proposed, %d adopted, %d previewed",
 			eff.Repo.Owner, eff.Repo.Name, stats.Proposed, stats.Adopted, stats.Previewed)
 	}
-	// Dry-run keeps no state (it re-previews each run), so only persist when
-	// actually opening PRs.
+	// Dry-run keeps no state (it re-previews each run).
 	if !eff.DryRun {
 		if err := mgr.SaveState(); err != nil {
 			log.Printf("Warning: failed to save fix-PR state: %v", err)
