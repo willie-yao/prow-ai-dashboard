@@ -201,11 +201,11 @@ In rough order of impact when stepping down from a frontier hosted model:
 Every preset still requires `endpoint` and `model` (omitted below for brevity);
 set them in `project.yaml` or via `AI_ENDPOINT` / `AI_MODEL`.
 
-**Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot, OpenAI, or
-Azure). This is the CAPZ dashboard: the tuning defaults are enough, so set just
-the endpoint, model, and tools. A frontier model investigates deeply and writes
-concrete fixes without the guardrails, and the provider is shared and
-rate-limited, so leave `concurrency` at `1`.
+**Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot or OpenAI). The
+tuning defaults are enough here, so set just the endpoint, model, and tools. A
+frontier model investigates deeply and writes concrete fixes without the
+guardrails, and the provider is shared and rate-limited, so leave `concurrency`
+at `1`.
 
 ```yaml
 ai:

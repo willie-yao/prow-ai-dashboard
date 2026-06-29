@@ -92,16 +92,15 @@ are actionable links rather than guesses.
 Two production consumer prompts are available as reference templates.
 Both are around 100-150 lines and follow the section structure above.
 
-- **VM-based provider (Azure):** [CAPZ `prompts/system.md`][capz-prompt] —
-  ~100 lines covering Azure VM provisioning, kubeadm control-plane init,
-  14 documented failure patterns, Azure-specific transient errors, and
-  the CAPZ artifact layout.
-- **Non-VM provider (CAPD, Docker):** [CAPI core `prompts/system.md`][capi-prompt] —
-  ~150 lines covering provider-agnostic CAPI architecture, the CAPD
-  Docker provider, three job-type families (E2E / unit / conformance),
-  and the per-spec workload-cluster artifact layout. Use this as the
-  starting template for any project where CAPD-style or non-cloud-VM
-  failure patterns dominate.
+- **Provider-agnostic example (CAPD, Docker):**
+  [CAPI core `prompts/system.md`][capi-prompt] is ~150 lines covering
+  provider-agnostic CAPI architecture, the CAPD Docker provider, three job-type
+  families (E2E / unit / conformance), and the per-spec workload-cluster artifact
+  layout. Use this as the starting template for most projects.
+- **Cloud-VM example:** [a VM-based provider `prompts/system.md`][capz-prompt] is
+  ~100 lines covering cloud VM provisioning, kubeadm control-plane init, 14
+  documented failure patterns, provider-specific transient errors, and that
+  provider's artifact layout. Use it when cloud-VM failure patterns dominate.
 
 [capi-prompt]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/prompts/system.md
 [capz-prompt]: https://github.com/willie-yao/capz-prow-ai-dashboard/blob/main/prompts/system.md
@@ -160,8 +159,8 @@ project-specific opinion. That includes:
 - The list of components that exist in your project
 - Architecture diagrams or dependency chains
 - Failure patterns specific to your CI fleet
-- Cloud-provider-specific transient errors (Azure-specific quotas, vSphere
-  vCenter timeouts, etc.)
+- Cloud-provider-specific transient errors (quota throttling, vCenter
+  timeouts, etc.)
 - Test-flavor-specific debugging instructions
 
 If you want the model to know any of that, it must be in your

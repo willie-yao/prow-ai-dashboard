@@ -1,9 +1,11 @@
 # Onboarding a new project
 
-The complete reference for adding a prow-ai-dashboard project. For the fast
-happy path, start with [quickstart.md](quickstart.md) and come back here for the
-options it skips: job grouping, presubmits, host-repo choice, version pinning,
-and private chat-completions endpoints.
+The fastest way to add a prow-ai-dashboard project is the [`onboard`
+subcommand](#fast-start-scaffold-it-with-onboard) below: it scaffolds the whole
+file set for you. The rest of this page is the full reference for the fields and
+steps it generates, plus the options it leaves at their defaults: job grouping,
+presubmits, host-repo choice, version pinning, and private chat-completions
+endpoints.
 
 ## What you ship
 
@@ -218,10 +220,60 @@ whitespace-only. There is no default prompt. See
 
 ## Step 3: workflows
 
-Two thin callers of the engine's reusable workflows. Copy the templates from
-[quickstart.md](quickstart.md#step-1-pick-where-it-lives) and set `project_dir`
-to match where `project.yaml` lives. The deploy cron (`*/30 * * * *` is common)
-is the only field most projects adjust.
+Two thin callers of the engine's reusable workflows, both under
+`.github/workflows/`. Set `project_dir` to match where `project.yaml` lives
+(`.` for a dedicated repo, or your subdir such as `dashboard`). The deploy cron
+(`*/30 * * * *` is common) is the only field most projects adjust.
+
+**`deploy.yml`:**
+
+```yaml
+name: Deploy Dashboard
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    with:
+      project_dir: "."        # or "dashboard" if you used a subdir
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+```
+
+**`clear-cache.yml`** wipes the cache so the next deploy re-analyzes everything
+from scratch. Optional, for an immediate full re-baseline; prompt edits already
+take effect on the next deploy. Use the same `project_dir` as `deploy.yml`:
+
+```yaml
+name: Clear AI Cache
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+
+jobs:
+  clear:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-clear-cache.yml@main
+    with:
+      project_dir: "."        # or "dashboard" if you used a subdir
+```
 
 ### Versioning and pinning
 
@@ -313,7 +365,7 @@ re-baseline everything at once, run the **Clear AI Cache** workflow first.)
 
 ## Optional: chat-completions endpoint unreachable from GitHub-hosted runners
 
-If your endpoint is private (Azure Private Endpoint, K8s ClusterIP service,
+If your endpoint is private (a cloud private endpoint, a K8s ClusterIP service,
 on-prem inference), GitHub-hosted runners cannot reach it. Two options:
 
 **Fetch locally, publish pre-fetched data.** Set `skip-fetch: true` under
