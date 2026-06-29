@@ -181,6 +181,8 @@ ai:
   #   repo:                       # defaults to branding.source_repo
   #     owner: "kubernetes-sigs"
   #     name: "cluster-api-provider-azure"
+  #   fork: true                  # true (default): fork-and-PR (repo you don't own);
+  #                               # false: direct branch + same-repo PR (repo you own)
   #   min_confidence: high        # default high
   #   max_files: 3                # default 3 (bounded change scope)
   #   max_new_per_run: 1          # default 1

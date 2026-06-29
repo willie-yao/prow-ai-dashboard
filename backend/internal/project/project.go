@@ -357,9 +357,16 @@ type FixPRs struct {
 	// Repo is the source repo to open fix PRs against. Defaults to
 	// branding.source_repo.
 	Repo *SourceRepo `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// Fork controls how the fix branch reaches the source repo. true (the
+	// default) uses fork-and-PR: the branch is pushed to a fork under the
+	// token's identity and a cross-fork PR is opened (for a source repo you
+	// don't own). false pushes the branch directly to the source repo and opens
+	// a same-repo PR (for a source repo you own/maintain). Excluded from
+	// manifest.json.
+	Fork *bool `yaml:"fork,omitempty" json:"-"`
 	// AuthorName / AuthorEmail are the commit author identity. Required when
-	// enabled: the PR targets a community repo, so commits must be authored by a
-	// CLA-signed identity whose email matches that GitHub account (EasyCLA/DCO).
+	// enabled: for a community repo the commits must be authored by a CLA-signed
+	// identity whose email matches that GitHub account (EasyCLA/DCO).
 	AuthorName  string `yaml:"author_name,omitempty" json:"author_name,omitempty"`
 	AuthorEmail string `yaml:"author_email,omitempty" json:"author_email,omitempty"`
 	// MinConfidence is the lowest pattern confidence that qualifies. Only
@@ -388,6 +395,10 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	}
 	if out.Repo == nil && c != nil {
 		out.Repo = &SourceRepo{Owner: c.Branding.SourceRepo.Owner, Name: c.Branding.SourceRepo.Name}
+	}
+	if out.Fork == nil {
+		t := true
+		out.Fork = &t
 	}
 	if strings.TrimSpace(out.MinConfidence) == "" {
 		out.MinConfidence = "high"

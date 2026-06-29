@@ -449,6 +449,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		fixpr.Options{
 			SourceOwner:   eff.Repo.Owner,
 			SourceName:    eff.Repo.Name,
+			Fork:          eff.Fork == nil || *eff.Fork,
 			AuthorName:    eff.AuthorName,
 			AuthorEmail:   eff.AuthorEmail,
 			MinConfidence: eff.MinConfidence,

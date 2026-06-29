@@ -40,6 +40,10 @@ type Options struct {
 	// SourceOwner / SourceName are the repo fix PRs target.
 	SourceOwner string
 	SourceName  string
+	// Fork uses fork-and-PR (the branch goes to a fork under the token's
+	// identity, cross-fork PR) when true; a direct branch + same-repo PR when
+	// false (for a source repo the token can write to).
+	Fork bool
 	// AuthorName / AuthorEmail are the CLA-signed commit author identity.
 	AuthorName  string
 	AuthorEmail string
@@ -225,7 +229,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			Title:        prTitle(p),
 			Body:         prBody(p, fix, key, m.opts.DashboardURL),
 			Draft:        true,
-			Fork:         true,
+			Fork:         m.opts.Fork,
 			Base:         &base,
 			Labels:       m.opts.Labels,
 			AuthorName:   m.opts.AuthorName,

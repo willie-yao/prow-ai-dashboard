@@ -239,6 +239,9 @@ func newManager(t *testing.T, pr prClient, c Completer, src sourceReader, opts O
 	if opts.AuthorName == "" {
 		opts.AuthorName, opts.AuthorEmail = "Jane", "jane@example.com"
 	}
+	// Default to fork-and-PR, matching EffectiveFixPRs; a test can flip
+	// m.opts.Fork afterward to exercise the direct mode.
+	opts.Fork = true
 	return NewManager(pr, c, src, filepath.Join(t.TempDir(), "state.json"), opts)
 }
 
@@ -251,6 +254,25 @@ func goodCompleter() *fakeCompleter {
 
 func goodSource() *fakeSource {
 	return &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
+}
+
+func TestReconcile_DirectModeWhenForkFalse(t *testing.T) {
+	pr := &fakePR{}
+	m := newManager(t, pr, goodCompleter(), goodSource(), Options{})
+	m.opts.Fork = false // direct branch + same-repo PR (source repo you own)
+	if _, err := m.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(pr.opened) != 1 {
+		t.Fatalf("expected 1 PR, got %d", len(pr.opened))
+	}
+	req := pr.opened[0]
+	if req.Fork {
+		t.Errorf("direct mode must not fork")
+	}
+	if !req.Draft || !req.SignOff {
+		t.Errorf("fix PR should still be draft + signoff: %+v", req)
+	}
 }
 
 func TestReconcile_OpensDraftForkPR(t *testing.T) {

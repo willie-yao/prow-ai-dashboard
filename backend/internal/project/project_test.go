@@ -743,6 +743,15 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	if len(got.Labels) != 1 || got.Labels[0] != "ai-proposed-fix" {
 		t.Errorf("Labels = %v, want [ai-proposed-fix]", got.Labels)
 	}
+	if got.Fork == nil || *got.Fork != true {
+		t.Errorf("Fork default = %v, want true", got.Fork)
+	}
+	// An explicit fork: false is preserved.
+	f := false
+	c.AI.FixPRs.Fork = &f
+	if got2 := c.EffectiveFixPRs(); got2.Fork == nil || *got2.Fork != false {
+		t.Errorf("explicit Fork=false not preserved: %v", got2.Fork)
+	}
 }
 
 func TestValidateFixPRsRequiresAuthor(t *testing.T) {

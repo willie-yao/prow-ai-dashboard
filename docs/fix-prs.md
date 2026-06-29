@@ -29,21 +29,33 @@ A fix that can't be grounded at any step (no such file, anchor doesn't match,
 touches more than `max_files`) is dropped and logged. No partial or speculative
 changes are ever pushed.
 
+## Two modes: fork-and-PR vs direct
+
+How the fix branch reaches the source repo depends on whether you can write to
+it, controlled by `ai.fix_prs.fork` (default `true`):
+
+- **`fork: true` (default) — fork-and-PR.** For a source repo you **don't** own
+  (the usual case: an upstream community repo). The engine forks the repo under
+  the token's identity, pushes the branch to that fork, and opens a **cross-fork
+  PR** against the source repo.
+- **`fork: false` — direct.** For a source repo you **do** own or maintain (e.g.
+  a team running the dashboard on its own CI). The engine pushes the branch
+  straight to the source repo and opens a **same-repo PR**. No fork involved.
+
+Either way the PR targets the source repo's default branch and is opened as a
+draft. The branch is **never** pushed into a repo you don't own.
+
 ## Identity, CLA, and the token (read this first)
 
-The PR targets a (usually community) source repo you don't have write access to,
-so the engine uses the standard **fork-and-PR** flow: it forks the repo under the
-token's identity, pushes the branch to that fork, and opens a cross-fork PR.
-
-- **`FIX_TOKEN`** must be a **personal access token** of a real, CLA-signed
-  contributor, with permission to create a fork and push to it. It is **not** the
-  Actions `GITHUB_TOKEN` (which can't touch a fork elsewhere).
-  - **Use a classic PAT** (scope `repo`, or `public_repo` for public-only repos)
-    when the source repo is one you don't own (the usual case: an upstream
-    community repo). A **fine-grained PAT cannot open a PR against a repo you
-    don't own**, because it can only be granted permissions on your own repos.
-  - A fine-grained PAT works only when the PR targets a repo you **do** own
-    (e.g. testing against your own fork): scope it to that repo with
+- **`FIX_TOKEN`** is a **personal access token** of a real contributor. It is
+  **not** the Actions `GITHUB_TOKEN` (which can't touch a fork elsewhere). Which
+  PAT kind you need depends on the mode:
+  - **`fork: true` against a repo you don't own** → use a **classic PAT** (scope
+    `repo`, or `public_repo` for public-only repos). A **fine-grained PAT cannot
+    open a PR against a repo you don't own**, because it can only be granted
+    permissions on your own repos.
+  - **`fork: false` against a repo you own** (or `fork: true` testing against
+    your own fork) → a **fine-grained PAT** works: scope it to that repo with
     **Contents: Read and write** and **Pull requests: Read and write**.
 - **CLA / DCO.** CNCF projects (Kubernetes, etc.) run EasyCLA, which checks
   **every commit's author** against a signed CLA and blocks merge otherwise. So:
@@ -69,6 +81,8 @@ ai:
     #   name: "cluster-api-provider-azure"
     author_name: "Jane Maintainer"     # required: CLA-signed identity
     author_email: "jane@example.com"   # required: must match that GitHub account
+    # fork: true                  # true (default): fork-and-PR for a repo you don't own;
+    #                             # false: direct branch + same-repo PR for a repo you own
     # min_confidence: high        # only systemic patterns at >= this confidence (default high)
     # max_files: 3                # cap files a single fix may touch (default 3)
     # max_new_per_run: 1          # cap fix PRs per fetch (default 1)
