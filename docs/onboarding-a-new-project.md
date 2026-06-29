@@ -3,9 +3,9 @@
 The fastest way to add a prow-ai-dashboard project is the [`onboard`
 subcommand](#fast-start-scaffold-it-with-onboard) below: it scaffolds the whole
 file set for you. The rest of this page is the full reference for the fields and
-steps it generates, plus the options it leaves at their defaults (job grouping,
+steps it generates, plus the options it leaves at their defaults: job grouping,
 presubmits, host-repo choice, version pinning, and private chat-completions
-endpoints).
+endpoints.
 
 ## What you ship
 
