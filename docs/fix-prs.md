@@ -14,9 +14,10 @@ After each fetch, for every **systemic** recurring pattern (the same ones
 surfaced on the home page) at or above `min_confidence` that carries a concrete
 suggested fix, the engine:
 
-1. **Locates** the target file(s) in the source repo from the pattern's root
-   cause and suggested fix.
-2. **Fetches** their current content from the repo's default branch.
+1. **Locates** the target file(s) by choosing from the source repo's **real file
+   tree** (fetched and keyword-ranked against the failure), so the model can't
+   invent a path that doesn't exist.
+2. **Fetches** their current content at a pinned commit.
 3. Asks the model for **anchored search/replace edits** (a verbatim snippet to
    find and its replacement), and applies each edit only if its anchor matches
    **exactly once** in the file. Anything ambiguous or not found is rejected, so
@@ -36,8 +37,14 @@ token's identity, pushes the branch to that fork, and opens a cross-fork PR.
 
 - **`FIX_TOKEN`** must be a **personal access token** of a real, CLA-signed
   contributor, with permission to create a fork and push to it. It is **not** the
-  Actions `GITHUB_TOKEN` (which can't touch a fork elsewhere). No upstream write
-  permission is needed.
+  Actions `GITHUB_TOKEN` (which can't touch a fork elsewhere).
+  - **Use a classic PAT** (scope `repo`, or `public_repo` for public-only repos)
+    when the source repo is one you don't own (the usual case: an upstream
+    community repo). A **fine-grained PAT cannot open a PR against a repo you
+    don't own**, because it can only be granted permissions on your own repos.
+  - A fine-grained PAT works only when the PR targets a repo you **do** own
+    (e.g. testing against your own fork): scope it to that repo with
+    **Contents: Read and write** and **Pull requests: Read and write**.
 - **CLA / DCO.** CNCF projects (Kubernetes, etc.) run EasyCLA, which checks
   **every commit's author** against a signed CLA and blocks merge otherwise. So:
   - `author_name` / `author_email` **must** be the CLA-signed identity, and the
@@ -63,7 +70,7 @@ ai:
     author_name: "Jane Maintainer"     # required: CLA-signed identity
     author_email: "jane@example.com"   # required: must match that GitHub account
     # min_confidence: high        # only systemic patterns at >= this confidence (default high)
-    # max_files: 2                # cap files a single fix may touch (default 2)
+    # max_files: 3                # cap files a single fix may touch (default 3)
     # max_new_per_run: 1          # cap fix PRs per fetch (default 1)
     # labels: [ai-proposed-fix]   # labels applied to each PR
     # dry_run: false              # propose without opening a PR (see below)

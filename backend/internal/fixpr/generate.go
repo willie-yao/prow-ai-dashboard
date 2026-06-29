@@ -33,22 +33,29 @@ type proposedFix struct {
 	rationale string
 }
 
-// readFunc fetches a source file's content by path (bound to a repo).
-type readFunc func(ctx context.Context, path string) (content string, found bool, err error)
-
 // generateFix turns a systemic pattern into a validated minimal edit: locate the
-// target file(s), fetch their current content, ask for anchored edits, and apply
-// them (exact-match-once). Any step that can't be grounded returns an error so
-// the caller drops the fix rather than proposing something unsafe.
-func generateFix(ctx context.Context, c Completer, read readFunc, p models.PatternAnalysis, maxFiles int) (*proposedFix, error) {
-	files, err := locateTargets(ctx, c, p, maxFiles)
+// target file(s) by choosing from the repo's REAL file tree (so the model can't
+// hallucinate a path), fetch their current content, ask for anchored edits, and
+// apply them (exact-match-once). Any step that can't be grounded returns an error
+// so the caller drops the fix rather than proposing something unsafe.
+func generateFix(ctx context.Context, c Completer, source sourceReader, owner, repo, ref string, p models.PatternAnalysis, maxFiles int) (*proposedFix, error) {
+	tree, err := source.ListTree(ctx, owner, repo, ref)
+	if err != nil {
+		return nil, fmt.Errorf("listing %s/%s tree: %w", owner, repo, err)
+	}
+	candidates := rankCandidates(tree, p)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no candidate files in the repo matched the failure")
+	}
+
+	files, err := locateTargets(ctx, c, p, candidates, maxFiles)
 	if err != nil {
 		return nil, err
 	}
 
 	contents := make(map[string]string, len(files))
 	for _, f := range files {
-		body, found, err := read(ctx, f)
+		body, found, err := source.FileContent(ctx, owner, repo, ref, f)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", f, err)
 		}
@@ -73,21 +80,26 @@ func generateFix(ctx context.Context, c Completer, read readFunc, p models.Patte
 	}, nil
 }
 
-const locateSystemPrompt = `You identify which source files a known CI failure fix should touch. Given a recurring failure pattern and its suggested fix, name the smallest set of repository file paths (relative to the repo root) that must change. Prefer configuration, template, or manifest files over broad code changes. Answer only with one-line JSON, no prose.`
+const locateSystemPrompt = `You identify which source files a known CI failure fix should touch. You are given a candidate list of REAL repository file paths. Choose the smallest set of paths FROM THAT LIST that must change to fix the failure, preferring configuration, template, or manifest files. You MUST only return paths that appear verbatim in the candidate list; if none fit, return an empty list. Answer only with one-line JSON, no prose.`
 
-// locateTargets asks the model which file path(s) the fix should touch, capped
-// at maxFiles.
-func locateTargets(ctx context.Context, c Completer, p models.PatternAnalysis, maxFiles int) ([]string, error) {
+// locateTargets asks the model to choose target file(s) from the real candidate
+// paths, capped at maxFiles. Picks not present in the candidate set are rejected
+// so a hallucinated path can never slip through.
+func locateTargets(ctx context.Context, c Completer, p models.PatternAnalysis, candidates []string, maxFiles int) ([]string, error) {
 	user := fmt.Sprintf(`Recurring failure pattern:
 - subject: %s
 - shared_root_cause: %s
 - suggested_fix: %s
 - summary: %s
 
-Name the repository file path(s) the fix should change (relative to repo root),
-fewest first. Answer with one line of JSON:
+Candidate repository files (choose only from these exact paths):
+%s
+
+Choose the file path(s) to change, fewest first, only from the list above.
+Answer with one line of JSON:
 {"files": ["path/one", "path/two"]}`,
-		p.Subject, oneLine(p.SharedRootCause), oneLine(p.SuggestedFix), oneLine(p.Summary))
+		p.Subject, oneLine(p.SharedRootCause), oneLine(p.SuggestedFix), oneLine(p.Summary),
+		strings.Join(candidates, "\n"))
 
 	out, err := c.Complete(ctx, locateSystemPrompt, user)
 	if err != nil {
@@ -101,10 +113,19 @@ fewest first. Answer with one line of JSON:
 	}
 	files := dedupeNonEmpty(v.Files)
 	if len(files) == 0 {
-		return nil, fmt.Errorf("model named no target files")
+		return nil, fmt.Errorf("no candidate file fit the failure")
 	}
 	if len(files) > maxFiles {
 		return nil, fmt.Errorf("model named %d files, exceeds max_files %d", len(files), maxFiles)
+	}
+	candSet := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		candSet[c] = true
+	}
+	for _, f := range files {
+		if !candSet[f] {
+			return nil, fmt.Errorf("model named %q, which is not a real repo file", f)
+		}
 	}
 	return files, nil
 }
@@ -274,4 +295,112 @@ func sortedKeys(m map[string]string) []string {
 
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// maxCandidates caps how many real repo paths are offered to the locate step,
+// keeping the prompt bounded on large repos.
+const maxCandidates = 200
+
+// candidateStopwords are generic failure-narrative words that shouldn't drive
+// path matching.
+var candidateStopwords = map[string]bool{
+	"the": true, "and": true, "for": true, "with": true, "that": true, "this": true,
+	"failure": true, "test": true, "error": true, "during": true, "when": true,
+	"node": true, "pod": true, "cluster": true, "azure": true, "kubernetes": true,
+	"fix": true, "ensure": true, "issue": true, "from": true, "into": true, "not": true,
+	"are": true, "has": true, "was": true, "due": true, "which": true, "their": true,
+}
+
+// preferredDirHints boost config/template/manifest locations a fix usually lives
+// in; noisy or generated locations are penalized.
+var (
+	preferredDirHints = []string{"templates/", "config/", "charts/", "manifests/", "hack/", "scripts/", "test/e2e/", "kustomize"}
+	penalizedDirHints = []string{"vendor/", "third_party/", "docs/", "node_modules/", "testdata/", ".github/", "examples/"}
+	preferredExts     = map[string]bool{".yaml": true, ".yml": true, ".go": true, ".sh": true, ".tpl": true, ".json": true, ".toml": true, ".cfg": true}
+)
+
+// rankCandidates returns the repo paths most relevant to the pattern, scored by
+// keyword overlap with the failure text plus directory/extension preferences.
+// Grounding the locate step in real paths stops the model from inventing files.
+func rankCandidates(tree []string, p models.PatternAnalysis) []string {
+	keywords := extractKeywords(p.SharedRootCause + " " + p.SuggestedFix + " " + p.Subject + " " + p.Summary)
+	type scored struct {
+		path  string
+		score int
+	}
+	var ranked []scored
+	for _, path := range tree {
+		lp := strings.ToLower(path)
+		keywordHits := 0
+		for kw := range keywords {
+			if strings.Contains(lp, kw) {
+				keywordHits++
+			}
+		}
+		dirPreferred := false
+		for _, h := range preferredDirHints {
+			if strings.Contains(lp, h) {
+				dirPreferred = true
+				break
+			}
+		}
+		// A path qualifies only with a real signal: a keyword match or a
+		// preferred directory. A matching extension alone is not enough, so an
+		// empty/weak keyword set can't admit arbitrary files (and exclude the
+		// true target); fail closed instead.
+		if keywordHits == 0 && !dirPreferred {
+			continue
+		}
+		score := 2 * keywordHits
+		if dirPreferred {
+			score++
+		}
+		for _, h := range penalizedDirHints {
+			if strings.Contains(lp, h) {
+				score -= 2
+				break
+			}
+		}
+		if preferredExts[ext(lp)] {
+			score++
+		}
+		if score > 0 {
+			ranked = append(ranked, scored{path, score})
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].path < ranked[j].path
+	})
+	out := make([]string, 0, maxCandidates)
+	for _, s := range ranked {
+		if len(out) >= maxCandidates {
+			break
+		}
+		out = append(out, s.path)
+	}
+	return out
+}
+
+// extractKeywords tokenizes failure text into distinctive lowercase terms.
+func extractKeywords(text string) map[string]bool {
+	kws := map[string]bool{}
+	for _, tok := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	}) {
+		if len(tok) < 4 || candidateStopwords[tok] {
+			continue
+		}
+		kws[tok] = true
+	}
+	return kws
+}
+
+func ext(p string) string {
+	if i := strings.LastIndex(p, "."); i >= 0 {
+		return p[i:]
+	}
+	return ""
 }

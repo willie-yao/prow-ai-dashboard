@@ -168,8 +168,8 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 	if err != nil {
 		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
-	read := func(ctx context.Context, path string) (string, bool, error) {
-		return m.source.FileContent(ctx, m.opts.SourceOwner, m.opts.SourceName, base.HeadSHA, path)
+	gen := func(ctx context.Context, p models.PatternAnalysis) (*proposedFix, error) {
+		return generateFix(ctx, m.completer, m.source, m.opts.SourceOwner, m.opts.SourceName, base.HeadSHA, p, m.opts.MaxFiles)
 	}
 
 	for _, p := range work {
@@ -181,7 +181,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			if stats.Previewed >= m.opts.MaxNewPerRun {
 				break
 			}
-			fix, err := generateFix(ctx, m.completer, read, p, m.opts.MaxFiles)
+			fix, err := gen(ctx, p)
 			if err != nil {
 				log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
 				continue
@@ -211,7 +211,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			continue
 		}
 
-		fix, err := generateFix(ctx, m.completer, read, p, m.opts.MaxFiles)
+		fix, err := gen(ctx, p)
 		if err != nil {
 			log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
 			continue

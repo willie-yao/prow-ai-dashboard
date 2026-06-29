@@ -39,6 +39,14 @@ func (s *fakeSource) FileContent(_ context.Context, _, _, ref, path string) (str
 	return c, ok, nil
 }
 
+func (s *fakeSource) ListTree(_ context.Context, _, _, _ string) ([]string, error) {
+	paths := make([]string, 0, len(s.files))
+	for p := range s.files {
+		paths = append(paths, p)
+	}
+	return paths, nil
+}
+
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
 type fakePR struct {
 	opened      []ghpr.Request
@@ -96,12 +104,9 @@ func TestGenerateFix_HappyPath(t *testing.T) {
 		locate: `{"files": ["templates/cluster.yaml"]}`,
 		edit:   `{"rationale": "use a faster disk", "edits": [{"file": "templates/cluster.yaml", "old": "diskType: StandardSSD_LRS", "new": "diskType: Premium_LRS"}]}`,
 	}
-	src := fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
-	read := func(ctx context.Context, p string) (string, bool, error) {
-		return src.FileContent(ctx, "o", "r", "", p)
-	}
+	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
 
-	fix, err := generateFix(context.Background(), c, read, systemicPattern("etcd"), 2)
+	fix, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2)
 	if err != nil {
 		t.Fatalf("generateFix: %v", err)
 	}
@@ -114,22 +119,58 @@ func TestGenerateFix_HappyPath(t *testing.T) {
 	}
 }
 
-func TestGenerateFix_RejectsMissingFile(t *testing.T) {
-	c := &fakeCompleter{locate: `{"files": ["does/not/exist.yaml"]}`, edit: `{}`}
-	src := fakeSource{files: map[string]string{}}
-	read := func(ctx context.Context, p string) (string, bool, error) {
-		return src.FileContent(ctx, "o", "r", "", p)
+func TestGenerateFix_RejectsHallucinatedFile(t *testing.T) {
+	// The model picks a path that is not among the real candidate files.
+	c := &fakeCompleter{locate: `{"files": ["does/not/exist.yaml"]}`}
+	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
+	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "not a real repo file") {
+		t.Errorf("expected hallucinated-file rejection, got %v", err)
 	}
-	if _, err := generateFix(context.Background(), c, read, systemicPattern("x"), 2); err == nil || !strings.Contains(err.Error(), "does not exist") {
-		t.Errorf("expected missing-file error, got %v", err)
+}
+
+func TestGenerateFix_NoCandidates(t *testing.T) {
+	c := &fakeCompleter{}
+	src := &fakeSource{files: map[string]string{}}
+	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "no candidate") {
+		t.Errorf("expected no-candidate error, got %v", err)
 	}
 }
 
 func TestGenerateFix_RejectsTooManyFiles(t *testing.T) {
-	c := &fakeCompleter{locate: `{"files": ["a", "b", "c"]}`}
-	read := func(ctx context.Context, p string) (string, bool, error) { return "x", true, nil }
-	if _, err := generateFix(context.Background(), c, read, systemicPattern("x"), 2); err == nil || !strings.Contains(err.Error(), "max_files") {
+	c := &fakeCompleter{locate: `{"files": ["templates/a.yaml", "templates/b.yaml", "templates/c.yaml"]}`}
+	src := &fakeSource{files: map[string]string{
+		"templates/a.yaml": "x", "templates/b.yaml": "y", "templates/c.yaml": "z",
+	}}
+	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "max_files") {
 		t.Errorf("expected max_files error, got %v", err)
+	}
+}
+
+func TestRankCandidates_FiltersAndPrefers(t *testing.T) {
+	tree := []string{
+		"templates/test/ci/cluster-template-prow-azl3.yaml", // preferred dir + ext
+		"vendor/foo/bar.go",      // no signal -> excluded
+		"docs/proposals/etcd.md", // keyword but penalized dir
+		"README.md",              // no signal
+	}
+	got := rankCandidates(tree, systemicPattern("etcd"))
+	if len(got) == 0 || got[0] != "templates/test/ci/cluster-template-prow-azl3.yaml" {
+		t.Errorf("expected the template path ranked first, got %v", got)
+	}
+	for _, p := range got {
+		if strings.HasPrefix(p, "vendor/") {
+			t.Errorf("vendor path should be filtered out: %v", got)
+		}
+	}
+}
+
+func TestRankCandidates_ExtensionAloneExcluded(t *testing.T) {
+	// Paths with a matching extension but no keyword and no preferred dir must
+	// not be admitted, so a weak keyword set can't flood the candidate list with
+	// arbitrary files.
+	tree := []string{"random/unrelated/file.go", "another/thing.yaml"}
+	if got := rankCandidates(tree, systemicPattern("etcd")); len(got) != 0 {
+		t.Errorf("extension-only paths should be excluded, got %v", got)
 	}
 }
 

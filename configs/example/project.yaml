@@ -182,7 +182,7 @@ ai:
   #     owner: "kubernetes-sigs"
   #     name: "cluster-api-provider-azure"
   #   min_confidence: high        # default high
-  #   max_files: 2                # default 2 (bounded change scope)
+  #   max_files: 3                # default 3 (bounded change scope)
   #   max_new_per_run: 1          # default 1
   #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
   #   dry_run: true               # propose to fix_previews.json without a PR

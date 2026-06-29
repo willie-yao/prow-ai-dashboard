@@ -37,14 +37,16 @@ for how to pin a release.
 - Optional **agent-proposed fix PRs** (`ai.fix_prs`): after each fetch, for a
   systemic recurring pattern with a concrete remediation, the engine drafts a
   minimal code fix and opens a **draft PR** against the source repo via
-  fork-and-PR. Off by default and heavily guardrailed: draft-only, **anchored
-  search/replace** edits applied only on an exact single match, bounded by
-  `max_files`, a dedicated `FIX_TOKEN` (a CLA-signed contributor PAT) with the
-  commit authored under that identity plus a DCO `Signed-off-by`, idempotent
-  marker dedup, and a `max_new_per_run` cap. A `dry_run` mode runs the full
-  pipeline and writes proposed diffs to `fix_previews.json` without opening any
-  PR. The `ghpr` helper gained fork-and-PR support (fork on demand, cross-fork
-  draft PR) for this. See [docs/fix-prs.md](docs/fix-prs.md).
+  fork-and-PR. Off by default and heavily guardrailed: the target file(s) are
+  chosen from the repo's **real file tree** (keyword-ranked) so the model can't
+  invent a path; **anchored search/replace** edits are applied only on an exact
+  single match and bounded by `max_files`; draft-only; a dedicated `FIX_TOKEN`
+  (a CLA-signed contributor PAT) authors the commit under that identity with a
+  DCO `Signed-off-by`; idempotent marker dedup; and a `max_new_per_run` cap. A
+  `dry_run` mode runs the full pipeline and writes proposed diffs to
+  `fix_previews.json` without opening any PR. The `ghpr` helper gained
+  fork-and-PR support (fork on demand, cross-fork draft PR) for this. See
+  [docs/fix-prs.md](docs/fix-prs.md).
 
 - Optional **self-improving skills** (`ai.suggest_skills`): after each fetch,
   the engine drafts a diagnostic skill recipe for any systemic recurring pattern

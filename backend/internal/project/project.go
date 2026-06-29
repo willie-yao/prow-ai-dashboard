@@ -366,7 +366,7 @@ type FixPRs struct {
 	// systemic patterns are ever considered. Defaults to "high".
 	MinConfidence string `yaml:"min_confidence,omitempty" json:"min_confidence,omitempty"`
 	// MaxFiles caps how many files a single proposed fix may touch. Defaults
-	// to 2 to keep changes minimal and reviewable.
+	// to 3 to keep changes minimal and reviewable.
 	MaxFiles int `yaml:"max_files,omitempty" json:"max_files,omitempty"`
 	// MaxNewPerRun caps how many fix PRs are opened in a single fetch.
 	// Defaults to 1.
@@ -393,7 +393,7 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		out.MinConfidence = "high"
 	}
 	if out.MaxFiles <= 0 {
-		out.MaxFiles = 2
+		out.MaxFiles = 3
 	}
 	if out.MaxNewPerRun <= 0 {
 		out.MaxNewPerRun = 1
