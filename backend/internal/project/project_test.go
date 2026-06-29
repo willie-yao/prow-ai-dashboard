@@ -545,6 +545,72 @@ func TestAgentic_Effective(t *testing.T) {
 	})
 }
 
+func TestTriage_Effective(t *testing.T) {
+	t.Run("disabled and defaulted when no triage model", func(t *testing.T) {
+		got, enabled := (&AI{}).EffectiveTriage()
+		if enabled {
+			t.Error("enabled = true, want false without a triage model")
+		}
+		if got.MaxIters != defaultTriageMaxIters {
+			t.Errorf("MaxIters = %d, want default %d", got.MaxIters, defaultTriageMaxIters)
+		}
+	})
+	t.Run("nil receiver is disabled", func(t *testing.T) {
+		if _, enabled := (*AI)(nil).EffectiveTriage(); enabled {
+			t.Error("nil receiver should be disabled")
+		}
+	})
+	t.Run("a triage model enables the cascade", func(t *testing.T) {
+		_, enabled := (&AI{Triage: Triage{Model: "gpt-5-mini"}}).EffectiveTriage()
+		if !enabled {
+			t.Error("enabled = false, want true when a triage model is set")
+		}
+	})
+	t.Run("floors and timeout inherit the deep tier", func(t *testing.T) {
+		a := &AI{Agentic: Agentic{MinToolCalls: 4, MinGCSBytes: 250_000, Timeout: 90 * time.Second}, Triage: Triage{Model: "m"}}
+		got, _ := a.EffectiveTriage()
+		if got.MinToolCalls != 4 || got.MinGCSBytes != 250_000 {
+			t.Errorf("floors = (%d,%d), want (4,250000) inherited from deep", got.MinToolCalls, got.MinGCSBytes)
+		}
+		if got.Timeout != 90*time.Second {
+			t.Errorf("Timeout = %v, want 90s inherited from deep", got.Timeout)
+		}
+	})
+	t.Run("grounding floors fall back to safe minimums when deep has none", func(t *testing.T) {
+		got, _ := (&AI{Triage: Triage{Model: "m"}}).EffectiveTriage()
+		if got.MinToolCalls != defaultTriageMinToolCalls {
+			t.Errorf("MinToolCalls = %d, want safe default %d", got.MinToolCalls, defaultTriageMinToolCalls)
+		}
+		if got.MinGCSBytes != defaultTriageMinGCSBytes {
+			t.Errorf("MinGCSBytes = %d, want safe default %d", got.MinGCSBytes, defaultTriageMinGCSBytes)
+		}
+	})
+	t.Run("explicit triage knobs override", func(t *testing.T) {
+		a := &AI{Agentic: Agentic{MinToolCalls: 4}, Triage: Triage{Model: "m", MaxIters: 3, MinToolCalls: 1, MinGCSBytes: 10, Timeout: 20 * time.Second}}
+		got, _ := a.EffectiveTriage()
+		if got.MaxIters != 3 || got.MinToolCalls != 1 || got.MinGCSBytes != 10 || got.Timeout != 20*time.Second {
+			t.Errorf("overrides not applied: %+v", got)
+		}
+	})
+}
+
+func TestValidate_Triage(t *testing.T) {
+	t.Run("negative knob rejected", func(t *testing.T) {
+		c := validConfig()
+		c.AI = &AI{Triage: Triage{Model: "m", MinToolCalls: -1}}
+		if err := c.Validate(); err == nil {
+			t.Error("expected error for negative ai.triage.min_tool_calls")
+		}
+	})
+	t.Run("valid triage passes", func(t *testing.T) {
+		c := validConfig()
+		c.AI = &AI{Triage: Triage{Model: "gpt-5-mini", MaxIters: 6, MinToolCalls: 2, MinGCSBytes: 1000}}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("valid triage config rejected: %v", err)
+		}
+	})
+}
+
 // agenticEqual compares Agentic structs without using == because Tools is a slice.
 func agenticEqual(a, b Agentic) bool {
 	return a.MaxIters == b.MaxIters &&

@@ -59,6 +59,21 @@ type Service struct {
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by "owner/repo/path" to existence.
 	linkVerifyCache sync.Map
+
+	// triageClient and triageOpts configure the optional cheap triage tier run
+	// before the deep analysis. nil triageClient disables the cascade.
+	triageClient *Client
+	triageOpts   AgenticOptions
+
+	// triageUnsupported latches once the triage endpoint rejects tools, so the
+	// rest of the run skips straight to the deep tier instead of re-hitting it.
+	triageUnsupported atomic.Bool
+
+	// Cascade counters, updated atomically across concurrent analyses and read
+	// once per run for a summary log: failures the triage tier resolved vs
+	// escalated to the deep tier.
+	triageResolved  atomic.Int64
+	triageEscalated atomic.Int64
 }
 
 // NewService constructs a Service. systemPrompt is the full composed prompt and
@@ -101,6 +116,24 @@ func (s *Service) SetSourceRepo(owner, name string) {
 	s.sourceRepoName = name
 }
 
+// EnableTriage installs the optional cheap triage tier (the model cascade). When
+// set, Analyze investigates each failure on the triage client first and only
+// escalates real bugs and ungrounded or budget-exhausted results to the deep
+// tier. opts should carry a lighter iteration budget but keep the grounding
+// floors so the cheap model must read the real logs before ruling a failure
+// transient. Call once at fetcher startup, after EnableAgentic.
+func (s *Service) EnableTriage(client *Client, opts AgenticOptions) {
+	s.triageClient = client
+	s.triageOpts = opts
+}
+
+// TriageStats returns how many failures the triage tier resolved on the cheap
+// model versus escalated to the deep tier this run. Both are zero when the
+// cascade is off.
+func (s *Service) TriageStats() (resolved, escalated int) {
+	return int(s.triageResolved.Load()), int(s.triageEscalated.Load())
+}
+
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
 // using the agentic tool-calling loop. Skips if already analyzed and still
 // meets the current quality floors. On API failure or endpoints without
@@ -124,7 +157,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		s.setUnavailable(tc, fmt.Errorf("AI endpoint requires function-calling support"))
 		return
 	}
-	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt)
+	summary, analysis, err := s.analyzeCascade(ctx, jobID, buildPrefix, run, tc, userPrompt)
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
@@ -143,9 +176,67 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	}
 }
 
-// runAgentic does the per-failure agentic call setup. Kept separate so
-// Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+// analyzeCascade runs the model cascade: when a triage tier is configured, it
+// investigates on the cheap model first and short-circuits a grounded transient,
+// otherwise it escalates to the deep tier. With no triage tier it is a single
+// deep-tier call. A triage infra error (including an endpoint that rejects
+// tools) escalates rather than dropping the analysis.
+func (s *Service) analyzeCascade(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
+	if s.triageClient != nil && !s.triageUnsupported.Load() {
+		summary, analysis, err := s.runAgenticTier(ctx, s.triageClient, s.triageOpts, ":triage", jobID, buildPrefix, run, tc, userPrompt)
+		if err == nil {
+			if s.triageAccepts(summary, analysis) {
+				if analysis != nil {
+					analysis.Tier = "triage"
+				}
+				s.triageResolved.Add(1)
+				return summary, analysis, nil
+			}
+		} else {
+			if errors.Is(err, ErrToolsUnsupported) {
+				s.triageUnsupported.Store(true)
+			}
+			log.Printf("  ⚠ triage tier unavailable for %s, escalating to deep: %v", tc.Name, err)
+		}
+	}
+
+	summary, analysis, err := s.runAgenticTier(ctx, s.client, s.agenticOpts, "", jobID, buildPrefix, run, tc, userPrompt)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.triageClient != nil {
+		if analysis != nil {
+			analysis.Tier = "deep"
+			analysis.Escalated = true
+		}
+		s.triageEscalated.Add(1)
+	}
+	return summary, analysis, nil
+}
+
+// triageAccepts reports whether the triage tier produced a grounded transient
+// verdict, the only outcome that short-circuits the deep tier. A real bug, a
+// transient below the triage grounding floors, or a budget-exhausted run all
+// escalate, so the cheap tier never finalizes a real bug.
+func (s *Service) triageAccepts(summary *models.AISummary, analysis *models.AIAnalysis) bool {
+	if summary == nil || analysis == nil {
+		return false
+	}
+	if !summary.IsTransient || analysis.BudgetExhausted {
+		return false
+	}
+	if analysis.ToolCalls < s.triageOpts.MinToolCalls || analysis.GCSBytes < s.triageOpts.MinGCSBytes {
+		return false
+	}
+	return true
+}
+
+// runAgenticTier does the per-failure agentic call setup for one cascade tier.
+// keySuffix namespaces the tier's AI-result cache entries so triage and deep
+// never collide in the shared cache; the deep tier uses no suffix to preserve
+// single-tier cache entries. The per-build tool cache is shared across tiers, so
+// the deep tier reuses any artifacts the triage tier already fetched.
+func (s *Service) runAgenticTier(ctx context.Context, client *Client, opts AgenticOptions, keySuffix, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt string) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
@@ -154,10 +245,10 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 	}
 	browser := s.browserFactory.ForBuild(buildPrefix, run.JobName+"/"+run.BuildID)
 	cache := s.toolCacheFor(buildPrefix)
-	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
+	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage) + keySuffix
 	in := AgenticInputs{
 		Browser:      browser,
-		Opts:         s.agenticOpts,
+		Opts:         opts,
 		Registry:     s.registry,
 		EnabledTools: s.enabledTools,
 		Cache:        cache,
@@ -165,7 +256,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		Mode:         AgenticMode,
 		Skills:       s.skillSet,
 	}
-	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
+	return client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }
 
 // toolCacheFor returns the *tools.Cache scoped to one build, creating it
@@ -218,6 +309,19 @@ func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
 // critique is on, critique version older than the engine's current version, or
 // skill-set hash mismatch.
 func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase) bool {
+	// A triage-resolved result never passed through the deep floors, so revalidate
+	// it against the triage tier's own floors (and the prompt). With the cascade
+	// now disabled, force a deep re-analysis instead of trusting a stale cheap
+	// verdict.
+	if tc.AIAnalysis.Tier == "triage" {
+		if s.triageClient == nil {
+			return true
+		}
+		if tc.AIAnalysis.ToolCalls < s.triageOpts.MinToolCalls || tc.AIAnalysis.GCSBytes < s.triageOpts.MinGCSBytes {
+			return true
+		}
+		return tc.AIAnalysis.PromptHash != PromptFingerprint(s.systemPrompt)
+	}
 	if tc.AIAnalysis.ToolCalls < s.agenticOpts.MinToolCalls {
 		return true
 	}

@@ -43,6 +43,10 @@ type Options struct {
 	// this for provider-specific routing headers or to override the default
 	// Authorization scheme.
 	ExtraHeaders map[string]string
+	// Cache, when non-nil, is used instead of opening one at CacheDir. Lets a
+	// second client (e.g. the triage tier) share the primary client's cache so
+	// both tiers read and write one ai_cache.json under distinct keys.
+	Cache *Cache
 }
 
 // NewClientWithOptions creates a Client from explicit options. Endpoint and
@@ -53,6 +57,10 @@ func NewClientWithOptions(opts Options) *Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 32
 	transport.MaxIdleConnsPerHost = 16
+	cache := opts.Cache
+	if cache == nil {
+		cache = NewCache(opts.CacheDir)
+	}
 	return &Client{
 		// No client-level Timeout: per-request deadlines come from the
 		// caller's context. The agentic loop runs every chat call under the
@@ -66,7 +74,7 @@ func NewClientWithOptions(opts Options) *Client {
 		token:        opts.Token,
 		model:        opts.Model,
 		extraHeaders: opts.ExtraHeaders,
-		cache:        NewCache(opts.CacheDir),
+		cache:        cache,
 	}
 }
 
@@ -75,6 +83,10 @@ func (c *Client) Endpoint() string { return c.apiURL }
 
 // ModelName returns the configured model identifier.
 func (c *Client) ModelName() string { return c.model }
+
+// Token returns the configured bearer token. Used to let a derived client (the
+// triage tier) inherit the primary client's credentials.
+func (c *Client) Token() string { return c.token }
 
 // Cache returns the underlying cache so callers can persist it.
 func (c *Client) Cache() *Cache {

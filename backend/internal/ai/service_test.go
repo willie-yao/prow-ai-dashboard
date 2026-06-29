@@ -273,9 +273,169 @@ func (f *fakeFactory) ForBuild(_, _ string) artifacts.Browser {
 	return &fakeBrowser{}
 }
 
+// fileFactory hands out a browser backed by a fixed file set so cascade tests
+// can ground a triage run with real reads.
+type fileFactory struct{ files map[string][]byte }
+
+func (f *fileFactory) ForBuild(_, _ string) artifacts.Browser {
+	return &fakeBrowser{files: f.files}
+}
+
 // Compile-time interface checks.
 var _ Module = (*stubModule)(nil)
 var _ artifacts.Factory = (*fakeFactory)(nil)
+var _ artifacts.Factory = (*fileFactory)(nil)
+
+// ---------- Model cascade (triage tier) ----------
+
+func TestTriageAccepts(t *testing.T) {
+	s := &Service{triageOpts: AgenticOptions{MinToolCalls: 1, MinGCSBytes: 100}}
+	cases := []struct {
+		name            string
+		transient       bool
+		budgetExhausted bool
+		toolCalls       int
+		gcsBytes        int
+		want            bool
+	}{
+		{"grounded transient", true, false, 2, 200, true},
+		{"real bug", false, false, 2, 200, false},
+		{"below tool floor", true, false, 0, 200, false},
+		{"below gcs floor", true, false, 2, 50, false},
+		{"budget exhausted", true, true, 2, 200, false},
+	}
+	for _, c := range cases {
+		sum := &models.AISummary{IsTransient: c.transient}
+		an := &models.AIAnalysis{BudgetExhausted: c.budgetExhausted, ToolCalls: c.toolCalls, GCSBytes: c.gcsBytes}
+		if got := s.triageAccepts(sum, an); got != c.want {
+			t.Errorf("%s: triageAccepts = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if s.triageAccepts(nil, nil) {
+		t.Error("nil summary/analysis must not be accepted")
+	}
+}
+
+// newCascadeService wires a Service with a deep client and a triage client
+// pointing at separate scripted servers, grounded by one build-log.txt file.
+func newCascadeService(t *testing.T, deepURL, triageURL string, triageOpts AgenticOptions) *Service {
+	t.Helper()
+	registry, enabled := newServiceTestRegistry(t)
+	factory := &fileFactory{files: map[string][]byte{"build-log.txt": []byte(strings.Repeat("log line\n", 30))}}
+	s := NewService(newAgenticTestClient(t, deepURL), &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	s.EnableAgentic(AgenticOptions{MaxIters: 5, ModelByteBudget: 1_000_000, GCSByteBudget: 1_000_000, Timeout: 30 * time.Second}, factory, registry, enabled)
+	s.EnableTriage(newAgenticTestClient(t, triageURL), triageOpts)
+	return s
+}
+
+func TestService_Cascade_GroundedTransientResolvedByTriage(t *testing.T) {
+	shrinkCallDelay(t)
+	triageSrv := newScriptedChatServer(t)
+	triageSrv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	triageSrv.push(200, chatRespFinal(`{"summary":"flake","is_transient":true,"root_cause":"network blip that recovered","severity":"Transient-Ignore","suggested_fix":"retry","relevant_files":["build-log.txt"]}`))
+	deepSrv := newScriptedChatServer(t) // must not be called
+
+	s := newCascadeService(t, deepSrv.URL, triageSrv.URL, AgenticOptions{MaxIters: 5, ModelByteBudget: 1_000_000, GCSByteBudget: 1_000_000, Timeout: 30 * time.Second, MinToolCalls: 1, MinGCSBytes: 1})
+	tc := newFailedTC("Test A", "boom")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AISummary == nil || !tc.AISummary.IsTransient {
+		t.Fatalf("want transient summary, got %+v", tc.AISummary)
+	}
+	if tc.AIAnalysis == nil || tc.AIAnalysis.Tier != "triage" {
+		t.Fatalf("Tier = %q, want triage", tierOf(tc))
+	}
+	if tc.AIAnalysis.Escalated {
+		t.Error("Escalated = true, want false for a triage-resolved failure")
+	}
+	if got := atomic.LoadInt32(&deepSrv.calls); got != 0 {
+		t.Errorf("deep tier called %d times, want 0", got)
+	}
+	if r, e := s.TriageStats(); r != 1 || e != 0 {
+		t.Errorf("TriageStats = (%d,%d), want (1,0)", r, e)
+	}
+}
+
+func TestService_Cascade_RealBugEscalatesToDeep(t *testing.T) {
+	shrinkCallDelay(t)
+	triageSrv := newScriptedChatServer(t)
+	triageSrv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	triageSrv.push(200, chatRespFinal(`{"summary":"real","is_transient":false,"root_cause":"nil deref in reconciler","severity":"High","suggested_fix":"guard the nil","relevant_files":["build-log.txt"]}`))
+	deepSrv := newScriptedChatServer(t)
+	deepSrv.push(200, chatRespFinal(`{"summary":"deep","is_transient":false,"root_cause":"nil deref in reconciler at line 42","severity":"High","suggested_fix":"guard p before deref","relevant_files":["build-log.txt"]}`))
+
+	s := newCascadeService(t, deepSrv.URL, triageSrv.URL, AgenticOptions{MaxIters: 5, ModelByteBudget: 1_000_000, GCSByteBudget: 1_000_000, Timeout: 30 * time.Second, MinToolCalls: 1, MinGCSBytes: 1})
+	tc := newFailedTC("Test B", "boom")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis == nil || tc.AIAnalysis.Tier != "deep" {
+		t.Fatalf("Tier = %q, want deep", tierOf(tc))
+	}
+	if !tc.AIAnalysis.Escalated {
+		t.Error("Escalated = false, want true after escalation")
+	}
+	if got := atomic.LoadInt32(&deepSrv.calls); got == 0 {
+		t.Error("deep tier was not called on escalation")
+	}
+	if r, e := s.TriageStats(); r != 0 || e != 1 {
+		t.Errorf("TriageStats = (%d,%d), want (0,1)", r, e)
+	}
+}
+
+func TestService_Cascade_TriageErrorEscalatesToDeep(t *testing.T) {
+	shrinkCallDelay(t)
+	triageSrv := newScriptedChatServer(t)
+	triageSrv.push(500, "triage boom")
+	deepSrv := newScriptedChatServer(t)
+	deepSrv.push(200, chatRespFinal(`{"summary":"deep","is_transient":false,"root_cause":"real","severity":"High","suggested_fix":"fix it","relevant_files":[]}`))
+
+	s := newCascadeService(t, deepSrv.URL, triageSrv.URL, AgenticOptions{MaxIters: 5, ModelByteBudget: 1_000_000, GCSByteBudget: 1_000_000, Timeout: 30 * time.Second})
+	tc := newFailedTC("Test C", "boom")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis == nil || tc.AIAnalysis.Tier != "deep" {
+		t.Fatalf("Tier = %q, want deep after a triage infra error", tierOf(tc))
+	}
+	if got := atomic.LoadInt32(&deepSrv.calls); got == 0 {
+		t.Error("deep tier was not called after triage error")
+	}
+}
+
+func tierOf(tc *models.TestCase) string {
+	if tc.AIAnalysis == nil {
+		return "<nil analysis>"
+	}
+	return tc.AIAnalysis.Tier
+}
+
+func TestService_TriageResult_RevalidatedAgainstTriageFloors(t *testing.T) {
+	// A cached triage-tier result is checked against the triage floors, not the
+	// deep floors, so raising the triage floor forces re-analysis.
+	s := &Service{
+		systemPrompt: "sys",
+		agenticOpts:  AgenticOptions{MinToolCalls: 0, MinGCSBytes: 0},
+		triageClient: &Client{},
+		triageOpts:   AgenticOptions{MinToolCalls: 3, MinGCSBytes: 200_000},
+	}
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
+		Mode: AgenticMode, Tier: "triage", ToolCalls: 1, GCSBytes: 1000,
+		PromptHash: PromptFingerprint("sys"),
+	}}
+	if !s.belowCurrentAgenticFloor(tc) {
+		t.Error("triage result below the triage floor should re-analyze")
+	}
+	// Meets the triage floor: no re-analysis.
+	tc.AIAnalysis.ToolCalls = 5
+	tc.AIAnalysis.GCSBytes = 300_000
+	if s.belowCurrentAgenticFloor(tc) {
+		t.Error("triage result meeting the triage floor should not re-analyze")
+	}
+	// Cascade disabled (triageClient nil): a stale triage result must re-analyze.
+	s.triageClient = nil
+	if !s.belowCurrentAgenticFloor(tc) {
+		t.Error("triage result should re-analyze once the cascade is disabled")
+	}
+}
 
 // ---------- setUnavailable retry semantics ----------
 

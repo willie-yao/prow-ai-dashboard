@@ -42,6 +42,18 @@ for how to pin a release.
 
 ### Added
 
+- Optional **model cascade** (`ai.triage`): a cheap triage tier in front of the
+  deep agentic analysis. When a triage model is set (or `AI_TRIAGE_MODEL`), each
+  failure is investigated first on the cheaper model; a **grounded transient
+  verdict** (transient, grounding floors met, budget not exhausted) short-circuits
+  and skips the deep tier, while real bugs and ungrounded or budget-exhausted
+  results **escalate** to the full analysis, so the cheap tier never finalizes a
+  real bug. Endpoint, headers, and token inherit from the parent `ai:` block
+  unless overridden (`AI_TRIAGE_ENDPOINT` / `AI_TRIAGE_TOKEN`); the triage tier
+  shares the deep client's cache (namespaced per tier) and the per-build tool
+  cache. The published analysis records `tier` and `escalated`, and the run logs
+  the escalation rate. Off by default. See [docs/agentic.md](docs/agentic.md#model-cascade-triage-tier).
+
 - Optional **agent-proposed fix PRs** (`ai.fix_prs`): after each fetch, for a
   systemic recurring pattern with a concrete remediation, the engine drafts a
   minimal code fix and opens a **draft PR** against the source repo via

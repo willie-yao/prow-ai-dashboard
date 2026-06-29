@@ -256,6 +256,84 @@ ai:
 
 ---
 
+## Model cascade (triage tier)
+
+The cascade adds an optional cheap *triage tier* in front of the existing deep
+analysis, so the cheap model resolves the transient majority and only real bugs
+and inconclusive cases pay for the expensive deep dive. The deep tier keeps all
+its quality machinery (critique, skills, evidence injection, floors); the triage
+tier only decides *whether* a failure needs it.
+
+It is off until you name a triage model. The deep tier stays exactly as
+configured and becomes the escalation target.
+
+```yaml
+ai:
+  endpoint: "https://api.githubcopilot.com/chat/completions"
+  model: "claude-opus-4.8"      # deep tier (unchanged)
+  triage:
+    model: "gpt-5-mini"         # same endpoint + token, cheaper model
+```
+
+Endpoint, headers, and token inherit from the parent `ai:` block. For a separate
+provider (e.g. a cheap hosted model for triage and a self-hosted deep tier),
+override the endpoint and supply a token via `AI_TRIAGE_TOKEN`:
+
+```yaml
+ai:
+  endpoint: "http://qwen.svc.cluster.local:8000/v1/chat/completions"
+  model: "qwen3-coder-480b"     # deep tier (self-hosted)
+  triage:
+    endpoint: "https://api.githubcopilot.com/chat/completions"
+    model: "gpt-5-mini"         # different provider for cheap triage
+```
+
+Triage runs the same tool loop as the deep tier, so it is a real investigation
+on a cheaper model, not a string match. Optional knobs (sensible defaults; most
+set only `model`):
+
+```yaml
+  triage:
+    model: "gpt-5-mini"
+    max_iters: 8                # lighter than the deep tier (default 8)
+    # Grounding floors default to the deep tier's values, so the cheap model
+    # must drill the real logs before its transient verdict is trusted. When the
+    # deep tier runs floorless, triage falls back to safe minimums
+    # (min_tool_calls 3, min_gcs_bytes 200000) rather than trusting an unread
+    # transient verdict.
+    min_tool_calls: 3
+    min_gcs_bytes: 200000
+```
+
+Env plumbing mirrors the rest of the AI config: `AI_TRIAGE_MODEL` and
+`AI_TRIAGE_ENDPOINT` (repo vars) and `AI_TRIAGE_TOKEN` (secret), each falling
+back to the deep tier's value when unset. Setting `AI_TRIAGE_MODEL` alone is
+enough to enable the cascade.
+
+### How the cascade decides
+
+1. The triage tier investigates on the cheap model with a lighter iteration
+   budget but the same grounding floors.
+2. If it reaches a **grounded transient verdict** (the failure is transient, the
+   triage floors were met, and it did not exhaust its budget), the result is
+   accepted and the deep tier is skipped. This is the cost win: the grounded
+   transient majority is resolved cheaply.
+3. Otherwise (a real bug, a transient that did not meet the floors, or a
+   budget-exhausted run) the failure **escalates** to the full deep tier. The
+   cheap tier never finalizes a real bug.
+
+A triage infra error (including an endpoint that rejects tools) escalates rather
+than dropping the analysis, so a triage-only problem never loses a result.
+
+Both tiers cache under the shared AI cache by failure key, namespaced per tier,
+and reuse one per-build tool cache so the deep tier reuses any artifacts the
+triage tier already fetched. The published `tier` (`triage` or `deep`) and
+`escalated` fields record which tier resolved each failure, and the run logs the
+escalation rate. A triage false-negative is self-correcting: a missed real bug
+keeps failing, gets re-analyzed, and is caught by pattern analysis.
+
+---
+
 ## How it works
 
 ### The loop at a glance

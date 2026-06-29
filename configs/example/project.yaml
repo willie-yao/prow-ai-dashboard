@@ -145,6 +145,20 @@ ai:
   #                         # Auto-enabled when skills/*.yaml recipes
   #                         # are present (recipes feed this gate).
   #   max_retries: 2
+  # Optional model cascade: a cheap triage tier in front of the deep analysis.
+  # When a triage model is set (here or via AI_TRIAGE_MODEL), each failure is
+  # investigated first on the cheap model; a grounded transient verdict skips
+  # the deep tier, while real bugs and ungrounded or budget-exhausted results
+  # escalate to the full analysis. Endpoint, headers, and token inherit from
+  # this ai: block unless overridden (AI_TRIAGE_ENDPOINT / AI_TRIAGE_TOKEN).
+  # See docs/agentic.md "Model cascade".
+  # triage:
+  #   model: "gpt-5-mini"     # setting a model is what enables the cascade
+  #   # endpoint: "..."       # optional: a separate provider for triage
+  #   # max_iters: 8          # lighter than the deep tier (engine default 8)
+  #   # min_tool_calls: 3     # grounding floors; default to the deep tier's
+  #   # min_gcs_bytes: 200000 # values, or safe minimums when the deep tier
+  #   #                       # runs floorless, so triage must read the logs
   # Cross-build pattern analysis runs automatically (no flag): after the
   # per-failure analyses, for any job that failed in >=3 recent builds the
   # engine correlates one representative failure per failed build into a single

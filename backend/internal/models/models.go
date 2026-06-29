@@ -91,6 +91,15 @@ type AIAnalysis struct {
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 
+	// Tier records which model cascade tier resolved the analysis: "triage"
+	// for a grounded transient short-circuited on the cheap model, "deep" for
+	// the full analysis. Empty when the cascade is off (single tier).
+	Tier string `json:"tier,omitempty"`
+
+	// Escalated reports that the triage tier could not resolve the failure and
+	// handed it to the deep tier. Only meaningful when the cascade is on.
+	Escalated bool `json:"escalated,omitempty"`
+
 	// ToolCalls is the number of agent tool invocations made during this
 	// analysis.
 	ToolCalls int `json:"tool_calls,omitempty"`

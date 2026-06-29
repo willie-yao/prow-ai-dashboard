@@ -296,6 +296,11 @@ type AI struct {
 	// endpoint is required.
 	Agentic Agentic `yaml:",inline" json:"agentic,omitempty"`
 
+	// Triage configures an optional cheap-model triage tier in front of the
+	// deep agentic analysis (the model cascade). Off unless a triage model is
+	// set. See Triage.
+	Triage Triage `yaml:"triage,omitempty" json:"triage,omitempty"`
+
 	// SuggestSkills configures optional auto-drafting of skill recipes for
 	// systemic recurring patterns. Off by default. Excluded from manifest.json.
 	SuggestSkills *SuggestSkills `yaml:"suggest_skills,omitempty" json:"-"`
@@ -564,6 +569,92 @@ func (a *AI) EffectiveAgentic() Agentic {
 	return out
 }
 
+// Triage configures the optional model-cascade triage tier. When a triage model
+// is set (here or via AI_TRIAGE_MODEL), each failure is first investigated by a
+// cheaper model; a grounded transient verdict short-circuits and skips the deep
+// tier, while real bugs and ungrounded or budget-exhausted triage results
+// escalate to the full deep analysis. Endpoint, headers, and token inherit from
+// the parent ai: block unless overridden. Disabled when no triage model is set.
+type Triage struct {
+	// Endpoint optionally overrides the chat-completions URL for the triage
+	// tier. Falls back to AI_TRIAGE_ENDPOINT, then the parent ai.endpoint.
+	Endpoint string `yaml:"endpoint,omitempty" json:"-"`
+
+	// Model is the triage tier's model identifier. Setting it (or
+	// AI_TRIAGE_MODEL) is what enables the cascade. Excluded from manifest.json.
+	Model string `yaml:"model,omitempty" json:"-"`
+
+	// MaxIters caps the triage tier's tool-call rounds. Defaults to
+	// DefaultTriage.MaxIters, lighter than the deep tier.
+	MaxIters int `yaml:"max_iters,omitempty" json:"max_iters,omitempty"`
+
+	// Timeout caps the triage tier's wall-clock per failure. Defaults to the
+	// deep tier's timeout.
+	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+
+	// MinToolCalls and MinGCSBytes are the triage tier's grounding floors: a
+	// transient verdict is only accepted (short-circuiting the deep tier) when
+	// the triage model met both, so the cheap model must drill the real logs
+	// before it can rule a failure transient. Both default to the deep tier's
+	// floors so triage inherits the project's grounding bar.
+	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty"`
+	MinGCSBytes  int `yaml:"min_gcs_bytes,omitempty" json:"min_gcs_bytes,omitempty"`
+}
+
+// defaultTriageMaxIters is the triage tier's iteration cap when unset: fewer
+// rounds than the deep tier, but enough to drill the related logs.
+const defaultTriageMaxIters = 8
+
+// When neither the deep tier nor the triage block sets a grounding floor, the
+// triage tier still needs one: the cheap model must read the real logs before
+// its transient verdict can short-circuit the deep tier. These are the safe
+// minimums applied in that case.
+const (
+	defaultTriageMinToolCalls = 3
+	defaultTriageMinGCSBytes  = 200_000
+)
+
+// EffectiveTriage returns the resolved triage tuning with defaults applied, and
+// whether the cascade is enabled by config (a triage model is set). The fetcher
+// still layers AI_TRIAGE_MODEL on top, so a config without a model can be
+// enabled by env. Floors and timeout inherit the resolved deep tier; when
+// neither tier sets a floor, triage falls back to safe grounding minimums.
+func (a *AI) EffectiveTriage() (Triage, bool) {
+	deep := a.EffectiveAgentic()
+	out := Triage{
+		MaxIters:     defaultTriageMaxIters,
+		Timeout:      deep.Timeout,
+		MinToolCalls: deep.MinToolCalls,
+		MinGCSBytes:  deep.MinGCSBytes,
+	}
+	enabled := false
+	if a != nil {
+		out.Endpoint = a.Triage.Endpoint
+		out.Model = a.Triage.Model
+		if a.Triage.MaxIters > 0 {
+			out.MaxIters = a.Triage.MaxIters
+		}
+		if a.Triage.Timeout > 0 {
+			out.Timeout = a.Triage.Timeout
+		}
+		if a.Triage.MinToolCalls > 0 {
+			out.MinToolCalls = a.Triage.MinToolCalls
+		}
+		if a.Triage.MinGCSBytes > 0 {
+			out.MinGCSBytes = a.Triage.MinGCSBytes
+		}
+		enabled = strings.TrimSpace(a.Triage.Model) != ""
+	}
+	// Keep triage grounded even when the deep tier runs floorless.
+	if out.MinToolCalls == 0 {
+		out.MinToolCalls = defaultTriageMinToolCalls
+	}
+	if out.MinGCSBytes == 0 {
+		out.MinGCSBytes = defaultTriageMinGCSBytes
+	}
+	return out, enabled
+}
+
 // CollectorName returns the configured collector name, defaulting to "generic".
 func (c *Config) CollectorName() string {
 	if c.Artifacts == nil || strings.TrimSpace(c.Artifacts.Collector) == "" {
@@ -710,6 +801,15 @@ func (c *Config) Validate() error {
 	// this load-time check.
 	if c.AI != nil && c.AI.Agentic.EvidenceInjection && !c.AI.Agentic.Critique.Enabled {
 		return fmt.Errorf("ai.evidence_injection requires ai.critique.enabled: true")
+	}
+
+	// The triage tier's tuning knobs gate cost and grounding, so a negative
+	// value is a config error rather than a silent no-op.
+	if c.AI != nil {
+		t := c.AI.Triage
+		if t.MaxIters < 0 || t.MinToolCalls < 0 || t.MinGCSBytes < 0 || t.Timeout < 0 {
+			return fmt.Errorf("ai.triage max_iters, timeout, min_tool_calls, and min_gcs_bytes must be >= 0")
+		}
 	}
 
 	// Validate issue triggers when the feature is configured, so a typo fails

@@ -693,11 +693,9 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	modelByteBudget := fallbackModelByteBudget
 	contextByteBudget := 0
 	if tokens, ok := aiClient.DetectContextWindowTokens(ctx); ok {
-		windowBytes := tokens * avgBytesPerToken
-		modelByteBudget = windowBytes * modelBudgetWindowPct / 100
-		contextByteBudget = windowBytes * contextBudgetWindowPct / 100
+		modelByteBudget, contextByteBudget = windowByteBudgets(tokens)
 		log.Printf("🪟 detected context window: %d tokens (~%d KB); model_byte_budget=%d KB, context_byte_budget=%d KB",
-			tokens, windowBytes/1024, modelByteBudget/1024, contextByteBudget/1024)
+			tokens, tokens*avgBytesPerToken/1024, modelByteBudget/1024, contextByteBudget/1024)
 	}
 	aiBackend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 60 * time.Second})
 	if err != nil {
@@ -732,6 +730,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 		}, factory, registry, enabled)
 		// nil is safe; without recipes the service skips skill matching.
 		service.SetSkills(skillSet)
+		enableTriageTier(ctx, cfg, service, aiClient, gcsByteBudget)
 		critiqueLog := "off"
 		if eff.Critique.Enabled {
 			critiqueLog = fmt.Sprintf("on/%d", eff.Critique.MaxRetries)
@@ -821,10 +820,68 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	}
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
+	if resolved, escalated := service.TriageStats(); resolved+escalated > 0 {
+		log.Printf("🪜 model cascade: triage resolved %d, escalated %d to deep (%.0f%% on the cheap tier)",
+			resolved, escalated, 100*float64(resolved)/float64(resolved+escalated))
+	}
 
 	// Always run the job-level pattern pass. It self-gates on failed build count
 	// and is cached.
 	analyzePatternsAcrossBuilds(ctx, service, details)
+}
+
+// windowByteBudgets converts a detected context-window token count into the
+// model-evidence and compaction byte budgets.
+func windowByteBudgets(tokens int) (modelByteBudget, contextByteBudget int) {
+	windowBytes := tokens * avgBytesPerToken
+	return windowBytes * modelBudgetWindowPct / 100, windowBytes * contextBudgetWindowPct / 100
+}
+
+// enableTriageTier wires the optional model-cascade triage tier when a triage
+// model is configured (ai.triage.model or AI_TRIAGE_MODEL). The triage client
+// shares the deep client's cache and tools, inherits its endpoint, headers, and
+// token unless overridden, and runs with a lighter iteration budget while
+// keeping the grounding floors. A no-op when no triage model is set.
+func enableTriageTier(ctx context.Context, cfg *project.Config, service *ai.Service, deep *ai.Client, gcsByteBudget int) {
+	tri, _ := cfg.AI.EffectiveTriage()
+	model := firstNonEmpty(tri.Model, os.Getenv("AI_TRIAGE_MODEL"))
+	if model == "" {
+		return
+	}
+	endpoint := firstNonEmpty(tri.Endpoint, os.Getenv("AI_TRIAGE_ENDPOINT"), deep.Endpoint())
+	token := firstNonEmpty(os.Getenv("AI_TRIAGE_TOKEN"), deep.Token())
+
+	triClient := ai.NewClientWithOptions(ai.Options{
+		Token:        token,
+		Endpoint:     endpoint,
+		Model:        model,
+		ExtraHeaders: aiHeaders(cfg),
+		// Share the deep tier's cache; tier-suffixed keys keep them separate.
+		Cache: deep.Cache(),
+	})
+
+	// Size the triage budgets from the triage model's own context window. The
+	// deep model's detected window does not apply to a different (smaller) triage
+	// model, so fall back to the static budget when the probe fails rather than
+	// inheriting it.
+	modelBudget, contextBudget := fallbackModelByteBudget, 0
+	if tokens, ok := triClient.DetectContextWindowTokens(ctx); ok {
+		modelBudget, contextBudget = windowByteBudgets(tokens)
+	}
+
+	service.EnableTriage(triClient, ai.AgenticOptions{
+		MaxIters:          tri.MaxIters,
+		ModelByteBudget:   modelBudget,
+		GCSByteBudget:     gcsByteBudget,
+		Timeout:           tri.Timeout,
+		ContextByteBudget: contextBudget,
+		MinToolCalls:      tri.MinToolCalls,
+		MinGCSBytes:       tri.MinGCSBytes,
+		// Triage is the cheap filter; the deep tier owns critique, skills, and
+		// evidence injection.
+	})
+	log.Printf("🪜 model cascade enabled: triage model=%s endpoint=%s (%d iters, min_tools=%d, min_gcs_kb=%d); deep tier owns escalations",
+		model, endpoint, tri.MaxIters, tri.MinToolCalls, tri.MinGCSBytes/1024)
 }
 
 // patternMinFailedBuilds gates job-level recurring pattern analysis.
