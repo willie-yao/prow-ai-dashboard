@@ -38,28 +38,44 @@ type proposedFix struct {
 	rationale string
 }
 
+// genParams holds the inputs for generateFix.
+type genParams struct {
+	completer Completer
+	// critique reviews the proposed change; nil (or critiqueRetries 0) skips it.
+	critique Completer
+	source   sourceReader
+	owner    string
+	repo     string
+	ref      string
+	maxFiles int
+	// critiqueRetries bounds how many times the edit step is re-prompted to
+	// resolve a reviewer's objections or a validation error before dropping.
+	critiqueRetries int
+}
+
 // generateFix turns a pattern into a validated minimal edit: pick target
-// file(s) from the repo's real tree, fetch them, propose anchored edits, and
-// apply them (exact-match-once). Any ungrounded step returns an error so the
-// caller drops the fix.
-func generateFix(ctx context.Context, c Completer, source sourceReader, owner, repo, ref string, p models.PatternAnalysis, maxFiles int) (*proposedFix, error) {
-	tree, err := source.ListTree(ctx, owner, repo, ref)
+// file(s) from the repo's real tree, fetch them, propose anchored edits, apply
+// them (exact-match-once), parse-check, and (optionally) pass an LLM review.
+// Validation or review failures re-prompt up to critiqueRetries, then the fix is
+// dropped.
+func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
+	tree, err := gp.source.ListTree(ctx, gp.owner, gp.repo, gp.ref)
 	if err != nil {
-		return nil, fmt.Errorf("listing %s/%s tree: %w", owner, repo, err)
+		return nil, fmt.Errorf("listing %s/%s tree: %w", gp.owner, gp.repo, err)
 	}
 	candidates := rankCandidates(tree, p)
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no candidate files in the repo matched the failure")
 	}
 
-	files, err := locateTargets(ctx, c, p, candidates, maxFiles)
+	files, err := locateTargets(ctx, gp.completer, p, candidates, gp.maxFiles)
 	if err != nil {
 		return nil, err
 	}
 
 	contents := make(map[string]string, len(files))
 	for _, f := range files {
-		body, found, err := source.FileContent(ctx, owner, repo, ref, f)
+		body, found, err := gp.source.FileContent(ctx, gp.owner, gp.repo, gp.ref, f)
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", f, err)
 		}
@@ -69,22 +85,44 @@ func generateFix(ctx context.Context, c Completer, source sourceReader, owner, r
 		contents[f] = body
 	}
 
-	edits, rationale, err := proposeEdits(ctx, c, p, contents)
-	if err != nil {
-		return nil, err
+	// Propose, validate, and review; re-prompt with feedback on a fixable
+	// problem (broken syntax or reviewer objections) up to critiqueRetries.
+	var feedback string
+	for attempt := 0; ; attempt++ {
+		edits, rationale, err := proposeEdits(ctx, gp.completer, p, contents, feedback)
+		if err != nil {
+			return nil, err
+		}
+		changed, applyErr := applyEdits(contents, edits, gp.maxFiles)
+		if applyErr == nil {
+			applyErr = validateSyntax(changed)
+		}
+		if applyErr != nil {
+			if attempt < gp.critiqueRetries {
+				feedback = "The previous edits were rejected: " + applyErr.Error()
+				continue
+			}
+			return nil, applyErr
+		}
+
+		fix := &proposedFix{files: changed, diff: renderDiff(contents, edits), rationale: rationale}
+		if gp.critique == nil || gp.critiqueRetries == 0 {
+			return fix, nil
+		}
+		issues, err := critiqueFix(ctx, gp.critique, p, contents, changed, edits)
+		if err != nil {
+			// An inconclusive review (endpoint down or an unreadable verdict)
+			// fails closed: drop the fix rather than skip the gate.
+			return nil, fmt.Errorf("fix review failed: %w", err)
+		}
+		if issues == "" {
+			return fix, nil
+		}
+		if attempt >= gp.critiqueRetries {
+			return nil, fmt.Errorf("fix rejected by review after %d attempt(s): %s", attempt+1, oneLine(issues))
+		}
+		feedback = "A reviewer found problems with the previous edits; address them: " + issues
 	}
-	changed, err := applyEdits(contents, edits, maxFiles)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateSyntax(changed); err != nil {
-		return nil, err
-	}
-	return &proposedFix{
-		files:     changed,
-		diff:      renderDiff(contents, edits),
-		rationale: rationale,
-	}, nil
 }
 
 const locateSystemPrompt = `You identify which source files a known CI failure fix should touch. You are given a candidate list of REAL repository file paths. Choose the smallest set of paths FROM THAT LIST that must change to fix the failure, preferring configuration, template, or manifest files. You MUST only return paths that appear verbatim in the candidate list; if none fit, return an empty list. Answer only with one-line JSON, no prose.`
@@ -139,20 +177,26 @@ Answer with one line of JSON:
 const editSystemPrompt = `You propose a MINIMAL fix as anchored search/replace edits. You are given the current content of one or more files and a known failure root cause. For each change, return an "old" snippet copied VERBATIM from the file (long enough to be unique within that file) and the "new" snippet to replace it with. Do not reformat unrelated lines. Make the smallest change that fixes the root cause. Answer only with JSON, no prose.`
 
 // proposeEdits asks the model for anchored edits given the real file contents.
-func proposeEdits(ctx context.Context, c Completer, p models.PatternAnalysis, contents map[string]string) ([]edit, string, error) {
+// feedback, when non-empty, tells the model to address problems from a prior
+// attempt.
+func proposeEdits(ctx context.Context, c Completer, p models.PatternAnalysis, contents map[string]string, feedback string) ([]edit, string, error) {
 	var sb strings.Builder
 	for _, path := range sortedKeys(contents) {
 		fmt.Fprintf(&sb, "=== FILE: %s ===\n%s\n", path, contents[path])
 	}
+	fb := ""
+	if strings.TrimSpace(feedback) != "" {
+		fb = "\n" + feedback + "\n"
+	}
 	user := fmt.Sprintf(`Root cause: %s
 Suggested fix: %s
-
+%s
 Current file content(s):
 %s
 Return anchored edits as JSON:
 {"rationale": "<one sentence>", "edits": [{"file": "<path>", "old": "<verbatim snippet>", "new": "<replacement>"}]}
 The "old" snippet for each edit MUST appear exactly once in that file.`,
-		oneLine(p.SharedRootCause), oneLine(p.SuggestedFix), sb.String())
+		oneLine(p.SharedRootCause), oneLine(p.SuggestedFix), fb, sb.String())
 
 	out, err := c.Complete(ctx, editSystemPrompt, user)
 	if err != nil {
@@ -169,6 +213,41 @@ The "old" snippet for each edit MUST appear exactly once in that file.`,
 		return nil, "", fmt.Errorf("model proposed no edits")
 	}
 	return v.Edits, strings.TrimSpace(v.Rationale), nil
+}
+
+const critiqueSystemPrompt = `You are a skeptical senior code reviewer checking a proposed fix for a CI failure before it becomes a draft PR. Judge whether the change is a reasonable, correct starting point. Flag concrete defects ONLY: wrong logic, values, or comparisons; references to undefined symbols, fields, or unimported packages; changes that break adjacent code; or a change that does not actually address the stated root cause. Do NOT flag style, formatting, or minor preferences, and remember it is a draft for a human to refine. If the change is a reasonable fix, return no issues.`
+
+// critiqueFix asks a reviewer model whether the change has concrete defects. It
+// returns a "; "-joined issue string (empty when the change is acceptable). The
+// reviewer sees the diff plus the full edited file(s) so it can judge context
+// (imports, surrounding code).
+func critiqueFix(ctx context.Context, c Completer, p models.PatternAnalysis, orig, changed map[string]string, edits []edit) (string, error) {
+	var sb strings.Builder
+	sb.WriteString(renderDiff(orig, edits))
+	sb.WriteString("\n\n")
+	for _, path := range sortedKeys(changed) {
+		fmt.Fprintf(&sb, "=== FILE AFTER EDIT: %s ===\n%s\n", path, changed[path])
+	}
+	user := fmt.Sprintf(`Root cause: %s
+Suggested fix: %s
+
+Proposed change:
+%s
+Does this change have concrete defects (not style)? Answer with one line of JSON, no comments. Use an empty array if it is a reasonable fix:
+{"issues": ["<problem>", "<problem>"]}`,
+		oneLine(p.SharedRootCause), oneLine(p.SuggestedFix), sb.String())
+
+	out, err := c.Complete(ctx, critiqueSystemPrompt, user)
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		Issues []string `json:"issues"`
+	}
+	if err := parseJSONObject(out, &v); err != nil {
+		return "", fmt.Errorf("review response: %w", err)
+	}
+	return strings.Join(dedupeNonEmpty(v.Issues), "; "), nil
 }
 
 // Scope caps that keep a fix minimal (so exact-match-once can't be abused with a

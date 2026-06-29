@@ -188,6 +188,9 @@ ai:
   #   max_new_per_run: 1          # default 1
   #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
   #   dry_run: true               # propose to fix_previews.json without a PR
+  #   critique_retries: 1         # LLM review re-prompts before dropping (default 1; 0 disables)
+  #   critique_endpoint: "..."    # optional: review with a different endpoint/model
+  #   critique_model: "..."       #   (e.g. a stronger reviewer); token via FIX_CRITIQUE_TOKEN
 
 # Optional: auto-file GitHub issues for systemic recurring patterns and
 # persistent failures. Off by default. Active only when enabled AND an

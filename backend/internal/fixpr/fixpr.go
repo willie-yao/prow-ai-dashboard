@@ -61,6 +61,13 @@ type Options struct {
 	PreviewFile string
 	// DashboardURL is linked in the PR body for context.
 	DashboardURL string
+	// Critique reviews the proposed change before a PR is opened; nil (or
+	// CritiqueRetries 0) skips the review. May be the same Completer as
+	// generation or a separate provider.
+	Critique Completer
+	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections or a
+	// validation error before the fix is dropped.
+	CritiqueRetries int
 }
 
 // Manager reconciles systemic recurring patterns into fix PRs.
@@ -169,7 +176,16 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
 	gen := func(ctx context.Context, p models.PatternAnalysis) (*proposedFix, error) {
-		return generateFix(ctx, m.completer, m.source, m.opts.SourceOwner, m.opts.SourceName, base.HeadSHA, p, m.opts.MaxFiles)
+		return generateFix(ctx, genParams{
+			completer:       m.completer,
+			critique:        m.opts.Critique,
+			source:          m.source,
+			owner:           m.opts.SourceOwner,
+			repo:            m.opts.SourceName,
+			ref:             base.HeadSHA,
+			maxFiles:        m.opts.MaxFiles,
+			critiqueRetries: m.opts.CritiqueRetries,
+		}, p)
 	}
 
 	for _, p := range work {

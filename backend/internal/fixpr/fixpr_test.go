@@ -12,19 +12,33 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// fakeCompleter routes by system prompt: locate vs edit.
+// fakeCompleter routes by system prompt: locate, edit, or critique.
 type fakeCompleter struct {
-	locate    string
-	edit      string
-	locateErr error
-	editErr   error
+	locate      string
+	edit        string
+	critique    string // JSON {"issues":[...]}; empty -> approved
+	locateErr   error
+	editErr     error
+	critiqueErr error
+	editCalls   int
 }
 
 func (f *fakeCompleter) Complete(_ context.Context, system, _ string) (string, error) {
-	if system == locateSystemPrompt {
+	switch system {
+	case locateSystemPrompt:
 		return f.locate, f.locateErr
+	case critiqueSystemPrompt:
+		if f.critiqueErr != nil {
+			return "", f.critiqueErr
+		}
+		if f.critique == "" {
+			return `{"issues": []}`, nil
+		}
+		return f.critique, nil
+	default: // editSystemPrompt
+		f.editCalls++
+		return f.edit, f.editErr
 	}
-	return f.edit, f.editErr
 }
 
 // fakeSource serves canned file content and records the ref it was read at.
@@ -99,6 +113,11 @@ func systemicPattern(subject string) models.PatternAnalysis {
 
 // ---- generation ----
 
+// genParamsFor builds genParams for generation-only tests (review disabled).
+func genParamsFor(c Completer, src sourceReader) genParams {
+	return genParams{completer: c, source: src, owner: "o", repo: "r", ref: "ref", maxFiles: 2}
+}
+
 func TestGenerateFix_HappyPath(t *testing.T) {
 	c := &fakeCompleter{
 		locate: `{"files": ["templates/cluster.yaml"]}`,
@@ -106,7 +125,7 @@ func TestGenerateFix_HappyPath(t *testing.T) {
 	}
 	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
 
-	fix, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2)
+	fix, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd"))
 	if err != nil {
 		t.Fatalf("generateFix: %v", err)
 	}
@@ -123,7 +142,7 @@ func TestGenerateFix_RejectsHallucinatedFile(t *testing.T) {
 	// The model picks a path that is not among the real candidate files.
 	c := &fakeCompleter{locate: `{"files": ["does/not/exist.yaml"]}`}
 	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
-	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "not a real repo file") {
+	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "not a real repo file") {
 		t.Errorf("expected hallucinated-file rejection, got %v", err)
 	}
 }
@@ -131,7 +150,7 @@ func TestGenerateFix_RejectsHallucinatedFile(t *testing.T) {
 func TestGenerateFix_NoCandidates(t *testing.T) {
 	c := &fakeCompleter{}
 	src := &fakeSource{files: map[string]string{}}
-	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "no candidate") {
+	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "no candidate") {
 		t.Errorf("expected no-candidate error, got %v", err)
 	}
 }
@@ -141,7 +160,7 @@ func TestGenerateFix_RejectsTooManyFiles(t *testing.T) {
 	src := &fakeSource{files: map[string]string{
 		"templates/a.yaml": "x", "templates/b.yaml": "y", "templates/c.yaml": "z",
 	}}
-	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "max_files") {
+	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "max_files") {
 		t.Errorf("expected max_files error, got %v", err)
 	}
 }
@@ -207,8 +226,62 @@ func TestGenerateFix_DropsBrokenSyntax(t *testing.T) {
 		edit:   `{"rationale": "break it", "edits": [{"file": "templates/cluster.yaml", "old": "diskType: StandardSSD_LRS", "new": "diskType: [unclosed"}]}`,
 	}
 	src := &fakeSource{files: map[string]string{"templates/cluster.yaml": sampleFile}}
-	if _, err := generateFix(context.Background(), c, src, "o", "r", "ref", systemicPattern("etcd"), 2); err == nil || !strings.Contains(err.Error(), "not valid YAML") {
+	if _, err := generateFix(context.Background(), genParamsFor(c, src), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "not valid YAML") {
 		t.Errorf("expected broken-YAML drop, got %v", err)
+	}
+}
+
+// ---- critique loop ----
+
+func critiqueParams(c Completer, src sourceReader, retries int) genParams {
+	gp := genParamsFor(c, src)
+	gp.critique = c
+	gp.critiqueRetries = retries
+	return gp
+}
+
+func TestGenerateFix_CritiqueApproves(t *testing.T) {
+	c := goodCompleter() // critique defaults to {"issues": []}
+	src := goodSource()
+	fix, err := generateFix(context.Background(), critiqueParams(c, src, 1), systemicPattern("etcd"))
+	if err != nil {
+		t.Fatalf("generateFix: %v", err)
+	}
+	if !strings.Contains(fix.files["templates/cluster.yaml"], "Premium_LRS") {
+		t.Errorf("approved fix not applied")
+	}
+}
+
+func TestGenerateFix_CritiqueRejectsThenDrops(t *testing.T) {
+	c := goodCompleter()
+	c.critique = `{"issues": ["the new value is wrong"]}` // always rejects
+	src := goodSource()
+	_, err := generateFix(context.Background(), critiqueParams(c, src, 1), systemicPattern("etcd"))
+	if err == nil || !strings.Contains(err.Error(), "rejected by review") {
+		t.Errorf("expected review rejection, got %v", err)
+	}
+	// One initial attempt + one retry = 2 edit calls.
+	if c.editCalls != 2 {
+		t.Errorf("editCalls = %d, want 2 (initial + 1 retry)", c.editCalls)
+	}
+}
+
+func TestGenerateFix_CritiqueDisabledSkipsReview(t *testing.T) {
+	c := goodCompleter()
+	c.critique = `{"issues": ["would reject if asked"]}`
+	src := goodSource()
+	// retries 0 -> review skipped, fix accepted despite the would-be issues.
+	if _, err := generateFix(context.Background(), critiqueParams(c, src, 0), systemicPattern("etcd")); err != nil {
+		t.Errorf("with review disabled the fix should be accepted, got %v", err)
+	}
+}
+
+func TestGenerateFix_CritiqueErrorFailsClosed(t *testing.T) {
+	c := goodCompleter()
+	c.critiqueErr = errors.New("review endpoint down")
+	src := goodSource()
+	if _, err := generateFix(context.Background(), critiqueParams(c, src, 1), systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "review failed") {
+		t.Errorf("a review error should drop the fix (fail closed), got %v", err)
 	}
 }
 
@@ -279,6 +352,13 @@ func newManager(t *testing.T, pr prClient, c Completer, src sourceReader, opts O
 	}
 	// Default to fork-and-PR; tests can flip m.opts.Fork for direct mode.
 	opts.Fork = true
+	// Default to review on with the same completer; tests can override.
+	if opts.Critique == nil {
+		opts.Critique = c
+	}
+	if opts.CritiqueRetries == 0 {
+		opts.CritiqueRetries = 1
+	}
 	return NewManager(pr, c, src, filepath.Join(t.TempDir(), "state.json"), opts)
 }
 

@@ -24,18 +24,23 @@ suggested fix, the engine:
    a fix is never applied fuzzily.
 4. **Parse-checks** each edited file (Go, YAML, JSON) and drops the fix if an
    edit left it syntactically broken.
-5. Opens a **draft PR** via fork-and-PR with the change, the rendered diff, and a
+5. **Reviews** the change with a second LLM call (a skeptical reviewer that flags
+   wrong logic, undefined symbols, or a change that doesn't address the root
+   cause). On objections it re-prompts the edit step up to `critique_retries`
+   times, then drops the fix.
+6. Opens a **draft PR** via fork-and-PR with the change, the rendered diff, and a
    review checklist in the body.
 
 A fix that can't be grounded at any step (no such file, anchor doesn't match,
-touches more than `max_files`, or no longer parses) is dropped and logged. No
-partial or speculative changes are ever pushed.
+touches more than `max_files`, no longer parses, or the reviewer keeps rejecting
+it) is dropped and logged. No partial or speculative changes are ever pushed.
 
 > **Note on correctness.** The engine verifies the edit is *safe* (real file,
-> unique anchor, minimal scope, still parses) but does not compile it, run tests,
-> or confirm it fixes the failure. A fix PR is a reviewed **draft starting
-> point**, not a verified patch; Prow CI and a human reviewer are the correctness
-> gate (a draft PR won't run CI or merge without a maintainer's approval).
+> unique anchor, minimal scope, still parses) and runs an LLM review, but it does
+> not compile the change, run tests, or guarantee it fixes the failure. A fix PR
+> is a reviewed **draft starting point**, not a verified patch; Prow CI and a
+> human reviewer are the correctness gate (a draft PR won't run CI or merge
+> without a maintainer's approval).
 
 ## Two modes: fork-and-PR vs direct
 
@@ -96,12 +101,28 @@ ai:
     # max_new_per_run: 1          # cap fix PRs per fetch (default 1)
     # labels: [ai-proposed-fix]   # labels applied to each PR
     # dry_run: false              # propose without opening a PR (see below)
+    # critique_retries: 1         # LLM review re-prompts before dropping (default 1; 0 disables)
+    # critique_endpoint: "..."    # optional: review with a different chat-completions endpoint
+    # critique_model: "..."       # optional: review with a different model (e.g. a stronger one)
 ```
 
 `enabled: true` requires `author_name` and `author_email` (validated at load).
 The feature is active only when **all** of `enabled: true`, a non-empty
 `FIX_TOKEN`, and a resolved source repo are present; any missing piece is a
 no-op, never a deploy failure.
+
+### The LLM review (`critique_retries`)
+
+After the edit parses, a second LLM call reviews it as a skeptical reviewer and
+returns concrete defects (not style). If it objects, the engine re-prompts the
+edit step with that feedback, up to `critique_retries` times (default 1), then
+drops the fix. Set `critique_retries: 0` to skip the review.
+
+By default the review uses the **same** provider as generation. To review with a
+different (e.g. stronger) model, set `critique_endpoint` / `critique_model` (or
+the `FIX_CRITIQUE_ENDPOINT` / `FIX_CRITIQUE_MODEL` env vars), with the token in
+`FIX_CRITIQUE_TOKEN` (falls back to `AI_TOKEN`). A separate reviewer is also more
+independent than the model grading its own work.
 
 Wire the token into the deploy workflow:
 

@@ -443,22 +443,48 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		Model:        aiModel(cfg),
 		ExtraHeaders: aiHeaders(cfg),
 	})
+
+	// Resolve the review client: reuse the generation client unless the consumer
+	// pointed the review at a different endpoint/model/token.
+	critiqueRetries := 0
+	if eff.CritiqueRetries != nil {
+		critiqueRetries = *eff.CritiqueRetries
+	}
+	var critique fixpr.Completer
+	if critiqueRetries > 0 {
+		cEndpoint := firstNonEmpty(eff.CritiqueEndpoint, os.Getenv("FIX_CRITIQUE_ENDPOINT"), aiEndpoint(cfg))
+		cModel := firstNonEmpty(eff.CritiqueModel, os.Getenv("FIX_CRITIQUE_MODEL"), aiModel(cfg))
+		cToken := firstNonEmpty(os.Getenv("FIX_CRITIQUE_TOKEN"), aiToken)
+		if cEndpoint == aiEndpoint(cfg) && cModel == aiModel(cfg) && cToken == aiToken {
+			critique = aiClient
+		} else {
+			critique = ai.NewClientWithOptions(ai.Options{
+				Token:        cToken,
+				Endpoint:     cEndpoint,
+				Model:        cModel,
+				ExtraHeaders: aiHeaders(cfg),
+			})
+		}
+	}
+
 	prClient, source := fixpr.NewClients(fixToken)
 	mgr := fixpr.NewManager(prClient, aiClient, source,
 		filepath.Join(outDir, "fix_pr_state.json"),
 		fixpr.Options{
-			SourceOwner:   eff.Repo.Owner,
-			SourceName:    eff.Repo.Name,
-			Fork:          eff.Fork == nil || *eff.Fork,
-			AuthorName:    eff.AuthorName,
-			AuthorEmail:   eff.AuthorEmail,
-			MinConfidence: eff.MinConfidence,
-			MaxFiles:      eff.MaxFiles,
-			MaxNewPerRun:  eff.MaxNewPerRun,
-			Labels:        eff.Labels,
-			DryRun:        eff.DryRun,
-			PreviewFile:   filepath.Join(outDir, "fix_previews.json"),
-			DashboardURL:  cfg.Branding.SiteURL,
+			SourceOwner:     eff.Repo.Owner,
+			SourceName:      eff.Repo.Name,
+			Fork:            eff.Fork == nil || *eff.Fork,
+			AuthorName:      eff.AuthorName,
+			AuthorEmail:     eff.AuthorEmail,
+			MinConfidence:   eff.MinConfidence,
+			MaxFiles:        eff.MaxFiles,
+			MaxNewPerRun:    eff.MaxNewPerRun,
+			Labels:          eff.Labels,
+			DryRun:          eff.DryRun,
+			PreviewFile:     filepath.Join(outDir, "fix_previews.json"),
+			DashboardURL:    cfg.Branding.SiteURL,
+			Critique:        critique,
+			CritiqueRetries: critiqueRetries,
 		})
 	stats, err := mgr.Reconcile(ctx, patterns)
 	if err != nil {
@@ -473,6 +499,16 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			log.Printf("Warning: failed to save fix-PR state: %v", err)
 		}
 	}
+}
+
+// firstNonEmpty returns the first non-empty string, or "".
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // loadCachedJobDetails loads existing per-job JSON files from the output dir.

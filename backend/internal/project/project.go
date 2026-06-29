@@ -381,6 +381,17 @@ type FixPRs struct {
 	// DryRun runs the full generation pipeline (locate, fetch, edit, validate)
 	// and records the proposed change without opening any PR. Defaults to false.
 	DryRun bool `yaml:"dry_run,omitempty" json:"dry_run,omitempty"`
+	// CritiqueRetries bounds how many times the edit step is re-prompted to
+	// resolve an LLM reviewer's objections (or a validation error) before the
+	// fix is dropped. Defaults to 1; 0 disables the review. Excluded from
+	// manifest.json.
+	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
+	// CritiqueEndpoint / CritiqueModel optionally point the review step at a
+	// different chat-completions provider than the one drafting the fix; both
+	// default to ai.endpoint / ai.model. Token via the FIX_CRITIQUE_TOKEN env
+	// (falls back to AI_TOKEN). Excluded from manifest.json.
+	CritiqueEndpoint string `yaml:"critique_endpoint,omitempty" json:"-"`
+	CritiqueModel    string `yaml:"critique_model,omitempty" json:"-"`
 }
 
 // EffectiveFixPRs resolves the fix-PR config with defaults applied. The target
@@ -409,6 +420,10 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	}
 	if len(out.Labels) == 0 {
 		out.Labels = []string{"ai-proposed-fix"}
+	}
+	if out.CritiqueRetries == nil {
+		n := 1
+		out.CritiqueRetries = &n
 	}
 	return out
 }
@@ -724,6 +739,9 @@ func (c *Config) Validate() error {
 		}
 		if r := f.Repo; r != nil && (r.Owner == "" || r.Name == "") {
 			return fmt.Errorf("ai.fix_prs.repo requires both owner and name (omit it to default to branding.source_repo)")
+		}
+		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {
+			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables the review)")
 		}
 	}
 

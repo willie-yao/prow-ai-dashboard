@@ -746,6 +746,15 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	if got.Fork == nil || *got.Fork != true {
 		t.Errorf("Fork default = %v, want true", got.Fork)
 	}
+	if got.CritiqueRetries == nil || *got.CritiqueRetries != 1 {
+		t.Errorf("CritiqueRetries default = %v, want 1", got.CritiqueRetries)
+	}
+	// An explicit critique_retries: 0 (disable) is preserved.
+	zero := 0
+	c.AI.FixPRs.CritiqueRetries = &zero
+	if got2 := c.EffectiveFixPRs(); got2.CritiqueRetries == nil || *got2.CritiqueRetries != 0 {
+		t.Errorf("explicit critique_retries=0 not preserved: %v", got2.CritiqueRetries)
+	}
 	// An explicit fork: false is preserved.
 	f := false
 	c.AI.FixPRs.Fork = &f
@@ -779,5 +788,12 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", Repo: &SourceRepo{Owner: "x"}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "fix_prs.repo requires both") {
 		t.Errorf("expected partial-repo error, got %v", err)
+	}
+	// Negative critique_retries is rejected (0 disables, not negatives).
+	c = base()
+	neg := -1
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", CritiqueRetries: &neg}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "critique_retries must be >= 0") {
+		t.Errorf("expected negative-critique_retries error, got %v", err)
 	}
 }
