@@ -1,0 +1,128 @@
+# Agent-proposed fix PRs
+
+The dashboard can draft a **minimal code fix** for a systemic recurring failure
+and open a **draft pull request** against the source repo. It is **off by
+default**, opt-in per project, and heavily guardrailed: draft-only, bounded file
+scope, a CLA-signed commit author, and idempotent dedup.
+
+This is the highest-risk automation the engine offers (it writes code to a repo),
+so read this whole page before enabling it.
+
+## What it does
+
+After each fetch, for every **systemic** recurring pattern (the same ones
+surfaced on the home page) at or above `min_confidence` that carries a concrete
+suggested fix, the engine:
+
+1. **Locates** the target file(s) in the source repo from the pattern's root
+   cause and suggested fix.
+2. **Fetches** their current content from the repo's default branch.
+3. Asks the model for **anchored search/replace edits** (a verbatim snippet to
+   find and its replacement), and applies each edit only if its anchor matches
+   **exactly once** in the file. Anything ambiguous or not found is rejected, so
+   a fix is never applied fuzzily.
+4. Opens a **draft PR** via fork-and-PR with the change, the rendered diff, and a
+   review checklist in the body.
+
+A fix that can't be grounded at any step (no such file, anchor doesn't match,
+touches more than `max_files`) is dropped and logged. No partial or speculative
+changes are ever pushed.
+
+## Identity, CLA, and the token (read this first)
+
+The PR targets a (usually community) source repo you don't have write access to,
+so the engine uses the standard **fork-and-PR** flow: it forks the repo under the
+token's identity, pushes the branch to that fork, and opens a cross-fork PR.
+
+- **`FIX_TOKEN`** must be a **personal access token** of a real, CLA-signed
+  contributor, with permission to create a fork and push to it. It is **not** the
+  Actions `GITHUB_TOKEN` (which can't touch a fork elsewhere). No upstream write
+  permission is needed.
+- **CLA / DCO.** CNCF projects (Kubernetes, etc.) run EasyCLA, which checks
+  **every commit's author** against a signed CLA and blocks merge otherwise. So:
+  - `author_name` / `author_email` **must** be the CLA-signed identity, and the
+    email **must** match that GitHub account, or the check reports an "unknown
+    commit author".
+  - Every commit gets a DCO `Signed-off-by` trailer matching the author
+    (required by Kubernetes repos). The engine adds this automatically.
+  - A GitHub App / bot identity generally is **not** recognized by EasyCLA;
+    use a human contributor's PAT.
+- **Prow keeps a human in the loop for free.** A draft PR won't run CI or merge
+  without a maintainer's `/ok-to-test`, `/lgtm`, and `/approve`. The engine never
+  merges anything.
+
+## Configuration
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    # repo:                       # defaults to branding.source_repo
+    #   owner: "kubernetes-sigs"
+    #   name: "cluster-api-provider-azure"
+    author_name: "Jane Maintainer"     # required: CLA-signed identity
+    author_email: "jane@example.com"   # required: must match that GitHub account
+    # min_confidence: high        # only systemic patterns at >= this confidence (default high)
+    # max_files: 2                # cap files a single fix may touch (default 2)
+    # max_new_per_run: 1          # cap fix PRs per fetch (default 1)
+    # labels: [ai-proposed-fix]   # labels applied to each PR
+    # dry_run: false              # propose without opening a PR (see below)
+```
+
+`enabled: true` requires `author_name` and `author_email` (validated at load).
+The feature is active only when **all** of `enabled: true`, a non-empty
+`FIX_TOKEN`, and a resolved source repo are present; any missing piece is a
+no-op, never a deploy failure.
+
+Wire the token into the deploy workflow:
+
+```yaml
+jobs:
+  deploy:
+    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+      FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
+```
+
+## Start with dry-run
+
+Before letting it open real PRs, set `dry_run: true`. The engine runs the full
+pipeline (locate, fetch, edit, validate) and writes the proposed changes to
+`fix_previews.json` in the published data directory (and logs the diffs), but
+**opens no PR and forks nothing**. Inspect the previews, confirm the edits look
+right and target the correct files, then flip `dry_run` off.
+
+## Guardrails (summary)
+
+- **Opt-in** per project; **draft-only** PRs; never pushes to a protected branch.
+- Only **systemic**, at-or-above-`min_confidence` patterns with a concrete fix.
+- **Anchored edits**, exact-match-once or rejected; bounded by `max_files`.
+- Dedicated **`FIX_TOKEN`** with a CLA-signed author and DCO sign-off.
+- **Idempotent**: a hidden marker keyed by job + root-cause fingerprint (local
+  state plus an open-PR search) means a pattern is never proposed twice, and a
+  different cause on the same job is proposed separately.
+- **`max_new_per_run`** caps PRs per fetch.
+
+## Known limitations
+
+- **File mode.** Edited files are committed as regular files (`100644`). If a fix
+  were to edit an executable script, the PR would drop the executable bit; the
+  change is visible in the draft diff for a reviewer to catch. Fix targets are
+  typically YAML/templates, so this is rare.
+- **Concurrency.** Dedup (local state + an open-PR search) is not atomic, so two
+  overlapping deploys could both propose the same fix. Scheduled deploys are
+  normally serialized; add a workflow `concurrency:` group if you run them in
+  parallel.
+- **First fork.** Creating a brand-new fork is asynchronous; on the very first
+  run for a never-forked repo the commit step may fail while the fork populates.
+  The next run (fork now exists) succeeds.
+
+## Relationship to the other features
+
+This builds on the same pattern analysis that drives the home-page recurring
+patterns, the auto-filed issues ([github-issues.md](github-issues.md)), and the
+skill suggestions ([skills.md](skills.md#auto-suggesting-recipes)). Issues and
+skill suggestions act on **your** repos; fix PRs are the only feature that writes
+to the **source** repo, which is why the identity and CLA requirements are
+stricter.

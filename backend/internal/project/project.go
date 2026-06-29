@@ -299,6 +299,11 @@ type AI struct {
 	// SuggestSkills configures optional auto-drafting of skill recipes for
 	// systemic recurring patterns. Off by default. Excluded from manifest.json.
 	SuggestSkills *SuggestSkills `yaml:"suggest_skills,omitempty" json:"-"`
+
+	// FixPRs configures optional auto-drafting of fix PRs against the source
+	// repo for systemic recurring patterns. Off by default. Excluded from
+	// manifest.json.
+	FixPRs *FixPRs `yaml:"fix_prs,omitempty" json:"-"`
 }
 
 // SuggestSkills configures the self-improving skills feature. When a systemic
@@ -335,6 +340,66 @@ func (c *Config) EffectiveSuggestSkills() SuggestSkills {
 	}
 	if len(out.Labels) == 0 {
 		out.Labels = []string{"skill-suggestion"}
+	}
+	return out
+}
+
+// FixPRs configures the agent-proposed fix-PR feature: when a systemic recurring
+// pattern carries a concrete remediation, the engine drafts a minimal code edit
+// and opens a draft PR against the source repo via fork-and-PR. Off by default;
+// the fetcher only acts when `enabled: true`, a FIX_TOKEN secret is present, and
+// the author identity is set, so a missing piece is a no-op rather than a deploy
+// failure. Targets a community repo, so the commit author must be a CLA-signed
+// identity (see docs/fix-prs.md).
+type FixPRs struct {
+	// Enabled turns the feature on for this consumer. Defaults to false.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Repo is the source repo to open fix PRs against. Defaults to
+	// branding.source_repo.
+	Repo *SourceRepo `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// AuthorName / AuthorEmail are the commit author identity. Required when
+	// enabled: the PR targets a community repo, so commits must be authored by a
+	// CLA-signed identity whose email matches that GitHub account (EasyCLA/DCO).
+	AuthorName  string `yaml:"author_name,omitempty" json:"author_name,omitempty"`
+	AuthorEmail string `yaml:"author_email,omitempty" json:"author_email,omitempty"`
+	// MinConfidence is the lowest pattern confidence that qualifies. Only
+	// systemic patterns are ever considered. Defaults to "high".
+	MinConfidence string `yaml:"min_confidence,omitempty" json:"min_confidence,omitempty"`
+	// MaxFiles caps how many files a single proposed fix may touch. Defaults
+	// to 2 to keep changes minimal and reviewable.
+	MaxFiles int `yaml:"max_files,omitempty" json:"max_files,omitempty"`
+	// MaxNewPerRun caps how many fix PRs are opened in a single fetch.
+	// Defaults to 1.
+	MaxNewPerRun int `yaml:"max_new_per_run,omitempty" json:"max_new_per_run,omitempty"`
+	// Labels are applied to every fix PR. Defaults to ["ai-proposed-fix"].
+	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	// DryRun runs the full generation pipeline (locate, fetch, edit, validate)
+	// and records the proposed change without opening any PR. Defaults to false.
+	DryRun bool `yaml:"dry_run,omitempty" json:"dry_run,omitempty"`
+}
+
+// EffectiveFixPRs resolves the fix-PR config with defaults applied. The target
+// repo defaults to branding.source_repo when `repo` is omitted entirely. Safe on
+// a nil receiver.
+func (c *Config) EffectiveFixPRs() FixPRs {
+	out := FixPRs{}
+	if c != nil && c.AI != nil && c.AI.FixPRs != nil {
+		out = *c.AI.FixPRs
+	}
+	if out.Repo == nil && c != nil {
+		out.Repo = &SourceRepo{Owner: c.Branding.SourceRepo.Owner, Name: c.Branding.SourceRepo.Name}
+	}
+	if strings.TrimSpace(out.MinConfidence) == "" {
+		out.MinConfidence = "high"
+	}
+	if out.MaxFiles <= 0 {
+		out.MaxFiles = 2
+	}
+	if out.MaxNewPerRun <= 0 {
+		out.MaxNewPerRun = 1
+	}
+	if len(out.Labels) == 0 {
+		out.Labels = []string{"ai-proposed-fix"}
 	}
 	return out
 }
@@ -638,6 +703,18 @@ func (c *Config) Validate() error {
 		// branding.source_repo, risking issues on the wrong repo.
 		if r := c.Issues.Repo; r != nil && (r.Owner == "" || r.Name == "") {
 			return fmt.Errorf("issues.repo requires both owner and name (omit issues.repo entirely to default to branding.source_repo)")
+		}
+	}
+
+	// fix_prs targets a (usually community) source repo, so an enabled config
+	// must name the CLA-signed commit author and may not carry a partial repo.
+	if c.AI != nil && c.AI.FixPRs != nil && c.AI.FixPRs.Enabled {
+		f := c.AI.FixPRs
+		if strings.TrimSpace(f.AuthorName) == "" || strings.TrimSpace(f.AuthorEmail) == "" {
+			return fmt.Errorf("ai.fix_prs requires author_name and author_email (the CLA-signed identity that authors the commits)")
+		}
+		if r := f.Repo; r != nil && (r.Owner == "" || r.Name == "") {
+			return fmt.Errorf("ai.fix_prs.repo requires both owner and name (omit it to default to branding.source_repo)")
 		}
 	}
 

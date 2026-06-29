@@ -1,0 +1,353 @@
+// Package fixpr drafts minimal code fixes for systemic recurring patterns and
+// opens draft pull requests against the source repo via fork-and-PR. It is
+// opt-in (ai.fix_prs), idempotent (a hidden marker dedupes per pattern), and
+// guardrailed: draft-only, bounded file scope, a CLA-signed commit author with a
+// DCO sign-off, and a dry-run mode that proposes without opening any PR.
+package fixpr
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+)
+
+// keyPrefix namespaces a fix's dedup key (one per recurring pattern + cause).
+const keyPrefix = "fix-pr::"
+
+// markerPrefix tags the hidden HTML comment embedded in every fix PR so the
+// search-based dedup can find it again when local state is lost.
+const markerPrefix = "prow-ai-dashboard-fix"
+
+// prClient is the subset of *ghpr.Client the manager needs.
+type prClient interface {
+	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
+	SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
+	ResolveBase(ctx context.Context, owner, repo string) (ghpr.Base, error)
+}
+
+// Options tunes the reconcile.
+type Options struct {
+	// SourceOwner / SourceName are the repo fix PRs target.
+	SourceOwner string
+	SourceName  string
+	// AuthorName / AuthorEmail are the CLA-signed commit author identity.
+	AuthorName  string
+	AuthorEmail string
+	// MinConfidence is the lowest pattern confidence that qualifies.
+	MinConfidence string
+	// MaxFiles caps how many files a single fix may touch.
+	MaxFiles int
+	// MaxNewPerRun caps fix PRs opened (or previews produced) this run.
+	MaxNewPerRun int
+	// Labels are applied to each fix PR.
+	Labels []string
+	// DryRun proposes fixes without opening any PR; previews are written to
+	// PreviewFile and logged.
+	DryRun bool
+	// PreviewFile is where dry-run previews are written (JSON). Ignored unless
+	// DryRun is set.
+	PreviewFile string
+	// DashboardURL is linked in the PR body for context.
+	DashboardURL string
+}
+
+// Manager reconciles systemic recurring patterns into fix PRs.
+type Manager struct {
+	pr        prClient
+	completer Completer
+	source    sourceReader
+	stateFile string
+	opts      Options
+	state     *State
+}
+
+// State persists which patterns already have a fix PR.
+type State struct {
+	// Repo scopes the state to the source repo; state for a different repo is
+	// discarded on load.
+	Repo    string                `json:"repo,omitempty"`
+	Tracked map[string]TrackedFix `json:"tracked"`
+}
+
+// TrackedFix records the fix PR opened for a pattern key.
+type TrackedFix struct {
+	URL      string `json:"url"`
+	OpenedAt string `json:"opened_at"`
+}
+
+// Preview is a dry-run proposed fix (no PR opened).
+type Preview struct {
+	Subject   string            `json:"subject"`
+	Rationale string            `json:"rationale"`
+	Diff      string            `json:"diff"`
+	Files     map[string]string `json:"-"`
+}
+
+// Stats reports what a reconcile did, for logging.
+type Stats struct {
+	Proposed  int // PRs opened (draft mode)
+	Adopted   int // existing open PR adopted
+	Previewed int // dry-run previews produced
+}
+
+// NewClients builds the GitHub PR client and source reader from a token.
+func NewClients(token string) (*ghpr.Client, sourceReader) {
+	return ghpr.NewClient(nil, token), newHTTPSource(token)
+}
+
+// NewManager builds a Manager and loads prior state from stateFile if present.
+func NewManager(pr prClient, completer Completer, source sourceReader, stateFile string, opts Options) *Manager {
+	m := &Manager{
+		pr:        pr,
+		completer: completer,
+		source:    source,
+		stateFile: stateFile,
+		opts:      opts,
+		state:     &State{Repo: opts.SourceOwner + "/" + opts.SourceName, Tracked: map[string]TrackedFix{}},
+	}
+	m.loadState()
+	return m
+}
+
+func (m *Manager) targetRepo() string { return m.opts.SourceOwner + "/" + m.opts.SourceName }
+
+func (m *Manager) loadState() {
+	data, err := os.ReadFile(m.stateFile)
+	if err != nil {
+		return
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		log.Printf("Warning: failed to parse fix-PR state: %v", err)
+		return
+	}
+	if s.Repo != "" && s.Repo != m.targetRepo() {
+		log.Printf("Fix PRs: target repo changed (%s -> %s); starting state fresh", s.Repo, m.targetRepo())
+		return
+	}
+	if s.Tracked != nil {
+		m.state = &s
+		m.state.Repo = m.targetRepo()
+	}
+}
+
+// SaveState writes the tracking state to disk.
+func (m *Manager) SaveState() error {
+	data, err := json.MarshalIndent(m.state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling fix-PR state: %w", err)
+	}
+	return os.WriteFile(m.stateFile, data, 0o644)
+}
+
+// Reconcile drafts fixes for eligible patterns. Per-pattern errors are logged
+// and skipped; the run is best-effort.
+func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalysis) (Stats, error) {
+	var stats Stats
+	var previews []Preview
+
+	work := eligible(patterns, m.opts.MinConfidence)
+	if len(work) == 0 {
+		return stats, nil
+	}
+
+	// Pin one upstream snapshot: read file content, apply edits, and commit all
+	// against the same base commit, so an upstream push mid-run can't make us
+	// commit stale content (silently reverting an intervening change).
+	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+	if err != nil {
+		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
+	}
+	read := func(ctx context.Context, path string) (string, bool, error) {
+		return m.source.FileContent(ctx, m.opts.SourceOwner, m.opts.SourceName, base.HeadSHA, path)
+	}
+
+	for _, p := range work {
+		key := keyFor(p)
+
+		// Dry-run: propose without any GitHub writes or state, so each run shows
+		// the current proposal. Cap previews per run.
+		if m.opts.DryRun {
+			if stats.Previewed >= m.opts.MaxNewPerRun {
+				break
+			}
+			fix, err := generateFix(ctx, m.completer, read, p, m.opts.MaxFiles)
+			if err != nil {
+				log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
+				continue
+			}
+			previews = append(previews, Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files})
+			stats.Previewed++
+			log.Printf("  🧪 fix preview for %q (%d file(s)):\n%s", p.Subject, len(fix.files), fix.diff)
+			continue
+		}
+
+		if _, tracked := m.state.Tracked[key]; tracked {
+			continue // already proposed
+		}
+		// A prior run may have an open fix PR even if local state is lost.
+		if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
+			log.Printf("  ⚠ fix-PR search failed for %s: %v", key, err)
+			continue
+		} else if found {
+			m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+			stats.Adopted++
+			log.Printf("  🔗 adopted existing fix PR for %q", p.Subject)
+			continue
+		}
+
+		if stats.Proposed >= m.opts.MaxNewPerRun {
+			log.Printf("  ⓘ fix-PR cap (%d) reached; deferring %q to next run", m.opts.MaxNewPerRun, p.Subject)
+			continue
+		}
+
+		fix, err := generateFix(ctx, m.completer, read, p, m.opts.MaxFiles)
+		if err != nil {
+			log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
+			continue
+		}
+
+		url, err := m.pr.OpenPR(ctx, ghpr.Request{
+			Owner:        m.opts.SourceOwner,
+			Repo:         m.opts.SourceName,
+			Files:        fix.files,
+			BranchPrefix: "ai-fix",
+			Title:        prTitle(p),
+			Body:         prBody(p, fix, key, m.opts.DashboardURL),
+			Draft:        true,
+			Fork:         true,
+			Base:         &base,
+			Labels:       m.opts.Labels,
+			AuthorName:   m.opts.AuthorName,
+			AuthorEmail:  m.opts.AuthorEmail,
+			SignOff:      true,
+		})
+		if url == "" {
+			log.Printf("  ⚠ failed to open fix PR for %q: %v", p.Subject, err)
+			continue
+		}
+		if err != nil {
+			// The PR opened but a follow-up (e.g. labeling) failed. Track it so
+			// we don't reopen a duplicate, and still count it against the cap.
+			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
+		}
+		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+		stats.Proposed++
+		log.Printf("  🛠️ opened draft fix PR for %q: %s", p.Subject, url)
+	}
+
+	if m.opts.DryRun && len(previews) > 0 && m.opts.PreviewFile != "" {
+		if err := writePreviews(m.opts.PreviewFile, previews); err != nil {
+			log.Printf("Warning: failed to write fix previews: %v", err)
+		}
+	}
+	return stats, nil
+}
+
+// eligible filters to systemic patterns at or above minConfidence that carry a
+// concrete suggested fix, ranked highest-confidence first.
+func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.PatternAnalysis {
+	floor := confidenceRank(minConfidence)
+	var out []models.PatternAnalysis
+	for _, p := range patterns {
+		if !p.Systemic || strings.TrimSpace(p.SuggestedFix) == "" {
+			continue
+		}
+		if confidenceRank(p.Confidence) < floor {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return confidenceRank(out[i].Confidence) > confidenceRank(out[j].Confidence)
+	})
+	return out
+}
+
+// keyFor is the stable dedup identity of a pattern: the job plus a fingerprint
+// of the shared root cause, so a different cause on the same job is proposed
+// separately while a recurrence of the same cause stays deduped.
+func keyFor(p models.PatternAnalysis) string {
+	job := p.JobID
+	if strings.TrimSpace(job) == "" {
+		job = p.Subject
+	}
+	cause := oneLine(strings.ToLower(p.SharedRootCause))
+	sum := sha256.Sum256([]byte(cause))
+	return keyPrefix + job + "::" + hex.EncodeToString(sum[:6])
+}
+
+func markerFor(key string) string {
+	return fmt.Sprintf("<!-- %s:%s -->", markerPrefix, markerToken(key))
+}
+
+func markerToken(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:8])
+}
+
+func prTitle(p models.PatternAnalysis) string {
+	subj := strings.TrimSpace(p.Subject)
+	if subj == "" {
+		subj = "a recurring CI failure"
+	}
+	return "fix: address recurring failure in " + subj
+}
+
+func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL string) string {
+	var sb strings.Builder
+	sb.WriteString("> [!WARNING]\n> Draft PR auto-proposed by a CI failure-analysis dashboard. Review carefully before use; the change is a starting point, not a verified fix.\n\n")
+	if r := strings.TrimSpace(fix.rationale); r != "" {
+		fmt.Fprintf(&sb, "**Proposed change:** %s\n\n", oneLine(r))
+	}
+	fmt.Fprintf(&sb, "**Recurring failure:** %s\n", p.Subject)
+	if c := strings.TrimSpace(p.SharedRootCause); c != "" {
+		fmt.Fprintf(&sb, "**Shared root cause:** %s\n", oneLine(c))
+	}
+	fmt.Fprintf(&sb, "**Builds analyzed:** %d (confidence: %s)\n\n", p.BuildsAnalyzed, p.Confidence)
+	sb.WriteString("**Before merging, a human must:**\n")
+	sb.WriteString("- Verify the change actually fixes the root cause (run the affected job).\n")
+	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.\n\n")
+	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
+	sb.WriteString(fix.diff)
+	sb.WriteString("\n```\n</details>\n")
+	if dashboardURL != "" {
+		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
+	}
+	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
+	return sb.String()
+}
+
+// confidenceRank orders verdict confidences. Unknown strings rank lowest.
+func confidenceRank(c string) int {
+	switch strings.ToLower(strings.TrimSpace(c)) {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func writePreviews(path string, previews []Preview) error {
+	data, err := json.MarshalIndent(previews, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func now() string { return time.Now().UTC().Format(time.RFC3339) }

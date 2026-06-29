@@ -726,3 +726,49 @@ func TestEffectiveSuggestSkillsDefaults(t *testing.T) {
 		t.Errorf("explicit config not preserved: %+v", got)
 	}
 }
+
+func TestEffectiveFixPRsDefaults(t *testing.T) {
+	// Defaults the target repo to branding.source_repo and applies field defaults.
+	c := &Config{
+		Branding: Branding{SourceRepo: SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}},
+		AI:       &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com"}},
+	}
+	got := c.EffectiveFixPRs()
+	if got.Repo == nil || got.Repo.Owner != "kubernetes-sigs" || got.Repo.Name != "cluster-api-provider-azure" {
+		t.Errorf("Repo = %+v, want branding.source_repo", got.Repo)
+	}
+	if got.MinConfidence != "high" || got.MaxFiles != 2 || got.MaxNewPerRun != 1 {
+		t.Errorf("defaults wrong: %+v", got)
+	}
+	if len(got.Labels) != 1 || got.Labels[0] != "ai-proposed-fix" {
+		t.Errorf("Labels = %v, want [ai-proposed-fix]", got.Labels)
+	}
+}
+
+func TestValidateFixPRsRequiresAuthor(t *testing.T) {
+	base := func() *Config {
+		c, err := parse(strings.NewReader(validYAML))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		return c
+	}
+	// Enabled without author identity is rejected.
+	c := base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "author_name and author_email") {
+		t.Errorf("expected author requirement error, got %v", err)
+	}
+	// Enabled with author identity passes.
+	c = base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com"}}
+	if err := c.Validate(); err != nil {
+		t.Errorf("unexpected error with author set: %v", err)
+	}
+	// Partial repo is rejected.
+	c = base()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", Repo: &SourceRepo{Owner: "x"}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "fix_prs.repo requires both") {
+		t.Errorf("expected partial-repo error, got %v", err)
+	}
+}

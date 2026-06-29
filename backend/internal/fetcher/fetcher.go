@@ -27,6 +27,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/collectors"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
@@ -301,6 +302,12 @@ func Run(ctx context.Context, opts Options) error {
 		processSkillSuggestions(ctx, cfg, flakinessReport.RecurringPatterns, aiSkillSet, aiToken, opts.OutDir)
 	}
 
+	// Draft fix PRs against the source repo when enabled, AI ran, and FIX_TOKEN
+	// is present.
+	if opts.EnableAI {
+		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, aiToken, opts.OutDir)
+	}
+
 	log.Println("Done!")
 	return nil
 }
@@ -406,6 +413,66 @@ func splitOwnerName(slug string) (owner, name string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+// processFixPRs drafts minimal fix PRs against the source repo for systemic
+// recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
+// operator PAT). In dry-run it writes previews instead of opening PRs. Any
+// missing piece is a no-op.
+func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) {
+	if cfg.AI == nil || cfg.AI.FixPRs == nil || !cfg.AI.FixPRs.Enabled {
+		return
+	}
+	if len(patterns) == 0 {
+		return
+	}
+	eff := cfg.EffectiveFixPRs()
+	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+		log.Println("Fix PRs: no source repo resolved (set ai.fix_prs.repo or branding.source_repo); skipping")
+		return
+	}
+	fixToken := os.Getenv("FIX_TOKEN")
+	if fixToken == "" {
+		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping")
+		return
+	}
+
+	aiClient := ai.NewClientWithOptions(ai.Options{
+		Token:        aiToken,
+		Endpoint:     aiEndpoint(cfg),
+		Model:        aiModel(cfg),
+		ExtraHeaders: aiHeaders(cfg),
+	})
+	prClient, source := fixpr.NewClients(fixToken)
+	mgr := fixpr.NewManager(prClient, aiClient, source,
+		filepath.Join(outDir, "fix_pr_state.json"),
+		fixpr.Options{
+			SourceOwner:   eff.Repo.Owner,
+			SourceName:    eff.Repo.Name,
+			AuthorName:    eff.AuthorName,
+			AuthorEmail:   eff.AuthorEmail,
+			MinConfidence: eff.MinConfidence,
+			MaxFiles:      eff.MaxFiles,
+			MaxNewPerRun:  eff.MaxNewPerRun,
+			Labels:        eff.Labels,
+			DryRun:        eff.DryRun,
+			PreviewFile:   filepath.Join(outDir, "fix_previews.json"),
+			DashboardURL:  cfg.Branding.SiteURL,
+		})
+	stats, err := mgr.Reconcile(ctx, patterns)
+	if err != nil {
+		log.Printf("Warning: fix-PR processing failed: %v", err)
+	} else if stats.Proposed+stats.Adopted+stats.Previewed > 0 {
+		log.Printf("🛠️ Fix PRs (%s/%s): %d proposed, %d adopted, %d previewed",
+			eff.Repo.Owner, eff.Repo.Name, stats.Proposed, stats.Adopted, stats.Previewed)
+	}
+	// Dry-run keeps no state (it re-previews each run), so only persist when
+	// actually opening PRs.
+	if !eff.DryRun {
+		if err := mgr.SaveState(); err != nil {
+			log.Printf("Warning: failed to save fix-PR state: %v", err)
+		}
+	}
 }
 
 // loadCachedJobDetails loads existing per-job JSON files from the output dir.
