@@ -32,6 +32,10 @@ for how to pin a release.
   `ai.model: claude-sonnet-4.5` (or the equivalent repo variables). This makes
   the engine fully provider-agnostic with no opinionated default.
 
+- Consolidated getting started into a single path: removed `docs/quickstart.md`
+  and made `docs/onboarding-a-new-project.md` the one entry point, leading with
+  the `onboard` scaffold.
+
 ### Added
 
 - Optional **self-improving skills** (`ai.suggest_skills`): after each fetch,
