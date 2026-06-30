@@ -161,6 +161,29 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 	}
 }
 
+func TestBuildPatternUserPrompt_RendersFixAndFiles(t *testing.T) {
+	failures := patternFailures(2)
+	failures[0].SuggestedFix = "serialize nodepool scaling operations"
+	failures[0].RelevantFiles = []string{"exp/controllers/azuremachinepool_controller.go", "test/e2e/aks_byo_node.go"}
+
+	prompt := buildPatternUserPrompt("job", failures)
+	for _, want := range []string{
+		"suggested_fix: serialize nodepool scaling operations",
+		"relevant_files: exp/controllers/azuremachinepool_controller.go, test/e2e/aks_byo_node.go",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+
+	// A changed per-build suggested fix is new evidence, so the cache key moves.
+	base := patternCacheKey("kubernetes", "job", "job", buildPatternUserPrompt("job", patternFailures(2)))
+	withFix := patternCacheKey("kubernetes", "job", "job", prompt)
+	if base == withFix {
+		t.Error("expected cache key to change when a per-build suggested_fix is added")
+	}
+}
+
 func TestAnalyzePattern_CapsBuilds(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
