@@ -934,6 +934,8 @@ func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
 			FailingTest:    rep.Name,
 			FailureMessage: rep.FailureMessage,
 			RootCause:      rep.AIAnalysis.RootCause,
+			SuggestedFix:   rep.AIAnalysis.SuggestedFix,
+			RelevantFiles:  rep.AIAnalysis.RelevantFiles,
 			IsTransient:    rep.AISummary != nil && rep.AISummary.IsTransient,
 			Severity:       rep.AIAnalysis.Severity,
 		})

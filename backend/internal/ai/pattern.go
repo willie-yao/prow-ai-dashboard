@@ -15,7 +15,7 @@ import (
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 1
+const patternPromptVersion = 2
 
 // maxPatternBuilds caps how many per-build analyses are fed into one pattern
 // call, keeping the prompt bounded for a test that failed in many builds.
@@ -29,8 +29,14 @@ type PatternFailure struct {
 	FailingTest    string
 	FailureMessage string
 	RootCause      string
-	IsTransient    bool
-	Severity       string
+	// SuggestedFix is this build's per-failure remediation. The correlation
+	// preserves the most specific one rather than regressing to the symptom.
+	SuggestedFix string
+	// RelevantFiles are the source files this build's analysis implicated,
+	// so the correlation can name concrete targets in the cross-cutting fix.
+	RelevantFiles []string
+	IsTransient   bool
+	Severity      string
 }
 
 // patternResponse is the model's JSON contract for the correlation verdict.
@@ -47,21 +53,27 @@ type patternResponse struct {
 // analyses of the same job into one systemic-vs-transient verdict.
 const patternSystemPrompt = `You correlate multiple failed builds of the SAME CI job to decide whether they share one underlying root cause.
 
-You are given N independent per-build failure analyses from recent failed builds of one job. Each build was analyzed in isolation, so each may have called its own failure "transient". The specific test or spec that failed may differ from build to build. Your job is the cross-build view those single analyses cannot have.
+You are given N independent per-build failure analyses from recent failed builds of one job. Each build was analyzed in isolation, so each may have called its own failure "transient". The specific test or spec that failed may differ from build to build. Each per-build analysis may also carry its own root_cause, suggested_fix, and the source files it implicated. Your job is the cross-build view those single analyses cannot have.
 
 Key principle: a failure mode that recurs across most builds is NOT a flake, it is a systemic bug. "Transient" infrastructure errors (timeouts, resource exhaustion, slow disk, quota, image-pull) that appear in the majority of recent runs almost always have a fixable systemic cause (e.g. an undersized VM, a tight timeout, a missing image, a misconfigured template). Weigh the underlying MECHANISM, not the surface symptom: the same root cause can present as different-looking failures (different test flavors, different failing specs, different error strings).
 
+Preserve signal, do not flatten it. The per-build analyses often already pinpoint the mechanism (a specific error, a named operation, an implicated file). Carry the MOST SPECIFIC evidence-backed cause and fix forward; do NOT regress to the lowest-common-denominator symptom that every build merely shares. If one build identified a concrete mechanism (e.g. "concurrent agent-pool update -> Azure OperationNotAllowed") and another only saw the symptom, the shared cause is the concrete mechanism, not the symptom.
+
+Distinguish symptom from root cause. "VM bootstrapping failed", "test timed out", "node never joined" are SYMPTOMS. The root cause is WHY: the specific operation, condition, config, or code path that produced them.
+
+The suggested_fix must be ACTIONABLE: name the specific change, the mechanism it addresses, and the component / file / config to change (cite a relevant_file when one is implicated). Do NOT emit non-fixes like "investigate the logs", "check why X fails", or "look into Y" - those are next steps, not fixes. If the evidence genuinely does not determine a concrete fix, say so plainly in suggested_fix AND lower confidence accordingly (do not claim high confidence on an undetermined fix).
+
 Decide:
-- systemic=true when most builds share one underlying cause. Name it precisely and give the cross-cutting fix.
+- systemic=true when most builds share one underlying cause. Name it precisely and give the concrete cross-cutting fix.
 - systemic=false when the failures are genuinely unrelated or independently one-off.
 
 Respond with ONLY a JSON object, no prose, no code fences:
 {
   "systemic": true|false,
-  "confidence": "high"|"medium"|"low",
-  "shared_root_cause": "the one underlying cause (empty if not systemic)",
+  "confidence": "high"|"medium"|"low",  // high only when the cause is specific AND the fix is concrete
+  "shared_root_cause": "the one underlying MECHANISM (empty if not systemic); not a restated symptom",
   "shared_builds": ["buildID", ...],   // builds you judge to share the cause
-  "suggested_fix": "the cross-cutting fix (empty if not systemic)",
+  "suggested_fix": "the concrete, actionable cross-cutting fix naming the change and target (empty if not systemic)",
   "summary": "one short paragraph: the verdict and the evidence for it"
 }`
 
@@ -166,6 +178,12 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 		}
 		if f.RootCause != "" {
 			fmt.Fprintf(&b, "root_cause: %s\n", clampPattern(f.RootCause, 1500))
+		}
+		if f.SuggestedFix != "" {
+			fmt.Fprintf(&b, "suggested_fix: %s\n", clampPattern(f.SuggestedFix, 600))
+		}
+		if len(f.RelevantFiles) > 0 {
+			fmt.Fprintf(&b, "relevant_files: %s\n", clampPattern(strings.Join(f.RelevantFiles, ", "), 400))
 		}
 		if f.FailureMessage != "" {
 			fmt.Fprintf(&b, "failure_message: %s\n", clampPattern(f.FailureMessage, 600))
