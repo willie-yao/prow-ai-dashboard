@@ -284,6 +284,7 @@ type agenticCacheData struct {
 	ModelBytes      int  `json:"model_bytes,omitempty"`
 	GCSBytes        int  `json:"gcs_bytes,omitempty"`
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+	IterationCapped bool `json:"iteration_capped,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -346,6 +347,12 @@ type agentState struct {
 	gcsBytes        int
 	calls           int
 	budgetExhausted bool
+
+	// iterationCapped is set when the loop exhausts max_iters before the model
+	// voluntarily finalizes, so the answer is force-finalized rather than a
+	// natural conclusion. Stamped onto the analysis; the triage tier escalates
+	// an iteration-capped transient verdict instead of trusting it.
+	iterationCapped bool
 
 	// critiquePassed records whether the accepted answer cleared the
 	// critique gate. Stamped onto the published AIAnalysis so the
@@ -442,6 +449,7 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.ModelBytes = state.modelBytes
 		analysis.GCSBytes = state.gcsBytes
 		analysis.BudgetExhausted = state.budgetExhausted
+		analysis.IterationCapped = state.iterationCapped
 		analysis.CritiquePassed = state.critiquePassed
 		if state.critiquePassed {
 			analysis.CritiqueVersion = currentCritiqueVersion
@@ -647,6 +655,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.ModelBytes = cached.ModelBytes
 				analysis.GCSBytes = cached.GCSBytes
 				analysis.BudgetExhausted = cached.BudgetExhausted
+				analysis.IterationCapped = cached.IterationCapped
 				analysis.CritiquePassed = cached.CritiquePassed
 				analysis.CritiqueVersion = cached.CritiqueVersion
 				analysis.SkillSetHash = cached.SkillSetHash
@@ -882,6 +891,11 @@ func (c *Client) doAnalyzeAgentic(
 			})
 		}
 	}
+
+	// The loop exits with done set only when the model voluntarily produced a
+	// tools-free final. Exiting because iter reached maxIters means the answer
+	// is force-finalized below, not a natural conclusion.
+	state.iterationCapped = !done
 
 	// If the model never returned a tools-free final message, OR returned one
 	// without parseable JSON, force a finalize round with tools omitted.
@@ -1191,6 +1205,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		ModelBytes:       state.modelBytes,
 		GCSBytes:         state.gcsBytes,
 		BudgetExhausted:  state.budgetExhausted,
+		IterationCapped:  state.iterationCapped,
 		CritiquePassed:   critiquePassed,
 		CritiqueVersion:  version,
 		SkillSetHash:     skillHash,

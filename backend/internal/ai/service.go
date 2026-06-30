@@ -216,13 +216,14 @@ func (s *Service) analyzeCascade(ctx context.Context, jobID, buildPrefix string,
 
 // triageAccepts reports whether the triage tier produced a grounded transient
 // verdict, the only outcome that short-circuits the deep tier. A real bug, a
-// transient below the triage grounding floors, or a budget-exhausted run all
-// escalate, so the cheap tier never finalizes a real bug.
+// transient below the triage grounding floors, a budget-exhausted run, or an
+// iteration-capped finalization all escalate, so the cheap tier never finalizes
+// a real bug or trusts a verdict it only reached by running out of budget.
 func (s *Service) triageAccepts(summary *models.AISummary, analysis *models.AIAnalysis) bool {
 	if summary == nil || analysis == nil {
 		return false
 	}
-	if !summary.IsTransient || analysis.BudgetExhausted {
+	if !summary.IsTransient || analysis.BudgetExhausted || analysis.IterationCapped {
 		return false
 	}
 	if analysis.ToolCalls < s.triageOpts.MinToolCalls || analysis.GCSBytes < s.triageOpts.MinGCSBytes {

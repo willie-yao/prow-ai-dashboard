@@ -45,7 +45,8 @@ for how to pin a release.
 - Optional **model cascade** (`ai.triage`): a cheap triage tier in front of the
   deep agentic analysis. When a triage model is set (or `AI_TRIAGE_MODEL`), each
   failure is investigated first on the cheaper model; a **grounded transient
-  verdict** (transient, grounding floors met, budget not exhausted) short-circuits
+  verdict** (transient, grounding floors met, budget not exhausted, and reached
+  before the iteration cap) short-circuits
   and skips the deep tier, while real bugs and ungrounded or budget-exhausted
   results **escalate** to the full analysis, so the cheap tier never finalizes a
   real bug. Endpoint, headers, and token inherit from the parent `ai:` block

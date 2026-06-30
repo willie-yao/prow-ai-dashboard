@@ -315,12 +315,15 @@ enough to enable the cascade.
 1. The triage tier investigates on the cheap model with a lighter iteration
    budget but the same grounding floors.
 2. If it reaches a **grounded transient verdict** (the failure is transient, the
-   triage floors were met, and it did not exhaust its budget), the result is
-   accepted and the deep tier is skipped. This is the cost win: the grounded
-   transient majority is resolved cheaply.
-3. Otherwise (a real bug, a transient that did not meet the floors, or a
-   budget-exhausted run) the failure **escalates** to the full deep tier. The
-   cheap tier never finalizes a real bug.
+   triage floors were met, it did not exhaust its budget, and it concluded
+   before hitting `max_iters`), the result is accepted and the deep tier is
+   skipped. This is the cost win: the grounded transient majority is resolved
+   cheaply.
+3. Otherwise (a real bug, a transient that did not meet the floors, a
+   budget-exhausted run, or a transient the model only reached by running out of
+   iterations) the failure **escalates** to the full deep tier. The cheap tier
+   never finalizes a real bug, and never trusts a transient verdict it was forced
+   into at the iteration cap.
 
 A triage infra error (including an endpoint that rejects tools) escalates rather
 than dropping the analysis, so a triage-only problem never loses a result.

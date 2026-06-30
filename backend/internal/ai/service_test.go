@@ -294,19 +294,21 @@ func TestTriageAccepts(t *testing.T) {
 		name            string
 		transient       bool
 		budgetExhausted bool
+		iterationCapped bool
 		toolCalls       int
 		gcsBytes        int
 		want            bool
 	}{
-		{"grounded transient", true, false, 2, 200, true},
-		{"real bug", false, false, 2, 200, false},
-		{"below tool floor", true, false, 0, 200, false},
-		{"below gcs floor", true, false, 2, 50, false},
-		{"budget exhausted", true, true, 2, 200, false},
+		{"grounded transient", true, false, false, 2, 200, true},
+		{"real bug", false, false, false, 2, 200, false},
+		{"below tool floor", true, false, false, 0, 200, false},
+		{"below gcs floor", true, false, false, 2, 50, false},
+		{"budget exhausted", true, true, false, 2, 200, false},
+		{"iteration capped", true, false, true, 2, 200, false},
 	}
 	for _, c := range cases {
 		sum := &models.AISummary{IsTransient: c.transient}
-		an := &models.AIAnalysis{BudgetExhausted: c.budgetExhausted, ToolCalls: c.toolCalls, GCSBytes: c.gcsBytes}
+		an := &models.AIAnalysis{BudgetExhausted: c.budgetExhausted, IterationCapped: c.iterationCapped, ToolCalls: c.toolCalls, GCSBytes: c.gcsBytes}
 		if got := s.triageAccepts(sum, an); got != c.want {
 			t.Errorf("%s: triageAccepts = %v, want %v", c.name, got, c.want)
 		}
@@ -398,6 +400,62 @@ func TestService_Cascade_TriageErrorEscalatesToDeep(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&deepSrv.calls); got == 0 {
 		t.Error("deep tier was not called after triage error")
+	}
+}
+
+func TestService_Cascade_IterationCappedTransientEscalates(t *testing.T) {
+	shrinkCallDelay(t)
+	// Triage never voluntarily finalizes: it makes a tool call every iteration
+	// until max_iters, then the forced finalize returns a transient verdict.
+	// That verdict is iteration-capped, so it must escalate despite being
+	// transient and meeting the floors.
+	triageSrv := newScriptedChatServer(t)
+	triageSrv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	triageSrv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	// Forced finalize round (loop hit max_iters=2):
+	triageSrv.push(200, chatRespFinal(`{"summary":"flake","is_transient":true,"root_cause":"looks transient","severity":"Transient-Ignore","suggested_fix":"retry","relevant_files":["build-log.txt"]}`))
+	deepSrv := newScriptedChatServer(t)
+	deepSrv.push(200, chatRespFinal(`{"summary":"deep","is_transient":false,"root_cause":"real bug found","severity":"High","suggested_fix":"fix it","relevant_files":["build-log.txt"]}`))
+
+	// Low floors so the only reason to escalate is the iteration cap.
+	s := newCascadeService(t, deepSrv.URL, triageSrv.URL, AgenticOptions{MaxIters: 2, ModelByteBudget: 1_000_000, GCSByteBudget: 1_000_000, Timeout: 30 * time.Second, MinToolCalls: 1, MinGCSBytes: 1})
+	tc := newFailedTC("Test D", "boom")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis == nil || tc.AIAnalysis.Tier != "deep" {
+		t.Fatalf("Tier = %q, want deep (iteration-capped transient must escalate)", tierOf(tc))
+	}
+	if !tc.AIAnalysis.Escalated {
+		t.Error("Escalated = false, want true")
+	}
+	if r, e := s.TriageStats(); r != 0 || e != 1 {
+		t.Errorf("TriageStats = (%d,%d), want (0,1)", r, e)
+	}
+}
+
+func TestService_Cascade_VoluntaryUnparseableFinalNotCapped(t *testing.T) {
+	shrinkCallDelay(t)
+	// The model voluntarily returns a tools-free final (done), but it isn't
+	// parseable JSON, so a finalize round repairs it. That is parse repair, not
+	// an iteration cap, so the grounded transient still short-circuits.
+	triageSrv := newScriptedChatServer(t)
+	triageSrv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	triageSrv.push(200, chatRespFinal("This looks like a transient flake to me."))
+	triageSrv.push(200, chatRespFinal(`{"summary":"flake","is_transient":true,"root_cause":"network blip that recovered","severity":"Transient-Ignore","suggested_fix":"retry","relevant_files":["build-log.txt"]}`))
+	deepSrv := newScriptedChatServer(t) // must not be called
+
+	s := newCascadeService(t, deepSrv.URL, triageSrv.URL, AgenticOptions{MaxIters: 5, ModelByteBudget: 1_000_000, GCSByteBudget: 1_000_000, Timeout: 30 * time.Second, MinToolCalls: 1, MinGCSBytes: 1})
+	tc := newFailedTC("Test E", "boom")
+	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
+
+	if tc.AIAnalysis == nil || tc.AIAnalysis.Tier != "triage" {
+		t.Fatalf("Tier = %q, want triage (parse repair must not count as iteration-capped)", tierOf(tc))
+	}
+	if tc.AIAnalysis.IterationCapped {
+		t.Error("IterationCapped = true, want false for a voluntary (unparseable) final")
+	}
+	if got := atomic.LoadInt32(&deepSrv.calls); got != 0 {
+		t.Errorf("deep tier called %d times, want 0", got)
 	}
 }
 

@@ -117,6 +117,12 @@ type AIAnalysis struct {
 	// budget caps and was forced to finalize on best-effort evidence.
 	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
 
+	// IterationCapped reports that the loop hit max_iters before the model
+	// voluntarily produced a final answer, so the answer was force-finalized
+	// rather than naturally concluded. The triage tier treats an
+	// iteration-capped transient verdict as ungrounded and escalates it.
+	IterationCapped bool `json:"iteration_capped,omitempty"`
+
 	// CritiquePassed reports whether this analysis cleared the critique
 	// gate. Only meaningful when the project has critique enabled.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
