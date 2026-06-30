@@ -641,7 +641,9 @@ func (c *Config) Validate() error {
 	require("id", c.ID)
 	require("name", c.Name)
 	require("storage.provider", c.Storage.Provider)
-	require("storage.bucket", c.Storage.Bucket)
+	if c.Storage.Provider != string(storage.ProviderLocal) {
+		require("storage.bucket", c.Storage.Bucket)
+	}
 	require("branding.title", c.Branding.Title)
 	require("branding.base_path", c.Branding.BasePath)
 	require("branding.site_url", c.Branding.SiteURL)
@@ -663,9 +665,11 @@ func (c *Config) Validate() error {
 		// Empty is already reported above; gcs needs no extra fields.
 	case string(storage.ProviderGCSWeb):
 		require("storage.base (required for the gcsweb provider)", c.Storage.Base)
+	case string(storage.ProviderLocal):
+		require("storage.base (the root directory, required for the local provider)", c.Storage.Base)
 	default:
-		missing = append(missing, fmt.Sprintf("storage.provider %q (want %q or %q)",
-			c.Storage.Provider, storage.ProviderGCS, storage.ProviderGCSWeb))
+		missing = append(missing, fmt.Sprintf("storage.provider %q (want %q, %q, or %q)",
+			c.Storage.Provider, storage.ProviderGCS, storage.ProviderGCSWeb, storage.ProviderLocal))
 	}
 
 	if len(missing) > 0 {

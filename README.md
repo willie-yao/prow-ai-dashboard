@@ -81,6 +81,8 @@ A dashboard is shaped by three things:
 **Development**
 - [Local development](docs/development.md): build, test, and run the fetcher
   against a consumer repo locally.
+- [Testing](docs/testing.md): unit, end-to-end pipeline, and quality-evaluation
+  layers.
 
 ## Adding a project
 
