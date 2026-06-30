@@ -1,4 +1,4 @@
-.PHONY: all build test test-v e2e lint fmt tidy \
+.PHONY: all build test test-v e2e eval eval-ab lint fmt tidy \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check \
        dist dist-ai clean clean-cache clean-all deploy help
@@ -28,6 +28,23 @@ test-v:
 # Run the end-to-end pipeline tests (hermetic: local fixtures + scripted model)
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
+
+# Run the AI quality evaluation over a labeled dataset (needs AI_ENDPOINT,
+# AI_MODEL, AI_TOKEN). DATASET and SAMPLES are overridable. Set PROJECT_DIR to a
+# consumer project dir to load its real prompt/skills/agentic config (production
+# fidelity); omit it to use the built-in default prompt.
+#   make eval DATASET=eval/dataset/example SAMPLES=3 PROJECT_DIR=../capz-prow-dashboard
+DATASET ?= eval/dataset/example
+SAMPLES ?= 1
+PROJECT_DIR ?=
+PROJECT_FLAG := $(if $(PROJECT_DIR),-project-dir $(PROJECT_DIR),)
+eval:
+	cd backend && go run ./cmd/eval -dataset $(DATASET) -samples $(SAMPLES) $(PROJECT_FLAG)
+
+# A/B the candidate (current env/config) against a baseline scorecard.json.
+#   make eval-ab DATASET=... BASELINE=eval/out/scorecard.json
+eval-ab:
+	cd backend && go run ./cmd/eval -dataset $(DATASET) -samples $(SAMPLES) $(PROJECT_FLAG) -baseline $(BASELINE)
 
 # Run Go linter (requires golangci-lint)
 lint:

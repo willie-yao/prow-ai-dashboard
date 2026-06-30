@@ -1,0 +1,17 @@
+{
+  "cases": [
+    {
+      "name": "control-plane-provisioning-timeout",
+      "job": "periodic-example-e2e-main",
+      "build": "101",
+      "build_prefix": "logs/periodic-example-e2e-main/101/",
+      "test_name": "[It] Workload cluster creation Creates a HA cluster with 3 control plane nodes",
+      "failure_message": "Timed out after 600.001s. Timed out waiting for 3 control plane machines to exist. Expected 2 to equal 3",
+      "labels": {
+        "is_transient": false,
+        "root_cause_keywords": ["control plane", "timed out", "register"],
+        "expected_files": ["build-log.txt"]
+      }
+    }
+  ]
+}
