@@ -215,15 +215,16 @@ func (b *localBackend) ListTree(_ context.Context, prefix string, max int) ([]st
 	return paths, truncated, nil
 }
 
+// WebURL returns a human-browsable link for a bucket-relative path. With
+// web_base set it points at that public root; otherwise it returns a
+// root-relative path rather than a file:// URL, so a local-provider run never
+// leaks the on-disk root into published output.
 func (b *localBackend) WebURL(path string) string {
+	p := strings.TrimLeft(path, "/")
 	if b.webBase != "" {
-		return b.webBase + "/" + strings.TrimLeft(path, "/")
+		return b.webBase + "/" + p
 	}
-	full, err := b.resolve(path)
-	if err != nil {
-		full = filepath.Join(b.root, filepath.FromSlash(path))
-	}
-	return "file://" + full
+	return "/" + p
 }
 
 func (b *localBackend) ProwURL(path string) string {

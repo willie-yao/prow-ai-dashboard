@@ -1,4 +1,4 @@
-.PHONY: all build test test-v lint fmt tidy \
+.PHONY: all build test test-v e2e lint fmt tidy \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check \
        dist dist-ai clean clean-cache clean-all deploy help
@@ -24,6 +24,10 @@ test:
 # Run Go tests with verbose output
 test-v:
 	cd backend && go test ./... -count=1 -v
+
+# Run the end-to-end pipeline tests (hermetic: local fixtures + scripted model)
+e2e:
+	cd backend && go test ./internal/e2e/... -count=1 -v
 
 # Run Go linter (requires golangci-lint)
 lint:

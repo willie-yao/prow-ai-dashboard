@@ -149,6 +149,39 @@ func TestLocalBackend_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestLocalBackend_WebURL(t *testing.T) {
+	// Without web_base, links are root-relative and never leak the on-disk root.
+	b, _ := newTestLocal(t)
+	if got := b.WebURL("logs/job/1/build-log.txt"); got != "/logs/job/1/build-log.txt" {
+		t.Errorf("WebURL = %q, want a root-relative path with no filesystem leak", got)
+	}
+	// With web_base, links point at the public root.
+	wb, err := NewLocalBackend(t.TempDir(), "https://example.com/bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wb.WebURL("logs/x"); got != "https://example.com/bucket/logs/x" {
+		t.Errorf("WebURL with web_base = %q", got)
+	}
+}
+
+func TestNew_LocalProvider(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "logs/job/1/finished.json", `{"result":"FAILURE"}`)
+	b, err := New(Config{Provider: ProviderLocal, Base: root}, nil)
+	if err != nil {
+		t.Fatalf("New(local): %v", err)
+	}
+	data, err := ReadAll(context.Background(), b, "logs/job/1/finished.json")
+	if err != nil || string(data) != `{"result":"FAILURE"}` {
+		t.Errorf("read via New(local) = %q, %v", data, err)
+	}
+	// Local requires base (the root), not bucket.
+	if _, err := New(Config{Provider: ProviderLocal}, nil); err == nil {
+		t.Error("expected error for local provider without base")
+	}
+}
+
 func TestNewLocalBackend_Errors(t *testing.T) {
 	if _, err := NewLocalBackend(filepath.Join(t.TempDir(), "missing"), ""); err == nil {
 		t.Error("expected error for missing root")

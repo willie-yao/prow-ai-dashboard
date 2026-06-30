@@ -23,6 +23,10 @@ type Provider string
 const (
 	ProviderGCS    Provider = "gcs"
 	ProviderGCSWeb Provider = "gcsweb"
+	// ProviderLocal reads artifacts from a local directory tree mirroring the
+	// bucket layout. Base is the root directory. Suited to offline or air-gapped
+	// fetches against a downloaded artifact tree, and to hermetic tests.
+	ProviderLocal Provider = "local"
 )
 
 // Config selects and configures a Backend. Bucket is always required. The
@@ -93,6 +97,14 @@ func New(cfg Config, client *http.Client) (Backend, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
+	// The local backend reads from a directory, not a bucket, so it requires
+	// Base (the root) rather than Bucket.
+	if cfg.Provider == ProviderLocal {
+		if cfg.Base == "" {
+			return nil, fmt.Errorf("storage: local provider requires base (the root directory)")
+		}
+		return NewLocalBackend(cfg.Base, cfg.WebBase)
+	}
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("storage: bucket is required")
 	}
@@ -105,9 +117,9 @@ func New(cfg Config, client *http.Client) (Backend, error) {
 		}
 		return newGCSWebBackend(cfg, client), nil
 	case "":
-		return nil, fmt.Errorf("storage: provider is required (gcs or gcsweb)")
+		return nil, fmt.Errorf("storage: provider is required (gcs, gcsweb, or local)")
 	default:
-		return nil, fmt.Errorf("storage: unknown provider %q (want gcs or gcsweb)", cfg.Provider)
+		return nil, fmt.Errorf("storage: unknown provider %q (want gcs, gcsweb, or local)", cfg.Provider)
 	}
 }
 
