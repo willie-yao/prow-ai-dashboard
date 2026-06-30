@@ -36,6 +36,7 @@ Consumer workflow (cron)
 backend/                       Go 1.25
   cmd/
     fetcher/                   Main entrypoint; one binary per deploy
+    server/                    Kubernetes-native API server (read parity + capabilities)
     ai-toolcall-spike/         Throwaway probe; safe to ignore
     _manifest_check/           Build-time check on manifest schema
   internal/
@@ -64,6 +65,7 @@ backend/                       Go 1.25
     output/                    JSON writers (dashboard.json, jobs/, ...)
     project/                   project.yaml load + validate
     prow/jobconfig/            kubernetes/test-infra job parsing
+    server/                    HTTP handler: /data/* read parity + /api/capabilities
 
 frontend/                      React 19 + Vite 8 + Tailwind 4
   public/data/                 Fetcher writes JSON here; Vite serves it

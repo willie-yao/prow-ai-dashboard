@@ -76,6 +76,9 @@ A dashboard is shaped by three things:
 **Operations**
 - [In-cluster runner](docs/self-hosted-runner-in-cluster.md): run the deploy on
   a self-hosted runner to reach a private, in-cluster AI endpoint.
+- [Server mode](docs/server.md): run the dashboard Kubernetes-native, serving
+  the same `/data/*.json` contract plus a capability descriptor, while keeping
+  static Pages as the default.
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
 
 **Development**
