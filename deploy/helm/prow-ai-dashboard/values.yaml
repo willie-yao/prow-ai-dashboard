@@ -1,0 +1,112 @@
+# Default values for the prow-ai-dashboard chart.
+# The fetcher runs as a CronJob and writes JSON (and its AI cache) to a shared
+# volume; the server Deployment reads that volume and serves the SPA plus the
+# /data/*.json contract and /api/capabilities.
+
+image:
+  repository: ghcr.io/willie-yao/prow-ai-dashboard
+  # Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Shared volume holding fetcher output and the AI cache. It must be
+# ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at
+# the same time. Set existingClaim to reuse a pre-provisioned PVC.
+persistence:
+  enabled: true
+  existingClaim: ""
+  accessMode: ReadWriteMany
+  size: 1Gi
+  storageClass: ""
+  # Mount path inside both the fetcher and the server containers.
+  mountPath: /data
+
+# Consumer-owned project config. Supply project.yaml and prompts/system.md at
+# install time, for example:
+#   helm install ... \
+#     --set-file project.config=project.yaml \
+#     --set-file project.systemPrompt=prompts/system.md
+# Or point at a ConfigMap you created yourself with keys project.yaml and
+# system.md via project.existingConfigMap.
+# Note: consumer-owned skills/*.yaml recipes are not wired into this chart yet.
+# Use project.existingConfigMap with a git-sync sidecar if you need them.
+project:
+  existingConfigMap: ""
+  config: ""
+  systemPrompt: ""
+  # Mount path the fetcher reads as -project-dir.
+  mountPath: /config
+
+# AI failure analysis. When enabled the fetcher runs with -ai and needs an
+# OpenAI-compatible endpoint, a model id, and a token. The token lives in a
+# Secret; endpoint and model are passed as env. Set existingSecret to reuse a
+# Secret you manage (it must hold the key named by tokenSecretKey).
+ai:
+  enabled: false
+  endpoint: ""
+  model: ""
+  token: ""
+  existingSecret: ""
+  tokenSecretKey: AI_TOKEN
+
+fetcher:
+  # Cron schedule for the fetch. Default: every 6 hours.
+  schedule: "0 */6 * * *"
+  # Forbid overlapping runs so a slow fetch never races itself.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  buildsPerJob: 10
+  workers: 5
+  timeout: 30m
+  includePresubmits: false
+  # Extra environment variables (e.g. GITHUB_TOKEN, SLACK_WEBHOOK_URL) sourced
+  # from secrets or given inline. Standard core/v1 EnvVar entries.
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+server:
+  replicaCount: 1
+  # Path to the SPA baked into the image.
+  staticDir: /app/web
+  port: 8080
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: dashboard.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Applied to both the fetcher and server pods. The numeric UID/GID match the
+# distroless nonroot user; fsGroup makes the shared volume group-writable so the
+# non-root fetcher can write to a freshly provisioned PVC.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

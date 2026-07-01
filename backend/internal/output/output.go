@@ -18,7 +18,9 @@ func SanitizeFilename(name string) string {
 	return unsafeChars.ReplaceAllString(name, "-")
 }
 
-// writeJSON writes indented JSON and creates parent directories as needed.
+// writeJSON writes indented JSON and creates parent directories as needed. It
+// writes to a temp file and renames into place so a concurrent reader (the
+// server in Kubernetes-native mode) never observes a half-written file.
 func writeJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -27,7 +29,23 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // WriteDashboard writes dashboard.json to dir.

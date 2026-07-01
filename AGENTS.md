@@ -73,9 +73,11 @@ frontend/                      React 19 + Vite 8 + Tailwind 4
     hooks/useData.ts           Loads dashboard.json, flakiness.json, jobs/*
     components/ManifestProvider.tsx   Loads manifest.json
 configs/example/               Docs-only sample project.yaml + prompts/
+deploy/helm/                   Helm chart for the Kubernetes-native mode
+Dockerfile                     Multi-stage image: fetcher + server + SPA
 docs/                          agentic.md, ai-providers.md, skills.md,
                                writing-prompts.md, onboarding-a-new-project.md
-.github/workflows/             ci.yml + reusable-deploy.yml + reusable-clear-cache.yml
+.github/workflows/             ci.yml + reusable-deploy.yml + reusable-clear-cache.yml + image.yml
 Makefile                       Local-dev entry points (PROJECT_DIR override)
 ```
 
@@ -91,6 +93,11 @@ make tidy            # go mod tidy
 make fe-install      # npm ci in frontend/
 make fe-check        # tsc --noEmit
 make fe-build        # production build into frontend/dist/
+
+# Kubernetes-native mode (Go 1.25)
+make build-server    # cd backend && go build -o ../bin/server ./cmd/server/
+make serve           # serve frontend/public/data over HTTP
+make image           # docker build fetcher + server + SPA into one image
 ```
 
 ## Local development workflow
@@ -269,6 +276,9 @@ live deploy.
 - `docs/ai-providers.md` - endpoint shape requirements (OpenAI-style chat
   completions + function calling) and per-provider notes
   (Copilot, OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...).
+- `docs/server.md` - server mode endpoints and the capability seam.
+- `docs/kubernetes.md` - Kubernetes-native deploy: fetcher CronJob + server
+  from a shared volume, via the Helm chart in `deploy/helm`.
 
 ## When in doubt
 

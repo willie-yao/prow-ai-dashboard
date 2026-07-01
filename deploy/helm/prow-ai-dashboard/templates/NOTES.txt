@@ -1,0 +1,25 @@
+The prow-ai-dashboard is installed.
+
+Fetcher CronJob:  {{ include "prow-ai-dashboard.fullname" . }}-fetcher (schedule {{ .Values.fetcher.schedule | quote }})
+Server:           {{ include "prow-ai-dashboard.fullname" . }}-server
+Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persistence.accessMode }})
+
+The server serves the SPA at / and the JSON contract at /data/*, with a
+capability descriptor at /api/capabilities.
+
+{{- if .Values.ingress.enabled }}
+Reach it at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+No ingress is enabled. Port-forward to try it:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "prow-ai-dashboard.fullname" . }}-server 8080:{{ .Values.server.service.port }}
+  open http://localhost:8080
+{{- end }}
+
+The fetcher runs on its schedule. To populate data immediately, create a Job
+from the CronJob:
+
+  kubectl --namespace {{ .Release.Namespace }} create job --from=cronjob/{{ include "prow-ai-dashboard.fullname" . }}-fetcher fetch-now

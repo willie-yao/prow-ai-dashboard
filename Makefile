@@ -1,4 +1,4 @@
-.PHONY: all build build-server serve test test-v e2e lint fmt tidy \
+.PHONY: all build build-server serve image test test-v e2e lint fmt tidy \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check \
        dist dist-ai clean clean-cache clean-all deploy help
@@ -7,6 +7,10 @@
 # Override on the command line, e.g.:
 #   make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard
 PROJECT_DIR ?= configs/example
+
+# Container image coordinates for `make image`.
+IMAGE ?= ghcr.io/willie-yao/prow-ai-dashboard
+VERSION ?= dev
 
 # Default target
 all: build
@@ -25,6 +29,11 @@ build-server:
 # Point a built SPA at it with -static-dir=frontend/dist for a self-contained run.
 serve: build-server
 	./bin/server -data-dir=frontend/public/data
+
+# Build the container image (fetcher + server + SPA). Override IMAGE/VERSION:
+#   make image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.2.3
+image:
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
 
 # Run all Go tests
 test:
@@ -117,6 +126,8 @@ help:
 	@echo "prow-ai-dashboard — Make Targets"
 	@echo ""
 	@echo "  build              Build Go data fetcher binary"
+	@echo "  build-server       Build Go API server binary"
+	@echo "  serve              Serve fetched data + capabilities over HTTP"
 	@echo "  test               Run Go tests"
 	@echo "  test-v             Run Go tests (verbose)"
 	@echo "  lint               Run golangci-lint"
@@ -139,6 +150,7 @@ help:
 	@echo ""
 	@echo "  dist               Full pipeline: build + fetch + frontend"
 	@echo "  dist-ai            Full pipeline with AI analysis"
+	@echo "  image              Build the container image (fetcher + server + SPA)"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"
 	@echo "  clean-all          Clean everything including cache"
