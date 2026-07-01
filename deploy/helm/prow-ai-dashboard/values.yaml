@@ -14,14 +14,15 @@ nameOverride: ""
 fullnameOverride: ""
 
 # Fetch mode selects how data is produced. Both modes have exactly one writer.
+#   watch: (default) a continuous worker Deployment refreshes on a short interval
+#          and reconciles (rediscovers jobs, runs side effects) periodically.
+#          Best for an in-cluster deploy co-located with the inference stack.
 #   cron:  the fetcher runs as a scheduled CronJob (portable, also the GitHub
 #          Pages path).
-#   watch: a continuous worker Deployment refreshes on a short interval and
-#          reconciles (rediscovers jobs, runs side effects) periodically.
 # In watch mode the worker must be the only writer to the shared volume: do not
 # also run the CronJob or a manual fetch-now Job, and do not point a second
 # release at the same existingClaim.
-mode: cron
+mode: watch
 
 # Shared volume holding fetcher output and the AI cache. It must be
 # ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at

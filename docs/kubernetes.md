@@ -40,14 +40,14 @@ them. `ReadWriteMany` is required so both pods can mount the claim at once.
 The chart produces data in one of two modes, set by `mode`. Both keep exactly
 one writer to the shared volume.
 
-- `mode: cron` (default): the fetcher runs as a scheduled CronJob. Portable, and
-  the same binary the GitHub Actions + Pages path uses.
-- `mode: watch`: a continuous worker Deployment refreshes data on a short
-  interval, reusing a cached job list so it skips job rediscovery, and does a
-  full pass (rediscover jobs, run notifications and issue and PR side effects)
+- `mode: watch` (default): a continuous worker Deployment refreshes data on a
+  short interval, reusing a cached job list so it skips job rediscovery, and does
+  a full pass (rediscover jobs, run notifications and issue and PR side effects)
   on a longer interval. Newly finished builds are analyzed within the watch
   interval instead of waiting for the next cron tick. The worker uses a
   `Recreate` rollout so an update never runs two writers at once.
+- `mode: cron`: the fetcher runs as a scheduled CronJob. Portable, and the same
+  binary the GitHub Actions + Pages path uses.
 
 Watch mode detects new builds by listing each job's builds in the artifact
 store and reusing the on-disk cache, the same mechanism a normal fetch uses. It
@@ -113,7 +113,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | Value | Purpose |
 | --- | --- |
 | `image.repository`, `image.tag` | Engine image; tag defaults to the chart `appVersion`. |
-| `mode` | `cron` (scheduled CronJob) or `watch` (continuous worker Deployment). |
+| `mode` | `watch` (continuous worker Deployment, default) or `cron` (scheduled CronJob). |
 | `persistence.accessMode` | Must be `ReadWriteMany`. |
 | `persistence.storageClass`, `persistence.size` | The shared volume's class and size. |
 | `persistence.existingClaim` | Reuse a pre-provisioned PVC instead of creating one. |
