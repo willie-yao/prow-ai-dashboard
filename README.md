@@ -79,6 +79,8 @@ A dashboard is shaped by three things:
 - [Server mode](docs/server.md): run the dashboard Kubernetes-native, serving
   the same `/data/*.json` contract plus a capability descriptor, while keeping
   static Pages as the default.
+- [Kubernetes deploy](docs/kubernetes.md): run the fetcher as a CronJob and the
+  server from a shared volume, via the Helm chart in `deploy/helm`.
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
 
 **Development**

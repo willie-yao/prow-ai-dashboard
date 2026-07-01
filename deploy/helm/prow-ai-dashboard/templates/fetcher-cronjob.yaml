@@ -1,0 +1,102 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "prow-ai-dashboard.fullname" . }}-fetcher
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fetcher
+spec:
+  schedule: {{ .Values.fetcher.schedule | quote }}
+  concurrencyPolicy: {{ .Values.fetcher.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.fetcher.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.fetcher.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "prow-ai-dashboard.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: fetcher
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: fetcher
+              image: {{ include "prow-ai-dashboard.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - /usr/local/bin/fetcher
+                - -project-dir={{ .Values.project.mountPath }}
+                - -out={{ .Values.persistence.mountPath }}
+                - -builds={{ .Values.fetcher.buildsPerJob }}
+                - -workers={{ .Values.fetcher.workers }}
+                - -timeout={{ .Values.fetcher.timeout }}
+                {{- if .Values.fetcher.includePresubmits }}
+                - -include-presubmits
+                {{- end }}
+                {{- if .Values.ai.enabled }}
+                - -ai
+                {{- end }}
+              env:
+                {{- if .Values.ai.enabled }}
+                - name: AI_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                      key: {{ .Values.ai.tokenSecretKey }}
+                {{- if .Values.ai.endpoint }}
+                - name: AI_ENDPOINT
+                  value: {{ .Values.ai.endpoint | quote }}
+                {{- end }}
+                {{- if .Values.ai.model }}
+                - name: AI_MODEL
+                  value: {{ .Values.ai.model | quote }}
+                {{- end }}
+                {{- end }}
+                {{- with .Values.fetcher.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: {{ .Values.persistence.mountPath }}
+                - name: project
+                  mountPath: {{ .Values.project.mountPath }}
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                {{- toYaml .Values.fetcher.resources | nindent 16 }}
+          {{- with .Values.fetcher.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.fetcher.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.fetcher.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "prow-ai-dashboard.pvcName" . }}
+            - name: project
+              configMap:
+                name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
+                items:
+                  - key: project.yaml
+                    path: project.yaml
+                  - key: system.md
+                    path: prompts/system.md
+            - name: tmp
+              emptyDir: {}
