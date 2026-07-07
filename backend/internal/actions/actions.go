@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 )
 
 // ErrNotFound means no pattern in the published data matched the given id.
@@ -49,6 +50,20 @@ type Service struct {
 // jobs/*.json and the *_state.json files.
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	return &Service{cfg: cfg, dataDir: dataDir, ai: ai}
+}
+
+// aiCompleter returns an AI client for template reformatting when AI is fully
+// configured, else nil (which makes the fillers a pass-through).
+func (s *Service) aiCompleter() repotemplate.Completer {
+	if s.ai.Endpoint == "" || s.ai.Model == "" || s.ai.Token == "" {
+		return nil
+	}
+	return ai.NewClientWithOptions(ai.Options{
+		Token:        s.ai.Token,
+		Endpoint:     s.ai.Endpoint,
+		Model:        s.ai.Model,
+		ExtraHeaders: s.ai.Headers,
+	})
 }
 
 // findPattern resolves a failure id to its PatternAnalysis by scanning the
@@ -114,11 +129,18 @@ func (s *Service) CreateIssue(ctx context.Context, failureID, userToken string) 
 
 	client := issues.NewClient(userToken, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
+	// When AI is available, reformat the issue body to follow the target repo's
+	// issue template; nil filler leaves the default body untouched.
+	var filler issues.TemplateFiller
+	if c := s.aiCompleter(); c != nil {
+		filler = repotemplate.NewIssueFiller(userToken, c, eff.Repo.Owner, eff.Repo.Name)
+	}
 	// RecoverPrefixes is deliberately empty: a single on-demand create must only
 	// create or adopt this one spec. A non-empty set would make Reconcile treat
 	// every other tracked issue as recovered and comment/close it.
 	mgr := issues.NewManager(client, filepath.Join(s.dataDir, "issue_state.json"), targetRepo, issues.Options{
-		MaxNewPerRun: 1,
+		MaxNewPerRun:   1,
+		TemplateFiller: filler,
 	})
 	if _, err := mgr.Reconcile(ctx, specs); err != nil {
 		return "", fmt.Errorf("filing issue: %w", err)
@@ -184,6 +206,7 @@ func (s *Service) ProposeFix(ctx context.Context, failureID, userToken string) (
 			DashboardURL:    s.cfg.Branding.SiteURL,
 			Critique:        critique,
 			CritiqueRetries: critiqueRetries,
+			PRFiller:        repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
 		})
 	stats, err := mgr.Reconcile(ctx, []models.PatternAnalysis{*pa})
 	if err != nil {

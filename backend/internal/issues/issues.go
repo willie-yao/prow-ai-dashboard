@@ -98,6 +98,17 @@ type Options struct {
 	// A tracked key outside the set is left as-is so disabled or skipped
 	// triggers never wrongly resolve their issues.
 	RecoverPrefixes []string
+	// TemplateFiller, when set, reformats a new issue's title and body to follow
+	// the repo's issue template before filing. A nil filler (or one that finds
+	// no template) is a pass-through.
+	TemplateFiller TemplateFiller
+}
+
+// TemplateFiller reformats an issue's title and body to follow the repo's issue
+// template. repotemplate.IssueFiller satisfies it. Implementations must be safe
+// to call with a nil receiver and must return the input on any error.
+type TemplateFiller interface {
+	FillIssue(ctx context.Context, title, body string) (string, string)
 }
 
 // Manager reconciles the current set of findings against tracked issues.
@@ -221,7 +232,18 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 			log.Printf("  ⓘ issue create cap (%d) reached; deferring %s to next run", m.opts.MaxNewPerRun, key)
 			continue
 		}
-		num, urlStr, err := m.client.CreateIssue(ctx, spec.Title, spec.Body, spec.Labels)
+		title, body := spec.Title, spec.Body
+		if m.opts.TemplateFiller != nil {
+			// Reformat to follow the repo issue template, then guarantee the
+			// dedup marker survives so tracking and adoption keep working.
+			marker := markerFor(key)
+			title, body = m.opts.TemplateFiller.FillIssue(ctx, title, strings.ReplaceAll(body, marker, ""))
+			title = clampTitle(title)
+			if !strings.Contains(body, marker) {
+				body = strings.TrimRight(body, "\n") + "\n\n" + marker
+			}
+		}
+		num, urlStr, err := m.client.CreateIssue(ctx, title, body, spec.Labels)
 		if err != nil {
 			log.Printf("  ⚠ failed to create issue for %s: %v", key, err)
 			continue

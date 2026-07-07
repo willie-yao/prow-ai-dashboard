@@ -69,6 +69,16 @@ type Options struct {
 	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections or a
 	// validation error before the fix is dropped.
 	CritiqueRetries int
+	// PRFiller, when set, reformats the PR description to follow the repo's PR
+	// template. A nil filler (or one that finds no template) is a pass-through.
+	PRFiller PRBodyFiller
+}
+
+// PRBodyFiller reformats a PR description to follow the repo's PR template.
+// repotemplate.PRFiller satisfies it. Implementations must be safe to call with
+// a nil receiver and must return the input on any error.
+type PRBodyFiller interface {
+	FillBody(ctx context.Context, description string) string
 }
 
 // Manager reconciles systemic recurring patterns into fix PRs.
@@ -265,13 +275,19 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			continue
 		}
 
+		// Reformat the description to follow the repo PR template when configured.
+		description := prDescription(p, fix)
+		if m.opts.PRFiller != nil {
+			description = m.opts.PRFiller.FillBody(ctx, description)
+		}
+
 		url, err := m.pr.OpenPR(ctx, ghpr.Request{
 			Owner:        m.opts.SourceOwner,
 			Repo:         m.opts.SourceName,
 			Files:        fix.files,
 			BranchPrefix: "ai-fix",
 			Title:        prTitle(p),
-			Body:         prBody(p, fix, key, m.opts.DashboardURL),
+			Body:         prBody(p, fix, key, m.opts.DashboardURL, description),
 			Draft:        true,
 			Fork:         m.opts.Fork,
 			Base:         &base,
@@ -358,9 +374,25 @@ func prTitle(p models.PatternAnalysis) string {
 	return "fix: address recurring failure in " + subj
 }
 
-func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL string) string {
+func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL, description string) string {
 	var sb strings.Builder
 	sb.WriteString("> [!WARNING]\n> Draft PR auto-proposed by a CI failure-analysis dashboard. Review carefully before use; the change is a starting point, not a verified fix.\n\n")
+	sb.WriteString(strings.TrimSpace(description))
+	sb.WriteString("\n\n")
+	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
+	sb.WriteString(fix.diff)
+	sb.WriteString("\n```\n</details>\n")
+	if dashboardURL != "" {
+		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
+	}
+	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
+	return sb.String()
+}
+
+// prDescription is the human-readable summary of the fix. It is the part that
+// gets reformatted to follow a repo PR template when one is configured.
+func prDescription(p models.PatternAnalysis, fix *proposedFix) string {
+	var sb strings.Builder
 	if r := strings.TrimSpace(fix.rationale); r != "" {
 		fmt.Fprintf(&sb, "**Proposed change:** %s\n\n", oneLine(r))
 	}
@@ -371,14 +403,7 @@ func prBody(p models.PatternAnalysis, fix *proposedFix, key, dashboardURL string
 	fmt.Fprintf(&sb, "**Builds analyzed:** %d (confidence: %s)\n\n", p.BuildsAnalyzed, p.Confidence)
 	sb.WriteString("**Before merging, a human must:**\n")
 	sb.WriteString("- Verify the change actually fixes the root cause (run the affected job).\n")
-	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.\n\n")
-	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
-	sb.WriteString(fix.diff)
-	sb.WriteString("\n```\n</details>\n")
-	if dashboardURL != "" {
-		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
-	}
-	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
+	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.")
 	return sb.String()
 }
 

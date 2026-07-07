@@ -507,3 +507,41 @@ func TestReconcile_SingleSpecNoRecoverPrefixes(t *testing.T) {
 		t.Error("unrelated tracked finding was dropped by a single-spec create")
 	}
 }
+
+// stubFiller reformats to a template-like body that drops the marker, to prove
+// Reconcile re-adds it.
+type stubFiller struct{}
+
+func (stubFiller) FillIssue(_ context.Context, title, _ string) (string, string) {
+	return title + " (templated)", "**What happened**: filled from template"
+}
+
+func TestReconcile_TemplateFillerPreservesMarker(t *testing.T) {
+	f := newFakeGitHub(t)
+	opts := defaultOpts()
+	opts.TemplateFiller = stubFiller{}
+	m := newTestManager(t, f, opts)
+
+	key := "pattern::job-a"
+	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// The created issue body must still carry the dedup marker so a later run
+	// adopts it instead of filing a duplicate.
+	var created *fakeIssue
+	for _, is := range f.issues {
+		created = is
+	}
+	if created == nil {
+		t.Fatal("no issue created")
+	}
+	if !strings.Contains(created.Body, markerFor(key)) {
+		t.Errorf("marker missing from templated body: %q", created.Body)
+	}
+	if !strings.Contains(created.Body, "filled from template") {
+		t.Errorf("template fill not applied: %q", created.Body)
+	}
+	if !strings.Contains(created.Title, "templated") {
+		t.Errorf("title not templated: %q", created.Title)
+	}
+}
