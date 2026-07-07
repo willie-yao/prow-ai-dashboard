@@ -37,7 +37,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [actionsAvailable, mode]);
 
   const signIn = useCallback(() => {
-    window.location.href = loginUrl ?? `${API_BASE}api/auth/login`;
+    const base = loginUrl ?? `${API_BASE}api/auth/login`;
+    // Return to the current page after signing in.
+    const here = window.location.pathname + window.location.search;
+    window.location.href = `${base}?redirect=${encodeURIComponent(here)}`;
   }, [loginUrl]);
 
   const signOut = useCallback(async () => {

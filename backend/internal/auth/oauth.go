@@ -23,6 +23,7 @@ var (
 )
 
 const stateCookieName = "pad_oauth_state"
+const returnCookieName = "pad_oauth_return"
 
 // OAuthConfig configures the GitHub OAuth App login flow.
 type OAuthConfig struct {
@@ -102,7 +103,9 @@ func (o *OAuth) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/auth/user", o.handleUser)
 }
 
-// handleLogin sets a random state cookie and redirects to GitHub.
+// handleLogin sets a random state cookie and redirects to GitHub. It records a
+// same-origin return path so the callback can send the admin back to the page
+// they started from.
 func (o *OAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	state, err := randomState()
 	if err != nil {
@@ -112,6 +115,15 @@ func (o *OAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
 		Value:    state,
+		Path:     "/",
+		MaxAge:   int((10 * time.Minute).Seconds()),
+		HttpOnly: true,
+		Secure:   o.cfg.SecureCookies,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     returnCookieName,
+		Value:    safeRelativePath(r.URL.Query().Get("redirect")),
 		Path:     "/",
 		MaxAge:   int((10 * time.Minute).Seconds()),
 		HttpOnly: true,
@@ -163,7 +175,14 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	// Send the admin back to the page they signed in from, defaulting to the
+	// home page. The path is validated to be same-origin.
+	dest := "/"
+	if rc, err := r.Cookie(returnCookieName); err == nil {
+		dest = safeRelativePath(rc.Value)
+	}
+	http.SetCookie(w, &http.Cookie{Name: returnCookieName, Value: "", Path: "/", MaxAge: -1})
+	http.Redirect(w, r, dest, http.StatusFound)
 }
 
 // handleLogout clears the session.
@@ -229,6 +248,24 @@ func randomState() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// safeRelativePath returns p only if it is a same-origin absolute path (a single
+// leading "/"), otherwise "/". This blocks open redirects to external or
+// protocol-relative destinations after login.
+func safeRelativePath(p string) string {
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return "/"
+	}
+	// Reject protocol-relative ("//host") and backslash tricks ("/\\host").
+	if strings.HasPrefix(p, "//") || strings.HasPrefix(p, `/\`) {
+		return "/"
+	}
+	u, err := url.Parse(p)
+	if err != nil || u.Scheme != "" || u.Host != "" {
+		return "/"
+	}
+	return p
 }
 
 // adminSet lowercases and indexes the allowlist.

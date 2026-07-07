@@ -161,3 +161,47 @@ func TestBot_NoHeaderNoAllowlist(t *testing.T) {
 		t.Fatalf("id=%+v err=%v", id, err)
 	}
 }
+
+func TestSafeRelativePath(t *testing.T) {
+	cases := map[string]string{
+		"/job/x":           "/job/x",
+		"/job/x?run=1":     "/job/x?run=1",
+		"":                 "/",
+		"relative":         "/",
+		"//evil.com":       "/",
+		`/\evil.com`:       "/",
+		"https://evil.com": "/",
+		"/path#frag":       "/path#frag",
+	}
+	for in, want := range cases {
+		if got := safeRelativePath(in); got != want {
+			t.Errorf("safeRelativePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestOAuth_LoginRecordsReturnPath(t *testing.T) {
+	o := testOAuth(t, []string{"alice"})
+	rec := httptest.NewRecorder()
+	o.handleLogin(rec, httptest.NewRequest("GET", "/api/auth/login?redirect=%2Fjob%2Fx", nil))
+	var ret string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == returnCookieName {
+			ret = c.Value
+		}
+	}
+	if ret != "/job/x" {
+		t.Errorf("return cookie = %q, want /job/x", ret)
+	}
+}
+
+func TestOAuth_LoginRejectsExternalReturn(t *testing.T) {
+	o := testOAuth(t, []string{"alice"})
+	rec := httptest.NewRecorder()
+	o.handleLogin(rec, httptest.NewRequest("GET", "/api/auth/login?redirect=https%3A%2F%2Fevil.com", nil))
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == returnCookieName && c.Value != "/" {
+			t.Errorf("external return not sanitized: %q", c.Value)
+		}
+	}
+}
