@@ -70,6 +70,61 @@ check, and tokens are never logged or returned to the browser.
 | `GET /api/auth/user` | The signed-in admin, or 401. |
 | `POST /api/auth/logout` | Clear the session. |
 
+### Setting up oauth mode
+
+1. Register a GitHub OAuth App at
+   <https://github.com/settings/developers> -> **New OAuth App** (or under an
+   org: **Settings -> Developer settings -> OAuth Apps**). Set:
+   - **Application name**: anything, e.g. `myproject-dashboard`.
+   - **Homepage URL**: your dashboard URL, e.g. `https://dashboard.example.com`
+     (or `http://localhost:8080` for local testing).
+   - **Authorization callback URL**: the dashboard URL plus
+     `/api/auth/callback`, e.g. `https://dashboard.example.com/api/auth/callback`
+     (or `http://localhost:8080/api/auth/callback` locally). This must match
+     `OAUTH_REDIRECT_URL` exactly.
+2. Click **Register application**, then **Generate a new client secret**. Copy
+   the client ID and secret.
+3. Generate a session key (any long random string), e.g.
+   `openssl rand -base64 32`.
+4. Run the server with these env vars:
+
+   | Variable | Purpose |
+   | --- | --- |
+   | `AUTH_MODE=oauth` | Select OAuth login. |
+   | `OAUTH_CLIENT_ID` | The App's client ID. |
+   | `OAUTH_CLIENT_SECRET` | The App's client secret. |
+   | `OAUTH_REDIRECT_URL` | The callback URL registered above. |
+   | `SESSION_KEY` | Random secret seeding the session-cookie encryption. |
+   | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
+   | `OAUTH_SCOPE` | Optional; defaults to `repo`. Use `public_repo` for public-only. |
+   | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
+
+   ```bash
+   make fe-build
+   AUTH_MODE=oauth COOKIE_INSECURE=1 \
+   OAUTH_CLIENT_ID=<client-id> OAUTH_CLIENT_SECRET=<client-secret> \
+   OAUTH_REDIRECT_URL=http://localhost:8080/api/auth/callback \
+   SESSION_KEY="$(openssl rand -base64 32)" ADMIN_LOGINS=your-login \
+   ./bin/server -data-dir=frontend/public/data -static-dir=frontend/dist \
+     -project-dir=../myproject-dashboard
+   ```
+
+   Open <http://localhost:8080>, go to a failing job's pattern, click **Sign in
+   to file issues or fixes**, authorize, and the action buttons appear.
+
+### Setting up proxy mode
+
+Use this when an authenticating proxy (oauth2-proxy, Google IAP, ...) already
+sits in front of the server and injects the signed-in user in a header. The
+server trusts that header, so it must be reachable **only** through the proxy.
+
+| Variable | Purpose |
+| --- | --- |
+| `AUTH_MODE=proxy` | Select proxy mode. |
+| `AUTH_PROXY_HEADER` | Header carrying the user, e.g. `X-Auth-Request-Email`. |
+| `BOT_TOKEN` | GitHub PAT that performs the writes (bot account). |
+| `ADMIN_LOGINS` | Optional; restrict which header identities may act. |
+
 ## Running locally
 
 ```bash
@@ -82,4 +137,5 @@ make fe-build
 ```
 
 Flags: `-addr` (default `:8080`), `-data-dir` (default `data`), `-static-dir`
-(optional built SPA; empty serves data and API only).
+(optional built SPA; empty serves data and API only). Add `-project-dir` plus
+the `AUTH_MODE` env above to enable admin actions.

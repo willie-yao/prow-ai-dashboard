@@ -135,6 +135,40 @@ and choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
 attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
 the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
 
+### Enabling actions with Helm
+
+OAuth mode (per-user attribution). Register a GitHub OAuth App first (see
+[server.md](server.md#setting-up-oauth-mode)); its callback URL is your
+dashboard URL plus `/api/auth/callback`.
+
+```bash
+helm upgrade --install capz deploy/helm/prow-ai-dashboard \
+  ... \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=oauth \
+  --set 'server.actions.admins={alice,bob}' \
+  --set server.actions.oauth.clientId=<client-id> \
+  --set server.actions.oauth.clientSecret=<client-secret> \
+  --set server.actions.oauth.redirectUrl=https://dashboard.example.com/api/auth/callback \
+  --set server.actions.oauth.sessionKey="$(openssl rand -base64 32)"
+```
+
+Proxy mode (an SSO proxy fronts the server; a bot token writes):
+
+```bash
+helm upgrade --install capz deploy/helm/prow-ai-dashboard \
+  ... \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.proxy.header=X-Auth-Request-Email \
+  --set server.actions.proxy.botToken=<bot-pat> \
+  --set 'server.actions.admins={alice,bob}'
+```
+
+Provide the OAuth secret/session key or bot token via a pre-made Secret instead
+with `server.actions.oauth.existingSecret` (keys `OAUTH_CLIENT_SECRET`,
+`SESSION_KEY`) or `server.actions.proxy.existingSecret` (key `BOT_TOKEN`).
+
 `/data/*` serves everything the fetcher writes to the shared volume, matching
 the static Pages path exactly. That includes the AI cache and the fetcher's
 state files (issue, skill, and fix-PR tracking). None hold credentials, but if
