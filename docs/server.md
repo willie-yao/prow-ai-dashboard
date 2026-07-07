@@ -20,6 +20,8 @@ descriptor the frontend uses to discover server-only features.
 | `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"chat":false,"actions":false}}`. |
 | `GET /healthz` | Liveness and readiness probe. |
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
+| `POST /api/failures/{id}/create-issue` | Admin-gated: file a GitHub issue for one failure. Enabled only when actions are configured. |
+| `POST /api/failures/{id}/propose-fix` | Admin-gated: draft a fix PR for one failure. |
 
 ## Capability seam
 
@@ -32,6 +34,21 @@ The frontend discovers its mode by probing `/api/capabilities`:
 
 Interactive features are additive and gated behind this descriptor, so the same
 build serves both targets. All `/data/*.json` schemas stay byte-compatible.
+
+## Admin-gated actions
+
+The write endpoints let an admin file an issue or draft a fix PR for a specific
+failure on demand, reusing the same engines the scheduled fetch uses. They are
+off unless the server is started with `-project-dir` and the `ADMIN_LOGINS`
+environment variable lists at least one GitHub login. When enabled, the server
+sets `features.actions: true` and the frontend shows the buttons.
+
+Auth is per-user, not a shared operator token. The admin sends their own GitHub
+PAT in the `Authorization` header; the server verifies it against GitHub,
+checks the resolved login against `ADMIN_LOGINS`, and performs the write with
+that token, so the issue or PR is attributed to the real user. The
+`Authenticator` is a seam: the PAT check ships first and a GitHub OAuth flow can
+replace it later without touching the handlers.
 
 ## Running locally
 
