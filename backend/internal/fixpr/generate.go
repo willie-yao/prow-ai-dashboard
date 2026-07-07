@@ -3,6 +3,7 @@ package fixpr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/build/constraint"
@@ -20,6 +21,10 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
+
+// errNoEdits signals the model returned an empty edit set. generateFix treats
+// it as retryable, then reports a clear "not auto-fixable" error.
+var errNoEdits = errors.New("model proposed no edits")
 
 // Completer is the subset of the AI client this package needs (an interface so
 // generation is unit-testable).
@@ -92,10 +97,20 @@ func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*
 	}
 
 	// Propose, validate, and review; re-prompt with feedback on a fixable
-	// problem (broken syntax or reviewer objections) up to critiqueRetries.
+	// problem (no edits, broken syntax, or reviewer objections) up to
+	// critiqueRetries.
 	var feedback string
 	for attempt := 0; ; attempt++ {
 		edits, rationale, err := proposeEdits(ctx, gp.completer, p, contents, feedback)
+		if errors.Is(err, errNoEdits) {
+			// The model returned an empty edit set. Nudge it once more with
+			// explicit feedback before giving up, like the other retry paths.
+			if attempt < gp.critiqueRetries {
+				feedback = "You returned no edits. Propose at least one concrete anchored edit that addresses the root cause, or if the fix is purely operational (infrastructure, quota, or timing) and cannot be a code change, this failure is not auto-fixable."
+				continue
+			}
+			return nil, fmt.Errorf("the model could not produce a code change for this failure (its fix may be operational rather than a code edit)")
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +231,7 @@ The "old" snippet for each edit MUST appear exactly once in that file.`,
 		return nil, "", fmt.Errorf("edit response: %w", err)
 	}
 	if len(v.Edits) == 0 {
-		return nil, "", fmt.Errorf("model proposed no edits")
+		return nil, "", errNoEdits
 	}
 	return v.Edits, strings.TrimSpace(v.Rationale), nil
 }
