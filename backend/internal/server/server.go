@@ -7,13 +7,31 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 )
+
+// ActionRunner performs on-demand actions for a failure id using the admin's
+// token. actions.Service satisfies it.
+type ActionRunner interface {
+	CreateIssue(ctx context.Context, failureID, userToken string) (string, error)
+	ProposeFix(ctx context.Context, failureID, userToken string) (string, error)
+}
+
+// defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
+// the model and opens a PR, so it can run for a while.
+const defaultActionTimeout = 5 * time.Minute
 
 // Options configures a server Handler.
 type Options struct {
@@ -24,6 +42,12 @@ type Options struct {
 	StaticDir string
 	// Capabilities is the descriptor returned at /api/capabilities.
 	Capabilities Capabilities
+	// Auth and Actions enable the admin-gated write endpoints. Both must be set;
+	// when either is nil the server is read-only and advertises no actions.
+	Auth    auth.Authenticator
+	Actions ActionRunner
+	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
+	ActionTimeout time.Duration
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -66,7 +90,23 @@ func Handler(opts Options) (http.Handler, error) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("/api/capabilities", capabilitiesHandler(opts.Capabilities))
+
+	// Admin-gated write actions, enabled only when both auth and an action
+	// runner are configured. Advertise the capability so the frontend lights up
+	// the buttons.
+	caps := opts.Capabilities
+	if opts.Auth != nil && opts.Actions != nil {
+		caps.Features.Actions = true
+		timeout := opts.ActionTimeout
+		if timeout <= 0 {
+			timeout = defaultActionTimeout
+		}
+		mux.Handle("POST /api/failures/{id}/create-issue",
+			auth.Middleware(opts.Auth, actionHandler(timeout, opts.Actions.CreateIssue)))
+		mux.Handle("POST /api/failures/{id}/propose-fix",
+			auth.Middleware(opts.Auth, actionHandler(timeout, opts.Actions.ProposeFix)))
+	}
+	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
 
 	// /data/* serves the fetcher output tree (manifest.json, dashboard.json,
 	// jobs/*.json, flakiness.json, search-index.json) at read parity. Directory
@@ -92,6 +132,38 @@ func capabilitiesHandler(c Capabilities) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(c)
 	}
+}
+
+// actionFunc runs one on-demand action for a failure id with the admin's token.
+type actionFunc func(ctx context.Context, failureID, userToken string) (string, error)
+
+// actionHandler runs an authed action and returns {"url": ...}. The admin
+// identity is set by auth.Middleware. Errors map to 404 (unknown failure) or
+// 422 (not actionable / misconfigured / upstream), never leaking the token.
+func actionHandler(timeout time.Duration, run actionFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		url, err := run(ctx, id, identity.Token)
+		if err != nil {
+			if errors.Is(err, actions.ErrNotFound) {
+				http.Error(w, "failure not found", http.StatusNotFound)
+				return
+			}
+			log.Printf("action failed for %s (by %s): %v", id, identity.Login, err)
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"url": url})
+	})
 }
 
 // spaHandler serves a single-page app from dir: real files are served as-is,

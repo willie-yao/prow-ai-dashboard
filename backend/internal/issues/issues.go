@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -165,7 +166,29 @@ func (m *Manager) SaveState() error {
 	if err != nil {
 		return fmt.Errorf("marshalling issue state: %w", err)
 	}
-	return os.WriteFile(m.stateFile, data, 0o644)
+	return writeFileAtomic(m.stateFile, data)
+}
+
+// writeFileAtomic writes data to a temp file and renames it into place so a
+// concurrent reader never observes a half-written state file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Reconcile files issues for new findings, adopts a pre-existing open issue when

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
@@ -33,11 +34,15 @@ type AIConfig struct {
 
 // Service runs on-demand actions against the data written to DataDir. It reads
 // jobs/*.json to resolve a failure id and reuses the issue and fix-PR state
-// files alongside them.
+// files alongside them. A mutex serializes state read-modify-write so
+// concurrent admin requests to one server do not clobber each other; cross-
+// process consistency with the fetcher/worker relies on the engines' adopt-by-
+// search path, which recovers when local state is stale.
 type Service struct {
 	cfg     *project.Config
 	dataDir string
 	ai      AIConfig
+	mu      sync.Mutex
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -81,6 +86,9 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 // CreateIssue files a single GitHub issue for the failure using userToken and
 // returns the issue URL. The user's token attributes the issue to them.
 func (s *Service) CreateIssue(ctx context.Context, failureID, userToken string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	pa, err := s.findPattern(failureID)
 	if err != nil {
 		return "", err
@@ -129,6 +137,9 @@ func (s *Service) CreateIssue(ctx context.Context, failureID, userToken string) 
 // using userToken and returns the PR URL. On-demand always opens a draft PR
 // (never dry-run) since a human explicitly requested it.
 func (s *Service) ProposeFix(ctx context.Context, failureID, userToken string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	pa, err := s.findPattern(failureID)
 	if err != nil {
 		return "", err

@@ -1,3 +1,4 @@
+{{- $actions := gt (len .Values.server.actions.admins) 0 -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +34,29 @@ spec:
             - -addr=:{{ .Values.server.port }}
             - -data-dir={{ .Values.persistence.mountPath }}
             - -static-dir={{ .Values.server.staticDir }}
+            {{- if $actions }}
+            - -project-dir={{ .Values.project.mountPath }}
+            {{- end }}
+          {{- if $actions }}
+          env:
+            - name: ADMIN_LOGINS
+              value: {{ join "," .Values.server.actions.admins | quote }}
+            {{- if .Values.ai.enabled }}
+            - name: AI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.aiSecret" . }}
+                  key: {{ .Values.ai.tokenSecretKey }}
+            {{- if .Values.ai.endpoint }}
+            - name: AI_ENDPOINT
+              value: {{ .Values.ai.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.ai.model }}
+            - name: AI_MODEL
+              value: {{ .Values.ai.model | quote }}
+            {{- end }}
+            {{- end }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.server.port }}
@@ -49,7 +73,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+              # Read-write when actions are enabled: the server persists issue
+              # and fix-PR dedup state next to the data it serves.
+              readOnly: {{ not $actions }}
+            {{- if $actions }}
+            - name: project
+              mountPath: {{ .Values.project.mountPath }}
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
           resources:
             {{- toYaml .Values.server.resources | nindent 12 }}
       {{- with .Values.server.nodeSelector }}
@@ -68,3 +101,15 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "prow-ai-dashboard.pvcName" . }}
+        {{- if $actions }}
+        - name: project
+          configMap:
+            name: {{ include "prow-ai-dashboard.projectConfigMap" . }}
+            items:
+              - key: project.yaml
+                path: project.yaml
+              - key: system.md
+                path: prompts/system.md
+        - name: tmp
+          emptyDir: {}
+        {{- end }}

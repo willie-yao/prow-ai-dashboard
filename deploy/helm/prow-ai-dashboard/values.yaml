@@ -92,6 +92,13 @@ server:
   # Path to the SPA baked into the image.
   staticDir: /app/web
   port: 8080
+  # Admin-gated write actions. When admins is non-empty the server enables
+  # POST /api/failures/{id}/create-issue and /propose-fix, each gated by a
+  # GitHub PAT whose login must be in this allowlist. Enabling this mounts the
+  # project config and the AI secret into the server and gives it write access
+  # to the shared volume (for issue/fix-PR dedup state).
+  actions:
+    admins: []
   resources: {}
   nodeSelector: {}
   tolerations: []
