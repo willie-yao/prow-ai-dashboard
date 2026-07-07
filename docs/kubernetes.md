@@ -126,13 +126,14 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth and budget. |
 | `fetcher.extraEnv` | Extra env such as `GITHUB_TOKEN` or `SLACK_WEBHOOK_URL`. |
 | `ingress.enabled`, `ingress.hosts`, `ingress.tls` | Public read path. |
-| `server.actions.admins` | GitHub logins allowed to file issues / draft fix PRs from the UI. Empty = read-only. |
+| `server.actions.enabled`, `server.actions.mode` | Turn on write actions; `oauth` (GitHub sign-in) or `proxy` (SSO proxy + bot token). |
+| `server.actions.admins` | GitHub logins allowed to file issues / draft fix PRs. |
 
 The public read endpoints (`/data/*`, `/api/capabilities`, `/healthz`) are
-unauthenticated. Admin write actions are opt-in: set `server.actions.admins` to
-the GitHub logins allowed to file issues or draft fix PRs from the UI. Each
-action is authenticated by the admin's own GitHub PAT and attributed to them
-(see [server.md](server.md)); an empty list keeps the server read-only.
+unauthenticated. Admin write actions are opt-in: set `server.actions.enabled`
+and choose `server.actions.mode` (`oauth` for GitHub sign-in with per-user
+attribution, or `proxy` for an upstream SSO proxy plus a bot token), then list
+the allowed GitHub logins in `server.actions.admins` (see [server.md](server.md)).
 
 `/data/*` serves everything the fetcher writes to the shared volume, matching
 the static Pages path exactly. That includes the AI cache and the fetcher's

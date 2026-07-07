@@ -1,4 +1,5 @@
-{{- $actions := gt (len .Values.server.actions.admins) 0 -}}
+{{- $actions := .Values.server.actions.enabled -}}
+{{- $a := .Values.server.actions -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,8 +40,38 @@ spec:
             {{- end }}
           {{- if $actions }}
           env:
+            - name: AUTH_MODE
+              value: {{ $a.mode | quote }}
+            {{- if $a.admins }}
             - name: ADMIN_LOGINS
-              value: {{ join "," .Values.server.actions.admins | quote }}
+              value: {{ join "," $a.admins | quote }}
+            {{- end }}
+            {{- if eq $a.mode "oauth" }}
+            - name: OAUTH_CLIENT_ID
+              value: {{ $a.oauth.clientId | quote }}
+            - name: OAUTH_REDIRECT_URL
+              value: {{ $a.oauth.redirectUrl | quote }}
+            - name: OAUTH_SCOPE
+              value: {{ $a.oauth.scope | quote }}
+            - name: OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.authSecret" . }}
+                  key: OAUTH_CLIENT_SECRET
+            - name: SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.authSecret" . }}
+                  key: SESSION_KEY
+            {{- else if eq $a.mode "proxy" }}
+            - name: AUTH_PROXY_HEADER
+              value: {{ $a.proxy.header | quote }}
+            - name: BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.authSecret" . }}
+                  key: BOT_TOKEN
+            {{- end }}
             {{- if .Values.ai.enabled }}
             - name: AI_TOKEN
               valueFrom:

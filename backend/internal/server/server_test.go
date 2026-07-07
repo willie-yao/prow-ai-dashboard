@@ -279,3 +279,35 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 		t.Errorf("not-found status = %d, want 404", r.StatusCode)
 	}
 }
+
+func TestHandler_CSRFCrossOriginRejected(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{}`)
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, Actions: &fakeRunner{}, AuthMode: "oauth", LoginURL: "/api/auth/login"})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// A cross-origin POST (Origin != Host) is rejected before auth runs.
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/failures/abc/create-issue", nil)
+	req.Header.Set("Authorization", "ok")
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-origin status = %d, want 403", resp.StatusCode)
+	}
+
+	// The capability advertises the oauth auth info.
+	cr, _ := http.Get(srv.URL + "/api/capabilities")
+	var caps Capabilities
+	json.NewDecoder(cr.Body).Decode(&caps)
+	cr.Body.Close()
+	if caps.Auth == nil || caps.Auth.Mode != "oauth" || caps.Auth.LoginURL == "" {
+		t.Errorf("capability auth = %+v, want oauth with login url", caps.Auth)
+	}
+}

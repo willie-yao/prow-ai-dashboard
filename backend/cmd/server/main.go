@@ -3,8 +3,14 @@
 // static Pages site reads, plus /api/capabilities so the frontend can light up
 // server-only features. The static Pages mode keeps working unchanged.
 //
-// When -project-dir is set and ADMIN_LOGINS names at least one GitHub login,
-// the admin-gated write endpoints (create-issue, propose-fix) are enabled.
+// Admin-gated write actions (create-issue, propose-fix) are enabled when
+// -project-dir is set and AUTH_MODE selects an auth mechanism:
+//
+//	oauth: GitHub OAuth App login; each admin's own token performs the write.
+//	       Needs OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, OAUTH_REDIRECT_URL,
+//	       SESSION_KEY, and ADMIN_LOGINS.
+//	proxy: an upstream SSO proxy authenticates and passes AUTH_PROXY_HEADER;
+//	       a bot token (BOT_TOKEN) performs the write. ADMIN_LOGINS optional.
 package main
 
 import (
@@ -37,7 +43,7 @@ func main() {
 	flag.StringVar(&addr, "addr", ":8080", "listen address")
 	flag.StringVar(&dataDir, "data-dir", "data", "directory of fetcher JSON output served at /data")
 	flag.StringVar(&staticDir, "static-dir", "", "optional built frontend (dist) served at / with SPA fallback")
-	flag.StringVar(&projectDir, "project-dir", "", "project.yaml directory; enables admin actions when set with ADMIN_LOGINS")
+	flag.StringVar(&projectDir, "project-dir", "", "project.yaml directory; enables admin actions when set with AUTH_MODE")
 	flag.Parse()
 
 	opts := server.Options{
@@ -46,19 +52,15 @@ func main() {
 		Capabilities: server.DefaultCapabilities(),
 	}
 
-	// Enable admin-gated actions only when a project config and an admin
-	// allowlist are both provided. Otherwise the server stays read-only.
-	admins := splitList(os.Getenv("ADMIN_LOGINS"))
-	if projectDir != "" && len(admins) > 0 {
-		a, act, err := buildActions(projectDir, dataDir, admins)
-		if err != nil {
+	// Enable admin-gated actions only when a project config and an auth mode are
+	// both provided. Otherwise the server stays read-only.
+	if projectDir != "" && os.Getenv("AUTH_MODE") != "" {
+		if err := enableActions(&opts, projectDir, dataDir); err != nil {
 			log.Fatalf("server: enabling actions: %v", err)
 		}
-		opts.Auth = a
-		opts.Actions = act
-		log.Printf("🔐 admin actions enabled for %d login(s)", len(admins))
+		log.Printf("🔐 admin actions enabled (auth mode: %s)", opts.AuthMode)
 	} else {
-		log.Println("actions disabled (set -project-dir and ADMIN_LOGINS to enable)")
+		log.Println("actions disabled (set -project-dir and AUTH_MODE to enable)")
 	}
 
 	handler, err := server.Handler(opts)
@@ -92,20 +94,53 @@ func main() {
 	}
 }
 
-// buildActions loads the project config and wires the PAT authenticator and the
-// action service. AI credentials come from the AI_* env for fix-PR drafting.
-func buildActions(projectDir, dataDir string, admins []string) (auth.Authenticator, *actions.Service, error) {
+// enableActions loads the project config, builds the action service, and wires
+// the authenticator selected by AUTH_MODE onto opts.
+func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	cfg, err := project.Load(filepath.Join(projectDir, "project.yaml"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading project config: %w", err)
+		return fmt.Errorf("loading project config: %w", err)
 	}
-	aiCfg := actions.AIConfig{
+	opts.Actions = actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token:    os.Getenv("AI_TOKEN"),
 		Endpoint: firstNonEmpty(aiField(cfg, "endpoint"), os.Getenv("AI_ENDPOINT")),
 		Model:    firstNonEmpty(aiField(cfg, "model"), os.Getenv("AI_MODEL")),
 		Headers:  aiHeaders(cfg),
+	})
+
+	admins := splitList(os.Getenv("ADMIN_LOGINS"))
+	switch mode := os.Getenv("AUTH_MODE"); mode {
+	case "oauth":
+		o, err := auth.NewOAuth(auth.OAuthConfig{
+			ClientID:      os.Getenv("OAUTH_CLIENT_ID"),
+			ClientSecret:  os.Getenv("OAUTH_CLIENT_SECRET"),
+			RedirectURL:   os.Getenv("OAUTH_REDIRECT_URL"),
+			Scope:         os.Getenv("OAUTH_SCOPE"),
+			Admins:        admins,
+			SessionKey:    os.Getenv("SESSION_KEY"),
+			SecureCookies: os.Getenv("COOKIE_INSECURE") != "1",
+		})
+		if err != nil {
+			return err
+		}
+		opts.Auth = o
+		opts.AuthMode = "oauth"
+		opts.LoginURL = "/api/auth/login"
+	case "proxy":
+		botToken := os.Getenv("BOT_TOKEN")
+		if botToken == "" {
+			return fmt.Errorf("proxy auth mode requires BOT_TOKEN")
+		}
+		header := os.Getenv("AUTH_PROXY_HEADER")
+		if header == "" {
+			log.Println("⚠ proxy auth mode with no AUTH_PROXY_HEADER: every request is authorized; the server must be reachable only through a trusted SSO proxy")
+		}
+		opts.Auth = auth.NewBotAuthenticator(header, botToken, admins)
+		opts.AuthMode = "proxy"
+	default:
+		return fmt.Errorf("unknown AUTH_MODE %q (want oauth or proxy)", mode)
 	}
-	return auth.NewPATAuthenticator(admins), actions.NewService(cfg, dataDir, aiCfg), nil
+	return nil
 }
 
 // aiField returns cfg.AI.<endpoint|model> or "" when AI is unset.

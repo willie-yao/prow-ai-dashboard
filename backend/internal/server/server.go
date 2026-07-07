@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,11 @@ type Options struct {
 	Actions ActionRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
 	ActionTimeout time.Duration
+	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button) or
+	// "proxy" (auth handled upstream; the UI just calls the actions).
+	AuthMode string
+	// LoginURL is where the frontend sends admins to sign in (oauth mode).
+	LoginURL string
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -58,6 +64,17 @@ type Capabilities struct {
 	Mode string `json:"mode"`
 	// Features gates additive interactive UI. All false at read parity.
 	Features Features `json:"features"`
+	// Auth describes how the frontend should authenticate for write actions.
+	// Nil when actions are unavailable.
+	Auth *AuthInfo `json:"auth,omitempty"`
+}
+
+// AuthInfo tells the frontend how admins sign in for write actions.
+type AuthInfo struct {
+	// Mode is "oauth" (redirect to LoginURL) or "proxy" (upstream SSO).
+	Mode string `json:"mode"`
+	// LoginURL is the sign-in redirect for oauth mode.
+	LoginURL string `json:"login_url,omitempty"`
 }
 
 // Features enumerates the optional interactive capabilities.
@@ -66,6 +83,12 @@ type Features struct {
 	Chat bool `json:"chat"`
 	// Actions enables on-page create-issue / propose-fix buttons.
 	Actions bool `json:"actions"`
+}
+
+// authRegistrar is implemented by authenticators that need their own routes
+// (the OAuth login/callback/user/logout endpoints).
+type authRegistrar interface {
+	Register(mux *http.ServeMux)
 }
 
 // DefaultCapabilities is the read-parity descriptor: server mode, no
@@ -97,14 +120,19 @@ func Handler(opts Options) (http.Handler, error) {
 	caps := opts.Capabilities
 	if opts.Auth != nil && opts.Actions != nil {
 		caps.Features.Actions = true
+		caps.Auth = &AuthInfo{Mode: opts.AuthMode, LoginURL: opts.LoginURL}
 		timeout := opts.ActionTimeout
 		if timeout <= 0 {
 			timeout = defaultActionTimeout
 		}
+		// Register the authenticator's own routes (OAuth login/callback/etc).
+		if reg, ok := opts.Auth.(authRegistrar); ok {
+			reg.Register(mux)
+		}
 		mux.Handle("POST /api/failures/{id}/create-issue",
-			auth.Middleware(opts.Auth, actionHandler(timeout, opts.Actions.CreateIssue)))
+			auth.Middleware(opts.Auth, csrfGuard(actionHandler(timeout, opts.Actions.CreateIssue))))
 		mux.Handle("POST /api/failures/{id}/propose-fix",
-			auth.Middleware(opts.Auth, actionHandler(timeout, opts.Actions.ProposeFix)))
+			auth.Middleware(opts.Auth, csrfGuard(actionHandler(timeout, opts.Actions.ProposeFix))))
 	}
 	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
 
@@ -132,6 +160,22 @@ func capabilitiesHandler(c Capabilities) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(c)
 	}
+}
+
+// csrfGuard rejects a state-changing request whose Origin header is present and
+// does not match the request host. Combined with the SameSite=Lax session
+// cookie, this blocks cross-site POSTs while leaving same-origin and
+// non-browser (no Origin header) clients unaffected.
+func csrfGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if u, err := url.Parse(origin); err != nil || u.Host != r.Host {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // actionFunc runs one on-demand action for a failure id with the admin's token.

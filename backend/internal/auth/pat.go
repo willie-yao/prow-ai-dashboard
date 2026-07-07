@@ -24,14 +24,7 @@ type PATAuthenticator struct {
 // NewPATAuthenticator builds an authenticator whose admins are the given GitHub
 // logins (case-insensitive). An empty list fails closed: no one is authorized.
 func NewPATAuthenticator(admins []string) *PATAuthenticator {
-	set := make(map[string]struct{}, len(admins))
-	for _, a := range admins {
-		a = strings.ToLower(strings.TrimSpace(a))
-		if a != "" {
-			set[a] = struct{}{}
-		}
-	}
-	return &PATAuthenticator{admins: set, resolve: resolveGitHubLogin}
+	return &PATAuthenticator{admins: adminSet(admins), resolve: resolveGitHubLogin}
 }
 
 // resolveGitHubLogin verifies the token against GitHub and returns its login.

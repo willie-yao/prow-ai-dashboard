@@ -1,14 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { BugReport, Build } from "@mui/icons-material";
+import { BugReport, Build, GitHub, Logout } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { useAdminToken } from "../hooks/useAdminToken";
 
 type Action = "create-issue" | "propose-fix";
 
@@ -17,29 +15,50 @@ interface Result {
   error?: string;
 }
 
+const API_BASE = import.meta.env.BASE_URL;
+
 // FailureActions renders admin write buttons for one systemic pattern. It shows
-// only in server mode when the actions capability is present and the pattern
-// has an id. The admin's token authenticates each request and attributes the
-// issue/PR to them.
+// only in server mode when the actions capability is present. Auth is handled
+// by the server: in oauth mode the admin signs in with GitHub (no token in the
+// browser); in proxy mode an upstream SSO proxy authenticates the request.
 export function FailureActions({ failureID }: { failureID: string }) {
-  const { features } = useCapabilities();
-  const { token, setToken } = useAdminToken();
+  const { features, auth } = useCapabilities();
+  // login: undefined = unknown/loading, null = signed out, string = signed in.
+  const [login, setLogin] = useState<string | null | undefined>(undefined);
   const [busy, setBusy] = useState<Action | null>(null);
   const [result, setResult] = useState<Result | null>(null);
+
+  const oauth = auth?.mode === "oauth";
+
+  useEffect(() => {
+    if (!features.actions) return;
+    // proxy mode: the proxy authenticates every request, so assume authorized.
+    if (!oauth) {
+      setLogin("");
+      return;
+    }
+    fetch(`${API_BASE}api/auth/user`, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((u: { login: string } | null) => setLogin(u ? u.login : null))
+      .catch(() => setLogin(null));
+  }, [features.actions, oauth]);
 
   if (!features.actions || !failureID) {
     return null;
   }
 
   async function run(action: Action) {
-    if (!token) return;
     setBusy(action);
     setResult(null);
     try {
       const res = await fetch(
-        `${import.meta.env.BASE_URL}api/failures/${encodeURIComponent(failureID)}/${action}`,
-        { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/${action}`,
+        { method: "POST", credentials: "same-origin" },
       );
+      if (res.status === 401) {
+        setLogin(null);
+        throw new Error("Please sign in to continue");
+      }
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text.trim() || `HTTP ${res.status}`);
@@ -53,6 +72,29 @@ export function FailureActions({ failureID }: { failureID: string }) {
     }
   }
 
+  // oauth mode, signed out: offer sign-in.
+  if (oauth && login === null) {
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<GitHub sx={{ fontSize: 18 }} />}
+        href={auth?.login_url ?? `${API_BASE}api/auth/login`}
+      >
+        Sign in to file issues or fixes
+      </Button>
+    );
+  }
+
+  if (login === undefined) {
+    return null; // still checking auth state
+  }
+
+  async function signOut() {
+    await fetch(`${API_BASE}api/auth/logout`, { method: "POST", credentials: "same-origin" });
+    setLogin(null);
+  }
+
   return (
     <Box>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
@@ -61,7 +103,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
           variant="outlined"
           color="warning"
           startIcon={<BugReport sx={{ fontSize: 18 }} />}
-          disabled={!token || busy !== null}
+          disabled={busy !== null}
           onClick={() => run("create-issue")}
         >
           {busy === "create-issue" ? "Filing…" : "File issue"}
@@ -71,20 +113,15 @@ export function FailureActions({ failureID }: { failureID: string }) {
           variant="outlined"
           color="warning"
           startIcon={<Build sx={{ fontSize: 18 }} />}
-          disabled={!token || busy !== null}
+          disabled={busy !== null}
           onClick={() => run("propose-fix")}
         >
           {busy === "propose-fix" ? "Drafting…" : "Propose fix"}
         </Button>
-        {!token && (
-          <TextField
-            size="small"
-            type="password"
-            placeholder="GitHub token"
-            onChange={(e) => setToken(e.target.value)}
-            sx={{ minWidth: 200 }}
-            helperText="Admin PAT, kept in memory only"
-          />
+        {oauth && login && (
+          <Button size="small" color="inherit" startIcon={<Logout sx={{ fontSize: 16 }} />} onClick={signOut}>
+            {login}
+          </Button>
         )}
       </Stack>
       {result?.url && (

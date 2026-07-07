@@ -39,16 +39,36 @@ build serves both targets. All `/data/*.json` schemas stay byte-compatible.
 
 The write endpoints let an admin file an issue or draft a fix PR for a specific
 failure on demand, reusing the same engines the scheduled fetch uses. They are
-off unless the server is started with `-project-dir` and the `ADMIN_LOGINS`
-environment variable lists at least one GitHub login. When enabled, the server
-sets `features.actions: true` and the frontend shows the buttons.
+off unless the server is started with `-project-dir` and `AUTH_MODE` selects an
+auth mechanism. When enabled, the server sets `features.actions: true` and the
+frontend shows the buttons.
 
-Auth is per-user, not a shared operator token. The admin sends their own GitHub
-PAT in the `Authorization` header; the server verifies it against GitHub,
-checks the resolved login against `ADMIN_LOGINS`, and performs the write with
-that token, so the issue or PR is attributed to the real user. The
-`Authenticator` is a seam: the PAT check ships first and a GitHub OAuth flow can
-replace it later without touching the handlers.
+Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`):
+
+- **`oauth`** (per-user attribution): the operator registers a GitHub OAuth App.
+  Admins sign in with GitHub; the server holds each admin's own OAuth token in
+  an encrypted, httpOnly session cookie and performs the write as them, so the
+  issue or PR is attributed to the real user. No token is ever entered in the
+  browser. Needs `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URL`
+  (the App's callback), and `SESSION_KEY`.
+- **`proxy`** (bot attribution): an upstream SSO proxy (oauth2-proxy, IAP, ...)
+  authenticates the user and passes their identity in a trusted header
+  (`AUTH_PROXY_HEADER`, e.g. `X-Auth-Request-Email`); a single `BOT_TOKEN`
+  performs the write. Simplest when you already run an authenticating proxy.
+
+The `Authenticator` is a seam, so the two modes share one code path and a third
+mechanism can be added without touching the handlers. Sessions are stateless
+(encrypted cookie), CSRF is covered by a `SameSite=Lax` cookie plus an Origin
+check, and tokens are never logged or returned to the browser.
+
+### Auth endpoints (oauth mode)
+
+| Path | Purpose |
+| --- | --- |
+| `GET /api/auth/login` | Redirect to GitHub to sign in. |
+| `GET /api/auth/callback` | OAuth callback; establishes the session. |
+| `GET /api/auth/user` | The signed-in admin, or 401. |
+| `POST /api/auth/logout` | Clear the session. |
 
 ## Running locally
 
