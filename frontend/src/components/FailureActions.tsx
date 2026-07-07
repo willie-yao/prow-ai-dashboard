@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { BugReport, Build, GitHub, Logout } from "@mui/icons-material";
+import { BugReport, Build, GitHub } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useAuth } from "../hooks/useAuth";
 
 type Action = "create-issue" | "propose-fix";
 
@@ -18,33 +19,30 @@ interface Result {
 const API_BASE = import.meta.env.BASE_URL;
 
 // FailureActions renders admin write buttons for one systemic pattern. It shows
-// only in server mode when the actions capability is present. Auth is handled
-// by the server: in oauth mode the admin signs in with GitHub (no token in the
-// browser); in proxy mode an upstream SSO proxy authenticates the request.
+// only in server mode when the actions capability is present. Auth state is
+// shared with the navbar via useAuth: in oauth mode a signed-out admin sees a
+// contextual sign-in prompt; once signed in (or in proxy mode) the buttons act.
 export function FailureActions({ failureID }: { failureID: string }) {
-  const { features, auth } = useCapabilities();
-  // login: undefined = unknown/loading, null = signed out, string = signed in.
-  const [login, setLogin] = useState<string | null | undefined>(undefined);
+  const { features } = useCapabilities();
+  const { status, signIn } = useAuth();
   const [busy, setBusy] = useState<Action | null>(null);
   const [result, setResult] = useState<Result | null>(null);
 
-  const oauth = auth?.mode === "oauth";
-
-  useEffect(() => {
-    if (!features.actions) return;
-    // proxy mode: the proxy authenticates every request, so assume authorized.
-    if (!oauth) {
-      setLogin("");
-      return;
-    }
-    fetch(`${API_BASE}api/auth/user`, { credentials: "same-origin" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((u: { login: string } | null) => setLogin(u ? u.login : null))
-      .catch(() => setLogin(null));
-  }, [features.actions, oauth]);
-
-  if (!features.actions || !failureID) {
+  if (!features.actions || !failureID || status === "loading" || status === "unavailable") {
     return null;
+  }
+
+  if (status === "anonymous") {
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<GitHub sx={{ fontSize: 18 }} />}
+        onClick={signIn}
+      >
+        Sign in to file issues or fixes
+      </Button>
+    );
   }
 
   async function run(action: Action) {
@@ -55,10 +53,6 @@ export function FailureActions({ failureID }: { failureID: string }) {
         `${API_BASE}api/failures/${encodeURIComponent(failureID)}/${action}`,
         { method: "POST", credentials: "same-origin" },
       );
-      if (res.status === 401) {
-        setLogin(null);
-        throw new Error("Please sign in to continue");
-      }
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text.trim() || `HTTP ${res.status}`);
@@ -70,29 +64,6 @@ export function FailureActions({ failureID }: { failureID: string }) {
     } finally {
       setBusy(null);
     }
-  }
-
-  // oauth mode, signed out: offer sign-in.
-  if (oauth && login === null) {
-    return (
-      <Button
-        size="small"
-        variant="outlined"
-        startIcon={<GitHub sx={{ fontSize: 18 }} />}
-        href={auth?.login_url ?? `${API_BASE}api/auth/login`}
-      >
-        Sign in to file issues or fixes
-      </Button>
-    );
-  }
-
-  if (login === undefined) {
-    return null; // still checking auth state
-  }
-
-  async function signOut() {
-    await fetch(`${API_BASE}api/auth/logout`, { method: "POST", credentials: "same-origin" });
-    setLogin(null);
   }
 
   return (
@@ -118,11 +89,6 @@ export function FailureActions({ failureID }: { failureID: string }) {
         >
           {busy === "propose-fix" ? "Drafting…" : "Propose fix"}
         </Button>
-        {oauth && login && (
-          <Button size="small" color="inherit" startIcon={<Logout sx={{ fontSize: 16 }} />} onClick={signOut}>
-            {login}
-          </Button>
-        )}
       </Stack>
       {result?.url && (
         <Alert severity="success" sx={{ mt: 1 }}>
