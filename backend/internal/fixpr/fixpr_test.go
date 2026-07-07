@@ -632,3 +632,29 @@ func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
 		t.Errorf("partial-success PR should be tracked")
 	}
 }
+
+func TestParseJSONObject_ToleratesLiteralTabsAndNewlines(t *testing.T) {
+	// A model copying a Go snippet verbatim emits literal tabs/newlines inside
+	// the JSON string values, which strict JSON rejects. parseJSONObject must
+	// recover by escaping them.
+	raw := "{\"edits\": [{\"file\": \"a.go\", \"old\": \"func F() {\n\treturn\n}\", \"new\": \"func F() {\n\treturn nil\n}\"}]}"
+	var v struct {
+		Edits []edit `json:"edits"`
+	}
+	if err := parseJSONObject(raw, &v); err != nil {
+		t.Fatalf("parseJSONObject: %v", err)
+	}
+	if len(v.Edits) != 1 || !strings.Contains(v.Edits[0].New, "return nil") {
+		t.Errorf("parsed edits = %+v", v.Edits)
+	}
+}
+
+func TestEscapeStringControlChars_LeavesStructureAndEscapes(t *testing.T) {
+	// Structural whitespace between tokens is untouched; an already-escaped \n
+	// is not double-escaped; a literal tab inside a string is escaped.
+	in := "{\n\t\"k\": \"a\\nb\tc\"\n}"
+	out := escapeStringControlChars(in)
+	if !strings.Contains(out, `a\nb\tc`) {
+		t.Errorf("escaped = %q", out)
+	}
+}

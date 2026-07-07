@@ -185,7 +185,8 @@ func (s *Service) ProposeFix(ctx context.Context, failureID, userToken string) (
 			Critique:        critique,
 			CritiqueRetries: critiqueRetries,
 		})
-	if _, err := mgr.Reconcile(ctx, []models.PatternAnalysis{*pa}); err != nil {
+	stats, err := mgr.Reconcile(ctx, []models.PatternAnalysis{*pa})
+	if err != nil {
 		return "", fmt.Errorf("drafting fix PR: %w", err)
 	}
 	if err := mgr.SaveState(); err != nil {
@@ -193,7 +194,34 @@ func (s *Service) ProposeFix(ctx context.Context, failureID, userToken string) (
 	}
 	url, ok := mgr.TrackedURL(*pa)
 	if !ok {
-		return "", fmt.Errorf("no fix PR was opened for %s", failureID)
+		// Surface why generation did not produce a PR, sanitized so no upstream
+		// (AI provider) detail reaches the browser.
+		if len(stats.Failures) > 0 {
+			return "", fmt.Errorf("%s", safeReason(stats.Failures[0].Reason))
+		}
+		return "", fmt.Errorf("no fix PR was opened for this failure")
 	}
 	return url, nil
+}
+
+// safeReason turns an internal failure reason into a message safe to show a
+// user. Reasons from the AI provider (which may echo an opaque response body)
+// are replaced with a generic message; our own pipeline messages pass through,
+// truncated. It never exposes endpoints, tokens, or provider bodies.
+func safeReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	low := strings.ToLower(reason)
+	// AI transport/provider errors: do not leak the provider's response body.
+	if strings.Contains(low, "chat returned") || strings.Contains(low, "unauthorized") ||
+		strings.Contains(low, "status code") || strings.Contains(low, "http ") {
+		return "the AI service could not complete the request"
+	}
+	const max = 300
+	if len(reason) > max {
+		reason = reason[:max] + "…"
+	}
+	if reason == "" {
+		return "the fix could not be generated"
+	}
+	return reason
 }

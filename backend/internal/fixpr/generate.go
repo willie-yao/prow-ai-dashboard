@@ -506,7 +506,57 @@ func parseJSONObject(s string, v any) error {
 	if start < 0 || end < start {
 		return fmt.Errorf("no JSON object in response")
 	}
-	return json.Unmarshal([]byte(s[start:end+1]), v)
+	obj := s[start : end+1]
+	if err := json.Unmarshal([]byte(obj), v); err == nil {
+		return nil
+	}
+	// Models copying verbatim code snippets into "old"/"new" often emit literal
+	// tabs and newlines inside JSON strings, which strict JSON rejects. Escape
+	// raw control characters inside string literals and retry.
+	return json.Unmarshal([]byte(escapeStringControlChars(obj)), v)
+}
+
+// escapeStringControlChars escapes raw control characters (tab, newline, and
+// other bytes below 0x20) that appear inside JSON string literals, leaving
+// structural whitespace between tokens untouched. Already-escaped sequences and
+// characters outside strings pass through unchanged.
+func escapeStringControlChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString, escaped := false, false
+	for _, r := range s {
+		if !inString {
+			if r == '"' {
+				inString = true
+			}
+			b.WriteRune(r)
+			continue
+		}
+		if escaped {
+			b.WriteRune(r)
+			escaped = false
+			continue
+		}
+		switch {
+		case r == '\\':
+			b.WriteRune(r)
+			escaped = true
+		case r == '"':
+			b.WriteRune(r)
+			inString = false
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func dedupeNonEmpty(in []string) []string {

@@ -108,6 +108,15 @@ type Stats struct {
 	Proposed  int // PRs opened (draft mode)
 	Adopted   int // existing open PR adopted
 	Previewed int // dry-run previews produced
+	// Failures records why a fix was not opened for a pattern. The batch path
+	// logs and ignores these; on-demand callers surface the reason.
+	Failures []Failure
+}
+
+// Failure is a per-pattern reason a fix could not be proposed.
+type Failure struct {
+	Subject string
+	Reason  string
 }
 
 // NewClients builds the GitHub PR client and source reader from a token.
@@ -252,6 +261,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		fix, err := gen(ctx, p)
 		if err != nil {
 			log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
+			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
 			continue
 		}
 
@@ -272,6 +282,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		})
 		if url == "" {
 			log.Printf("  ⚠ failed to open fix PR for %q: %v", p.Subject, err)
+			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: "opening the pull request failed"})
 			continue
 		}
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -84,5 +85,31 @@ func TestProposeFix_AINotConfigured(t *testing.T) {
 	_, err := s.ProposeFix(context.Background(), pa.ID, "tok")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("want AI-not-configured error, got %v", err)
+	}
+}
+
+func TestSafeReason_RedactsAIErrorsPassesOurs(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"chat returned 401: unauthorized: <provider body>", "the AI service could not complete the request"},
+		{"AuthenticateToken authentication failed: unauthorized", "the AI service could not complete the request"},
+		{"the model could not produce a code change for this failure", "the model could not produce a code change for this failure"},
+		{"no candidate files in the repo matched the failure", "no candidate files in the repo matched the failure"},
+		{"", "the fix could not be generated"},
+	}
+	for _, c := range cases {
+		if got := safeReason(c.in); got != c.want {
+			t.Errorf("safeReason(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestSafeReason_Truncates(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	got := safeReason(long)
+	if len([]rune(got)) > 302 { // 300 + ellipsis
+		t.Errorf("safeReason did not truncate: len=%d", len([]rune(got)))
 	}
 }
