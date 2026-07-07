@@ -482,3 +482,28 @@ func TestMarker_StableAndKeyed(t *testing.T) {
 		t.Error("marker comment should contain the search token")
 	}
 }
+
+// TestReconcile_SingleSpecNoRecoverPrefixes documents the on-demand actions
+// contract: filing one issue with no recover prefixes must not recover, close,
+// or drop any other tracked finding.
+func TestReconcile_SingleSpecNoRecoverPrefixes(t *testing.T) {
+	f := newFakeGitHub(t)
+	m := newTestManager(t, f, Options{MaxNewPerRun: 1}) // no RecoverPrefixes
+
+	// Pre-track an unrelated finding as if a prior batch run filed it.
+	m.state.Tracked["pattern::other-job"] = TrackedIssue{Number: 42, URL: "u", FirstFiledAt: now()}
+
+	stats, err := m.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-a")})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if stats.Created != 1 {
+		t.Errorf("Created = %d, want 1", stats.Created)
+	}
+	if stats.Recovered != 0 {
+		t.Errorf("Recovered = %d, want 0 (single-spec create must not recover others)", stats.Recovered)
+	}
+	if _, ok := m.state.Tracked["pattern::other-job"]; !ok {
+		t.Error("unrelated tracked finding was dropped by a single-spec create")
+	}
+}

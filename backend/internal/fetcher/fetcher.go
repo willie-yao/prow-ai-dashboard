@@ -337,6 +337,14 @@ func (p *pipeline) refresh(ctx context.Context, jobs []models.ProwJob) (*refresh
 	// Run AI failure analysis when enabled.
 	if p.enableAI {
 		analyzeFailuresWithAI(ctx, cfg, details, flakinessReport, p.aiToken, opts.OutDir, p.aiSystemPrompt, p.aiSkillSet)
+		// Assign stable IDs so the frontend and actions API can address a
+		// specific pattern. Set here so both jobs/*.json and the folded
+		// flakiness.json patterns carry the same ID.
+		for i := range details {
+			for j := range details[i].PatternAnalyses {
+				details[i].PatternAnalyses[j].ID = models.PatternID(details[i].PatternAnalyses[j])
+			}
+		}
 		// Fold systemic job-level verdicts into flakiness.json for the home page.
 		flakinessReport.RecurringPatterns = collectRecurringPatterns(details)
 		if n := len(flakinessReport.RecurringPatterns); n > 0 {

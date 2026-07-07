@@ -288,6 +288,13 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
+// TrackedURL returns the PR URL recorded for a pattern, if one has been opened
+// or adopted. Used by on-demand callers to report the result after Reconcile.
+func (m *Manager) TrackedURL(p models.PatternAnalysis) (string, bool) {
+	t, ok := m.state.Tracked[keyFor(p)]
+	return t.URL, ok
+}
+
 // keyFor is the dedup identity of a pattern: the job plus a fingerprint of the
 // shared root cause, so distinct causes on one job dedupe separately.
 func keyFor(p models.PatternAnalysis) string {

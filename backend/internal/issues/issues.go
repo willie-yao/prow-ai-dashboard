@@ -115,6 +115,14 @@ type Stats struct {
 	Recovered int
 }
 
+// TrackedURL returns the issue URL recorded for a finding key, if one has been
+// filed or adopted. Used by on-demand callers to report the result after
+// Reconcile.
+func (m *Manager) TrackedURL(key string) (string, bool) {
+	t, ok := m.state.Tracked[key]
+	return t.URL, ok
+}
+
 // NewManager builds a Manager and loads prior state from stateFile if present.
 // targetRepo scopes state by owner/name so issue numbers are never mixed
 // across repos.
