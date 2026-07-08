@@ -201,6 +201,7 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 		MinGCSBytes:        agentic.MinGCSBytes,
 		CritiqueMaxRetries: agentic.Critique.MaxRetries,
 		SingleToolCall:     agentic.SingleToolCall,
+		SemanticJudge:      true,
 	}, factory, registry, enabled)
 
 	loc := prowbuild.BuildLocation{
