@@ -612,8 +612,15 @@ func repoRelevantFiles(relevant, tree []string) []string {
 	seen := map[string]bool{}
 	for _, rf := range relevant {
 		p := strings.TrimSpace(strings.TrimPrefix(rf, "/"))
+		stripped := false
 		for p != "" {
 			if treeSet[p] {
+				// A suffix (stripped) match must be at least two segments deep,
+				// so a bare basename like "client.go" from a vendored path can't
+				// resolve to an unrelated repo file. An exact match is always ok.
+				if stripped && !strings.Contains(p, "/") {
+					break
+				}
 				if !seen[p] {
 					seen[p] = true
 					out = append(out, p)
@@ -625,6 +632,7 @@ func repoRelevantFiles(relevant, tree []string) []string {
 				break
 			}
 			p = p[i+1:]
+			stripped = true
 		}
 	}
 	return out

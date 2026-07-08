@@ -35,8 +35,12 @@ type PatternFailure struct {
 	// RelevantFiles are the source files this build's analysis implicated,
 	// so the correlation can name concrete targets in the cross-cutting fix.
 	RelevantFiles []string
-	IsTransient   bool
-	Severity      string
+	// LocationFile is the failing test's own source file (from the JUnit
+	// failure location). It seeds the fix harness but is deliberately kept out
+	// of the correlation prompt so it never perturbs the pattern cache key.
+	LocationFile string
+	IsTransient  bool
+	Severity     string
 }
 
 // patternResponse is the model's JSON contract for the correlation verdict.
@@ -127,21 +131,25 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
 }
 
-// collectRelevantFiles unions the per-build implicated files in first-seen
-// order. These carry the model's own targeting into the pattern so downstream
-// consumers (the fix harness) can ground candidate selection on them rather
-// than re-deriving targets from scratch.
+// collectRelevantFiles unions the files each build implicated, in first-seen
+// order, leading with the failing test's own source file. These carry the
+// analysis's own targeting into the pattern so the fix harness can ground
+// candidate selection on them rather than re-deriving targets from scratch.
 func collectRelevantFiles(failures []PatternFailure) []string {
 	seen := map[string]bool{}
 	var out []string
+	add := func(f string) {
+		f = strings.TrimSpace(f)
+		if f == "" || seen[f] {
+			return
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
 	for _, f := range failures {
+		add(f.LocationFile)
 		for _, rf := range f.RelevantFiles {
-			rf = strings.TrimSpace(rf)
-			if rf == "" || seen[rf] {
-				continue
-			}
-			seen[rf] = true
-			out = append(out, rf)
+			add(rf)
 		}
 	}
 	return out

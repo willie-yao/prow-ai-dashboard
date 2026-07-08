@@ -277,6 +277,20 @@ func TestRepoRelevantFiles_MapsToRealPaths(t *testing.T) {
 	}
 }
 
+func TestRepoRelevantFiles_RejectsBareBasenameSuffix(t *testing.T) {
+	// A vendored path must not resolve to an unrelated root-level file by bare
+	// basename; only a >=2-segment suffix (or an exact match) counts.
+	tree := []string{"client.go", "test/e2e/clusterctl_upgrade_test.go"}
+	relevant := []string{
+		"sigs.k8s.io/cluster-api/test/framework/clusterctl/client.go", // must NOT match root client.go
+		"client.go", // exact repo-relative match is fine
+	}
+	got := repoRelevantFiles(relevant, tree)
+	if len(got) != 1 || got[0] != "client.go" {
+		t.Errorf("expected only the exact client.go match, got %v", got)
+	}
+}
+
 func TestMergeCandidates_SeedsFirstDeduped(t *testing.T) {
 	seeds := []string{"a.go", "b.go"}
 	ranked := []string{"b.go", "c.go"} // b.go overlaps
