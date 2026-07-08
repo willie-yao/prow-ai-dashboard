@@ -1,4 +1,4 @@
-// Package repofs implements read-only agent tools over a source repository's
+// Package repotree implements read-only agent tools over a source repository's
 // file tree. They mirror the shape of the filesystem tools (which read a
 // build's GCS artifact tree) but read a GitHub repo at a fixed ref via
 // tools.Env.Repo, so the agent can locate the file a fix should touch by
@@ -15,7 +15,7 @@
 // maxGrepFiles files matching path_glob per call and reports truncation. The
 // full tree listing and each file body are memoized in tools.Cache so repeated
 // navigation over one repo/ref costs no extra calls.
-package repofs
+package repotree
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 )
 
 // Group is the alias used to enable all repo tools at once.
-const Group = "repofs"
+const Group = "repotree"
 
 // Bounds shared across tools.
 const (
@@ -37,8 +37,8 @@ const (
 	maxGrepFiles = 40    // files fetched per grep_repo call
 	grepMaxCtx   = 5
 	grepMaxHits  = 100
-	treeCacheKey = "repofs/tree"
-	fileCachePfx = "repofs/file/"
+	treeCacheKey = "repotree/tree"
+	fileCachePfx = "repotree/file/"
 )
 
 // Register adds every tool in this package to the given registry.

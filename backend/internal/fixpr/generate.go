@@ -21,7 +21,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repofs"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -204,8 +204,8 @@ func (a repoReaderAdapter) ReadFile(ctx context.Context, path string) (string, b
 // in-repo file to change, which the caller upgrades to an upstream decline.
 func locateTargetsAgentic(ctx context.Context, gp genParams, p models.PatternAnalysis, candidates, tree []string) ([]string, error) {
 	reg := tools.NewRegistry()
-	repofs.Register(reg)
-	enabled, err := reg.Enable([]string{repofs.Group})
+	repotree.Register(reg)
+	enabled, err := reg.Enable([]string{repotree.Group})
 	if err != nil {
 		return nil, fmt.Errorf("enabling repo tools: %w", err)
 	}
