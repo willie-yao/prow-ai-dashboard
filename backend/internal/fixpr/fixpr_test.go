@@ -163,6 +163,54 @@ func TestGenerateFix_NoCandidates(t *testing.T) {
 	}
 }
 
+func TestGenerateFix_DeclinesWhenFixIsUpstream(t *testing.T) {
+	// The analysis pointed the fix at upstream Kubernetes source that does not
+	// exist in this repo. The repo has an unrelated file so candidates are
+	// non-empty, but the model correctly selects none. The error must name the
+	// upstream target rather than the vague "no candidate file fit".
+	src := &fakeSource{files: map[string]string{
+		"test/e2e/conformance_test.go": "package e2e\n",
+	}}
+	p := systemicPattern("dra device plugin registration race")
+	p.SuggestedFix = "add a poll in test/e2e/dra/dra.go before creating tester pods"
+	p.RelevantFiles = []string{
+		"k8s.io/kubernetes/test/e2e/dra/dra.go", // upstream .go, not in repo
+		"pkg/kubelet/cm/dra/manager/manager.go", // upstream, not in repo
+		"build-log.txt",                         // artifact, ignored
+	}
+	// Model honestly selects no in-repo file.
+	c := &fakeCompleter{locate: `{"files": []}`}
+	_, err := generateFix(context.Background(), genParamsFor(c, src), p)
+	if err == nil {
+		t.Fatal("expected a decline error")
+	}
+	if !strings.Contains(err.Error(), "outside") || !strings.Contains(err.Error(), "dra.go") {
+		t.Errorf("expected an upstream-decline message naming the external file, got %v", err)
+	}
+}
+
+func TestExternalSourceFiles(t *testing.T) {
+	tree := []string{"test/e2e/conformance_test.go", "config/a.yaml"}
+	relevant := []string{
+		"k8s.io/kubernetes/test/e2e/dra/dra.go",                // external source
+		"pkg/kubelet/cm/dra/manager/manager.go",                // external source
+		"sigs.k8s.io/cluster-api-provider-azure/config/a.yaml", // resolves in-repo -> excluded
+		"test/e2e/conformance_test.go",                         // in-repo -> excluded
+		"artifacts/foo/dump.yaml",                              // artifact -> excluded
+		"build-log.txt",                                        // log -> excluded
+	}
+	got := externalSourceFiles(relevant, tree)
+	want := []string{"k8s.io/kubernetes/test/e2e/dra/dra.go", "pkg/kubelet/cm/dra/manager/manager.go"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestGenerateFix_NoEditsRetriesThenSucceeds(t *testing.T) {
 	// The model returns an empty edit set first, then a real edit after the
 	// feedback nudge. critiqueRetries must allow at least one retry.
@@ -288,6 +336,28 @@ func TestRepoRelevantFiles_RejectsBareBasenameSuffix(t *testing.T) {
 	got := repoRelevantFiles(relevant, tree)
 	if len(got) != 1 || got[0] != "client.go" {
 		t.Errorf("expected only the exact client.go match, got %v", got)
+	}
+}
+
+func TestRepoRelevantFiles_NormalizesDotSlash(t *testing.T) {
+	// A "./main.go" prefix must still match the root file main.go exactly.
+	got := repoRelevantFiles([]string{"./main.go"}, []string{"main.go"})
+	if len(got) != 1 || got[0] != "main.go" {
+		t.Errorf("expected ./main.go to resolve to main.go, got %v", got)
+	}
+}
+
+func TestGenerateFix_DeclinesUpstreamWhenNoCandidates(t *testing.T) {
+	// No in-repo file even ranks (empty candidate set) and the analysis named
+	// only external source. The early return must still give the clear upstream
+	// decline, not the generic "no candidate files in the repo" message.
+	src := &fakeSource{files: map[string]string{"README.md": "# x\n"}}
+	p := systemicPattern("dra race")
+	p.RelevantFiles = []string{"k8s.io/kubernetes/test/e2e/dra/dra.go"}
+	c := &fakeCompleter{} // locate never called
+	_, err := generateFix(context.Background(), genParamsFor(c, src), p)
+	if err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("expected an upstream-decline message, got %v", err)
 	}
 }
 

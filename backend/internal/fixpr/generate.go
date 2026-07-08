@@ -26,6 +26,11 @@ import (
 // it as retryable, then reports a clear "not auto-fixable" error.
 var errNoEdits = errors.New("model proposed no edits")
 
+// errNoTargetSelected signals the locate step found no in-repo file to change.
+// generateFix upgrades it to a clearer reason when the analysis pointed the fix
+// at code outside this repo.
+var errNoTargetSelected = errors.New("no candidate file fit the failure")
+
 // Completer is the subset of the AI client this package needs (an interface so
 // generation is unit-testable).
 type Completer interface {
@@ -80,11 +85,21 @@ func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*
 	seeds := repoRelevantFiles(p.RelevantFiles, tree)
 	candidates := mergeCandidates(seeds, rankCandidates(tree, p))
 	if len(candidates) == 0 {
+		if reason := upstreamDecline(gp, p.RelevantFiles, tree); reason != nil {
+			return nil, reason
+		}
 		return nil, fmt.Errorf("no candidate files in the repo matched the failure")
 	}
 
 	files, err := locateTargets(ctx, gp.completer, p, candidates, gp.maxFiles)
 	if err != nil {
+		// When the model found no in-repo file and the analysis pointed the fix
+		// at source outside this repo, say so instead of a bare "no fit".
+		if errors.Is(err, errNoTargetSelected) {
+			if reason := upstreamDecline(gp, p.RelevantFiles, tree); reason != nil {
+				return nil, reason
+			}
+		}
 		return nil, err
 	}
 
@@ -182,7 +197,7 @@ Answer with one line of JSON:
 	}
 	files := dedupeNonEmpty(v.Files)
 	if len(files) == 0 {
-		return nil, fmt.Errorf("no candidate file fit the failure")
+		return nil, errNoTargetSelected
 	}
 	if len(files) > maxFiles {
 		return nil, fmt.Errorf("model named %d files, exceeds max_files %d", len(files), maxFiles)
@@ -611,7 +626,9 @@ func repoRelevantFiles(relevant, tree []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, rf := range relevant {
-		p := strings.TrimSpace(strings.TrimPrefix(rf, "/"))
+		p := strings.TrimSpace(rf)
+		p = strings.TrimPrefix(p, "./")
+		p = strings.TrimPrefix(p, "/")
 		stripped := false
 		for p != "" {
 			if treeSet[p] {
@@ -636,6 +653,42 @@ func repoRelevantFiles(relevant, tree []string) []string {
 		}
 	}
 	return out
+}
+
+// externalSourceFiles returns the analysis-named files that look like source
+// code (not logs or artifact dumps) but do not resolve to the target repo tree.
+// A non-empty result means the model pointed the fix at code outside this repo
+// (e.g. an upstream module), so the harness can decline with a clear reason.
+func externalSourceFiles(relevant, tree []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range relevant {
+		lf := strings.ToLower(strings.TrimSpace(f))
+		if lf == "" || seen[lf] {
+			continue
+		}
+		// Only source-like files; artifact dumps and logs are not fix targets.
+		if strings.Contains(lf, "artifacts/") || !preferredExts[ext(lf)] {
+			continue
+		}
+		// Skip anything that resolves to a real path in this repo.
+		if len(repoRelevantFiles([]string{f}, tree)) > 0 {
+			continue
+		}
+		seen[lf] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// upstreamDecline returns a clear "fix lives outside this repo" error when the
+// analysis named source files that don't resolve to the target repo, else nil.
+func upstreamDecline(gp genParams, relevant, tree []string) error {
+	ext := externalSourceFiles(relevant, tree)
+	if len(ext) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the fix appears to live outside %s/%s (e.g. %s); no file in this repo matched the failure", gp.owner, gp.repo, ext[0])
 }
 
 // mergeCandidates puts seeds first, then ranked paths not already seeded,
