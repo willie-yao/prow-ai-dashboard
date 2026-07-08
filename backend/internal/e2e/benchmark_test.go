@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -396,14 +397,41 @@ func benchByteBudgets(t *testing.T, client *ai.Client) (modelByteBudget, context
 
 // defaultBenchAgentic mirrors the live CAPZ-Dynamo tuning so a default run
 // (no BENCH_PROJECT_DIR) is representative of that deploy.
+// defaultBenchAgentic mirrors the live CAPZ-Dynamo tuning (a weak open-weights
+// model) so a default run is representative of that deploy. Individual floors
+// can be overridden via env (BENCH_MIN_TOOL_CALLS, BENCH_MIN_GCS_BYTES,
+// BENCH_MAX_ITERS, BENCH_TIMEOUT) to benchmark stronger models fairly without a
+// BENCH_PROJECT_DIR, since the weak-model floors distort a strong model that
+// answers concisely.
 func defaultBenchAgentic() project.Agentic {
-	return project.Agentic{
-		MaxIters:     15,
-		Timeout:      20 * time.Minute,
-		MinToolCalls: 5,
-		MinGCSBytes:  500_000,
-		Critique:     project.AgenticCritique{MaxRetries: 2},
+	a := project.Agentic{
+		MaxIters:     benchEnvInt("BENCH_MAX_ITERS", 15),
+		Timeout:      benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),
+		MinToolCalls: benchEnvInt("BENCH_MIN_TOOL_CALLS", 5),
+		MinGCSBytes:  benchEnvInt("BENCH_MIN_GCS_BYTES", 500_000),
+		Critique:     project.AgenticCritique{MaxRetries: benchEnvInt("BENCH_CRITIQUE_RETRIES", 2)},
 	}
+	return a
+}
+
+// benchEnvInt reads a non-negative integer env override, falling back to def.
+func benchEnvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// benchEnvDuration reads a duration env override (e.g. "10m"), falling back to def.
+func benchEnvDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
 }
 
 // ComposeBenchPrompt wraps a compact CAPZ/cloud-provider oriented addendum in
