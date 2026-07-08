@@ -101,7 +101,7 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 	if raw, ok := s.client.cache.Get(key); ok {
 		var cached patternResponse
 		if json.Unmarshal(raw, &cached) == nil && validPatternResponse(cached) {
-			return buildPatternAnalysis(subject, len(failures), cached), nil
+			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
 		}
 	}
 
@@ -124,7 +124,27 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
 	}
 	_ = s.client.cache.Set(key, parsed)
-	return buildPatternAnalysis(subject, len(failures), parsed), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+}
+
+// collectRelevantFiles unions the per-build implicated files in first-seen
+// order. These carry the model's own targeting into the pattern so downstream
+// consumers (the fix harness) can ground candidate selection on them rather
+// than re-deriving targets from scratch.
+func collectRelevantFiles(failures []PatternFailure) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range failures {
+		for _, rf := range f.RelevantFiles {
+			rf = strings.TrimSpace(rf)
+			if rf == "" || seen[rf] {
+				continue
+			}
+			seen[rf] = true
+			out = append(out, rf)
+		}
+	}
+	return out
 }
 
 // validPatternResponse rejects empty or self-contradictory verdicts so they are
@@ -140,7 +160,7 @@ func validPatternResponse(p patternResponse) bool {
 }
 
 // buildPatternAnalysis converts a parsed verdict into the published model.
-func buildPatternAnalysis(subject string, builds int, p patternResponse) *models.PatternAnalysis {
+func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string) *models.PatternAnalysis {
 	conf := strings.ToLower(strings.TrimSpace(p.Confidence))
 	switch conf {
 	case "high", "medium", "low":
@@ -157,6 +177,7 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse) *models
 		SharedBuilds:    p.SharedBuilds,
 		SuggestedFix:    strings.TrimSpace(p.SuggestedFix),
 		Summary:         strings.TrimSpace(p.Summary),
+		RelevantFiles:   relevantFiles,
 	}
 }
 

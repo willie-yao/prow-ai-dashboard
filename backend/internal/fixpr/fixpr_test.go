@@ -243,6 +243,85 @@ func TestRankCandidates_ExtensionAloneExcluded(t *testing.T) {
 	}
 }
 
+func TestRepoRelevantFiles_MapsToRealPaths(t *testing.T) {
+	tree := []string{
+		"test/e2e/azure_apiversion_upgrade_test.go",
+		"test/e2e/clusterctl_upgrade_test.go",
+		"test/e2e/config/azure-dev.yaml",
+		"main.go",
+	}
+	// Mirrors what an analysis actually implicates: real repo files, vendored/
+	// prefixed paths, upstream module paths, and artifact logs.
+	relevant := []string{
+		"test/e2e/azure_apiversion_upgrade_test.go",                                  // exact
+		"sigs.k8s.io/cluster-api-provider-azure/test/e2e/clusterctl_upgrade_test.go", // prefixed -> resolves
+		"test/e2e/config/azure-dev.yaml",                                             // exact
+		"sigs.k8s.io/cluster-api/test/framework/clusterctl/client.go",                // upstream, no repo match
+		"artifacts/clusters/bootstrap/logs/manager.log",                              // artifact, dropped
+		"build-log.txt", // dropped
+		"/home/prow/go/pkg/mod/sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go", // dropped
+	}
+	got := repoRelevantFiles(relevant, tree)
+	want := map[string]bool{
+		"test/e2e/azure_apiversion_upgrade_test.go": true,
+		"test/e2e/clusterctl_upgrade_test.go":       true,
+		"test/e2e/config/azure-dev.yaml":            true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %d real paths", got, len(want))
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected path %q in %v", g, got)
+		}
+	}
+}
+
+func TestMergeCandidates_SeedsFirstDeduped(t *testing.T) {
+	seeds := []string{"a.go", "b.go"}
+	ranked := []string{"b.go", "c.go"} // b.go overlaps
+	got := mergeCandidates(seeds, ranked)
+	want := []string{"a.go", "b.go", "c.go"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q (%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestGenerateFix_SeedsRelevantFilesWhenRankingMisses(t *testing.T) {
+	// Keyword ranking would miss this file (its name shares no keyword with the
+	// failure), but the analysis named it. Seeding must surface it so the locate
+	// step can pick it instead of failing with "no candidate file fit".
+	target := "test/e2e/azure_apiversion_upgrade_test.go"
+	src := &fakeSource{files: map[string]string{
+		target:          "package e2e\n\nfunc TestUpgrade() { doThing() }\n",
+		"README.md":     "# readme\n",
+		"vendor/x/y.go": "package x\n",
+	}}
+	p := systemicPattern("aso webhook readiness race")
+	p.SharedRootCause = "clusterctl upgrade races the ASO conversion webhook lifecycle"
+	p.SuggestedFix = "wait for the webhook endpoints before tearing down the old provider"
+	p.RelevantFiles = []string{
+		"sigs.k8s.io/cluster-api-provider-azure/" + target, // resolves to target
+		"artifacts/clusters/bootstrap/logs/manager.log",    // dropped
+	}
+	c := &fakeCompleter{
+		locate: `{"files": ["test/e2e/azure_apiversion_upgrade_test.go"]}`,
+		edit:   `{"rationale": "guard the webhook", "edits": [{"file": "test/e2e/azure_apiversion_upgrade_test.go", "old": "doThing()", "new": "waitForWebhook(); doThing()"}]}`,
+	}
+	fix, err := generateFix(context.Background(), genParamsFor(c, src), p)
+	if err != nil {
+		t.Fatalf("generateFix: %v", err)
+	}
+	if _, ok := fix.files[target]; !ok {
+		t.Errorf("expected an edit to %q, got %v", target, fix.files)
+	}
+}
+
 func TestValidateSyntax(t *testing.T) {
 	ok := []map[string]string{
 		{"a.yaml": "key: val\n"},

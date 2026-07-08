@@ -74,7 +74,11 @@ func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*
 	if err != nil {
 		return nil, fmt.Errorf("listing %s/%s tree: %w", gp.owner, gp.repo, err)
 	}
-	candidates := rankCandidates(tree, p)
+	// Seed candidates with the files the analysis itself implicated (mapped to
+	// real repo paths), so a poor keyword ranking can't hide the target the
+	// model already named. Fall back to keyword ranking for the rest.
+	seeds := repoRelevantFiles(p.RelevantFiles, tree)
+	candidates := mergeCandidates(seeds, rankCandidates(tree, p))
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no candidate files in the repo matched the failure")
 	}
@@ -589,6 +593,60 @@ func oneLine(s string) string {
 // maxCandidates caps how many real repo paths are offered to the locate step,
 // keeping the prompt bounded on large repos.
 const maxCandidates = 200
+
+// repoRelevantFiles maps the analysis's implicated files to real repo paths.
+// A path is kept when it is a repo path exactly, or when a real repo path is a
+// path-segment-aligned suffix of it (so a vendored or absolute path like
+// "sigs.k8s.io/cluster-api-provider-azure/test/e2e/x_test.go" resolves to
+// "test/e2e/x_test.go"). Artifact logs and upstream paths with no repo match
+// drop out. The longest matching suffix wins.
+func repoRelevantFiles(relevant, tree []string) []string {
+	if len(relevant) == 0 {
+		return nil
+	}
+	treeSet := make(map[string]bool, len(tree))
+	for _, t := range tree {
+		treeSet[t] = true
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, rf := range relevant {
+		p := strings.TrimSpace(strings.TrimPrefix(rf, "/"))
+		for p != "" {
+			if treeSet[p] {
+				if !seen[p] {
+					seen[p] = true
+					out = append(out, p)
+				}
+				break
+			}
+			i := strings.IndexByte(p, '/')
+			if i < 0 {
+				break
+			}
+			p = p[i+1:]
+		}
+	}
+	return out
+}
+
+// mergeCandidates puts seeds first, then ranked paths not already seeded,
+// deduped and capped at maxCandidates.
+func mergeCandidates(seeds, ranked []string) []string {
+	out := make([]string, 0, maxCandidates)
+	seen := map[string]bool{}
+	for _, s := range append(append([]string{}, seeds...), ranked...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+		if len(out) >= maxCandidates {
+			break
+		}
+	}
+	return out
+}
 
 // candidateStopwords are generic failure-narrative words that shouldn't drive
 // path matching.
