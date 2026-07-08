@@ -116,12 +116,53 @@ var benchCases = []benchCase{
 		// This dual-stack job failed ~9 consecutive builds before PR #6358; a
 		// genuine flake would not, so a transient verdict is contradicted.
 		consecutiveFailures: 9,
+		// This is the hard/aspirational case. The MUST bar is the achievable
+		// correct high-level diagnosis (systemic, not a flake; control-plane /
+		// networking on CAPZ). The exact control-plane route-table root cause
+		// requires reading one field in a resource dump and is a stretch "nice"
+		// signal that even strong models miss today.
 		signals: []benchSignal{
-			{name: "route table", re: mustRE(`(?i)route[\s_-]?table`), must: true},
-			{name: "control-plane subnet or apiserver->pod reachability", re: mustRE(`(?i)control[\s_-]?plane|api[\s_-]?server|subnet`), must: true},
+			{name: "not a transient flake", re: mustRE(`(?i)systemic|persistent|not\s+(?:a\s+)?(?:transient|flake)|real\s+(?:bug|issue|regression)|deterministic`), must: true},
+			{name: "control-plane / networking / subnet involvement", re: mustRE(`(?i)control[\s_-]?plane|api[\s_-]?server|subnet|network|routing?|connectivity`), must: true},
 			{name: "identifies CAPZ / AzureCluster as the fix site", re: mustRE(`(?i)cluster-api-provider-azure|capz|azurecluster`)},
 			{name: "traces the calico/apiservice/namespace cascade", re: mustRE(`(?i)calico|apiservice|namespace|terminating|discovery`)},
-			{name: "notes dual-stack / encapsulation none", re: mustRE(`(?i)dual[\s_-]?stack|ipv6|encapsulation`)},
+			{name: "STRETCH: pinpoints the control-plane route table", re: mustRE(`(?i)route[\s_-]?table`)},
+			{name: "STRETCH: notes dual-stack / encapsulation none", re: mustRE(`(?i)dual[\s_-]?stack|ipv6|encapsulation`)},
+		},
+	},
+	{
+		// apiversion-upgrade periodic fails on clusterctl upgrade: during the
+		// management-cluster provider upgrade, clusterctl scales the Azure
+		// Service Operator (ASO) controller-manager down, so ASO's CRD
+		// conversion webhook becomes unreachable (connection refused). When
+		// clusterctl's object-graph discovery then lists ASO resource CRDs
+		// (network.azure.com VirtualNetworksSubnet, containerservice.azure.com
+		// ManagedClustersAgentPool), the storage-version conversion call to the
+		// downed webhook fails and retries until the client-side rate limiter
+		// hits its context deadline ("action failed after 9 attempts"). Unlike
+		// the route-table case, the proximate cause is stated verbatim in
+		// build-log.txt and the clusterctl-upgrade.log dumps, so a competent
+		// agent finds it by reading the logs. Persistent (7+ consecutive
+		// builds); the real fix is partly upstream in sigs.k8s.io/cluster-api's
+		// clusterctl upgrade sequencing.
+		name:                "apiversion-upgrade-clusterctl-aso-ratelimit",
+		bucket:              "kubernetes-ci-logs",
+		fixtureAsset:        "apiversion-upgrade-aso-clusterctl.tar.gz",
+		jobType:             models.JobTypePeriodic,
+		jobName:             "periodic-cluster-api-provider-azure-apiversion-upgrade-main",
+		buildID:             "2074603331648491520",
+		webURL:              "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-apiversion-upgrade-main/2074603331648491520/",
+		sourceRepo:          [2]string{"kubernetes-sigs", "cluster-api-provider-azure"},
+		testName:            "[It] Running the Cluster API E2E tests API Version Upgrade upgrade from the latest version of v1beta1 to current, and scale workload clusters created in the old version Should create a management cluster and then upgrade all the providers",
+		junitFile:           "junit.e2e_suite.1.xml",
+		failureMsg:          `failed to run clusterctl upgrade Unexpected error: failed to list objects for the "network.azure.com/v1api20201101, Kind=VirtualNetworksSubnet" GroupVersionKind: action failed after 9 attempts: client rate limiter Wait returned an error: context deadline exceeded`,
+		consecutiveFailures: 7,
+		signals: []benchSignal{
+			{name: "identifies clusterctl upgrade as the failing step", re: mustRE(`(?i)clusterctl\s+upgrade|management[\s_-]?cluster.*upgrade|provider.*upgrade`), must: true},
+			{name: "identifies ASO / the azure.com CRD listing as what failed", re: mustRE(`(?i)service\s?operator|\baso\b|azure\.com|virtualnetworkssubnet|managedclustersagentpool|crd`), must: true},
+			{name: "names the rate-limiter / deadline mechanism", re: mustRE(`(?i)rate[\s_-]?limit|context deadline|timed?\s?out|9 attempts`)},
+			{name: "recognizes it as systemic, not a flake", re: mustRE(`(?i)systemic|persistent|not\s+(?:a\s+)?(?:transient|flake)|recurring|scal`)},
+			{name: "STRETCH: pinpoints the conversion-webhook / ASO scale-down mechanism", re: mustRE(`(?i)conversion\s?webhook|scal(?:e|ed|ing)\s?down|connection refused|webhook.*(?:unreachable|refused|down)`)},
 		},
 	},
 }
