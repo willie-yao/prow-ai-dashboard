@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -46,9 +46,28 @@ export function FailureActions({ failureID }: { failureID: string }) {
   const [action, setAction] = useState<Action | null>(null);
   const [busy, setBusy] = useState<"preview" | "refine" | "confirm" | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  // drafts caches the last generated preview per action so reopening the dialog
+  // reuses it instead of regenerating (fix generation is expensive). A draft is
+  // invalidated after a successful confirm or when its server-side token has
+  // expired.
+  const [drafts, setDrafts] = useState<Partial<Record<Action, Preview>>>({});
   const [instruction, setInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
+
+  // Cached drafts hold a server token bound to a specific failure. If this
+  // instance is reused for a different failure (e.g. route change without a
+  // remount), reset everything so a stale draft can never be confirmed against
+  // the wrong failure.
+  useEffect(() => {
+    setAction(null);
+    setBusy(null);
+    setPreview(null);
+    setDrafts({});
+    setInstruction("");
+    setError(null);
+    setUrl(null);
+  }, [failureID]);
 
   if (!features.actions || !failureID || status === "loading" || status === "unavailable") {
     return null;
@@ -69,11 +88,17 @@ export function FailureActions({ failureID }: { failureID: string }) {
 
   function open(act: Action) {
     setAction(act);
-    setPreview(null);
     setInstruction("");
     setError(null);
     setUrl(null);
-    void loadPreview(act, false);
+    const cached = drafts[act];
+    if (cached) {
+      // Reuse the already-generated draft instead of regenerating.
+      setPreview(cached);
+    } else {
+      setPreview(null);
+      void loadPreview(act, false);
+    }
   }
 
   async function loadPreview(act: Action, refine: boolean) {
@@ -93,7 +118,10 @@ export function FailureActions({ failureID }: { failureID: string }) {
         const text = await res.text();
         throw new Error(text.trim() || `HTTP ${res.status}`);
       }
-      setPreview((await res.json()) as Preview);
+      const p = (await res.json()) as Preview;
+      setPreview(p);
+      setDrafts((d) => ({ ...d, [act]: p }));
+      if (refine) setInstruction("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -101,8 +129,17 @@ export function FailureActions({ failureID }: { failureID: string }) {
     }
   }
 
+  function invalidate(act: Action) {
+    setDrafts((d) => {
+      const next = { ...d };
+      delete next[act];
+      return next;
+    });
+  }
+
   async function confirm() {
-    if (!preview) return;
+    if (!preview || !action) return;
+    const act = action;
     setBusy("confirm");
     setError(null);
     try {
@@ -114,10 +151,19 @@ export function FailureActions({ failureID }: { failureID: string }) {
       });
       if (!res.ok) {
         const text = await res.text();
+        // A 404 means the cached draft's token expired server-side; drop it so
+        // the next open regenerates.
+        if (res.status === 404) {
+          invalidate(act);
+          setPreview(null);
+          throw new Error("This draft expired. Close and reopen to regenerate it.");
+        }
         throw new Error(text.trim() || `HTTP ${res.status}`);
       }
       const body = (await res.json()) as { url: string };
       setUrl(body.url);
+      // The token is single-use; drop the draft so a repeat action regenerates.
+      invalidate(act);
       close();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -253,6 +299,8 @@ export function FailureActions({ failureID }: { failureID: string }) {
               />
               <Button
                 size="small"
+                variant="contained"
+                color="primary"
                 sx={{ mt: 1 }}
                 startIcon={busy === "refine" ? <CircularProgress size={14} color="inherit" /> : undefined}
                 disabled={busy !== null || instruction.trim() === "" || action === null}

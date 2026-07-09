@@ -251,8 +251,18 @@ Likely-relevant files to start from (verify by reading before choosing; you may 
 	var v struct {
 		Files []string `json:"files"`
 	}
-	if err := parseJSONObject(out, &v); err != nil {
-		return nil, fmt.Errorf("locate response: %w", err)
+	if perr := parseJSONObject(out, &v); perr != nil {
+		// The agentic loop occasionally ends in prose without the required JSON.
+		// Recover with one cheap completion that extracts the file list from its
+		// own conclusion, rather than re-running the whole (expensive) loop.
+		extract := "Extract the repo-relative files this investigation concluded should be edited, as JSON {\"files\": [\"path/one\", ...]}. Use an empty list if it found no in-repo file that fits. Reply with ONLY the JSON.\n\nInvestigation:\n" + out
+		out2, ferr := gp.completer.Complete(ctx, "You output only a JSON object.", extract)
+		if ferr != nil {
+			return nil, fmt.Errorf("locate response: %w", perr)
+		}
+		if perr2 := parseJSONObject(out2, &v); perr2 != nil {
+			return nil, fmt.Errorf("locate response: %w", perr2)
+		}
 	}
 	files := dedupeNonEmpty(v.Files)
 	if len(files) == 0 {
