@@ -43,7 +43,6 @@ export function PatternBanner({
         borderColor: (t) => soft(t, color, 0.3),
         bgcolor: (t) => soft(t, color, 0.05),
         p: { xs: 2, sm: 2.5 },
-        maxWidth: 860,
       }}
     >
       <Stack spacing={2}>
