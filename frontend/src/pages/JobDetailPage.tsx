@@ -6,7 +6,7 @@ import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
-import { ChevronRight, OpenInNew } from "@mui/icons-material";
+import { ChevronRight, HourglassEmpty, OpenInNew } from "@mui/icons-material";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
 import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
@@ -15,15 +15,38 @@ import { RunTimeline } from "../components/RunTimeline";
 import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
 import { PatternBanner } from "../components/PatternBanner";
+import { StatusChip } from "../components/StatusChip";
 import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
-import { dotColorFor, soft } from "../theme";
+import { soft } from "../theme";
 
 function passRateColor(rate: number): "success" | "warning" | "error" {
   if (rate >= 0.9) return "success";
   if (rate <= 0.3) return "error";
   return "warning";
+}
+
+// Derive the job's overall status from its recent pass rate, matching the
+// backend thresholds in aggregator.computeOverallStatus (>=0.9 PASSING,
+// <=0.3 FAILING, else FLAKY).
+function deriveJobStatus(rate: number | null): "PASSING" | "FLAKY" | "FAILING" | null {
+  if (rate === null) return null;
+  if (rate >= 0.9) return "PASSING";
+  if (rate <= 0.3) return "FAILING";
+  return "FLAKY";
+}
+
+// Section heading with the dashboard's accent tick.
+function SectionHeading({ title }: { title: string }) {
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, mb: 1.5 }}>
+      <Box sx={{ width: 4, height: 18, borderRadius: 999, bgcolor: "primary.main", flexShrink: 0 }} />
+      <Typography variant="headline" component="h2">
+        {title}
+      </Typography>
+    </Box>
+  );
 }
 
 export function JobDetailPage() {
@@ -101,13 +124,19 @@ export function JobDetailPage() {
       </Breadcrumbs>
 
       <Box>
-        <Typography
-          variant="h5"
-          component="h1"
-          sx={{ fontWeight: 700, color: "text.primary", fontSize: { xs: "1.25rem", sm: "1.5rem" } }}
-        >
-          {displayName}
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+          <Typography
+            variant="h5"
+            component="h1"
+            sx={{ fontWeight: 700, color: "text.primary", fontSize: { xs: "1.25rem", sm: "1.5rem" } }}
+          >
+            {displayName}
+          </Typography>
+          {(() => {
+            const jobStatus = deriveJobStatus(passRateRecent);
+            return jobStatus ? <StatusChip status={jobStatus} /> : null;
+          })()}
+        </Box>
         {lastRun && (
           <Typography
             variant="data"
@@ -176,9 +205,7 @@ export function JobDetailPage() {
       ) : (
         <>
           <Box component="section">
-            <Typography variant="headline" component="h2" sx={{ mb: 1.5 }}>
-              Run History
-            </Typography>
+            <SectionHeading title="Run History" />
             <RunTimeline
               runs={runs}
               selectedBuildId={selectedBuildId}
@@ -196,20 +223,22 @@ export function JobDetailPage() {
                 p: 0,
                 color: "text.primary",
                 textTransform: "none",
-                gap: 1,
+                gap: 1.25,
                 "&:hover": { color: "primary.main", bgcolor: "transparent" },
               }}
             >
+              <Box sx={{ width: 4, height: 18, borderRadius: 999, bgcolor: "primary.main", flexShrink: 0 }} />
+              <Typography variant="headline" component="span">
+                Test Results Grid
+              </Typography>
               <ChevronRight
                 sx={{
                   fontSize: 22,
+                  color: "text.secondary",
                   transition: (t) => t.transitions.create("transform", { duration: t.transitions.duration.short }),
                   transform: gridOpen ? "rotate(90deg)" : "rotate(0deg)",
                 }}
               />
-              <Typography variant="headline" component="span">
-                Test Results Grid
-              </Typography>
             </Button>
             <Collapse in={gridOpen} timeout="auto" unmountOnExit>
               <Box sx={{ pt: 1.5 }}>
@@ -220,7 +249,7 @@ export function JobDetailPage() {
 
           {selectedRun && (
             <Panel component="section" sx={{ borderRadius: 3, p: { xs: 2, sm: 3 } }}>
-              <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5 }}>
+              <Box sx={{ mb: 2, display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
                 <Typography variant="headline" component="h3" sx={{ fontSize: "1rem" }}>
                   Run Details
                 </Typography>
@@ -235,21 +264,39 @@ export function JobDetailPage() {
                     }}
                   />
                 ) : (
-                  <Box
-                    sx={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: "50%",
-                      bgcolor: (t) => dotColorFor(t, selectedRun.passed, selectedRun.result),
-                    }}
+                  <StatusChip
+                    status={selectedRun.passed ? "passed" : "failed"}
+                    label={selectedRun.passed ? "Passed" : "Failed"}
                   />
                 )}
+                <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+                  {selectedRun.prow_url && (
+                    <Link
+                      href={selectedRun.prow_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main", fontSize: "0.875rem" }}
+                    >
+                      View in Prow <OpenInNew sx={{ fontSize: 16 }} />
+                    </Link>
+                  )}
+                  {selectedRun.build_log_url && (
+                    <Link
+                      href={selectedRun.build_log_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main", fontSize: "0.875rem" }}
+                    >
+                      Build Log <OpenInNew sx={{ fontSize: 16 }} />
+                    </Link>
+                  )}
+                </Box>
               </Box>
 
               <Box
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(3, minmax(0, 1fr))" },
+                  gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(3, minmax(0, 1fr))", lg: "repeat(5, minmax(0, 1fr))" },
                   columnGap: 4,
                   rowGap: 1.5,
                 }}
@@ -300,37 +347,13 @@ export function JobDetailPage() {
                       : "—"}
                   </Typography>
                 </Box>
-                <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1.5, flexWrap: "wrap" }}>
-                  {selectedRun.prow_url && (
-                    <Link
-                      href={selectedRun.prow_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main" }}
-                    >
-                      View in Prow <OpenInNew sx={{ fontSize: 16 }} />
-                    </Link>
-                  )}
-                  {selectedRun.build_log_url && (
-                    <Link
-                      href={selectedRun.build_log_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, color: "primary.main" }}
-                    >
-                      Build Log <OpenInNew sx={{ fontSize: 16 }} />
-                    </Link>
-                  )}
-                </Box>
               </Box>
             </Panel>
           )}
 
           {selectedRun && testCases.length > 0 && (
             <Box component="section">
-              <Typography variant="headline" component="h2" sx={{ mb: 1.5 }}>
-                Test Cases
-              </Typography>
+              <SectionHeading title="Test Cases" />
               <TestCaseTable
                 testCases={testCases}
                 jobID={jobID}
@@ -343,11 +366,18 @@ export function JobDetailPage() {
 
           {selectedRun && testCases.length === 0 && (
             <Panel component="section" sx={{ borderRadius: 3, p: 4, textAlign: "center" }}>
-              <Typography color="text.secondary">
-                {selectedRun.result === "PENDING"
-                  ? "⏳ This build is still running — test results will appear when it completes."
-                  : "No test cases available for this run."}
-              </Typography>
+              {selectedRun.result === "PENDING" ? (
+                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1, color: "text.secondary" }}>
+                  <HourglassEmpty sx={{ fontSize: 20 }} />
+                  <Typography color="text.secondary">
+                    This build is still running — test results will appear when it completes.
+                  </Typography>
+                </Box>
+              ) : (
+                <Typography color="text.secondary">
+                  No test cases available for this run.
+                </Typography>
+              )}
             </Panel>
           )}
         </>

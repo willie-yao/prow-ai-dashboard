@@ -43,6 +43,7 @@ export function PatternBanner({
         borderColor: (t) => soft(t, color, 0.3),
         bgcolor: (t) => soft(t, color, 0.05),
         p: { xs: 2, sm: 2.5 },
+        maxWidth: 860,
       }}
     >
       <Stack spacing={2}>
@@ -92,8 +93,16 @@ export function PatternBanner({
         </Typography>
 
         {pattern.systemic && pattern.shared_root_cause && (
-          <Box>
-            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+          <Box
+            sx={{
+              borderRadius: "10px",
+              borderLeft: "3px solid",
+              borderColor: (t) => soft(t, color, 0.5),
+              bgcolor: (t) => (t.vars ?? t).palette.surface.containerLow,
+              p: { xs: 1.5, sm: 2 },
+            }}
+          >
+            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.75, textTransform: "uppercase" }}>
               Shared Root Cause
             </Typography>
             <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
@@ -103,8 +112,16 @@ export function PatternBanner({
         )}
 
         {pattern.systemic && pattern.suggested_fix && (
-          <Box>
-            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+          <Box
+            sx={{
+              borderRadius: "10px",
+              borderLeft: "3px solid",
+              borderColor: (t) => soft(t, "primary", 0.5),
+              bgcolor: (t) => (t.vars ?? t).palette.surface.containerLow,
+              p: { xs: 1.5, sm: 2 },
+            }}
+          >
+            <Typography variant="label" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.75, textTransform: "uppercase" }}>
               Suggested Fix
             </Typography>
             <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
