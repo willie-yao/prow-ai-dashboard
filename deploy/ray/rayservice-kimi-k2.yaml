@@ -1,0 +1,149 @@
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: kimi-k2
+  namespace: default
+spec:
+  serveConfigV2: |
+    applications:
+    - name: llm
+      import_path: ray.serve.llm:build_openai_app
+      route_prefix: "/"
+      # Ray strength: ship Python deps at deploy time, no image rebuild. Dynamo
+      # bakes runai_streamer + the kimi parser into a custom image; here you can
+      # add them declaratively instead of maintaining a Dockerfile.
+      # runtime_env:
+      #   pip: ["runai-model-streamer", "runai-model-streamer[s3]"]
+      args:
+        llm_configs:
+        - model_loading_config:
+            # Served model name = what the dashboard sends as "model".
+            model_id: moonshotai/Kimi-K2.7-Code
+            # Resolved offline from the Lustre HF cache (HF_HUB_OFFLINE=1 below).
+            model_source: moonshotai/Kimi-K2.7-Code
+          accelerator_type: H100
+          engine_kwargs:
+            # 16-way tensor parallel spanning 2 nodes (8 H100 each).
+            # distributed_executor_backend: ray lets vLLM place the TP group
+            # across both Ray worker pods via a placement group.
+            tensor_parallel_size: 16
+            distributed_executor_backend: ray
+            max_model_len: 262144
+            max_num_batched_tokens: 16384
+            gpu_memory_utilization: 0.9
+            load_format: runai_streamer
+            trust_remote_code: true
+            # Kimi tool calling (the dashboard's agentic loop needs this).
+            enable_auto_tool_choice: true
+            tool_call_parser: kimi_k2
+            # reasoning_parser: kimi_k25   # enable if your vLLM build ships it
+          # Ray strength: request-load autoscaling in a few declarative lines.
+          # Dynamo needs the separate Planner component to do the same. Each
+          # replica is a full 16-GPU TP group (one per free H100 node pair);
+          # max_replicas>1 needs Dynamo's node0+node1 freed first (see step 6).
+          deployment_config:
+            max_ongoing_requests: 128
+            autoscaling_config:
+              min_replicas: 1
+              # After decommissioning Dynamo, set to 2 to use all 4 H100 nodes.
+              max_replicas: 1
+              target_ongoing_requests: 32
+              # min_replicas: 0 scales the model down between scheduled dashboard
+              # fetches and frees its 16 H100s; cold start reloads weights from
+              # the Lustre cache via runai_streamer.
+  rayClusterConfig:
+    rayVersion: "2.52.0"
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+        num-gpus: "0"
+      template:
+        spec:
+          # Head is CPU-only; keep it on the system pool.
+          nodeSelector:
+            agentpool: nodepool1
+          containers:
+          - name: ray-head
+            image: rayproject/ray-llm:2.52.0-py311-cu128
+            ports:
+            - {containerPort: 8000, name: serve}
+            - {containerPort: 8265, name: dashboard}
+            - {containerPort: 6379, name: gcs}
+            - {containerPort: 10001, name: client}
+            resources:
+              requests: {cpu: "2", memory: "8Gi"}
+              limits: {cpu: "4", memory: "16Gi"}
+    workerGroupSpecs:
+    - groupName: h100
+      # Two GPU worker pods, one per H100 node -> 16 GPUs for the TP group.
+      replicas: 2
+      minReplicas: 2
+      maxReplicas: 2
+      numOfHosts: 1
+      rayStartParams:
+        num-gpus: "8"
+      template:
+        spec:
+          nodeSelector:
+            agentpool: ndh100pool
+          affinity:
+            podAntiAffinity:
+              # Keep Ray workers off the two nodes Dynamo's vLLM workers occupy,
+              # so Ray lands on the free H100 nodes and both stacks coexist.
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: nvidia.com/dynamo-component-type
+                    operator: In
+                    values: ["worker"]
+                topologyKey: kubernetes.io/hostname
+              # Spread the two Ray workers one-per-node (a full 8-GPU node each).
+              - labelSelector:
+                  matchExpressions:
+                  - key: ray.io/group
+                    operator: In
+                    values: ["h100"]
+                topologyKey: kubernetes.io/hostname
+          # 256Gi shared memory for NCCL, matching the DGD's sharedMemory.
+          volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 256Gi
+          - name: model-cache
+            persistentVolumeClaim:
+              claimName: pvc-lustre
+          containers:
+          - name: ray-worker
+            image: rayproject/ray-llm:2.52.0-py311-cu128
+            # Reuse the existing Dynamo HF secret verbatim.
+            envFrom:
+            - secretRef:
+                name: hf-token-secret
+            env:
+            - {name: HF_HOME, value: /mnt/model-cache}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            # InfiniBand / RDMA for cross-node NCCL (mirrors the DGD).
+            - {name: NCCL_IB_DISABLE, value: "0"}
+            - {name: NCCL_SOCKET_IFNAME, value: eth0}
+            - {name: GLOO_SOCKET_IFNAME, value: eth0}
+            - {name: NVIDIA_GDRCOPY, value: enabled}
+            - {name: RUNAI_STREAMER_CONCURRENCY, value: "16"}
+            - {name: PYTHONHASHSEED, value: "0"}
+            securityContext:
+              capabilities:
+                add: ["IPC_LOCK", "SYS_RESOURCE"]
+            volumeMounts:
+            - {name: dshm, mountPath: /dev/shm}
+            - {name: model-cache, mountPath: /mnt/model-cache}
+            resources:
+              requests:
+                cpu: "40"
+                memory: "800Gi"
+                nvidia.com/gpu: "8"
+                rdma/hca_shared_devices_a: "1"
+              limits:
+                cpu: "80"
+                memory: "1600Gi"
+                nvidia.com/gpu: "8"
+                rdma/hca_shared_devices_a: "1"
