@@ -16,6 +16,7 @@ import { TestResultsGrid } from "../components/TestResultsGrid";
 import { TestCaseTable } from "../components/TestCaseTable";
 import { PatternBanner } from "../components/PatternBanner";
 import { StatusChip } from "../components/StatusChip";
+import { SectionHeading } from "../components/SectionHeading";
 import { Panel } from "../components/Panel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
@@ -35,18 +36,6 @@ function deriveJobStatus(rate: number | null): "PASSING" | "FLAKY" | "FAILING" |
   if (rate >= 0.9) return "PASSING";
   if (rate <= 0.3) return "FAILING";
   return "FLAKY";
-}
-
-// Section heading with the dashboard's accent tick.
-function SectionHeading({ title }: { title: string }) {
-  return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, mb: 1.5 }}>
-      <Box sx={{ width: 4, height: 18, borderRadius: 999, bgcolor: "primary.main", flexShrink: 0 }} />
-      <Typography variant="headline" component="h2">
-        {title}
-      </Typography>
-    </Box>
-  );
 }
 
 interface StatTile {
