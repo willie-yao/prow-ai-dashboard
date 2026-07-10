@@ -67,7 +67,7 @@ function MetricTile({ tile }: { tile: StatTile }) {
 }
 
 // Metadata for a single build. "row" spreads the fields into a horizontal
-// strip; "column" stacks them for the sidebar run-inspector rail.
+// strip; "column" packs them two-up to fill the sidebar rail.
 function RunDetailsPanel({ run, orientation }: { run: BuildResult; orientation: "row" | "column" }) {
   const isPending = run.result === "PENDING";
   return (
@@ -122,7 +122,7 @@ function RunDetailsPanel({ run, orientation }: { run: BuildResult; orientation: 
           gridTemplateColumns:
             orientation === "row"
               ? { xs: "1fr 1fr", sm: "repeat(3, minmax(0, 1fr))", lg: "repeat(5, minmax(0, 1fr))" }
-              : "1fr",
+              : { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))" },
           columnGap: 4,
           rowGap: 1.5,
         }}
@@ -131,7 +131,7 @@ function RunDetailsPanel({ run, orientation }: { run: BuildResult; orientation: 
           <Typography variant="label" color="text.secondary">
             Build ID
           </Typography>
-          <Typography variant="data" component="p" color="text.primary">
+          <Typography variant="data" component="p" color="text.primary" sx={{ overflowWrap: "anywhere" }}>
             {run.build_id}
           </Typography>
         </Box>
@@ -398,6 +398,7 @@ export function JobDetailPage() {
               >
                 {statsColumn}
                 {runHistorySection}
+                {selectedRun && <RunDetailsPanel run={selectedRun} orientation="column" />}
               </Box>
             </Box>
           ) : (
@@ -411,7 +412,7 @@ export function JobDetailPage() {
 
           {selectedRun && (
             <>
-              <RunDetailsPanel run={selectedRun} orientation="row" />
+              {!pattern && <RunDetailsPanel run={selectedRun} orientation="row" />}
               {testCases.length > 0 ? (
                 <Box component="section">
                   <SectionHeading title="Test Cases" />
