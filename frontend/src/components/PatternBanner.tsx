@@ -38,10 +38,9 @@ export function PatternBanner({
   return (
     <Box
       component="section"
+      className="ai-aurora"
       sx={{
         borderRadius: "12px",
-        border: 1,
-        borderColor: (t) => soft(t, color, 0.3),
         bgcolor: (t) => soft(t, color, 0.05),
         p: { xs: 2, sm: 2.5 },
       }}
