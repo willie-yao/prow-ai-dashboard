@@ -160,6 +160,34 @@ func TestHandler_DataNoCache(t *testing.T) {
 	}
 }
 
+// TestHandler_SecurityHeaders verifies the hardening response headers are set on
+// every route.
+func TestHandler_SecurityHeaders(t *testing.T) {
+	dataDir := t.TempDir()
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
+	if err != nil {
+		t.Fatalf("Handler: %v", err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET healthz: %v", err)
+	}
+	resp.Body.Close()
+	want := map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+	}
+	for k, v := range want {
+		if got := resp.Header.Get(k); got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+}
+
 // TestHandler_NoDirectoryListing verifies /data/ does not expose a browsable
 // listing of the output tree.
 func TestHandler_NoDirectoryListing(t *testing.T) {

@@ -144,9 +144,12 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		}
 		header := os.Getenv("AUTH_PROXY_HEADER")
 		if header == "" {
-			log.Println("⚠ proxy auth mode with no AUTH_PROXY_HEADER: every request is authorized; the server must be reachable only through a trusted SSO proxy")
+			return fmt.Errorf("proxy auth mode requires AUTH_PROXY_HEADER (the trusted identity header)")
 		}
-		opts.Auth = auth.NewBotAuthenticator(header, botToken, admins)
+		if len(admins) == 0 {
+			return fmt.Errorf("proxy auth mode requires ADMIN_LOGINS (the allowlist of identities that may act)")
+		}
+		opts.Auth = auth.NewBotAuthenticator(header, botToken, admins, os.Getenv("AUTH_PROXY_SECRET"))
 		opts.AuthMode = "proxy"
 	default:
 		return fmt.Errorf("unknown AUTH_MODE %q (want oauth or proxy)", mode)
