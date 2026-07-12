@@ -70,9 +70,14 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
+		Addr:    addr,
+		Handler: handler,
+		// Bound the header read so a slow-header client cannot tie up a
+		// connection. WriteTimeout is intentionally unset: an action request
+		// (draft a fix PR) can legitimately run for minutes. IdleTimeout caps
+		// idle keep-alive connections.
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Shut down gracefully on SIGINT/SIGTERM so K8s rollouts drain cleanly.
