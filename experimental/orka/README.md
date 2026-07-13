@@ -79,6 +79,7 @@ manifests/
   20-gcs-tool.yaml         The GCS domain-tool Deployment + Service.
   30-tools.yaml            Filesystem Tool CRDs (list/find/grep/read/tail).
   35-k8s-tools.yaml        k8s discovery Tool CRDs (discover-clusters, find-my-cluster, ...).
+  36-validate-tool.yaml    Deterministic validate-analysis Tool (hallucinated-citation guard).
   40-example-tasks.yaml    hello-world (Q1) and capz-analyze (Q2) Tasks.
   50-copilot-proxy.yaml    Header-injecting proxy so Orka can reach Copilot.
 ```

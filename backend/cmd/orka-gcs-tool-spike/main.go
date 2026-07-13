@@ -60,6 +60,47 @@ func main() {
 		}
 	}
 
+	// POST /validate_analysis; body {"paths":[...]} where paths are the
+	// artifact paths an analysis cited. Deterministically checks each path
+	// exists in this build's tree (a 1-byte read via the Browser). This is the
+	// single high-value deterministic check kept from the engine's critique
+	// gate (hallucinated-citation guard), exposed Orka-natively as a tool a
+	// reviewer agent must call before approving an analysis.
+	http.HandleFunc("/tool/validate_analysis", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		var args struct {
+			Paths []string `json:"paths"`
+		}
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &args)
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		present, missing := []string{}, []string{}
+		for _, p := range args.Paths {
+			if p == "" {
+				continue
+			}
+			if _, _, err := browser.Read(ctx, p, 0, 1); err != nil {
+				missing = append(missing, p)
+			} else {
+				present = append(present, p)
+			}
+		}
+		log.Printf("✔ validate_analysis paths=%d present=%d missing=%d", len(args.Paths), len(present), len(missing))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"checked":     len(present) + len(missing),
+			"present":     present,
+			"missing":     missing,
+			"all_present": len(missing) == 0,
+		})
+	})
+
 	// POST /tool/{name}; body is the raw JSON tool arguments. Response is the
 	// tool's Payload as JSON, exactly what the engine would hand the model.
 	http.HandleFunc("/tool/", func(w http.ResponseWriter, r *http.Request) {
