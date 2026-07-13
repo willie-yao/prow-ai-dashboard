@@ -1,14 +1,18 @@
-# Builds the orka-gcs-tool shim from the backend module.
-# Build context MUST be the backend/ directory:
-#   docker build -f experimental/orka/Dockerfile -t orka-gcs-tool-spike:latest backend/
+# Builds one of the experimental Orka shims from the backend module. Select which
+# with the CMD build-arg. Build context MUST be the backend/ directory:
+#   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool-spike \
+#     -t orka-gcs-tool-spike:latest backend/
+#   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-copilot-proxy \
+#     -t orka-copilot-proxy:latest backend/
 FROM golang:1.25.12-bookworm AS build
+ARG CMD=orka-gcs-tool-spike
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
-RUN CGO_ENABLED=0 go build -o /out/gcs-tool ./cmd/orka-gcs-tool-spike
+RUN CGO_ENABLED=0 go build -o /out/app ./cmd/${CMD}
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/gcs-tool /gcs-tool
+COPY --from=build /out/app /app
 EXPOSE 8080
-ENTRYPOINT ["/gcs-tool"]
+ENTRYPOINT ["/app"]
