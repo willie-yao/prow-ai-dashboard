@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -67,6 +68,9 @@ func validateRange(path string, offset, length int64) (int64, error) {
 	}
 	if length > perCallCap {
 		length = perCallCap
+	}
+	if offset > math.MaxInt64-length {
+		return 0, fmt.Errorf("read %s: range overflows int64", path)
 	}
 	return length, nil
 }

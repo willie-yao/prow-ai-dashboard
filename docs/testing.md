@@ -1,7 +1,7 @@
 # Testing
 
-The engine has three layers of tests. The first two are deterministic CI gates;
-the third is an on-demand quality harness (planned).
+The engine has deterministic unit and end-to-end tests. Model quality evaluation
+is tracked separately from CI.
 
 ## Unit tests
 

@@ -10,15 +10,14 @@ function errorMessage(error: unknown): string {
 }
 
 function useJSON<T>(path: string | null) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(path !== null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{
+    path: string | null;
+    data: T | null;
+    error: string | null;
+  }>({ path: null, data: null, error: null });
 
   useEffect(() => {
     let cancelled = false;
-    setData(null);
-    setError(null);
-    setLoading(path !== null);
     if (path === null) return;
 
     fetch(`${DATA_BASE}/${path}`)
@@ -27,20 +26,25 @@ function useJSON<T>(path: string | null) {
         return r.json() as Promise<T>;
       })
       .then((value) => {
-        if (!cancelled) setData(value);
+        if (!cancelled) setResult({ path, data: value, error: null });
       })
       .catch((error: unknown) => {
-        if (!cancelled) setError(errorMessage(error));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setResult({ path, data: null, error: errorMessage(error) });
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [path]);
 
-  return { data, loading, error };
+  if (path === null) {
+    return { data: null, loading: false, error: null };
+  }
+  if (result.path !== path) {
+    return { data: null, loading: true, error: null };
+  }
+  return { data: result.data, loading: false, error: result.error };
 }
 
 export function useDashboard() {

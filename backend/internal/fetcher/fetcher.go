@@ -1103,10 +1103,7 @@ func severityRank(sev string) int {
 // aiEndpoint returns the configured AI chat-completions URL.
 // project.yaml wins over AI_ENDPOINT.
 func aiEndpoint(cfg *project.Config) string {
-	if cfg.AI != nil && cfg.AI.Endpoint != "" {
-		return cfg.AI.Endpoint
-	}
-	return os.Getenv("AI_ENDPOINT")
+	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
 }
 
 // shortHash returns a short SkillSet hash prefix for startup logs.
@@ -1123,16 +1120,10 @@ func shortHash(h string) string {
 // aiModel returns the configured AI model identifier.
 // project.yaml wins over AI_MODEL.
 func aiModel(cfg *project.Config) string {
-	if cfg.AI != nil && cfg.AI.Model != "" {
-		return cfg.AI.Model
-	}
-	return os.Getenv("AI_MODEL")
+	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
 }
 
 // aiHeaders returns the extra HTTP headers to attach to AI provider requests.
 func aiHeaders(cfg *project.Config) map[string]string {
-	if cfg.AI == nil || len(cfg.AI.Headers) == 0 {
-		return nil
-	}
-	return cfg.AI.Headers
+	return cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Headers
 }

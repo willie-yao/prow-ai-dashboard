@@ -7,6 +7,7 @@
 package project
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -294,6 +295,29 @@ type AI struct {
 	FixPRs *FixPRs `yaml:"fix_prs,omitempty" json:"-"`
 }
 
+// AIProvider is the resolved provider configuration used to construct clients.
+type AIProvider struct {
+	Endpoint string
+	Model    string
+	Headers  map[string]string
+}
+
+// ResolveAIProvider applies environment fallbacks to the project configuration.
+func (c *Config) ResolveAIProvider(endpointFallback, modelFallback string) AIProvider {
+	out := AIProvider{Endpoint: endpointFallback, Model: modelFallback}
+	if c == nil || c.AI == nil {
+		return out
+	}
+	if c.AI.Endpoint != "" {
+		out.Endpoint = c.AI.Endpoint
+	}
+	if c.AI.Model != "" {
+		out.Model = c.AI.Model
+	}
+	out.Headers = c.AI.Headers
+	return out
+}
+
 // SuggestSkills configures the self-improving skills feature. When a systemic
 // recurring pattern is found that no existing skill covers, the engine drafts a
 // skill recipe and opens a draft PR adding it to the dashboard repo's skills/
@@ -483,6 +507,17 @@ type AgenticCritique struct {
 	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
+// MarshalJSON omits zero retry values from the published manifest.
+func (c AgenticCritique) MarshalJSON() ([]byte, error) {
+	value := 0
+	if c.MaxRetries != nil {
+		value = *c.MaxRetries
+	}
+	return json.Marshal(struct {
+		MaxRetries int `json:"max_retries,omitempty"`
+	}{MaxRetries: value})
+}
+
 // DefaultAgentic is the zero-config fallback for agentic loop tuning.
 // The iteration and timeout defaults allow deep exploration while bounding
 // runaway loops. Byte budgets are derived or fixed in fetcher wiring.
@@ -496,8 +531,8 @@ var DefaultAgentic = Agentic{
 	},
 }
 
-// EffectiveAgentic returns the resolved agentic tuning with defaults applied
-// for any zero-valued field. Safe to call on a nil receiver.
+// EffectiveAgentic returns agentic tuning with defaults applied to unset fields.
+// Safe to call on a nil receiver.
 func (a *AI) EffectiveAgentic() Agentic {
 	out := DefaultAgentic
 	if a == nil {
