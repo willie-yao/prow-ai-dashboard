@@ -19,17 +19,22 @@ custom agent code"?
 Full write-up: the session's `orka-evaluation-spike.md`. Short version:
 
 - **Model access works.** An Orka Provider against an OpenAI-compatible endpoint
-  drives a `type: ai` Task end to end.
-- **GCS tools work.** The engine's real filesystem tools, exposed over HTTP by the
-  shim here, let an Orka agent run a genuine multi-round investigation and produce
-  a correct, artifact-grounded root cause. No custom orchestration code.
-- **Reaching the engine's depth is the hard part.** "No agent code" is not "no
-  code": you still run the GCS domain tool service, an ingestion shim back to
-  `dashboard.json`, and the frontend. The engine's quality machinery has no direct
-  Orka equivalent and is load-bearing: the `min_tool_calls` / `min_gcs_bytes`
-  floors, the deterministic critique gate, the skills registry, and the
-  `k8s.discover_clusters` tool tier. Orka's `RepositoryScan.validationMode` is only
-  a coarse analog.
+  drives a `type: ai` Task end to end (GitHub Models and, via the proxy, Copilot).
+- **GCS tools work.** The engine's real filesystem + k8s tools, exposed over HTTP
+  by the shim here, let an Orka agent run a genuine multi-round investigation and
+  produce a correct, artifact-grounded root cause. No custom orchestration code.
+- **Parity depth is reachable on Copilot.** With Copilot (large context) + the
+  de-streaming proxy + the k8s discovery tier + a raised iteration cap, an Orka
+  Task independently found the right per-spec cluster, read its Azure activity
+  log, and produced a completed, grounded RCA matching the engine's investigative
+  depth (11 tool calls vs the engine's 21).
+- **The remaining gap is classification, not depth.** On the sample failure the
+  engine and Orka+Copilot read the SAME activity log but diverged on root cause
+  and transient-vs-bug. The engine's quality machinery (floors, critique gate,
+  skills) is load-bearing exactly there, and has no direct Orka equivalent
+  (`RepositoryScan.validationMode` is only a coarse analog). "No agent code" is
+  also not "no code": you still run the GCS Tool service, the proxy, an ingestion
+  shim to `dashboard.json`, and the frontend.
 
 ### Known constraints (read before re-running)
 
@@ -40,8 +45,18 @@ Full write-up: the session's `orka-evaluation-spike.md`. Short version:
   different product with your subscription's full context window. Prefer the
   Copilot provider (`11-copilot-provider.yaml` + the proxy) for real runs; see
   "Using GitHub Copilot" below.
-- **Iteration budget.** Orka's ai loop defaults to 10 rounds and is only raised via
-  autonomous coordination mode, not a Task field. The engine used 21 tool calls.
+- **Iteration budget.** Orka's ai loop defaults to a hard 10 rounds (raised to 50
+  only via coordination mode, which the controller sets empty by default, or 100
+  via autonomous mode). Claude on Copilot is exhaustive and hits this cap
+  mid-investigation; the evaluation bumped the ai-worker default to 30 by patching
+  `workers/ai/main.go` before building the image. The engine itself uses 21+ tool
+  calls, so 10 is too low for parity-depth CI analysis.
+- **Copilot Claude tool_calls need the proxy.** Copilot's non-streaming
+  `/chat/completions` returns `finish_reason=tool_calls` with a null `tool_calls`
+  array for Claude models (the calls only arrive over the streaming SSE), and
+  Orka's worker uses the non-streaming path. The `orka-copilot-proxy` de-streams
+  such requests (forces `stream:true` upstream and aggregates the SSE) so the
+  worker sees real tool calls. Without it, the agent only emits a prose preamble.
 - **SSRF guard.** Orka's Tool controller marks any tool whose URL resolves to a
   private/loopback IP as `Available=false`. In-cluster ClusterIPs are private, so
   the tools here show unavailable but still work (see `manifests/30-tools.yaml`).
