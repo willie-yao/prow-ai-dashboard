@@ -1,7 +1,7 @@
 .PHONY: all build build-server build-worker serve dev-actions image test test-v e2e lint fmt tidy \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check \
-       dist dist-ai clean clean-cache clean-all deploy help
+       dist dist-ai clean clean-cache clean-all help
 
 # Path to a consumer project directory containing project.yaml + prompts/system.md.
 # Override on the command line, e.g.:
@@ -132,10 +132,6 @@ clean-cache:
 # Clean everything including cache
 clean-all: clean clean-cache
 
-# Trigger GitHub Actions deploy workflow
-deploy:
-	gh workflow run deploy.yml
-
 ## ─── Help ─────────────────────────────────────────────────────
 
 help:
@@ -171,4 +167,3 @@ help:
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"
 	@echo "  clean-all          Clean everything including cache"
-	@echo "  deploy             Trigger GitHub Actions deploy"

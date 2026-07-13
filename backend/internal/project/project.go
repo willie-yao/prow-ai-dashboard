@@ -279,7 +279,7 @@ type AI struct {
 	Concurrency int `yaml:"concurrency,omitempty" json:"-"`
 
 	// Agentic holds tool-calling loop tuning inlined under `ai:` in YAML.
-	// All fields are optional; zero values fall back to DefaultAgentic.
+	// Unset fields fall back to DefaultAgentic.
 	// The agentic loop is the only analysis path, and a function-calling
 	// endpoint is required.
 	Agentic Agentic `yaml:",inline" json:"agentic,omitempty"`
@@ -439,7 +439,7 @@ type Agentic struct {
 	// make before its final JSON answer is accepted. When the model
 	// returns a tools-free response below this floor, the loop nudges it
 	// to investigate further. Below-floor finals are published but not cached.
-	// Defaults to 0, which disables the floor.
+	// Defaults to 2.
 	MinToolCalls int `yaml:"min_tool_calls,omitempty" json:"min_tool_calls,omitempty"`
 
 	// MinGCSBytes is the minimum cumulative bytes the model must fetch
@@ -480,7 +480,7 @@ type AgenticCritique struct {
 	// MaxRetries caps the number of extra re-prompt rounds the loop
 	// spends per analysis when critique fails. Each retry consumes one
 	// extra agentic iteration on top of MaxIters. Defaults to 2.
-	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
 // DefaultAgentic is the zero-config fallback for agentic loop tuning.
@@ -492,7 +492,7 @@ var DefaultAgentic = Agentic{
 	MinToolCalls: 2,
 	MinGCSBytes:  0,
 	Critique: AgenticCritique{
-		MaxRetries: 2,
+		MaxRetries: intPtr(2),
 	},
 }
 
@@ -515,7 +515,7 @@ func (a *AI) EffectiveAgentic() Agentic {
 	if a.Agentic.MinGCSBytes > 0 {
 		out.MinGCSBytes = a.Agentic.MinGCSBytes
 	}
-	if a.Agentic.Critique.MaxRetries > 0 {
+	if a.Agentic.Critique.MaxRetries != nil {
 		out.Critique.MaxRetries = a.Agentic.Critique.MaxRetries
 	}
 	out.SingleToolCall = a.Agentic.SingleToolCall
@@ -523,12 +523,6 @@ func (a *AI) EffectiveAgentic() Agentic {
 		out.Tools = append([]string(nil), a.Agentic.Tools...)
 	}
 	return out
-}
-
-// CollectorName returns the artifact collector name. The engine ships a single
-// generic collector.
-func (c *Config) CollectorName() string {
-	return "generic"
 }
 
 // Load reads and validates a project.yaml file from disk.
@@ -546,27 +540,34 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// LoadDir reads <dir>/project.yaml and <dir>/prompts/system.md. Both are
-// mandatory. A missing or whitespace-only prompt is a hard error because AI
-// analysis is the main value the dashboard provides. The returned prompt is
-// the raw consumer addendum; the caller is expected to wrap it with
-// ai.ComposeSystemPrompt before handing it to the AI service.
+// LoadPrompt reads the required consumer AI prompt.
+func LoadPrompt(dir string) (string, error) {
+	promptPath := filepath.Join(dir, "prompts", "system.md")
+	data, err := os.ReadFile(promptPath)
+	if err != nil {
+		return "", fmt.Errorf("AI analysis requires %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md (%w)", promptPath, err)
+	}
+	prompt := strings.TrimSpace(string(data))
+	if prompt == "" {
+		return "", fmt.Errorf("AI analysis requires non-empty %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md", promptPath)
+	}
+	return prompt, nil
+}
+
+// LoadDir reads project.yaml and the required consumer AI prompt.
 func LoadDir(dir string) (*Config, string, error) {
 	cfg, err := Load(filepath.Join(dir, "project.yaml"))
 	if err != nil {
 		return nil, "", err
 	}
-	promptPath := filepath.Join(dir, "prompts", "system.md")
-	data, err := os.ReadFile(promptPath)
+	prompt, err := LoadPrompt(dir)
 	if err != nil {
-		return nil, "", fmt.Errorf("AI analysis requires %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md (%w)", promptPath, err)
-	}
-	prompt := strings.TrimSpace(string(data))
-	if prompt == "" {
-		return nil, "", fmt.Errorf("AI analysis requires non-empty %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md", promptPath)
+		return nil, "", err
 	}
 	return cfg, prompt, nil
 }
+
+func intPtr(v int) *int { return &v }
 
 // parse decodes YAML in strict mode and runs validation.
 func parse(r io.Reader) (*Config, error) {
