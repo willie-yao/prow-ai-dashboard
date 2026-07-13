@@ -16,9 +16,11 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { useResolved } from "../hooks/useData";
 import { soft } from "../theme";
+import { StatusChip } from "./StatusChip";
 import type { Theme } from "@mui/material/styles";
 
 type Action = "create-issue" | "propose-fix";
+type VerifyStatus = "passed" | "failed" | "skipped";
 
 interface Preview {
   token: string;
@@ -26,6 +28,8 @@ interface Preview {
   title: string;
   body: string;
   diff?: string;
+  verify_status?: VerifyStatus;
+  verify_summary?: string;
 }
 
 const API_BASE = import.meta.env.BASE_URL;
@@ -65,6 +69,49 @@ const dialogPaperSx = {
   borderColor: "divider",
   backgroundImage: "none",
 } as const;
+
+function VerificationReceipt({ preview }: { preview: Preview }) {
+  if (preview.kind !== "fix" || !preview.verify_status) return null;
+
+  const failed = preview.verify_status === "failed";
+  const skipped = preview.verify_status === "skipped";
+  const accent = failed ? "error" : skipped ? "warning" : "success";
+  const summary =
+    preview.verify_summary ||
+    (failed
+      ? "The configured verification command failed."
+      : skipped
+        ? "Verification did not run in this environment."
+        : "The configured verification commands passed.");
+
+  return (
+    <Box
+      role="status"
+      aria-label={`Automated verification ${preview.verify_status}`}
+      sx={{
+        borderRadius: "10px",
+        border: "1px solid",
+        borderColor: (t) => soft(t, accent, 0.34),
+        bgcolor: (t) => soft(t, accent, 0.08),
+        px: 1.75,
+        py: 1.5,
+      }}
+    >
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", justifyContent: "space-between" }}>
+        <Typography sx={{ ...sectionLabelSx, mb: 0 }}>Automated verification</Typography>
+        <StatusChip status={skipped ? "flaky" : preview.verify_status} label={preview.verify_status} />
+      </Stack>
+      <Typography variant="body2" sx={{ mt: 0.75, lineHeight: 1.55 }}>
+        {summary}
+      </Typography>
+      {failed && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+          The draft remains available as a starting point, but it is not build-ready.
+        </Typography>
+      )}
+    </Box>
+  );
+}
 
 function DialogHeader({
   icon,
@@ -436,7 +483,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
               <CircularProgress size={20} />
               <Typography variant="body2" color="text.secondary">
                 {isFix
-                  ? "Generating a fix from the failure artifacts. This can take a minute…"
+                  ? "Generating the fix and running its configured verification. This can take a few minutes…"
                   : "Preparing the issue draft…"}
               </Typography>
             </Stack>
@@ -467,6 +514,8 @@ export function FailureActions({ failureID }: { failureID: string }) {
                   </Typography>
                 </Box>
               </Box>
+
+              <VerificationReceipt preview={preview} />
 
               <Box>
                 <Typography sx={sectionLabelSx}>
