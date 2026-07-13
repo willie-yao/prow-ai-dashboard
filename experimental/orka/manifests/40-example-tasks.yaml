@@ -1,0 +1,45 @@
+# Example Tasks.
+#
+# hello-world: smoke test the provider (Q1). Create AFTER the Provider reports
+# Ready, or the first reconcile races and Fails; just re-apply if so.
+#
+# capz-analyze: a real CAPZ failure investigation using the five GCS tools (Q2).
+# For a full project-prompt run, set ai.systemPrompt to the consumer's
+# prompts/system.md content (see README).
+apiVersion: core.orka.ai/v1alpha1
+kind: Task
+metadata:
+  name: hello-world
+  namespace: orka-system
+spec:
+  type: ai
+  ai:
+    providerRef:
+      name: gh-models
+    prompt: "Reply with exactly: ORKA_SPIKE_OK"
+---
+apiVersion: core.orka.ai/v1alpha1
+kind: Task
+metadata:
+  name: capz-analyze
+  namespace: orka-system
+spec:
+  type: ai
+  timeout: 5m
+  ai:
+    providerRef:
+      name: gh-models
+    model: openai/gpt-4o
+    tools: [list-artifacts, find-artifacts, grep-artifact, read-artifact, tail-artifact]
+    systemPrompt: |
+      You are a CI failure analyst for the Cluster API Provider Azure (CAPZ) project.
+      You have read-only tools over one Prow build's GCS artifact tree. All paths are
+      relative to the build root. Investigate before concluding: use find-artifacts to
+      locate JUnit XML, list/read to inspect it, and grep-artifact on build-log.txt to
+      find the root-cause error. Do not guess. Base every claim on artifact content you
+      actually read.
+    prompt: |
+      This CAPZ e2e build FAILED. Identify the single most likely root cause.
+      Steps: (1) find the JUnit XML and identify a failed test name; (2) grep
+      build-log.txt for the failure's error lines; (3) give a 3-sentence root-cause
+      summary citing the specific artifact paths and error text you used.

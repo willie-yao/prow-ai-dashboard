@@ -1,0 +1,41 @@
+# The GCS domain-tool service: exposes the engine's real filesystem tools
+# (list/read/tail/grep/find over a Prow build's GCS artifact tree) as HTTP
+# endpoints Orka Tools can call. Pinned to one build via BUILD_PREFIX.
+#
+# Build + load the image into kind first:
+#   docker build -f experimental/orka/Dockerfile -t orka-gcs-tool-spike:latest backend/
+#   kind load docker-image orka-gcs-tool-spike:latest --name orka-spike
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gcs-tool
+  namespace: orka-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gcs-tool}
+  template:
+    metadata:
+      labels: {app: gcs-tool}
+    spec:
+      containers:
+      - name: gcs-tool
+        image: orka-gcs-tool-spike:latest
+        imagePullPolicy: IfNotPresent
+        ports: [{containerPort: 8080}]
+        env:
+        # Bucket-relative, trailing-slashed Prow build directory to serve.
+        - name: BUILD_PREFIX
+          value: "logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/"
+        - name: DISPLAY
+          value: "capz-e2e-main/2073230525962653696"
+        # BUCKET defaults to kubernetes-ci-logs.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gcs-tool
+  namespace: orka-system
+spec:
+  selector: {app: gcs-tool}
+  ports: [{port: 8080, targetPort: 8080}]
