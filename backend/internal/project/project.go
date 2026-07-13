@@ -535,6 +535,7 @@ var DefaultAgentic = Agentic{
 // Safe to call on a nil receiver.
 func (a *AI) EffectiveAgentic() Agentic {
 	out := DefaultAgentic
+	out.Critique.MaxRetries = intPtr(*DefaultAgentic.Critique.MaxRetries)
 	if a == nil {
 		return out
 	}
@@ -550,7 +551,7 @@ func (a *AI) EffectiveAgentic() Agentic {
 	if a.Agentic.MinGCSBytes > 0 {
 		out.MinGCSBytes = a.Agentic.MinGCSBytes
 	}
-	if a.Agentic.Critique.MaxRetries != nil {
+	if a.Agentic.Critique.MaxRetries != nil && *a.Agentic.Critique.MaxRetries >= 0 {
 		out.Critique.MaxRetries = a.Agentic.Critique.MaxRetries
 	}
 	out.SingleToolCall = a.Agentic.SingleToolCall

@@ -535,7 +535,9 @@ func agenticEqual(a, b Agentic) bool {
 		a.Timeout == b.Timeout &&
 		a.MinToolCalls == b.MinToolCalls &&
 		a.MinGCSBytes == b.MinGCSBytes &&
-		a.Critique == b.Critique &&
+		a.Critique.MaxRetries != nil &&
+		b.Critique.MaxRetries != nil &&
+		*a.Critique.MaxRetries == *b.Critique.MaxRetries &&
 		a.SingleToolCall == b.SingleToolCall &&
 		equalStrings(a.Tools, b.Tools)
 }
