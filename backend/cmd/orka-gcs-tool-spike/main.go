@@ -1,10 +1,12 @@
-// Command orka-gcs-tool-spike is a throwaway HTTP shim for the Orka evaluation
-// spike (Q2). It exposes the engine's real filesystem tools (list/read/tail/
-// grep/find over a Prow build's GCS artifact tree) as plain HTTP endpoints so
-// an Orka Tool CRD can call them. It proves our existing domain code repackages
-// as an Orka-reachable Tool without any change to the tools themselves.
+// Command orka-gcs-tool-spike is an experimental HTTP shim for the Orka
+// evaluation. It exposes the engine's real artifact tools (filesystem:
+// list/read/tail/grep/find and k8s: discover_clusters/find_my_cluster/... over a
+// Prow build's GCS artifact tree) as plain HTTP endpoints so Orka Tool CRDs can
+// call them. It proves our existing domain code repackages as Orka-reachable
+// Tools without any change to the tools themselves.
 //
-// Not part of any deploy; do not commit.
+// TEMPORARY: this lives only on the `orka` branch. Remove it (together with
+// experimental/orka/) when the Orka evaluation concludes or Orka is dropped.
 package main
 
 import (
@@ -18,6 +20,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -43,11 +46,15 @@ func main() {
 
 	reg := tools.NewRegistry()
 	filesystem.Register(reg)
+	k8s.Register(reg)
+
+	webURLBase := backend.WebURL(buildPrefix)
 
 	newEnv := func() *tools.Env {
 		return &tools.Env{
 			Browser:             browser,
 			Cache:               tools.NewCache(),
+			WebURLBase:          webURLBase,
 			RemainingModelBytes: 1 << 30,
 			RemainingGCSBytes:   1 << 30,
 		}

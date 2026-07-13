@@ -5,6 +5,12 @@ analysis through [Orka](https://github.com/orka-agents/orka), a Kubernetes-nativ
 agent orchestration platform, instead of the engine's built-in agentic loop. It
 lives on the `orka` branch and touches nothing in `main`.
 
+> **Temporary / experimental.** Everything in `experimental/orka/` and
+> `backend/cmd/orka-gcs-tool-spike/` exists only on the `orka` branch to support
+> this evaluation. None of it is wired into any deploy, the Dockerfile, CI, or
+> `main`. Delete both when the evaluation concludes or if Orka is not adopted; no
+> production code depends on them.
+
 The question being evaluated: could Orka do "all the dashboard info without any
 custom agent code"?
 
@@ -37,9 +43,12 @@ Full write-up: the session's `orka-evaluation-spike.md`. Short version:
   private/loopback IP as `Available=false`. In-cluster ClusterIPs are private, so
   the tools here show unavailable but still work (see `manifests/30-tools.yaml`).
 - **Cluster mapping.** A CAPZ e2e build runs many specs, each with its own cluster.
-  The filesystem-only agent could not reliably map a failed test to its cluster;
-  the engine gets this right via its per-test context and the k8s tool tier, which
-  is not exposed here yet.
+  The filesystem-only agent could not reliably map a failed test to its cluster.
+  The k8s discovery tier (`35-k8s-tools.yaml`, `discover-clusters` /
+  `find-my-cluster`) is now exposed to close this gap: it surfaces the candidate
+  clusters so the agent stops guessing. Note `find-my-cluster`'s heuristic does not
+  match every test name; when it returns no match it still returns the candidate
+  list for the agent to reason over.
 
 ## Layout
 
@@ -49,12 +58,15 @@ manifests/
   00-rbac.yaml             Grants the Orka SA full core.orka.ai access (chart gap).
   10-provider.yaml         GitHub Models Provider (swap for a real endpoint).
   20-gcs-tool.yaml         The GCS domain-tool Deployment + Service.
-  30-tools.yaml            Five Tool CRDs (list/find/grep/read/tail).
+  30-tools.yaml            Filesystem Tool CRDs (list/find/grep/read/tail).
+  35-k8s-tools.yaml        k8s discovery Tool CRDs (discover-clusters, find-my-cluster, ...).
   40-example-tasks.yaml    hello-world (Q1) and capz-analyze (Q2) Tasks.
 ```
 
 The shim itself is `backend/cmd/orka-gcs-tool-spike/main.go`; it must live in the
-backend module because it imports the engine's internal tool packages.
+backend module because it imports the engine's internal tool packages. It
+registers both the `filesystem` and `k8s` tool groups over the same artifact
+Browser, so a single service backs every Tool CRD above.
 
 ## Reproduce
 
@@ -89,6 +101,7 @@ kind load docker-image orka-gcs-tool-spike:latest --name orka-spike
 kubectl apply -f experimental/orka/manifests/10-provider.yaml
 kubectl apply -f experimental/orka/manifests/20-gcs-tool.yaml
 kubectl apply -f experimental/orka/manifests/30-tools.yaml
+kubectl apply -f experimental/orka/manifests/35-k8s-tools.yaml
 
 # 6. Wait for the Provider to be Ready, then run the tasks
 kubectl wait provider/gh-models -n orka-system --for=jsonpath='{.status.ready}'=true
