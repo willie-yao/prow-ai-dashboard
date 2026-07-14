@@ -51,6 +51,16 @@ Full write-up: the session's `orka-evaluation-spike.md`. Short version:
   mid-investigation; the evaluation bumped the ai-worker default to 30 by patching
   `workers/ai/main.go` before building the image. The engine itself uses 21+ tool
   calls, so 10 is too low for parity-depth CI analysis.
+- **Open-weight models need MORE iteration headroom (F1a).** Kimi-K2 investigates
+  less efficiently than Claude and exhausted a 50-cap without concluding on a
+  complex CAPZ control-plane failure (still actively reading logs at call 50, not
+  looping). Raising the ai-worker cap to 80 let the same task converge on the
+  first attempt in 22 tool calls. The cap is the load-bearing lever; a
+  tool-call-budget/decisiveness nudge in the producer system prompt is a
+  complementary but not sufficient hint (Kimi ignored a soft "aim for ~20"). The
+  H4 `retryPolicy` is the backstop for the occasional overrun. Practically: for
+  open-weight providers set `maxIterations` to ~80 in `workers/ai/main.go` and
+  keep `-retries>=1` on the producer.
 - **Copilot Claude tool_calls need the proxy.** Copilot's non-streaming
   `/chat/completions` returns `finish_reason=tool_calls` with a null `tool_calls`
   array for Claude models (the calls only arrive over the streaming SSE), and

@@ -191,12 +191,14 @@ cluster, so the Provider baseURL bridges to a `port-forward` via
 topology Orka co-locates with the inference stack and baseURL is the in-cluster
 Service DNS (`http://kimi-0905-serve-svc.default.svc:8000/v1`).
 
-Caveat (see F1a): Kimi's 32k context is much smaller than Copilot's. On the
-validated run, attempt 1 failed because a `grep_artifact` returned ~1MB and
-overflowed the window; the H4 `retryPolicy` recovered it on attempt 2. The
-gcs-tool shim's tool-result caps were sized for large-context Copilot; bounding
-them to the model's context window (F1a) removes the retry dependency. The
-engine's own tools do the analogous thing in-process via #99/#100.
+Caveat (see F1a): Kimi's 32k context is much smaller than Copilot's, but Orka's
+worker already compacts the conversation on a context-too-long error, so overflow
+is not the failure mode. The real limit is the iteration budget: Kimi investigates
+less efficiently than Claude and exhausted the 50-iteration cap without concluding.
+Raising the ai-worker cap to 80 let the same task converge on the first attempt in
+22 tool calls. The cap is the load-bearing lever (a producer-prompt tool-budget
+nudge helps but is not sufficient; the H4 retryPolicy is the backstop). F1a
+documents this in the README constraints.
 
 ### F1 (original) - Point the Provider at the in-cluster Dynamo/Kimi stack (drop Copilot)
 Swap the Copilot Provider (11) for one aimed at the in-cluster model service and

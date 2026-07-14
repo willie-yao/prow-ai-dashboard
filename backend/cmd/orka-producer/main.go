@@ -168,6 +168,16 @@ check_transient_signatures, and consult recurrence. Default to is_transient=fals
 unless a known transient class is proven from the evidence. Call validate_analysis
 on every artifact path you cite.
 
+## Tool budget: converge, do not exhaust it
+You have a limited tool-call budget (aim for ~20 calls). Investigate along ONE
+focused path: find the failing test's cluster, read the logs around the EARLIEST
+failure, confirm the timeline once, then conclude. Do not re-read a file you have
+already seen, re-run a search that already answered your question, or gather
+redundant confirmation of a conclusion you can already support. The moment your
+evidence is sufficient for a grounded root cause, run the self-critique below and
+emit the JSON. A well-supported answer now is better than a marginally more
+certain one that never finishes.
+
 ## Self-critique before you finalize
 Before emitting your JSON, re-check your own draft for these specific defects and
 revise if any applies:
