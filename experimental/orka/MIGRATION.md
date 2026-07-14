@@ -173,7 +173,32 @@ Sequencing: H1 -> H2 -> (H3, H4 parallel) -> H5. All DONE.
 
 ## Future / strategic steps
 
-### F1 - Point the Provider at the in-cluster Dynamo/Kimi stack (drop Copilot)
+### F1 - Point the Provider at the in-cluster Kimi (Ray Serve) stack (VALIDATED)
+Added `12-kimi-provider.yaml`: an `openai`-type Provider aimed at Kimi-K2 served
+over an OpenAI-compatible API by Ray Serve, with NO de-streaming proxy. Unlike
+Copilot's Claude, Kimi returns `tool_calls` on the non-streaming
+`/v1/chat/completions` path, so the proxy (50) and the `Copilot-Integration-Id`
+header are unnecessary. Validated end to end on the spike:
+- hello-world Task returned `ORKA_KIMI_OK`;
+- a real capz failure Task ran the full tool set, correctly routed to its own
+  build (option L), and produced a grounded, artifact-cited analysis matching
+  Copilot's earlier conclusion on the same failure (3rd control-plane
+  `etcd-join: context deadline exceeded`, classified transient).
+
+Topology note: the spike runs Orka on a separate kind cluster from the h100 model
+cluster, so the Provider baseURL bridges to a `port-forward` via
+`host.docker.internal` (verified reachable from kind pods). In the production
+topology Orka co-locates with the inference stack and baseURL is the in-cluster
+Service DNS (`http://kimi-0905-serve-svc.default.svc:8000/v1`).
+
+Caveat (see F1a): Kimi's 32k context is much smaller than Copilot's. On the
+validated run, attempt 1 failed because a `grep_artifact` returned ~1MB and
+overflowed the window; the H4 `retryPolicy` recovered it on attempt 2. The
+gcs-tool shim's tool-result caps were sized for large-context Copilot; bounding
+them to the model's context window (F1a) removes the retry dependency. The
+engine's own tools do the analogous thing in-process via #99/#100.
+
+### F1 (original) - Point the Provider at the in-cluster Dynamo/Kimi stack (drop Copilot)
 Swap the Copilot Provider (11) for one aimed at the in-cluster model service and
 delete the de-streaming proxy (50) + Copilot-Integration-Id header. Re-validate
 quality on the in-cluster model (Kimi needed softer prompts + a higher iter cap).

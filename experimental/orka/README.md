@@ -76,6 +76,7 @@ manifests/
   00-rbac.yaml             Grants the Orka SA full core.orka.ai access (chart gap).
   10-provider.yaml         GitHub Models Provider (free, small per-request token cap).
   11-copilot-provider.yaml GitHub Copilot Provider via the proxy (full context window).
+  12-kimi-provider.yaml    In-cluster Kimi-K2 (Ray Serve) Provider, no proxy (F1).
   20-gcs-tool.yaml         The GCS domain-tool Deployment + Service.
   30-tools.yaml            Filesystem Tool CRDs (list/find/grep/read/tail).
   35-k8s-tools.yaml        k8s discovery Tool CRDs (discover-clusters, find-my-cluster, ...).
