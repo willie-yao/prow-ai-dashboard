@@ -32,18 +32,20 @@ per Task. Orka's HTTP tool executor sends the model's params as the JSON body an
 interpolates `{{param}}` in the URL, but does NOT auto-forward task identity.
 
 Two viable designs:
-- (D, lead) Build param: add an optional `build` field to each GCS tool schema;
-  the producer seeds the build prefix in the Task systemPrompt and instructs the
-  model to pass it on every tool call; the shim caches a Browser per build and
-  falls back to BUILD_PREFIX when absent. Simplest; relies on the model passing
-  the param (Copilot+Claude followed such instructions reliably in the spike).
-- (L, robust fallback) Per-build tool routing: shim serves
-  `/b/<build>/tool/<name>`; the producer creates per-build Tool CRDs whose URLs
-  embed the build and the Task references those names. Model-independent, at the
-  cost of Tool CRD churn (~tools x active-builds).
+- (D) Build param: model passes `build` on every tool call. PROTOTYPED AND
+  REJECTED: the model does not reliably pass it, and a silent fallback to the
+  default build produced confidently-wrong analyses (a security-group
+  investigation on an azl3 failure). Fail-wrong is unacceptable for a dashboard.
+- (L, CHOSEN) Per-build Tool CRDs: for each distinct build the producer clones
+  the base Tool CRDs with a static `X-Build-Prefix: <prefix>` header and a
+  build-suffixed name; each Task references its build's tool set. The shim (M0
+  multi-build) routes by that header, so tools always read the Task's own build
+  regardless of the model. Cost: base-tools x distinct-builds CRDs (e.g. 16 x 4 =
+  64 for the demo), created and GC'd by the producer/orchestrator.
 
-Prototype D first; keep L in reserve. Exit: two Tasks on different builds run
-concurrently against one shim and each reads its own build.
+M0 shim is done (serves any build via the `build` body param OR the
+`X-Build-Prefix` header). L is validated end to end: four concurrent Tasks each
+read their OWN build's clusters and produced build-correct analyses.
 
 ### M1 - Fetcher no-AI skeleton (low risk, no new code)
 
