@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -76,3 +77,34 @@ func (k *KubeClient) TaskPhase(ctx context.Context, ns, name string) (string, er
 	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
 	return phase, nil
 }
+
+// ListByLabel returns the objects of gvr in ns matching selector.
+func (k *KubeClient) ListByLabel(ctx context.Context, gvr schema.GroupVersionResource, ns, selector string) ([]unstructured.Unstructured, error) {
+	l, err := k.dyn.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, err
+	}
+	return l.Items, nil
+}
+
+// Delete removes a named object, ignoring not-found.
+func (k *KubeClient) Delete(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) error {
+	err := k.dyn.Resource(gvr).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// TerminalPhase reports whether a Task phase is final (no further transitions).
+func TerminalPhase(phase string) bool {
+	switch phase {
+	case "Succeeded", "Failed", "Cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsNotFound reports whether err is a Kubernetes not-found error.
+func IsNotFound(err error) bool { return apierrors.IsNotFound(err) }

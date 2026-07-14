@@ -24,6 +24,14 @@ func TaskName(buildID, hash, version string) string {
 	return Sanitize("az-" + buildID + "-" + hash + "-" + version)
 }
 
+// Labels the producer stamps on every Task and per-build Tool it creates, so the
+// ingestor can group them by build for status checks and garbage collection.
+const (
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	ManagedByValue = "orka-producer"
+	BuildLabel     = "orka.dashboard/build"
+)
+
 var nameUnsafe = strings.NewReplacer("_", "-", ".", "-", "/", "-", " ", "-", ":", "-")
 
 // Sanitize lowercases and reduces s to a valid, bounded RFC1123 name fragment.

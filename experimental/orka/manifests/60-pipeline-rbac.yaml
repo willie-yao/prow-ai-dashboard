@@ -1,8 +1,8 @@
-# RBAC for the in-cluster Orka pipeline (H2). The orka-producer applies Tasks +
-# per-build Tools via server-side apply, so its ServiceAccount needs write access
-# to those CRDs in the Orka namespace. The orka-ingestor needs no RBAC here: it
-# reads results over the Orka HTTP API, authenticated by this SA's token via
-# TokenReview, and patches only the shared data volume.
+# RBAC for the in-cluster Orka pipeline. The orka-producer applies Tasks +
+# per-build Tools via server-side apply. The orka-ingestor reads Task status and
+# garbage-collects completed builds' Tools. Both run under this ServiceAccount,
+# whose token also authenticates the ingestor to the Orka result API (via
+# TokenReview), so no separate credential is needed.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

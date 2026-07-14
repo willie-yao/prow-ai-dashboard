@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"io"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orkamig"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func main() {
@@ -34,6 +36,9 @@ func main() {
 	model := flag.String("model", "claude-sonnet-4.5", "model label recorded on each analysis")
 	wait := flag.Duration("wait", 0, "keep polling until every failing test is patched or this deadline elapses (0 = single pass)")
 	poll := flag.Duration("poll", 15*time.Second, "interval between passes when -wait is set")
+	namespace := flag.String("namespace", "orka-system", "namespace holding the Tasks and Tools")
+	kubeContext := flag.String("context", "", "kubeconfig context for Task-status checks and GC (in-cluster config is used when empty)")
+	gc := flag.Bool("gc", false, "after ingesting, delete per-build Tools whose Tasks are all terminal")
 	flag.Parse()
 
 	tok := strings.TrimSpace(*token)
@@ -53,23 +58,55 @@ func main() {
 
 	client := &orkaClient{base: strings.TrimRight(*apiBase, "/"), token: tok, http: &http.Client{Timeout: 30 * time.Second}}
 
+	// A kube client enables phase-based unavailable reasons and Tool GC. It is
+	// best-effort: without cluster access the ingestor still patches results and
+	// marks anything unresolved at the deadline as unavailable.
+	kube := newKubeClient(*kubeContext)
+
 	deadline := time.Now().Add(*wait)
+	builds := map[string]bool{}
 	for {
-		patched, failedTests, missing := ingestPass(client, *dataDir, *version, *model)
+		final := *wait > 0 && !time.Now().Before(deadline)
+		patched, failedTests, missing := ingestPass(client, kube, *namespace, *dataDir, *version, *model, final, builds)
 		log.Printf("patched %d/%d failing tests (%d results missing/unavailable)", patched, failedTests, missing)
-		if *wait <= 0 || missing == 0 || time.Now().After(deadline) {
-			return
+		if *wait <= 0 || missing == 0 || final {
+			break
 		}
 		time.Sleep(*poll)
 	}
+
+	if *gc && kube != nil {
+		gcTools(kube, *namespace, builds)
+	}
+}
+
+// newKubeClient builds a KubeClient, or returns nil (logged) when unavailable.
+func newKubeClient(kubeContext string) *orkamig.KubeClient {
+	cfg, err := orkamig.RESTConfig(kubeContext)
+	if err != nil {
+		log.Printf("⚠ no cluster access (%v); running result-only, no phase reasons or GC", err)
+		return nil
+	}
+	kc, err := orkamig.NewKubeClient(cfg)
+	if err != nil {
+		log.Printf("⚠ kube client init failed (%v); running result-only", err)
+		return nil
+	}
+	return kc
 }
 
 // saTokenPath is the standard in-cluster ServiceAccount token mount.
 const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
-// ingestPass patches every available result into the skeleton once, returning
-// how many failing tests it patched, saw, and could not yet resolve.
-func ingestPass(client *orkaClient, dataDir, version, model string) (patched, failedTests, missing int) {
+// unavailablePrefix matches the engine's marker for a failure whose analysis
+// could not complete and has no model result (internal/ai/service.go).
+const unavailablePrefix = "AI analysis unavailable: "
+
+// ingestPass patches every available result into the skeleton once. When final
+// is set, still-missing failing tests are marked unavailable (with a Task-phase
+// reason when a kube client is present). Distinct build IDs are recorded in
+// builds. Returns how many failing tests it patched, saw, and left unresolved.
+func ingestPass(client *orkaClient, kube *orkamig.KubeClient, namespace, dataDir, version, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
 	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
 		raw, err := os.ReadFile(jf)
@@ -89,6 +126,7 @@ func ingestPass(client *orkaClient, dataDir, version, model string) (patched, fa
 					continue
 				}
 				failedTests++
+				builds[run.BuildID] = true
 				if tc.AIAnalysis != nil {
 					continue // already patched by an earlier pass
 				}
@@ -96,11 +134,17 @@ func ingestPass(client *orkaClient, dataDir, version, model string) (patched, fa
 				result, ok := client.result(name)
 				if !ok {
 					missing++
+					if final && markUnavailable(tc, kube, namespace, name) {
+						changed = true
+					}
 					continue
 				}
 				a, ok := parseAnalysis(result)
 				if !ok {
 					missing++
+					if final && markUnavailable(tc, kube, namespace, name) {
+						changed = true
+					}
 					continue
 				}
 				now := time.Now().UTC().Format(time.RFC3339)
@@ -130,6 +174,76 @@ func ingestPass(client *orkaClient, dataDir, version, model string) (patched, fa
 		}
 	}
 	return patched, failedTests, missing
+}
+
+// markUnavailable stamps the engine's "unavailable" placeholder on a failing
+// test whose analysis did not complete, using the Task phase as the reason when
+// a kube client is present. It mirrors the engine: an AISummary with the
+// unavailable prefix and no AIAnalysis. Returns true if it changed the test.
+func markUnavailable(tc *models.TestCase, kube *orkamig.KubeClient, namespace, taskName string) bool {
+	if tc.AISummary != nil || tc.AIAnalysis != nil {
+		return false // already has a summary or a real analysis
+	}
+	reason := "analysis did not complete before the deadline"
+	if kube != nil {
+		phase, err := kube.TaskPhase(context.Background(), namespace, taskName)
+		switch {
+		case orkamig.IsNotFound(err) || (err == nil && phase == ""):
+			reason = "analysis Task not found"
+		case err != nil:
+			// leave the deadline reason; the phase could not be read
+		case phase == "Failed" || phase == "Cancelled":
+			reason = "analysis Task " + strings.ToLower(phase)
+		}
+	}
+	tc.AISummary = &models.AISummary{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Summary:     unavailablePrefix + reason,
+		IsTransient: false,
+	}
+	return true
+}
+
+// gcTools deletes the per-build Tool CRDs for every build whose Tasks are all
+// terminal, so the base x builds Tool set does not accumulate. Tools for a build
+// with a still-running Task are kept so the run can finish reading them.
+func gcTools(kube *orkamig.KubeClient, namespace string, builds map[string]bool) {
+	ctx := context.Background()
+	deleted := 0
+	for buildID := range builds {
+		selector := orkamig.BuildLabel + "=" + buildID
+		tasks, err := kube.ListByLabel(ctx, orkamig.TasksGVR, namespace, selector)
+		if err != nil {
+			log.Printf("⚠ GC list tasks for build %s: %v", buildID, err)
+			continue
+		}
+		allTerminal := true
+		for _, t := range tasks {
+			phase, _, _ := unstructured.NestedString(t.Object, "status", "phase")
+			if !orkamig.TerminalPhase(phase) {
+				allTerminal = false
+				break
+			}
+		}
+		if !allTerminal {
+			continue
+		}
+		tools, err := kube.ListByLabel(ctx, orkamig.ToolsGVR, namespace, selector)
+		if err != nil {
+			log.Printf("⚠ GC list tools for build %s: %v", buildID, err)
+			continue
+		}
+		for _, tool := range tools {
+			if err := kube.Delete(ctx, orkamig.ToolsGVR, namespace, tool.GetName()); err != nil {
+				log.Printf("⚠ GC delete tool %s: %v", tool.GetName(), err)
+				continue
+			}
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		log.Printf("🧹 GC deleted %d per-build Tools for completed builds", deleted)
+	}
 }
 
 // analysis is the model's output JSON shape.

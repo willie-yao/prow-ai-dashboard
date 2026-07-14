@@ -141,12 +141,16 @@ the producer becomes a fast fire-and-forget CronJob. RESPECT the chart's
 single-writer invariant: the fetcher writes the skeleton, then the ingestor is
 the sole patcher (atomic per-file rewrite or a lock).
 
-### H4 - Task lifecycle: retries, failure surfacing, Tool GC
-Use the Task `retryPolicy` for transient model/tool errors. The ingestor surfaces
-a Failed / max-iters Task as analysis-unavailable on that test (honest dashboard,
-never a silent skip). GC per-build Tool CRDs (label by build/run and delete once
-that build's Tasks are terminal, or ownerReference them to a per-run ConfigMap)
-so the base x builds Tool set does not grow unbounded.
+### H4 - Task lifecycle: retries, failure surfacing, Tool GC (DONE)
+The producer stamps each Task with `retryPolicy.maxRetries` (`-retries`, default
+1) and an `orka.dashboard/build` label on both Tasks and per-build Tools. The
+ingestor, on its final pass, marks any still-unresolved failing test with the
+engine's `AI analysis unavailable:` placeholder and a Task-phase reason (Task
+failed / cancelled / not found) instead of leaving it silently blank. With `-gc`
+it deletes a build's per-build Tools once that build's Tasks are all terminal
+(unlabeled Tools are never touched). Validated live: failed/absent Tasks surfaced
+as unavailable with the right reason, and GC deleted 64 build-labeled Tools after
+their Tasks were gone.
 
 ### H5 - Observability + ops runbook
 Metrics/logs (tasks created/succeeded/failed/ingested, mean iters, tokens), alert

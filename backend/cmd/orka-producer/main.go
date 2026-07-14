@@ -58,6 +58,7 @@ func main() {
 	version := flag.String("version", "v1", "content-address version suffix; bump to force re-analysis")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
 	toolsCSV := flag.String("tools", strings.Join(defaultTools, ","), "comma-separated base Tool names to enable")
+	retries := flag.Int("retries", 1, "Task retryPolicy maxRetries for transient model/tool errors")
 	apply := flag.Bool("apply", false, "apply Tools+Tasks to the cluster via client-go (in-cluster or -context) instead of only writing YAML")
 	kubeContext := flag.String("context", "", "kubeconfig context to use when -apply runs outside the cluster")
 	flag.Parse()
@@ -93,7 +94,7 @@ func main() {
 				}
 				builds[run.BuildID] = buildPrefix
 				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), *version)
-				task := buildTask(name, *namespace, *provider, *model, *timeout,
+				task := buildTask(name, *namespace, run.BuildID, *provider, *model, *timeout, *retries,
 					buildToolNames(toolNames, run.BuildID), systemPrompt,
 					userPrompt(detail.JobID, buildPrefix, tc))
 				writeYAML(filepath.Join(*tasksOut, name+".yaml"), task)
@@ -205,26 +206,33 @@ func userPrompt(jobID, buildPrefix string, tc models.TestCase) string {
 	return b.String()
 }
 
-func buildTask(name, namespace, provider, model, timeout string, tools []string, systemPrompt, prompt string) map[string]any {
+func buildTask(name, namespace, buildID, provider, model, timeout string, maxRetries int, tools []string, systemPrompt, prompt string) map[string]any {
+	spec := map[string]any{
+		"type":    "ai",
+		"timeout": timeout,
+		"ai": map[string]any{
+			"providerRef":  map[string]any{"name": provider},
+			"model":        model,
+			"tools":        tools,
+			"systemPrompt": systemPrompt,
+			"prompt":       prompt,
+		},
+	}
+	if maxRetries > 0 {
+		spec["retryPolicy"] = map[string]any{"maxRetries": maxRetries}
+	}
 	return map[string]any{
 		"apiVersion": "core.orka.ai/v1alpha1",
 		"kind":       "Task",
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": namespace,
-			"labels":    map[string]any{"app.kubernetes.io/managed-by": "orka-producer"},
-		},
-		"spec": map[string]any{
-			"type":    "ai",
-			"timeout": timeout,
-			"ai": map[string]any{
-				"providerRef":  map[string]any{"name": provider},
-				"model":        model,
-				"tools":        tools,
-				"systemPrompt": systemPrompt,
-				"prompt":       prompt,
+			"labels": map[string]any{
+				orkamig.ManagedByLabel: orkamig.ManagedByValue,
+				orkamig.BuildLabel:     buildID,
 			},
 		},
+		"spec": spec,
 	}
 }
 
@@ -270,7 +278,10 @@ func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, namespace
 	}
 	meta["name"] = buildToolName(baseName, buildID)
 	meta["namespace"] = namespace
-	meta["labels"] = map[string]any{"app.kubernetes.io/managed-by": "orka-producer"}
+	meta["labels"] = map[string]any{
+		orkamig.ManagedByLabel: orkamig.ManagedByValue,
+		orkamig.BuildLabel:     buildID,
+	}
 
 	spec, _ := doc["spec"].(map[string]any)
 	if spec == nil {
