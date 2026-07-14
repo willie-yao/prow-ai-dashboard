@@ -3,6 +3,11 @@
 Goal: produce a real dashboard for one consumer (capz) end to end through Orka,
 on the `orka` branch, without rewriting the parts that already work.
 
+Status: M0-M5 complete. The pipeline runs end to end (fetcher -> producer ->
+Orka Tasks -> ingestor) and patches real capz failures into the dashboard. M5's
+self-critique prompt was validated on a live task: it converged (no max-iters)
+and produced grounded, build-correct JSON.
+
 ## Key simplifier: reuse the fetcher, move only the AI step
 
 The current engine is: discover jobs/builds/failing tests -> analyze each failure
