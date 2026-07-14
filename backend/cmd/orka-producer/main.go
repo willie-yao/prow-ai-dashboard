@@ -21,8 +21,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -35,6 +33,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orkamig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
@@ -89,7 +88,7 @@ func main() {
 					continue
 				}
 				builds[run.BuildID] = buildPrefix
-				name := taskName(run.BuildID, failureHash(tc.Name, tc.FailureMessage), *version)
+				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), *version)
 				task := buildTask(name, *namespace, *provider, *model, *timeout,
 					buildToolNames(toolNames, run.BuildID), systemPrompt,
 					userPrompt(detail.JobID, buildPrefix, tc))
@@ -242,16 +241,7 @@ func buildToolNames(base []string, buildID string) []string {
 	return out
 }
 
-func buildToolName(base, buildID string) string { return sanitize(base + "-b" + buildID) }
-
-func taskName(buildID, hash, version string) string {
-	return sanitize(fmt.Sprintf("az-%s-%s-%s", buildID, hash, version))
-}
-
-func failureHash(testName, failureMessage string) string {
-	sum := sha256.Sum256([]byte(testName + "\x00" + strings.Join(strings.Fields(failureMessage), " ")))
-	return hex.EncodeToString(sum[:6])
-}
+func buildToolName(base, buildID string) string { return orkamig.Sanitize(base + "-b" + buildID) }
 
 // --- helpers ---
 
@@ -292,20 +282,6 @@ func deepCopy(v any) any {
 
 func asString(v any) string {
 	s, _ := v.(string)
-	return s
-}
-
-var nameUnsafe = strings.NewReplacer("_", "-", ".", "-", "/", "-", " ", "-", ":", "-")
-
-func sanitize(s string) string {
-	s = strings.ToLower(nameUnsafe.Replace(s))
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	s = strings.Trim(s, "-")
-	if len(s) > 200 {
-		s = strings.Trim(s[:200], "-")
-	}
 	return s
 }
 
