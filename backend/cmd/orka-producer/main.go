@@ -13,14 +13,16 @@
 // so re-running and re-applying is idempotent. Bump -version to force re-analysis
 // after a prompt/tool change.
 //
-// The producer is pure: it writes Task + Tool YAMLs to -tasks-out / -tools-out.
-// Applying them (kubectl apply -f) is the orchestration step's job.
+// By default the producer is pure: it writes Task + Tool YAMLs to -tasks-out /
+// -tools-out for a separate apply step. With -apply it server-side applies them
+// directly (in-cluster config, or -context for local runs), Tools before Tasks.
 //
 // TEMPORARY: lives only on the `orka` branch alongside experimental/orka/.
 package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -56,6 +58,8 @@ func main() {
 	version := flag.String("version", "v1", "content-address version suffix; bump to force re-analysis")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
 	toolsCSV := flag.String("tools", strings.Join(defaultTools, ","), "comma-separated base Tool names to enable")
+	apply := flag.Bool("apply", false, "apply Tools+Tasks to the cluster via client-go (in-cluster or -context) instead of only writing YAML")
+	kubeContext := flag.String("context", "", "kubeconfig context to use when -apply runs outside the cluster")
 	flag.Parse()
 
 	_, addendum, err := project.LoadDir(*projectDir)
@@ -75,7 +79,7 @@ func main() {
 
 	jobFiles, _ := filepath.Glob(filepath.Join(*dataDir, "jobs", "*.json"))
 	builds := map[string]string{} // buildID -> buildPrefix (distinct builds seen)
-	tasks := 0
+	var taskObjs []namedObj
 	for _, jf := range jobFiles {
 		var detail models.JobDetail
 		if b, err := os.ReadFile(jf); err != nil || json.Unmarshal(b, &detail) != nil {
@@ -93,24 +97,62 @@ func main() {
 					buildToolNames(toolNames, run.BuildID), systemPrompt,
 					userPrompt(detail.JobID, buildPrefix, tc))
 				writeYAML(filepath.Join(*tasksOut, name+".yaml"), task)
-				tasks++
+				taskObjs = append(taskObjs, namedObj{name, task})
 			}
 		}
 	}
 
 	// Emit per-build Tool CRD clones (header-routed) for every distinct build.
-	toolDocs := 0
+	var toolObjs []namedObj
 	for buildID, prefix := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
 			clone := cloneToolForBuild(doc, base, buildID, prefix, *namespace)
-			writeYAML(filepath.Join(*toolsOut, buildToolName(base, buildID)+".yaml"), clone)
-			toolDocs++
+			toolName := buildToolName(base, buildID)
+			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
+			toolObjs = append(toolObjs, namedObj{toolName, clone})
 		}
 	}
 
 	log.Printf("wrote %d Tasks (%s) and %d per-build Tools across %d builds (%s)",
-		tasks, *tasksOut, toolDocs, len(builds), *toolsOut)
+		len(taskObjs), *tasksOut, len(toolObjs), len(builds), *toolsOut)
+
+	if *apply {
+		if err := applyAll(*namespace, *kubeContext, toolObjs, taskObjs); err != nil {
+			log.Fatalf("apply: %v", err)
+		}
+	}
+}
+
+// namedObj pairs an object name with its unstructured content.
+type namedObj struct {
+	name string
+	obj  map[string]any
+}
+
+// applyAll server-side applies the Tools before the Tasks that reference them.
+func applyAll(namespace, kubeContext string, tools, tasks []namedObj) error {
+	cfg, err := orkamig.RESTConfig(kubeContext)
+	if err != nil {
+		return fmt.Errorf("kube config: %w", err)
+	}
+	kc, err := orkamig.NewKubeClient(cfg)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	for _, t := range tools {
+		if err := kc.Apply(ctx, orkamig.ToolsGVR, namespace, t.obj); err != nil {
+			return err
+		}
+	}
+	for _, t := range tasks {
+		if err := kc.Apply(ctx, orkamig.TasksGVR, namespace, t.obj); err != nil {
+			return err
+		}
+	}
+	log.Printf("applied %d Tools and %d Tasks to %s", len(tools), len(tasks), namespace)
+	return nil
 }
 
 const toolUsageAddendum = `

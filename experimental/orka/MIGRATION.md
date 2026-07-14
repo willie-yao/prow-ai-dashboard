@@ -116,22 +116,23 @@ target is an in-cluster deploy that slots into the existing Helm chart
 ReadWriteMany PVC at `/data`, and the existing server Deployment serves the
 Orka-produced JSON with no frontend change.
 
-### H1 - Containerize producer + ingestor
-Add `orka-producer` + `orka-ingestor` to the image build (extend the Dockerfile
-or a separate orka image target). Both build clean today. Low risk.
+### H1 - Containerize producer + ingestor (DONE)
+The `experimental/orka/Dockerfile` builds any orka binary via `--build-arg CMD=`;
+`orka-producer` and `orka-ingestor` build as ~15-18MB distroless images. The
+fetcher stays in the main engine image. No fetcher duplication.
 
-### H2 - In-cluster run-once Job (RBAC, port run-demo.sh)
-Port the demo script into a Job/CronJob against the shared PVC: fetcher(-ai=false)
--> producer -> apply Tasks+Tools -> poll -> ingestor. Add a ServiceAccount +
-Role/RoleBinding for create/get/list on `tasks.core.orka.ai` + `tools.core.orka.ai`;
-the SA token doubles as the result-API bearer (TokenReview accepts any SA token).
-OPEN DECISION: producer/ingestor create objects via client-go (adds a dependency
-the engine deliberately avoided, so guard it to the orka cmds) vs a
-kubectl-bearing image that applies the emitted YAML. Ingestion still polls here.
-
-DECIDED: client-go, guarded to the orka cmds (backend/cmd/orka-* + a small
-orkamig k8s client helper); the engine core stays client-go-free. Ingestion
-still polls here.
+### H2 - In-cluster CronJob (RBAC, client-go apply) (DONE)
+Ported `run-demo.sh` into an in-cluster CronJob against the shared PVC:
+fetcher(-ai=false) initContainer -> orka-producer `-apply` initContainer ->
+orka-ingestor `-wait` container. Client-go (DECIDED above) lives only in
+`orkamig` (`kube.go`: `RESTConfig`, `KubeClient.Apply` via server-side apply,
+`TaskPhase`), so the engine binaries link zero client-go packages. The producer
+gained `-apply`/`-context`; the ingestor gained `-wait`/`-poll` (retries the
+result API until every failing test is patched) and defaults its bearer to the
+mounted SA token, so the ingestor needs no k8s RBAC. Manifests:
+`60-pipeline-rbac.yaml` (SA + Role/RoleBinding on tasks+tools) and
+`70-pipeline-job.yaml` (the CronJob). The apply seam was validated live: the
+producer server-side applied 64 Tools + 4 Tasks (field manager `orka-producer`).
 
 ### H3 - Event-driven ingestion via Task.webhookURL
 The Task CRD supports `webhookURL`. Producer sets it on each Task pointing at a

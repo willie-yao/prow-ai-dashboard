@@ -32,6 +32,8 @@ func main() {
 	tokenFile := flag.String("token-file", "", "file holding the bearer token")
 	version := flag.String("version", "v1", "content-address version suffix (must match the producer run)")
 	model := flag.String("model", "claude-sonnet-4.5", "model label recorded on each analysis")
+	wait := flag.Duration("wait", 0, "keep polling until every failing test is patched or this deadline elapses (0 = single pass)")
+	poll := flag.Duration("poll", 15*time.Second, "interval between passes when -wait is set")
 	flag.Parse()
 
 	tok := strings.TrimSpace(*token)
@@ -42,11 +44,33 @@ func main() {
 		}
 		tok = strings.TrimSpace(string(b))
 	}
+	if tok == "" {
+		// In-cluster default: the pod's ServiceAccount token (TokenReview accepts it).
+		if b, err := os.ReadFile(saTokenPath); err == nil {
+			tok = strings.TrimSpace(string(b))
+		}
+	}
 
 	client := &orkaClient{base: strings.TrimRight(*apiBase, "/"), token: tok, http: &http.Client{Timeout: 30 * time.Second}}
 
-	jobFiles, _ := filepath.Glob(filepath.Join(*dataDir, "jobs", "*.json"))
-	patched, missing, failedTests := 0, 0, 0
+	deadline := time.Now().Add(*wait)
+	for {
+		patched, failedTests, missing := ingestPass(client, *dataDir, *version, *model)
+		log.Printf("patched %d/%d failing tests (%d results missing/unavailable)", patched, failedTests, missing)
+		if *wait <= 0 || missing == 0 || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(*poll)
+	}
+}
+
+// saTokenPath is the standard in-cluster ServiceAccount token mount.
+const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+// ingestPass patches every available result into the skeleton once, returning
+// how many failing tests it patched, saw, and could not yet resolve.
+func ingestPass(client *orkaClient, dataDir, version, model string) (patched, failedTests, missing int) {
+	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
 		raw, err := os.ReadFile(jf)
 		if err != nil {
@@ -65,7 +89,10 @@ func main() {
 					continue
 				}
 				failedTests++
-				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), *version)
+				if tc.AIAnalysis != nil {
+					continue // already patched by an earlier pass
+				}
+				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), version)
 				result, ok := client.result(name)
 				if !ok {
 					missing++
@@ -80,7 +107,7 @@ func main() {
 				tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.RootCause, IsTransient: a.IsTransient}
 				tc.AIAnalysis = &models.AIAnalysis{
 					GeneratedAt:   now,
-					Model:         *model,
+					Model:         model,
 					RootCause:     a.RootCause,
 					Severity:      a.Severity,
 					SuggestedFix:  a.SuggestedFix,
@@ -102,7 +129,7 @@ func main() {
 			}
 		}
 	}
-	log.Printf("patched %d/%d failing tests (%d results missing/unavailable)", patched, failedTests, missing)
+	return patched, failedTests, missing
 }
 
 // analysis is the model's output JSON shape.

@@ -1,0 +1,35 @@
+# RBAC for the in-cluster Orka pipeline (H2). The orka-producer applies Tasks +
+# per-build Tools via server-side apply, so its ServiceAccount needs write access
+# to those CRDs in the Orka namespace. The orka-ingestor needs no RBAC here: it
+# reads results over the Orka HTTP API, authenticated by this SA's token via
+# TokenReview, and patches only the shared data volume.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orka-pipeline
+  namespace: orka-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orka-pipeline
+  namespace: orka-system
+rules:
+  # create/patch to apply, get/list to poll status, delete for per-build Tool GC (H4).
+  - apiGroups: ["core.orka.ai"]
+    resources: ["tasks", "tools"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orka-pipeline
+  namespace: orka-system
+subjects:
+  - kind: ServiceAccount
+    name: orka-pipeline
+    namespace: orka-system
+roleRef:
+  kind: Role
+  name: orka-pipeline
+  apiGroup: rbac.authorization.k8s.io
