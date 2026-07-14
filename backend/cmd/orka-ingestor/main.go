@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -39,6 +40,8 @@ func main() {
 	namespace := flag.String("namespace", "orka-system", "namespace holding the Tasks and Tools")
 	kubeContext := flag.String("context", "", "kubeconfig context for Task-status checks and GC (in-cluster config is used when empty)")
 	gc := flag.Bool("gc", false, "after ingesting, delete per-build Tools whose Tasks are all terminal")
+	serve := flag.Bool("serve", false, "run as a webhook receiver: patch each result as its Task completes (Task.webhookURL)")
+	addr := flag.String("addr", ":8080", "listen address in -serve mode")
 	flag.Parse()
 
 	tok := strings.TrimSpace(*token)
@@ -57,6 +60,14 @@ func main() {
 	}
 
 	client := &orkaClient{base: strings.TrimRight(*apiBase, "/"), token: tok, http: &http.Client{Timeout: 30 * time.Second}}
+
+	if *serve {
+		srv := &webhookServer{client: client, dataDir: *dataDir, version: *version, model: *model}
+		http.HandleFunc("/webhook", srv.handle)
+		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		log.Printf("🔔 webhook receiver listening on %s (data=%s version=%s)", *addr, *dataDir, *version)
+		log.Fatal(http.ListenAndServe(*addr, nil))
+	}
 
 	// A kube client enables phase-based unavailable reasons and Tool GC. It is
 	// best-effort: without cluster access the ingestor still patches results and
@@ -131,35 +142,15 @@ func ingestPass(client *orkaClient, kube *orkamig.KubeClient, namespace, dataDir
 					continue // already patched by an earlier pass
 				}
 				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), version)
-				result, ok := client.result(name)
-				if !ok {
-					missing++
-					if final && markUnavailable(tc, kube, namespace, name) {
-						changed = true
-					}
+				if applyResult(tc, client, name, model) {
+					patched++
+					changed = true
 					continue
 				}
-				a, ok := parseAnalysis(result)
-				if !ok {
-					missing++
-					if final && markUnavailable(tc, kube, namespace, name) {
-						changed = true
-					}
-					continue
+				missing++
+				if final && markUnavailable(tc, kube, namespace, name) {
+					changed = true
 				}
-				now := time.Now().UTC().Format(time.RFC3339)
-				tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.RootCause, IsTransient: a.IsTransient}
-				tc.AIAnalysis = &models.AIAnalysis{
-					GeneratedAt:   now,
-					Model:         model,
-					RootCause:     a.RootCause,
-					Severity:      a.Severity,
-					SuggestedFix:  a.SuggestedFix,
-					RelevantFiles: a.RelevantFiles,
-					Mode:          "agentic",
-				}
-				patched++
-				changed = true
 			}
 		}
 		if changed {
@@ -176,14 +167,49 @@ func ingestPass(client *orkaClient, kube *orkamig.KubeClient, namespace, dataDir
 	return patched, failedTests, missing
 }
 
-// markUnavailable stamps the engine's "unavailable" placeholder on a failing
-// test whose analysis did not complete, using the Task phase as the reason when
-// a kube client is present. It mirrors the engine: an AISummary with the
-// unavailable prefix and no AIAnalysis. Returns true if it changed the test.
-func markUnavailable(tc *models.TestCase, kube *orkamig.KubeClient, namespace, taskName string) bool {
-	if tc.AISummary != nil || tc.AIAnalysis != nil {
-		return false // already has a summary or a real analysis
+// applyResult fetches taskName's result, parses the analysis, and patches it
+// onto tc. Returns true if it patched (result available and parseable).
+func applyResult(tc *models.TestCase, client *orkaClient, taskName, model string) bool {
+	result, ok := client.result(taskName)
+	if !ok {
+		return false
 	}
+	a, ok := parseAnalysis(result)
+	if !ok {
+		return false
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.RootCause, IsTransient: a.IsTransient}
+	tc.AIAnalysis = &models.AIAnalysis{
+		GeneratedAt:   now,
+		Model:         model,
+		RootCause:     a.RootCause,
+		Severity:      a.Severity,
+		SuggestedFix:  a.SuggestedFix,
+		RelevantFiles: a.RelevantFiles,
+		Mode:          "agentic",
+	}
+	return true
+}
+
+// setUnavailable stamps the engine's "unavailable" placeholder on a failing test
+// with no result, mirroring internal/ai/service.go (AISummary with the prefix,
+// no AIAnalysis). Returns true if it changed the test.
+func setUnavailable(tc *models.TestCase, reason string) bool {
+	if tc.AISummary != nil || tc.AIAnalysis != nil {
+		return false
+	}
+	tc.AISummary = &models.AISummary{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Summary:     unavailablePrefix + reason,
+		IsTransient: false,
+	}
+	return true
+}
+
+// markUnavailable derives the deadline/Task-phase reason (batch path) and marks
+// tc unavailable.
+func markUnavailable(tc *models.TestCase, kube *orkamig.KubeClient, namespace, taskName string) bool {
 	reason := "analysis did not complete before the deadline"
 	if kube != nil {
 		phase, err := kube.TaskPhase(context.Background(), namespace, taskName)
@@ -196,12 +222,7 @@ func markUnavailable(tc *models.TestCase, kube *orkamig.KubeClient, namespace, t
 			reason = "analysis Task " + strings.ToLower(phase)
 		}
 	}
-	tc.AISummary = &models.AISummary{
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary:     unavailablePrefix + reason,
-		IsTransient: false,
-	}
-	return true
+	return setUnavailable(tc, reason)
 }
 
 // gcTools deletes the per-build Tool CRDs for every build whose Tasks are all
@@ -244,6 +265,99 @@ func gcTools(kube *orkamig.KubeClient, namespace string, builds map[string]bool)
 	if deleted > 0 {
 		log.Printf("🧹 GC deleted %d per-build Tools for completed builds", deleted)
 	}
+}
+
+// webhookPayload is the subset of Orka's Task.webhookURL POST body we use.
+type webhookPayload struct {
+	TaskName  string `json:"taskName"`
+	Phase     string `json:"phase"`
+	ResultRef *struct {
+		Available bool `json:"available"`
+	} `json:"resultRef,omitempty"`
+}
+
+// webhookServer patches a single result into the skeleton as each Task
+// completes, driven by Orka's completion webhook instead of polling. Patches are
+// serialized so concurrent deliveries never corrupt a jobs/*.json file.
+type webhookServer struct {
+	mu      sync.Mutex
+	client  *orkaClient
+	dataDir string
+	version string
+	model   string
+}
+
+func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var p webhookPayload
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&p); err != nil || p.TaskName == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	// Act only on terminal phases; ignore intermediate notifications.
+	if orkamig.TerminalPhase(p.Phase) {
+		s.mu.Lock()
+		s.patchTask(p)
+		s.mu.Unlock()
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// patchTask finds the failing test whose content-addressed Task name matches the
+// webhook and patches its result or an unavailable placeholder.
+func (s *webhookServer) patchTask(p webhookPayload) {
+	jobFiles, _ := filepath.Glob(filepath.Join(s.dataDir, "jobs", "*.json"))
+	for _, jf := range jobFiles {
+		raw, err := os.ReadFile(jf)
+		if err != nil {
+			continue
+		}
+		var detail models.JobDetail
+		if json.Unmarshal(raw, &detail) != nil {
+			continue
+		}
+		for ri := range detail.Runs {
+			run := &detail.Runs[ri]
+			for ti := range run.TestCases {
+				tc := &run.TestCases[ti]
+				if tc.Status != "failed" {
+					continue
+				}
+				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), s.version)
+				if name != p.TaskName {
+					continue
+				}
+				if s.applyOrMark(tc, p, name) {
+					if out, err := json.MarshalIndent(detail, "", "  "); err != nil {
+						log.Printf("marshal %s: %v", jf, err)
+					} else if err := os.WriteFile(jf, out, 0o644); err != nil {
+						log.Printf("write %s: %v", jf, err)
+					} else {
+						log.Printf("🔔 patched %s (phase=%s)", p.TaskName, p.Phase)
+					}
+				}
+				return // task name is unique to one test
+			}
+		}
+	}
+}
+
+// applyOrMark patches tc from the webhook's result, or marks it unavailable with
+// a phase reason. Returns true if it changed tc.
+func (s *webhookServer) applyOrMark(tc *models.TestCase, p webhookPayload, name string) bool {
+	if tc.AIAnalysis != nil {
+		return false // already patched
+	}
+	if p.Phase == "Succeeded" && (p.ResultRef == nil || p.ResultRef.Available) {
+		if applyResult(tc, s.client, name, s.model) {
+			return true
+		}
+		return setUnavailable(tc, "analysis Task produced no readable result")
+	}
+	return setUnavailable(tc, "analysis Task "+strings.ToLower(p.Phase))
 }
 
 // analysis is the model's output JSON shape.

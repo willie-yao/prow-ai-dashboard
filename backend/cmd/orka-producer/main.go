@@ -59,6 +59,7 @@ func main() {
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
 	toolsCSV := flag.String("tools", strings.Join(defaultTools, ","), "comma-separated base Tool names to enable")
 	retries := flag.Int("retries", 1, "Task retryPolicy maxRetries for transient model/tool errors")
+	webhookURL := flag.String("webhook-url", "", "Task webhookURL for event-driven ingestion (must be a same-namespace ClusterIP service, e.g. http://orka-ingestor.orka-system.svc:8080/webhook)")
 	apply := flag.Bool("apply", false, "apply Tools+Tasks to the cluster via client-go (in-cluster or -context) instead of only writing YAML")
 	kubeContext := flag.String("context", "", "kubeconfig context to use when -apply runs outside the cluster")
 	flag.Parse()
@@ -94,7 +95,7 @@ func main() {
 				}
 				builds[run.BuildID] = buildPrefix
 				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), *version)
-				task := buildTask(name, *namespace, run.BuildID, *provider, *model, *timeout, *retries,
+				task := buildTask(name, *namespace, run.BuildID, *provider, *model, *timeout, *retries, *webhookURL,
 					buildToolNames(toolNames, run.BuildID), systemPrompt,
 					userPrompt(detail.JobID, buildPrefix, tc))
 				writeYAML(filepath.Join(*tasksOut, name+".yaml"), task)
@@ -206,7 +207,7 @@ func userPrompt(jobID, buildPrefix string, tc models.TestCase) string {
 	return b.String()
 }
 
-func buildTask(name, namespace, buildID, provider, model, timeout string, maxRetries int, tools []string, systemPrompt, prompt string) map[string]any {
+func buildTask(name, namespace, buildID, provider, model, timeout string, maxRetries int, webhookURL string, tools []string, systemPrompt, prompt string) map[string]any {
 	spec := map[string]any{
 		"type":    "ai",
 		"timeout": timeout,
@@ -220,6 +221,9 @@ func buildTask(name, namespace, buildID, provider, model, timeout string, maxRet
 	}
 	if maxRetries > 0 {
 		spec["retryPolicy"] = map[string]any{"maxRetries": maxRetries}
+	}
+	if webhookURL != "" {
+		spec["webhookURL"] = webhookURL
 	}
 	return map[string]any{
 		"apiVersion": "core.orka.ai/v1alpha1",

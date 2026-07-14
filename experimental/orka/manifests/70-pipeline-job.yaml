@@ -85,6 +85,8 @@ spec:
                 - -provider=copilot
                 - -model=claude-sonnet-4.5
                 - -version=v1
+                # Enable event-driven ingestion (apply 71-ingestor-webhook.yaml first):
+                # - -webhook-url=http://orka-ingestor.orka-system.svc:8080/webhook
               volumeMounts:
                 - { name: data, mountPath: /data }
                 - { name: config, mountPath: /config, readOnly: true }

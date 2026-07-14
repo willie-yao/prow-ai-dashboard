@@ -134,12 +134,20 @@ mounted SA token, so the ingestor needs no k8s RBAC. Manifests:
 `70-pipeline-job.yaml` (the CronJob). The apply seam was validated live: the
 producer server-side applied 64 Tools + 4 Tasks (field manager `orka-producer`).
 
-### H3 - Event-driven ingestion via Task.webhookURL
-The Task CRD supports `webhookURL`. Producer sets it on each Task pointing at a
-long-lived `orka-ingestor` Service that parses the result and patches the PVC;
-the producer becomes a fast fire-and-forget CronJob. RESPECT the chart's
-single-writer invariant: the fetcher writes the skeleton, then the ingestor is
-the sole patcher (atomic per-file rewrite or a lock).
+### H3 - Event-driven ingestion via Task.webhookURL (DONE)
+The producer's `-webhook-url` sets `spec.webhookURL` on each Task; a long-lived
+`orka-ingestor -serve` Deployment + ClusterIP Service receives Orka's completion
+webhook (`{taskName, phase, resultRef.available}`), fetches the result, and
+patches the one matching test, or marks it unavailable on Failed/Cancelled.
+Patches are mutex-serialized. Orka's SSRF guard requires a same-namespace
+ClusterIP Service with a selector (satisfied by `71-ingestor-webhook.yaml`), and
+delivery failures don't fail the Task (Orka retries), so the receiver can roll
+safely. It composes with the CronJob rather than replacing it: the job's fetcher
+still writes the skeleton and its `-wait` ingest re-applies every result from the
+result store after a refresh (the backstop), while the receiver keeps results
+current with low latency between runs. The receiver's `-version` must match the
+producer's. Validated locally: a Succeeded webhook patched the real analysis and a
+Failed webhook marked the test unavailable.
 
 ### H4 - Task lifecycle: retries, failure surfacing, Tool GC (DONE)
 The producer stamps each Task with `retryPolicy.maxRetries` (`-retries`, default
