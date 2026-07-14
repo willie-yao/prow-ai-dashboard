@@ -186,6 +186,82 @@ To run with the full CAPZ project prompt, set the `capz-analyze` Task's
 `ai.systemPrompt` to the consumer's `prompts/system.md`, and point `BUILD_PREFIX`
 in `20-gcs-tool.yaml` at the build you want to analyze.
 
+## Pipeline runbook (in-cluster, H1-H5)
+
+Beyond the single-Task spike above, the migration runs a whole consumer dashboard
+through Orka as a pipeline: `fetcher -ai=false` writes the skeleton, `orka-producer`
+turns each failing test into a content-addressed Task (plus per-build header-routed
+Tools), and `orka-ingestor` patches each result back into the skeleton the server
+serves. `experimental/orka/run-demo.sh <consumer-dir>` runs it end to end locally;
+the manifests below run it in-cluster.
+
+### Deploy
+
+```bash
+# Images (producer + ingestor; the engine image supplies the fetcher).
+docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-producer -t orka-producer:latest backend/
+docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-ingestor -t orka-ingestor:latest backend/
+kind load docker-image orka-producer:latest orka-ingestor:latest --name orka-spike
+
+# RBAC (SA orka-pipeline: create/patch Tasks+Tools, read status, delete for GC).
+kubectl apply -f experimental/orka/manifests/60-pipeline-rbac.yaml
+
+# Base Tool CRDs the producer clones per build (non-Tool docs are ignored).
+kubectl create configmap orka-base-tools -n orka-system \
+  --from-file=experimental/orka/manifests/
+
+# Consumer config: project.yaml at the root, system.md under prompts/.
+kubectl create configmap orka-consumer-config -n orka-system \
+  --from-file=project.yaml=<consumer>/project.yaml \
+  --from-file=system.md=<consumer>/prompts/system.md
+
+# A ReadWriteMany PVC named prow-ai-dashboard-data, shared with the server.
+# Then the CronJob (fetch -> produce -> -wait ingest), and optionally the
+# event-driven receiver.
+kubectl apply -f experimental/orka/manifests/70-pipeline-job.yaml
+kubectl apply -f experimental/orka/manifests/71-ingestor-webhook.yaml   # optional (H3)
+```
+
+For event-driven ingestion, apply `71` first, then uncomment `-webhook-url` in the
+`70` produce step so each Task notifies the receiver on completion.
+
+### Operate
+
+```bash
+# Trigger a run now (instead of waiting for the schedule).
+kubectl create job -n orka-system --from=cronjob/orka-pipeline orka-run-1
+
+# Analysis coverage: the ingestor logs a "📊 N failing: analyzed/unavailable/
+# pending" summary, and the -serve receiver exposes it as JSON.
+kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
+kubectl exec -n orka-system deploy/orka-ingestor -- wget -qO- localhost:8080/status
+
+# Per-Task state.
+kubectl get tasks -n orka-system -l app.kubernetes.io/managed-by=orka-producer
+
+# Force re-analysis after a prompt/tool change: bump -version on BOTH the produce
+# step and (if used) the receiver Deployment; the Task name embeds the version, so
+# old cached Tasks are ignored and new ones are created.
+```
+
+### Troubleshoot
+
+- **Results stay `pending`.** Tasks not finishing: check `kubectl get tasks` for
+  `Running`/`Failed`, the ai-worker logs, and the iteration cap (see constraints).
+  The `-wait` ingest only marks `unavailable` at its deadline.
+- **A test shows "AI analysis unavailable: analysis Task ...".** Expected honest
+  surfacing of a `Failed`/`Cancelled`/missing Task, not a silent blank. Inspect
+  that Task and re-run (bump `-version`) once the cause is fixed.
+- **Webhook never fires.** Orka's SSRF guard requires a same-namespace ClusterIP
+  Service with a selector; `71` satisfies this. Delivery failures don't fail the
+  Task (Orka retries), so a rolling receiver is safe. Confirm the receiver
+  `-version` matches the producer's, or Task names won't match.
+- **AI fields vanished after a run.** A fresh skeleton has no AI fields; the
+  CronJob's `-wait` ingest re-applies them from the Orka result store. Keep exactly
+  one writer to the PVC (the pipeline), per the chart invariant.
+- **Tool CRDs pile up.** The ingestor `-gc` deletes a build's per-build Tools once
+  its Tasks are terminal; unlabeled Tools are never touched.
+
 ## Teardown
 
 ```bash

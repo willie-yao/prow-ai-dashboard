@@ -65,7 +65,13 @@ func main() {
 		srv := &webhookServer{client: client, dataDir: *dataDir, version: *version, model: *model}
 		http.HandleFunc("/webhook", srv.handle)
 		http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		log.Printf("🔔 webhook receiver listening on %s (data=%s version=%s)", *addr, *dataDir, *version)
+		http.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(skeletonStatus(*dataDir, *version))
+		})
+		st := skeletonStatus(*dataDir, *version)
+		log.Printf("🔔 webhook receiver on %s (data=%s version=%s); %d failing: %d analyzed, %d unavailable, %d pending",
+			*addr, *dataDir, *version, st.Failing, st.Analyzed, st.Unavailable, st.Pending)
 		log.Fatal(http.ListenAndServe(*addr, nil))
 	}
 
@@ -89,6 +95,53 @@ func main() {
 	if *gc && kube != nil {
 		gcTools(kube, *namespace, builds)
 	}
+
+	st := skeletonStatus(*dataDir, *version)
+	log.Printf("📊 %d failing tests: %d analyzed, %d unavailable, %d pending",
+		st.Failing, st.Analyzed, st.Unavailable, st.Pending)
+}
+
+// status is the analysis coverage of the skeleton, for logs and the /status endpoint.
+type status struct {
+	Failing     int `json:"failing"`
+	Analyzed    int `json:"analyzed"`
+	Unavailable int `json:"unavailable"`
+	Pending     int `json:"pending"`
+}
+
+// skeletonStatus counts, across all failing tests, how many have a real analysis,
+// how many are marked unavailable, and how many are still awaiting a result.
+func skeletonStatus(dataDir, version string) status {
+	var st status
+	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
+	for _, jf := range jobFiles {
+		raw, err := os.ReadFile(jf)
+		if err != nil {
+			continue
+		}
+		var detail models.JobDetail
+		if json.Unmarshal(raw, &detail) != nil {
+			continue
+		}
+		for ri := range detail.Runs {
+			for ti := range detail.Runs[ri].TestCases {
+				tc := &detail.Runs[ri].TestCases[ti]
+				if tc.Status != "failed" {
+					continue
+				}
+				st.Failing++
+				switch {
+				case tc.AIAnalysis != nil:
+					st.Analyzed++
+				case tc.AISummary != nil && strings.HasPrefix(tc.AISummary.Summary, unavailablePrefix):
+					st.Unavailable++
+				default:
+					st.Pending++
+				}
+			}
+		}
+	}
+	return st
 }
 
 // newKubeClient builds a KubeClient, or returns nil (logged) when unavailable.

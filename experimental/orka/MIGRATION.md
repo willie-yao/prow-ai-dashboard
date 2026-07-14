@@ -160,11 +160,16 @@ it deletes a build's per-build Tools once that build's Tasks are all terminal
 as unavailable with the right reason, and GC deleted 64 build-labeled Tools after
 their Tasks were gone.
 
-### H5 - Observability + ops runbook
-Metrics/logs (tasks created/succeeded/failed/ingested, mean iters, tokens), alert
-on failure rate + ingestion lag, and a runbook under experimental/orka.
+### H5 - Observability + ops runbook (DONE)
+The ingestor derives an analysis-coverage summary from the skeleton
+(`failing`/`analyzed`/`unavailable`/`pending`), logs it as a `📊` line at the end
+of every batch run, and the `-serve` receiver exposes it as JSON at `/status`
+(plus `/healthz`). No new dependency (no Prometheus). The operator runbook lives
+in `experimental/orka/README.md` (Pipeline runbook: deploy, operate - trigger a
+run, read coverage, force re-analysis - and troubleshoot). Deliberately lean for
+an experiment; a Prometheus `/metrics` surface is a later add if this graduates.
 
-Sequencing: H1 -> H2 -> (H3, H4 parallel) -> H5.
+Sequencing: H1 -> H2 -> (H3, H4 parallel) -> H5. All DONE.
 
 ## Future / strategic steps
 
