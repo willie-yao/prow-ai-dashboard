@@ -80,6 +80,11 @@ manifests/
   30-tools.yaml            Filesystem Tool CRDs (list/find/grep/read/tail).
   35-k8s-tools.yaml        k8s discovery Tool CRDs (discover-clusters, find-my-cluster, ...).
   36-validate-tool.yaml    Deterministic validate-analysis Tool (hallucinated-citation guard).
+  37-verify-timeline.yaml  Deterministic verify-timeline Tool (ordered events for a resource).
+  38-transient-signatures.yaml  Deterministic transient-signature classifier Tool.
+  39-recurrence.yaml       Deterministic recurrence Tool (cross-build failure count).
+  40-diff-last-passing.yaml     Deterministic diff-vs-last-green-build Tool.
+  41-required-evidence.yaml     Deterministic required-evidence (triage) Tool.
   40-example-tasks.yaml    hello-world (Q1) and capz-analyze (Q2) Tasks.
   50-copilot-proxy.yaml    Header-injecting proxy so Orka can reach Copilot.
 ```
