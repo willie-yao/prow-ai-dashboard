@@ -106,3 +106,80 @@ contract). Keeps classification comparable-or-better than the engine.
 Event-driven producer (GCS watcher) instead of cron; native RepositoryScan-style
 remediation (issues/fix-PRs); tearing out the engine's in-process AI. Those come
 after a working end-to-end batch demo.
+
+## Hardening roadmap (make it a real in-cluster deploy, not a laptop script)
+
+Today the pipeline runs from `run-demo.sh` on a laptop against the `orka-spike`
+kind cluster, polling for results, with Copilot behind a de-streaming proxy. The
+target is an in-cluster deploy that slots into the existing Helm chart
+(`deploy/helm/prow-ai-dashboard`): fetcher/producer/ingestor share the chart's
+ReadWriteMany PVC at `/data`, and the existing server Deployment serves the
+Orka-produced JSON with no frontend change.
+
+### H1 - Containerize producer + ingestor
+Add `orka-producer` + `orka-ingestor` to the image build (extend the Dockerfile
+or a separate orka image target). Both build clean today. Low risk.
+
+### H2 - In-cluster run-once Job (RBAC, port run-demo.sh)
+Port the demo script into a Job/CronJob against the shared PVC: fetcher(-ai=false)
+-> producer -> apply Tasks+Tools -> poll -> ingestor. Add a ServiceAccount +
+Role/RoleBinding for create/get/list on `tasks.core.orka.ai` + `tools.core.orka.ai`;
+the SA token doubles as the result-API bearer (TokenReview accepts any SA token).
+OPEN DECISION: producer/ingestor create objects via client-go (adds a dependency
+the engine deliberately avoided, so guard it to the orka cmds) vs a
+kubectl-bearing image that applies the emitted YAML. Ingestion still polls here.
+
+DECIDED: client-go, guarded to the orka cmds (backend/cmd/orka-* + a small
+orkamig k8s client helper); the engine core stays client-go-free. Ingestion
+still polls here.
+
+### H3 - Event-driven ingestion via Task.webhookURL
+The Task CRD supports `webhookURL`. Producer sets it on each Task pointing at a
+long-lived `orka-ingestor` Service that parses the result and patches the PVC;
+the producer becomes a fast fire-and-forget CronJob. RESPECT the chart's
+single-writer invariant: the fetcher writes the skeleton, then the ingestor is
+the sole patcher (atomic per-file rewrite or a lock).
+
+### H4 - Task lifecycle: retries, failure surfacing, Tool GC
+Use the Task `retryPolicy` for transient model/tool errors. The ingestor surfaces
+a Failed / max-iters Task as analysis-unavailable on that test (honest dashboard,
+never a silent skip). GC per-build Tool CRDs (label by build/run and delete once
+that build's Tasks are terminal, or ownerReference them to a per-run ConfigMap)
+so the base x builds Tool set does not grow unbounded.
+
+### H5 - Observability + ops runbook
+Metrics/logs (tasks created/succeeded/failed/ingested, mean iters, tokens), alert
+on failure rate + ingestion lag, and a runbook under experimental/orka.
+
+Sequencing: H1 -> H2 -> (H3, H4 parallel) -> H5.
+
+## Future / strategic steps
+
+### F1 - Point the Provider at the in-cluster Dynamo/Kimi stack (drop Copilot)
+Swap the Copilot Provider (11) for one aimed at the in-cluster model service and
+delete the de-streaming proxy (50) + Copilot-Integration-Id header. Re-validate
+quality on the in-cluster model (Kimi needed softer prompts + a higher iter cap).
+Removes the only external dependency and the rate limit; the biggest unknown is
+quality/tuning parity. Independent of the H-series; high value.
+
+### F2 - Generalize the producer for a second consumer
+Only capz today. Generalize per-build tool routing + skills for another consumer
+(capi/kubelet/dynamo/qwen) and validate one more end to end.
+
+### F3 - Larger adjudicated batch / outcome ground truth
+Beyond the 15-failure A2: a larger adjudicated batch + outcome-based labels with a
+CAPZ expert to firm up the comparable-or-better claim.
+
+### F4 - Port remediation (issues / fix-PR) to Orka
+Move the on-demand issue/fix-PR agentic loop to an Orka RepositoryScan-style flow.
+Unlocks the Tier C deletions (internal/actions, internal/fixpr, internal/issues,
+toolloop.go, tools/).
+
+### F5 - Decommission the in-engine analysis path (Tier A deletions)
+Once Orka is the default and F1-F4 are proven, delete the fetcher's in-process
+agentic analysis (service.go, agentic.go, critique.go, cache.go, modules/,
+pattern/semantic) and add a Helm `analysis: orka|inprocess` switch.
+
+### F6 - Productization decision
+Fork vs keep-on-branch vs upstream-as-selectable-backend, based on manager
+interest + F1-F5 outcomes.
