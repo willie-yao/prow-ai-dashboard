@@ -73,10 +73,11 @@ writers + `internal/models`). Idempotent; safe to re-run as Tasks complete.
 
 ### M4 - Orchestrate + deploy on the branch
 
-A CronJob (or Make target for the demo) that runs fetcher(no-AI) -> producer ->
-poll until Tasks settle -> ingestor -> publish the data dir the frontend serves.
-Manifests under `experimental/orka/`. gcs-tool + copilot-proxy + Orka already
-deployed. Exit: a real capz dashboard rendered from Orka-produced analyses.
+`experimental/orka/run-demo.sh <consumer-dir>` runs the whole pipeline against the
+`orka-spike` cluster: fetcher(no-AI) -> producer -> apply Tools+Tasks -> poll ->
+ingestor -> a renderable data dir. Validated end to end (patched 4/4 failing tests
+into a real capz dashboard). A fully in-cluster CronJob (containerized producer +
+ingestor with RBAC) is the hardening step after this local demo.
 
 ### M5 - Quality contract in the Task (from A2 findings)
 
