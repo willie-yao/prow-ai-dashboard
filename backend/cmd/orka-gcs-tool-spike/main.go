@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -35,7 +36,6 @@ func env(key, def string) string {
 func main() {
 	bucket := env("BUCKET", "kubernetes-ci-logs")
 	buildPrefix := env("BUILD_PREFIX", "logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/")
-	display := env("DISPLAY", buildPrefix)
 	addr := env("ADDR", ":8080")
 
 	backend, err := storage.New(storage.Config{Provider: storage.ProviderGCS, Bucket: bucket}, nil)
@@ -43,38 +43,25 @@ func main() {
 		log.Fatalf("storage.New: %v", err)
 	}
 	factory := artifacts.NewBackendFactory(backend, bucket)
-	browser := factory.ForBuild(buildPrefix, display)
 
 	reg := tools.NewRegistry()
 	filesystem.Register(reg)
 	k8s.Register(reg)
 
-	webURLBase := backend.WebURL(buildPrefix)
-
-	newEnv := func() *tools.Env {
-		return &tools.Env{
-			Browser:             browser,
-			Cache:               tools.NewCache(),
-			WebURLBase:          webURLBase,
-			RemainingModelBytes: 1 << 30,
-			RemainingGCSBytes:   1 << 30,
-		}
-	}
+	// The resolver serves any build per-request (via the "build" body field or
+	// the X-Build-Prefix header), so one shared service backs many concurrent
+	// per-build analysis Tasks. Absent a selector, it uses BUILD_PREFIX.
+	resolver := newBuildResolver(backend, factory, bucket, buildPrefix)
 
 	// Self-registered deterministic quality tools each live in their own file
-	// and register via registerQTool (see validate.go for the template). They
-	// share this build-scoped toolEnv; cross-build tools use backend/factory.
-	tenv := &toolEnv{
-		backend:         backend,
-		bucket:          bucket,
-		buildPrefix:     buildPrefix,
-		webURLBase:      webURLBase,
-		browser:         browser,
-		browserForBuild: factory.ForBuild,
-	}
+	// and register via registerQTool (see validate.go for the template). Each
+	// request resolves its own build-scoped toolEnv.
 	for _, qt := range qtools {
 		qt := qt
 		http.HandleFunc(qt.route, func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			tenv := resolver.toolEnvFor(requestBuild(r, body))
+			r.Body = io.NopCloser(bytes.NewReader(body))
 			qt.h(tenv, w, r)
 		})
 	}
@@ -97,7 +84,9 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
-		res := reg.Dispatch(ctx, newEnv(), name, json.RawMessage(raw))
+		// Engine tools ignore the extra "build" field; the resolver uses it to
+		// pick the build-scoped Env.
+		res := reg.Dispatch(ctx, resolver.aiEnv(requestBuild(r, raw)), name, json.RawMessage(raw))
 		log.Printf("🛠  %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(res.Payload)

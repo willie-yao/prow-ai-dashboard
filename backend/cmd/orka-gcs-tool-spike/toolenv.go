@@ -5,13 +5,122 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-// toolEnv is the per-process context handed to every self-registered quality
+// buildResolver serves any build from one process so a single shared tool
+// service can back many concurrent per-build analysis Tasks. A request selects
+// its build via the "build" field in the JSON body or the X-Build-Prefix header;
+// absent that, defaultPrefix is used. Browsers and per-build caches are memoized.
+type buildResolver struct {
+	backend       storage.Backend
+	factory       *artifacts.BackendFactory
+	bucket        string
+	defaultPrefix string
+
+	mu       sync.Mutex
+	browsers map[string]artifacts.Browser
+	caches   map[string]*tools.Cache
+}
+
+func newBuildResolver(backend storage.Backend, factory *artifacts.BackendFactory, bucket, defaultPrefix string) *buildResolver {
+	return &buildResolver{
+		backend: backend, factory: factory, bucket: bucket,
+		defaultPrefix: normalizeBuildPrefix(defaultPrefix),
+		browsers:      map[string]artifacts.Browser{},
+		caches:        map[string]*tools.Cache{},
+	}
+}
+
+func normalizeBuildPrefix(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
+}
+
+// resolve returns the Browser + web-URL base + normalized prefix for a build.
+func (r *buildResolver) resolve(prefix string) (artifacts.Browser, string, string) {
+	prefix = normalizeBuildPrefix(prefix)
+	if prefix == "" {
+		prefix = r.defaultPrefix
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	b, ok := r.browsers[prefix]
+	if !ok {
+		b = r.factory.ForBuild(prefix, prefix)
+		r.browsers[prefix] = b
+	}
+	return b, r.backend.WebURL(prefix), prefix
+}
+
+func (r *buildResolver) cache(prefix string) *tools.Cache {
+	prefix = normalizeBuildPrefix(prefix)
+	if prefix == "" {
+		prefix = r.defaultPrefix
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c, ok := r.caches[prefix]
+	if !ok {
+		c = tools.NewCache()
+		r.caches[prefix] = c
+	}
+	return c
+}
+
+// aiEnv builds the engine-tool Env for a build.
+func (r *buildResolver) aiEnv(prefix string) *tools.Env {
+	b, web, p := r.resolve(prefix)
+	return &tools.Env{
+		Browser:             b,
+		Cache:               r.cache(p),
+		WebURLBase:          web,
+		RemainingModelBytes: 1 << 30,
+		RemainingGCSBytes:   1 << 30,
+	}
+}
+
+// toolEnvFor builds the quality-tool toolEnv for a build.
+func (r *buildResolver) toolEnvFor(prefix string) *toolEnv {
+	b, web, p := r.resolve(prefix)
+	return &toolEnv{
+		backend:         r.backend,
+		bucket:          r.bucket,
+		buildPrefix:     p,
+		webURLBase:      web,
+		browser:         b,
+		browserForBuild: r.factory.ForBuild,
+	}
+}
+
+// requestBuild extracts the caller-selected build prefix from the X-Build-Prefix
+// header (preferred) or a "build" field in the JSON body. Empty means default.
+func requestBuild(r *http.Request, body []byte) string {
+	if h := strings.TrimSpace(r.Header.Get("X-Build-Prefix")); h != "" {
+		return h
+	}
+	var meta struct {
+		Build string `json:"build"`
+	}
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &meta)
+	}
+	return meta.Build
+}
+
+// toolEnv is the per-request context handed to every self-registered quality
 // tool. It exposes the build-scoped Browser plus the raw backend and a factory
 // so cross-build tools (recurrence, diff_last_passing) can reach other builds.
 type toolEnv struct {
