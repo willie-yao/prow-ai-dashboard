@@ -1,0 +1,145 @@
+# Kimi-K2-Instruct-0905 on Ray: the most up-to-date Kimi the stock ray-llm image
+# (vLLM 0.11.0) can serve. Arch DeepseekV3ForCausalLM (vLLM-supported), fp8,
+# ~1.03 TB, TP=16 across two H100 nodes -- the same shape Dynamo uses for Kimi.
+#
+# Weights are pre-staged on shared Lustre (pvc-lustre-ray) by
+# kimi-0905-download-job.yaml and read offline (HF_HUB_OFFLINE=1). This is a
+# separate hub/ dir from Dynamo's Kimi-K2.7-Code, so the two coexist untouched.
+#
+# Deploy:  kubectl apply -f deploy/ray/rayservice-kimi-0905.yaml
+# Watch:   kubectl get rayservice kimi-0905 -w
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: kimi-0905
+  namespace: default
+spec:
+  serveConfigV2: |
+    applications:
+    - name: llm
+      import_path: ray.serve.llm:build_openai_app
+      route_prefix: "/"
+      # Ray strength: ship a deploy-time dependency without rebuilding the image.
+      # The Kimi/DeepSeek tiktoken tokenizer needs `blobfile`, which the stock
+      # ray-llm image lacks. Dynamo/NVIDIA bake it into a custom image; here it's
+      # one declarative line.
+      runtime_env:
+        pip: ["blobfile", "runai-model-streamer", "runai-model-streamer[s3]"]
+      args:
+        llm_configs:
+        - model_loading_config:
+            model_id: moonshotai/Kimi-K2-Instruct-0905
+            model_source: moonshotai/Kimi-K2-Instruct-0905
+          accelerator_type: H100
+          engine_kwargs:
+            # 16-way TP spanning 2 nodes (8 H100 each) via a Ray placement group.
+            tensor_parallel_size: 16
+            distributed_executor_backend: ray
+            # fp8 is auto-detected from the model's quantization_config.
+            # Conservative context for bring-up (weights ~1TB leave ~120-180GB
+            # for KV cache across 16 GPUs); raise once stable.
+            max_model_len: 32768
+            max_num_batched_tokens: 16384
+            gpu_memory_utilization: 0.9
+            trust_remote_code: true
+            # Fast parallel loader for the ~1TB weights off striped Lustre. The
+            # default safetensors loader crawls (~150s/shard, ~2.8h); runai_streamer
+            # saturates the OSTs with concurrent streams (this is why Dynamo uses
+            # it for Kimi). Needs runai-model-streamer (added via runtime_env).
+            load_format: runai_streamer
+            # Kimi-K2 tool calling (vLLM 0.11.0 ships kimi_k2_tool_parser).
+            enable_auto_tool_choice: true
+            tool_call_parser: kimi_k2
+          deployment_config:
+            max_ongoing_requests: 128
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 1
+              target_ongoing_requests: 32
+  rayClusterConfig:
+    rayVersion: "2.52.0"
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+        num-gpus: "0"
+      template:
+        spec:
+          nodeSelector:
+            agentpool: nodepool1
+          containers:
+          - name: ray-head
+            image: rayproject/ray-llm:2.52.0-py311-cu128
+            ports:
+            - {containerPort: 8000, name: serve}
+            - {containerPort: 8265, name: dashboard}
+            - {containerPort: 6379, name: gcs}
+            - {containerPort: 10001, name: client}
+            resources:
+              requests: {cpu: "2", memory: "8Gi"}
+              limits: {cpu: "4", memory: "16Gi"}
+    workerGroupSpecs:
+    - groupName: h100
+      replicas: 2
+      minReplicas: 2
+      maxReplicas: 2
+      numOfHosts: 1
+      rayStartParams:
+        num-gpus: "8"
+      template:
+        spec:
+          nodeSelector:
+            agentpool: ndh100pool
+          affinity:
+            podAntiAffinity:
+              # Spread the two Kimi workers one-per-node. The 72B validation
+              # occupies two other nodes (8 GPU each), so these land on the two
+              # free H100 nodes automatically.
+              requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: ray.io/group
+                    operator: In
+                    values: ["h100"]
+                topologyKey: kubernetes.io/hostname
+          volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 256Gi
+          - name: model-cache
+            persistentVolumeClaim:
+              claimName: pvc-lustre-ray
+          containers:
+          - name: ray-worker
+            image: rayproject/ray-llm:2.52.0-py311-cu128
+            env:
+            - {name: HF_HOME, value: /mnt/model-cache}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            # ray runs as uid 1000; Lustre HF_HOME is root-owned, so point the
+            # trust_remote_code module cache at a writable per-pod path.
+            - {name: HF_MODULES_CACHE, value: /tmp/hf_modules}
+            # runai_streamer parallel read concurrency for the Lustre load.
+            - {name: RUNAI_STREAMER_CONCURRENCY, value: "16"}
+            # InfiniBand / RDMA for cross-node NCCL.
+            - {name: NCCL_IB_DISABLE, value: "0"}
+            - {name: NCCL_SOCKET_IFNAME, value: eth0}
+            - {name: GLOO_SOCKET_IFNAME, value: eth0}
+            - {name: NVIDIA_GDRCOPY, value: enabled}
+            - {name: PYTHONHASHSEED, value: "0"}
+            securityContext:
+              capabilities:
+                add: ["IPC_LOCK", "SYS_RESOURCE"]
+            volumeMounts:
+            - {name: dshm, mountPath: /dev/shm}
+            - {name: model-cache, mountPath: /mnt/model-cache}
+            resources:
+              requests:
+                cpu: "40"
+                memory: "800Gi"
+                nvidia.com/gpu: "8"
+                rdma/hca_shared_devices_a: "1"
+              limits:
+                cpu: "80"
+                memory: "1600Gi"
+                nvidia.com/gpu: "8"
+                rdma/hca_shared_devices_a: "1"

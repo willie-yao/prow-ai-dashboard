@@ -1,0 +1,65 @@
+# Download Kimi-K2-Instruct-0905 (~1.03 TB fp8, DeepseekV3ForCausalLM) onto the
+# shared Lustre PVC so both Ray TP workers read one copy. Most up-to-date Kimi
+# whose architecture the stock ray-llm vLLM (0.11.0) supports (K2.5/K2.6/K2.7
+# use the unsupported KimiK25ForConditionalGeneration).
+#
+# Robust/idempotent by design:
+#  - `pip uninstall hf-xet` forces the standard HTTP path. The repo is Xet-backed,
+#    so hf-xet's high-performance mode retries a failing CAS fetch *silently and
+#    forever* -> a stuck download with frozen .incomplete files and no error.
+#    Without it, a bad shard fails fast with a clear error instead of hanging.
+#  - `until hf download ...; do sleep 300; done` retries through transient HF Xet
+#    CAS outages (cas-bridge 403/500 waves) and resumes -- it skips already-
+#    complete shards and only fetches what's missing.
+#
+# HF_HOME=/mnt/model-cache matches what the RayService expects (+ HF_HUB_OFFLINE).
+# After it completes, restripe the 0905 blobs ONLY with `lfs migrate -c 4` before
+# serving (never the shared hub/ or Dynamo's Kimi-K2.7-Code dir).
+#
+#   kubectl apply -f deploy/ray/kimi-0905-download-job.yaml
+#   kubectl logs -f job/model-download-kimi-k2-instruct-0905
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-download-kimi-k2-instruct-0905
+  namespace: default
+spec:
+  backoffLimit: 2
+  # Safety cap: give the retry loop up to 6h to ride out an HF Xet outage.
+  activeDeadlineSeconds: 21600
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        agentpool: ndh100pool
+      containers:
+        - name: download
+          image: python:3.10-slim
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eux
+              pip install --no-cache-dir huggingface_hub==1.16.4
+              pip uninstall -y hf-xet || true
+              until hf download moonshotai/Kimi-K2-Instruct-0905; do
+                echo "download attempt failed (likely HF Xet CAS 403/500); retrying in 5m..."
+                sleep 300
+              done
+              echo "download complete"
+          env:
+            - name: HF_HOME
+              value: /mnt/model-cache
+            - name: HF_HUB_DISABLE_XET
+              value: "1"
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token-secret
+                  key: HF_TOKEN
+          volumeMounts:
+            - name: model-cache
+              mountPath: /mnt/model-cache
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: pvc-lustre-ray
