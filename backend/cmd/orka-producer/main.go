@@ -122,7 +122,23 @@ logs. For a transient-vs-bug decision, confirm any transient claim with
 verify_timeline (did the expected operation actually register?) and
 check_transient_signatures, and consult recurrence. Default to is_transient=false
 unless a known transient class is proven from the evidence. Call validate_analysis
-on every artifact path you cite. Respond with ONLY the required JSON object.`
+on every artifact path you cite.
+
+## Self-critique before you finalize
+Before emitting your JSON, re-check your own draft for these specific defects and
+revise if any applies:
+1. Causal ordering: is your root_cause the EARLIEST initiating failure, or a later
+   downstream/teardown symptom (namespace/cluster deletion, cleanup timeout,
+   credential expiry, a cascade of dependent timeouts)? Those happen AFTER the
+   real failure.
+2. Attribution: if you blamed an external/platform cause (throttling, a hung Azure
+   operation, upstream flakiness) and set is_transient=true, did verify_timeline
+   actually show the expected operation never registered? If you did not confirm
+   it, treat the failure as a real bug (is_transient=false).
+3. Grounding: is every claim tied to evidence you actually read (validate_analysis
+   passed), not plausible-sounding speculation?
+4. Fix validity: would suggested_fix actually resolve the stated root_cause?
+Respond with ONLY the required JSON object.`
 
 func userPrompt(jobID, buildPrefix string, tc models.TestCase) string {
 	var b strings.Builder
