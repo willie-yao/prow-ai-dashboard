@@ -1,9 +1,17 @@
-# Builds one of the experimental Orka shims from the backend module. Select which
-# with the CMD build-arg. Build context MUST be the backend/ directory:
+# Builds one of the experimental Orka binaries from the backend module. Select
+# which with the CMD build-arg. Build context MUST be the backend/ directory.
+#
+# Long-lived shims (serve on :8080):
 #   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool-spike \
 #     -t orka-gcs-tool-spike:latest backend/
 #   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-copilot-proxy \
 #     -t orka-copilot-proxy:latest backend/
+#
+# Pipeline batch binaries (run to completion; take flags, see -h):
+#   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-producer \
+#     -t orka-producer:latest backend/
+#   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-ingestor \
+#     -t orka-ingestor:latest backend/
 FROM golang:1.25.12-bookworm AS build
 ARG CMD=orka-gcs-tool-spike
 WORKDIR /src
