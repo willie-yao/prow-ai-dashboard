@@ -1,5 +1,5 @@
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca..cff0a1b 100644
+index 47bc4ca..7de0ddd 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -929,9 +929,9 @@ func executeAgentLoopWithEvents(
@@ -14,7 +14,19 @@ index 47bc4ca..cff0a1b 100644
  	}
  	if coordinationEnv.AutonomousMode {
  		maxIterations = 100
-@@ -955,6 +955,18 @@ func executeAgentLoopWithEvents(
+@@ -946,6 +946,11 @@ func executeAgentLoopWithEvents(
+ 		return "", err
+ 	}
+ 
++	// Critique gate budget: how many times a transient verdict unsupported by a
++	// verify_timeline confirmation may be re-prompted before the answer is taken.
++	critiqueRetries := 0
++	const maxCritiqueRetries = 2
++
+ 	for iteration := range maxIterations {
+ 		stepCtx, stepSpan := startAgentStepSpan(ctx, iteration, provider, model, llmTools, baseToolCtx)
+ 		req := &llm.CompletionRequest{
+@@ -955,6 +960,18 @@ func executeAgentLoopWithEvents(
  			MaxTokens:    4096,
  			Tools:        llmTools,
  		}
@@ -33,7 +45,7 @@ index 47bc4ca..cff0a1b 100644
  		common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeModelRequestStarted, modelLoopEventTimeout,
  			common.WithEventSummary("model request started"),
  			common.WithEventContent(eventContent(map[string]any{
-@@ -1026,8 +1038,19 @@ func executeAgentLoopWithEvents(
+@@ -1026,8 +1043,34 @@ func executeAgentLoopWithEvents(
  			common.WithEventContentText(resp.Content),
  		)
  
@@ -51,6 +63,48 @@ index 47bc4ca..cff0a1b 100644
 +				stepSpan.End()
 +				continue
 +			}
++			// Critique gate: a transient verdict must be earned. If the model set
++			// is_transient=true but never called verify_timeline to confirm the
++			// failing operation was actually dropped or never completed, re-prompt
++			// with the engine's contract (confirm or default to a real bug). A
++			// generic "context deadline exceeded" or signature match is background
++			// noise in CI logs, not proof of a transient.
++			if critiqueRetries < maxCritiqueRetries && iteration < maxIterations-1 && transientWithoutTimeline(resp.Content, messages) {
++				critiqueRetries++
++				messages = append(messages,
++					llm.Message{Role: "assistant", Content: resp.Content},
++					llm.Message{Role: "user", Content: "You set is_transient=true but never called verify_timeline to confirm the failing operation was actually dropped, throttled, or never registered. A bare 'context deadline exceeded' or a transient-signature match is background noise in CI logs, not proof. Call verify_timeline now to confirm the specific operation recovered or never completed; if you cannot prove a known transient class from the timeline, set is_transient=false (default to a real bug). Then re-emit your final JSON."},
++				)
++				stepSpan.End()
++				continue
++			}
  			stepSpan.End()
  			return resp.Content, nil
  		}
+@@ -1171,6 +1214,26 @@ func executeAgentLoopWithEvents(
+ 	return "", fmt.Errorf("max iterations reached without completion")
+ }
+ 
++// transientWithoutTimeline reports whether the final answer claims
++// is_transient=true while the model never called verify_timeline to confirm it.
++// It backs the critique gate: a transient verdict must be earned with a timeline
++// confirmation, matching the engine's "default to bug unless proven" contract.
++func transientWithoutTimeline(content string, messages []llm.Message) bool {
++	compact := strings.NewReplacer(" ", "", "\n", "", "\t", "").Replace(content)
++	if !strings.Contains(compact, `"is_transient":true`) {
++		return false
++	}
++	for _, m := range messages {
++		for _, tc := range m.ToolCalls {
++			name := strings.ToLower(tc.Name)
++			if strings.Contains(name, "verify-timeline") || strings.Contains(name, "verify_timeline") {
++				return false
++			}
++		}
++	}
++	return true
++}
++
+ func approvalToolingRequested(coordinationEnv workerenv.CoordinationEnv, allowedToolCalls map[string]struct{}) bool {
+ 	if len(coordinationEnv.ApprovalRequiredTools) > 0 {
+ 		return true

@@ -332,3 +332,21 @@ engine's convergence robustness on the same cheap model. This closes gap #1
 model-limited and remains the target of the deterministic critique gate
 (G-Critique, not yet built). Worker changes are Orka-side (carried as a patch, to
 be upstreamed).
+
+## G-Critique (DONE): deterministic transient-discipline gate
+
+Added a worker-side critique gate (in the same patch): when the final answer sets
+is_transient=true but the model never called verify_timeline, the loop re-prompts
+(up to twice) with the engine's "confirm the failing operation with verify_timeline
+or default to a real bug" contract. Measured on Orka+gemini-3.5-flash, transient
+verdicts that consulted verify_timeline went from 3/8 to **11/11**. IMPORTANT honest
+limit: the gate enforces the DISCIPLINE, not the CLASSIFICATION. On gemini the azl3
+etcd-join cases stayed mislabeled transient - the weak model now calls
+verify_timeline but still misreads it and concludes transient. Forcing the model to
+LOOK at the timeline does not make a weak model REASON correctly about it.
+Classification correctness on the ambiguous ~two-thirds of failures is model-bound
+(claude gets them right, gemini does not); the gate is a model-independent process
+guardrail (a transient claim must be grounded in a timeline check) that pays off
+most with a capable model. Net across G-Converge + G-Critique: Orka now matches the
+engine's PROCESS on a cheap model (converges 15/15, transient discipline 11/11), and
+the residual quality gap is pure model capability, not harness.
