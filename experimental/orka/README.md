@@ -1,277 +1,55 @@
-# Orka experiment (isolated)
+# Orka backend (experimental)
 
-This directory holds a self-contained experiment that runs the dashboard's AI
-analysis through [Orka](https://github.com/orka-agents/orka), a Kubernetes-native
-agent orchestration platform, instead of the engine's built-in agentic loop. It
-lives on the `orka` branch and touches nothing in `main`.
+Runs the dashboard's AI failure analysis through
+[Orka](https://github.com/orka-agents/orka), a Kubernetes-native agent
+orchestration platform, instead of the engine's in-process agentic loop. Discovery
+and output are unchanged; only the per-failure analysis step moves to Orka Tasks
+that run alongside your inference stack.
 
-> **Temporary / experimental.** Everything in `experimental/orka/` and
-> `backend/cmd/orka-gcs-tool-spike/` exists only on the `orka` branch to support
-> this evaluation. None of it is wired into any deploy, the Dockerfile, CI, or
-> `main`. Delete both when the evaluation concludes or if Orka is not adopted; no
-> production code depends on them.
+> Experimental, `orka` branch only. Nothing here is wired into `main`, CI, or the
+> product image. No production code depends on it.
 
-The question being evaluated: could Orka do "all the dashboard info without any
-custom agent code"?
+## Docs
 
-## Findings summary
+- **[USAGE.md](USAGE.md)** - how to deploy and run the Orka path, the config it
+  reads, and the knobs. Start here.
+- **[MIGRATION.md](MIGRATION.md)** - the evaluation (what was proven, the
+  same-model control, the honest cost/quality trade) and the productization
+  recommendation.
+- **[worker-patches/](worker-patches/)** - the required Orka ai-worker changes
+  (convergence + transient-critique) and the numbers behind them.
 
-Full write-up: the session's `orka-evaluation-spike.md`. Short version:
+## Headline finding
 
-- **Model access works.** An Orka Provider against an OpenAI-compatible endpoint
-  drives a `type: ai` Task end to end (GitHub Models and, via the proxy, Copilot).
-- **GCS tools work.** The engine's real filesystem + k8s tools, exposed over HTTP
-  by the shim here, let an Orka agent run a genuine multi-round investigation and
-  produce a correct, artifact-grounded root cause. No custom orchestration code.
-- **Parity depth is reachable on Copilot.** With Copilot (large context) + the
-  de-streaming proxy + the k8s discovery tier + a raised iteration cap, an Orka
-  Task independently found the right per-spec cluster, read its Azure activity
-  log, and produced a completed, grounded RCA matching the engine's investigative
-  depth (11 tool calls vs the engine's 21).
-- **The remaining gap is classification, not depth.** On the sample failure the
-  engine and Orka+Copilot read the SAME activity log but diverged on root cause
-  and transient-vs-bug. The engine's quality machinery (floors, critique gate,
-  skills) is load-bearing exactly there, and has no direct Orka equivalent
-  (`RepositoryScan.validationMode` is only a coarse analog). "No agent code" is
-  also not "no code": you still run the GCS Tool service, the proxy, an ingestion
-  shim to `dashboard.json`, and the frontend.
+Orka + a strong model (claude-sonnet-4.5) produces excellent, artifact-grounded
+analyses that match or beat the engine's reference labels on the hardest CAPZ
+cases. But that edge is the MODEL, not the harness: on the engine's own cheap model
+(gemini-3.5-flash) Orka is no better at classification, and it needed the worker
+patches just to converge. After those patches Orka is at process parity with the
+engine on a cheap model (converges 15/15, grounds every transient verdict), and the
+residual quality gap is pure model capability. Recommendation: adopt Orka as an
+optional, co-located, strong-model backend; keep the engine as the default
+cheap-model path; do not decommission. Details and numbers in MIGRATION.md.
 
-### Known constraints (read before re-running)
+## Known constraints
 
-- **Endpoint token cap (use Copilot to avoid it).** GitHub **Models** free tier
-  (`models.github.ai`) caps each request at 8k (mini) / 16k (gpt-4o) input tokens,
-  smaller than one CAPZ log artifact plus the domain prompt, so parity-depth
-  analysis fails with HTTP 413. GitHub **Copilot** (`api.githubcopilot.com`) is a
-  different product with your subscription's full context window. Prefer the
-  Copilot provider (`11-copilot-provider.yaml` + the proxy) for real runs; see
-  "Using GitHub Copilot" below.
-- **Iteration budget.** Orka's ai loop defaults to a hard 10 rounds (raised to 50
-  only via coordination mode, which the controller sets empty by default, or 100
-  via autonomous mode). Claude on Copilot is exhaustive and hits this cap
-  mid-investigation; the evaluation bumped the ai-worker default to 30 by patching
-  `workers/ai/main.go` before building the image. The engine itself uses 21+ tool
-  calls, so 10 is too low for parity-depth CI analysis.
-- **Open-weight models need MORE iteration headroom (F1a).** Kimi-K2 investigates
-  less efficiently than Claude and exhausted a 50-cap without concluding on a
-  complex CAPZ control-plane failure (still actively reading logs at call 50, not
-  looping). Raising the ai-worker cap to 80 let the same task converge on the
-  first attempt in 22 tool calls. The cap is the load-bearing lever; a
-  tool-call-budget/decisiveness nudge in the producer system prompt is a
-  complementary but not sufficient hint (Kimi ignored a soft "aim for ~20"). The
-  H4 `retryPolicy` is the backstop for the occasional overrun. Practically: for
-  open-weight providers set `maxIterations` to ~80 in `workers/ai/main.go` and
-  keep `-retries>=1` on the producer.
-- **Copilot Claude tool_calls need the proxy.** Copilot's non-streaming
-  `/chat/completions` returns `finish_reason=tool_calls` with a null `tool_calls`
-  array for Claude models (the calls only arrive over the streaming SSE), and
-  Orka's worker uses the non-streaming path. The `orka-copilot-proxy` de-streams
-  such requests (forces `stream:true` upstream and aggregates the SSE) so the
-  worker sees real tool calls. Without it, the agent only emits a prose preamble.
-- **SSRF guard.** Orka's Tool controller marks any tool whose URL resolves to a
-  private/loopback IP as `Available=false`. In-cluster ClusterIPs are private, so
-  the tools here show unavailable but still work (see `manifests/30-tools.yaml`).
-- **Cluster mapping.** A CAPZ e2e build runs many specs, each with its own cluster.
-  The filesystem-only agent could not reliably map a failed test to its cluster.
-  The k8s discovery tier (`35-k8s-tools.yaml`, `discover-clusters` /
-  `find-my-cluster`) is now exposed to close this gap: it surfaces the candidate
-  clusters so the agent stops guessing. Note `find-my-cluster`'s heuristic does not
-  match every test name; when it returns no match it still returns the candidate
-  list for the agent to reason over.
-
-## Layout
-
-```
-Dockerfile                 Builds either shim from the backend module (CMD build-arg).
-manifests/
-  00-rbac.yaml             Grants the Orka SA full core.orka.ai access (chart gap).
-  10-provider.yaml         GitHub Models Provider (free, small per-request token cap).
-  11-copilot-provider.yaml GitHub Copilot Provider via the proxy (full context window).
-  12-kimi-provider.yaml    In-cluster Kimi-K2 (Ray Serve) Provider, no proxy (F1).
-  20-gcs-tool.yaml         The GCS domain-tool Deployment + Service.
-  30-tools.yaml            Filesystem Tool CRDs (list/find/grep/read/tail).
-  35-k8s-tools.yaml        k8s discovery Tool CRDs (discover-clusters, find-my-cluster, ...).
-  36-validate-tool.yaml    Deterministic validate-analysis Tool (hallucinated-citation guard).
-  37-verify-timeline.yaml  Deterministic verify-timeline Tool (ordered events for a resource).
-  38-transient-signatures.yaml  Deterministic transient-signature classifier Tool.
-  39-recurrence.yaml       Deterministic recurrence Tool (cross-build failure count).
-  40-diff-last-passing.yaml     Deterministic diff-vs-last-green-build Tool.
-  41-required-evidence.yaml     Deterministic required-evidence (triage) Tool.
-  40-example-tasks.yaml    hello-world (Q1) and capz-analyze (Q2) Tasks.
-  50-copilot-proxy.yaml    Header-injecting proxy so Orka can reach Copilot.
-```
-
-Two shims live under `backend/cmd/` (they must be in the backend module to import
-the engine's internal packages):
-- `orka-gcs-tool-spike` registers the `filesystem` and `k8s` tool groups over one
-  artifact Browser, so a single service backs every Tool CRD above.
-- `orka-copilot-proxy` injects the `Copilot-Integration-Id` header Orka cannot set
-  itself, so an `openai`-type Provider can reach `api.githubcopilot.com`.
-
-## Reproduce
-
-Prerequisites: `kind`, `kubectl`, `helm`, `docker`, and a GitHub PAT. Use a
-`models:read` PAT for GitHub Models, or a `copilot_chat` PAT for Copilot.
-
-```bash
-# 1. Cluster
-kind create cluster --name orka-spike
-
-# 2. Install Orka. Orka's published images are private, so build from source:
-git clone https://github.com/orka-agents/orka /tmp/orka-src && cd /tmp/orka-src
-docker build -t ghcr.io/orka-agents/orka:latest .
-docker build -t ghcr.io/orka-agents/orka/ai-worker:latest -f workers/ai/Dockerfile .
-kind load docker-image ghcr.io/orka-agents/orka:latest --name orka-spike
-kind load docker-image ghcr.io/orka-agents/orka/ai-worker:latest --name orka-spike
-helm install orka charts/orka -n orka-system --create-namespace
-kubectl apply -f config/crd/bases/         # chart does not bundle CRDs
-cd -
-
-# 3. Back in this repo: RBAC gap fix + provider secret
-kubectl apply -f experimental/orka/manifests/00-rbac.yaml
-kubectl rollout restart deploy orka-controller -n orka-system
-kubectl create secret generic gh-models-secret -n orka-system \
-  --from-literal=api-key=<YOUR_GITHUB_PAT>
-
-# 4. Build + load the GCS tool shim
-docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool-spike \
-  -t orka-gcs-tool-spike:latest backend/
-kind load docker-image orka-gcs-tool-spike:latest --name orka-spike
-
-# 5. Apply provider, tool service, tools
-kubectl apply -f experimental/orka/manifests/10-provider.yaml
-kubectl apply -f experimental/orka/manifests/20-gcs-tool.yaml
-kubectl apply -f experimental/orka/manifests/30-tools.yaml
-kubectl apply -f experimental/orka/manifests/35-k8s-tools.yaml
-
-# 6. Wait for the Provider to be Ready, then run the tasks
-kubectl wait provider/gh-models -n orka-system --for=jsonpath='{.status.ready}'=true
-kubectl apply -f experimental/orka/manifests/40-example-tasks.yaml
-kubectl get task -n orka-system -w
-```
-
-### Using GitHub Copilot instead of GitHub Models
-
-GitHub Models and GitHub Copilot are different products. Models is a free
-catalog with a small per-request token cap; Copilot is your subscription with a
-full context window. For parity-depth analysis, use Copilot: it needs a
-`Copilot-Integration-Id` header that Orka's Provider cannot set, so requests go
-through the header-injecting proxy in `50-copilot-proxy.yaml`.
-
-```bash
-# Secret: a fine-grained PAT with the copilot_chat permission.
-kubectl create secret generic copilot-secret -n orka-system \
-  --from-literal=api-key=<YOUR_COPILOT_CHAT_PAT>
-
-# Build + load the proxy (same Dockerfile, different CMD build-arg).
-docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-copilot-proxy \
-  -t orka-copilot-proxy:latest backend/
-kind load docker-image orka-copilot-proxy:latest --name orka-spike
-
-# Deploy the proxy + Copilot provider.
-kubectl apply -f experimental/orka/manifests/50-copilot-proxy.yaml
-kubectl apply -f experimental/orka/manifests/11-copilot-provider.yaml
-kubectl wait provider/copilot -n orka-system --for=jsonpath='{.status.ready}'=true
-
-# Point a Task at it: set ai.providerRef.name to "copilot" and use a Copilot
-# model (e.g. claude-sonnet-4.5) in the Task's ai.model.
-```
-
-Retrieve a task result. The Orka API validates the bearer via a Kubernetes
-TokenReview, so any service-account token works:
-
-```bash
-kubectl port-forward -n orka-system svc/orka 18080:8080 &
-TOKEN=$(kubectl create token orka -n orka-system)
-curl -s -H "Authorization: Bearer $TOKEN" \
-  http://localhost:18080/api/v1/tasks/capz-analyze/result
-```
-
-Watch the agent's tool calls in the shim logs, or the proxy's forwarded requests:
-
-```bash
-kubectl logs -n orka-system deploy/gcs-tool -f | grep '🛠'
-kubectl logs -n orka-system deploy/orka-copilot-proxy -f
-```
-
-To run with the full CAPZ project prompt, set the `capz-analyze` Task's
-`ai.systemPrompt` to the consumer's `prompts/system.md`, and point `BUILD_PREFIX`
-in `20-gcs-tool.yaml` at the build you want to analyze.
-
-## Pipeline runbook (in-cluster, H1-H5)
-
-Beyond the single-Task spike above, the migration runs a whole consumer dashboard
-through Orka as a pipeline: `fetcher -ai=false` writes the skeleton, `orka-producer`
-turns each failing test into a content-addressed Task (plus per-build header-routed
-Tools), and `orka-ingestor` patches each result back into the skeleton the server
-serves. `experimental/orka/run-demo.sh <consumer-dir>` runs it end to end locally;
-the manifests below run it in-cluster.
-
-### Deploy
-
-```bash
-# Images (producer + ingestor; the engine image supplies the fetcher).
-docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-producer -t orka-producer:latest backend/
-docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-ingestor -t orka-ingestor:latest backend/
-kind load docker-image orka-producer:latest orka-ingestor:latest --name orka-spike
-
-# RBAC (SA orka-pipeline: create/patch Tasks+Tools, read status, delete for GC).
-kubectl apply -f experimental/orka/manifests/60-pipeline-rbac.yaml
-
-# Base Tool CRDs the producer clones per build (non-Tool docs are ignored).
-kubectl create configmap orka-base-tools -n orka-system \
-  --from-file=experimental/orka/manifests/
-
-# Consumer config: project.yaml at the root, system.md under prompts/.
-kubectl create configmap orka-consumer-config -n orka-system \
-  --from-file=project.yaml=<consumer>/project.yaml \
-  --from-file=system.md=<consumer>/prompts/system.md
-
-# A ReadWriteMany PVC named prow-ai-dashboard-data, shared with the server.
-# Then the CronJob (fetch -> produce -> -wait ingest), and optionally the
-# event-driven receiver.
-kubectl apply -f experimental/orka/manifests/70-pipeline-job.yaml
-kubectl apply -f experimental/orka/manifests/71-ingestor-webhook.yaml   # optional (H3)
-```
-
-For event-driven ingestion, apply `71` first, then uncomment `-webhook-url` in the
-`70` produce step so each Task notifies the receiver on completion.
-
-### Operate
-
-```bash
-# Trigger a run now (instead of waiting for the schedule).
-kubectl create job -n orka-system --from=cronjob/orka-pipeline orka-run-1
-
-# Analysis coverage: the ingestor logs a "📊 N failing: analyzed/unavailable/
-# pending" summary, and the -serve receiver exposes it as JSON.
-kubectl logs -n orka-system job/orka-run-1 -c ingest | tail
-kubectl exec -n orka-system deploy/orka-ingestor -- wget -qO- localhost:8080/status
-
-# Per-Task state.
-kubectl get tasks -n orka-system -l app.kubernetes.io/managed-by=orka-producer
-
-# Force re-analysis after a prompt/tool change: bump -version on BOTH the produce
-# step and (if used) the receiver Deployment; the Task name embeds the version, so
-# old cached Tasks are ignored and new ones are created.
-```
-
-### Troubleshoot
-
-- **Results stay `pending`.** Tasks not finishing: check `kubectl get tasks` for
-  `Running`/`Failed`, the ai-worker logs, and the iteration cap (see constraints).
-  The `-wait` ingest only marks `unavailable` at its deadline.
-- **A test shows "AI analysis unavailable: analysis Task ...".** Expected honest
-  surfacing of a `Failed`/`Cancelled`/missing Task, not a silent blank. Inspect
-  that Task and re-run (bump `-version`) once the cause is fixed.
-- **Webhook never fires.** Orka's SSRF guard requires a same-namespace ClusterIP
-  Service with a selector; `71` satisfies this. Delivery failures don't fail the
-  Task (Orka retries), so a rolling receiver is safe. Confirm the receiver
-  `-version` matches the producer's, or Task names won't match.
-- **AI fields vanished after a run.** A fresh skeleton has no AI fields; the
-  CronJob's `-wait` ingest re-applies them from the Orka result store. Keep exactly
-  one writer to the PVC (the pipeline), per the chart invariant.
-- **Tool CRDs pile up.** The ingestor `-gc` deletes a build's per-build Tools once
-  its Tasks are terminal; unlabeled Tools are never touched.
+- **Copilot needs the de-streaming proxy.** Copilot's non-streaming endpoint
+  returns null tool_calls for Claude (the calls only arrive over streaming SSE).
+  manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.
+  Standard OpenAI-compatible endpoints (vLLM, Ray Serve, Dynamo/NIM, Ollama) do NOT
+  need it - point a Provider straight at them.
+- **Worker patches are required.** Small models otherwise fail to converge (submit
+  empty results) and skip the verify_timeline discipline. Apply
+  worker-patches/ai-worker-convergence.patch (iteration cap, forced finalization,
+  empty-final re-prompt, transient-critique gate) and rebuild the ai-worker image.
+- **SSRF guard.** Orka marks tools whose URL resolves to a private/loopback IP as
+  Available=false. In-cluster ClusterIPs are private, so the tools show unavailable
+  but still work (the worker does not gate on availability).
+- **Cluster mapping (CAPZ).** A CAPZ e2e build runs many specs, each with its own
+  cluster. The k8s tool group (35-k8s-tools.yaml, discover-clusters /
+  find-my-cluster) lets the agent map a failing test to its cluster; enable it via
+  ai.tools: [filesystem, k8s]. Filesystem-only consumers (e.g. non-CAPI projects)
+  set ai.tools: [filesystem].
 
 ## Teardown
 
