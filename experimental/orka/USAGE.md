@@ -61,6 +61,25 @@ composed into the Task's system prompt exactly as in the engine).
 Iteration budget, forced finalization, and the transient-critique gate live in the
 Orka ai-worker (see `worker-patches/`), not in config.
 
+## Container images
+
+The pipeline's images (`orka-producer`, `orka-ingestor`, `orka-artifact-tool`,
+`orka-copilot-proxy`) are published to GHCR alongside the engine image by
+`.github/workflows/image.yml`, tagged the same way (`:main`, `:sha-<short>`, and
+semver on release):
+
+```
+ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:main
+ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
+ghcr.io/willie-yao/prow-ai-dashboard/orka-artifact-tool:main
+ghcr.io/willie-yao/prow-ai-dashboard/orka-copilot-proxy:main
+```
+
+Reference these directly (via `--set orka.producerImage=...` for Helm, or the
+`image:` field in the manifests) to skip the local `docker build` steps below.
+Building locally with `docker build --build-arg CMD=<cmd>` + `kind load` remains
+the path for a local kind cluster or unmerged changes.
+
 ## One-time cluster setup
 
 1. **Orka.** Install the Orka control plane (Orka's images are private; build from
