@@ -6,8 +6,6 @@
 //
 // Idempotent: re-running patches whatever results are now available and leaves
 // the rest untouched, so it can run repeatedly as Tasks complete.
-//
-// TEMPORARY: lives only on the `orka` branch alongside experimental/orka/.
 package main
 
 import (
@@ -24,7 +22,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orkamig"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -145,13 +143,13 @@ func skeletonStatus(dataDir, version string) status {
 }
 
 // newKubeClient builds a KubeClient, or returns nil (logged) when unavailable.
-func newKubeClient(kubeContext string) *orkamig.KubeClient {
-	cfg, err := orkamig.RESTConfig(kubeContext)
+func newKubeClient(kubeContext string) *orka.KubeClient {
+	cfg, err := orka.RESTConfig(kubeContext)
 	if err != nil {
 		log.Printf("⚠ no cluster access (%v); running result-only, no phase reasons or GC", err)
 		return nil
 	}
-	kc, err := orkamig.NewKubeClient(cfg)
+	kc, err := orka.NewKubeClient(cfg)
 	if err != nil {
 		log.Printf("⚠ kube client init failed (%v); running result-only", err)
 		return nil
@@ -170,7 +168,7 @@ const unavailablePrefix = "AI analysis unavailable: "
 // is set, still-missing failing tests are marked unavailable (with a Task-phase
 // reason when a kube client is present). Distinct build IDs are recorded in
 // builds. Returns how many failing tests it patched, saw, and left unresolved.
-func ingestPass(client *orkaClient, kube *orkamig.KubeClient, namespace, dataDir, version, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
+func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir, version, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
 	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
 	for _, jf := range jobFiles {
 		raw, err := os.ReadFile(jf)
@@ -194,7 +192,7 @@ func ingestPass(client *orkaClient, kube *orkamig.KubeClient, namespace, dataDir
 				if tc.AIAnalysis != nil {
 					continue // already patched by an earlier pass
 				}
-				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), version)
+				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), version)
 				if applyResult(tc, client, name, model) {
 					patched++
 					changed = true
@@ -262,12 +260,12 @@ func setUnavailable(tc *models.TestCase, reason string) bool {
 
 // markUnavailable derives the deadline/Task-phase reason (batch path) and marks
 // tc unavailable.
-func markUnavailable(tc *models.TestCase, kube *orkamig.KubeClient, namespace, taskName string) bool {
+func markUnavailable(tc *models.TestCase, kube *orka.KubeClient, namespace, taskName string) bool {
 	reason := "analysis did not complete before the deadline"
 	if kube != nil {
 		phase, err := kube.TaskPhase(context.Background(), namespace, taskName)
 		switch {
-		case orkamig.IsNotFound(err) || (err == nil && phase == ""):
+		case orka.IsNotFound(err) || (err == nil && phase == ""):
 			reason = "analysis Task not found"
 		case err != nil:
 			// leave the deadline reason; the phase could not be read
@@ -281,12 +279,12 @@ func markUnavailable(tc *models.TestCase, kube *orkamig.KubeClient, namespace, t
 // gcTools deletes the per-build Tool CRDs for every build whose Tasks are all
 // terminal, so the base x builds Tool set does not accumulate. Tools for a build
 // with a still-running Task are kept so the run can finish reading them.
-func gcTools(kube *orkamig.KubeClient, namespace string, builds map[string]bool) {
+func gcTools(kube *orka.KubeClient, namespace string, builds map[string]bool) {
 	ctx := context.Background()
 	deleted := 0
 	for buildID := range builds {
-		selector := orkamig.BuildLabel + "=" + buildID
-		tasks, err := kube.ListByLabel(ctx, orkamig.TasksGVR, namespace, selector)
+		selector := orka.BuildLabel + "=" + buildID
+		tasks, err := kube.ListByLabel(ctx, orka.TasksGVR, namespace, selector)
 		if err != nil {
 			log.Printf("⚠ GC list tasks for build %s: %v", buildID, err)
 			continue
@@ -294,7 +292,7 @@ func gcTools(kube *orkamig.KubeClient, namespace string, builds map[string]bool)
 		allTerminal := true
 		for _, t := range tasks {
 			phase, _, _ := unstructured.NestedString(t.Object, "status", "phase")
-			if !orkamig.TerminalPhase(phase) {
+			if !orka.TerminalPhase(phase) {
 				allTerminal = false
 				break
 			}
@@ -302,13 +300,13 @@ func gcTools(kube *orkamig.KubeClient, namespace string, builds map[string]bool)
 		if !allTerminal {
 			continue
 		}
-		tools, err := kube.ListByLabel(ctx, orkamig.ToolsGVR, namespace, selector)
+		tools, err := kube.ListByLabel(ctx, orka.ToolsGVR, namespace, selector)
 		if err != nil {
 			log.Printf("⚠ GC list tools for build %s: %v", buildID, err)
 			continue
 		}
 		for _, tool := range tools {
-			if err := kube.Delete(ctx, orkamig.ToolsGVR, namespace, tool.GetName()); err != nil {
+			if err := kube.Delete(ctx, orka.ToolsGVR, namespace, tool.GetName()); err != nil {
 				log.Printf("⚠ GC delete tool %s: %v", tool.GetName(), err)
 				continue
 			}
@@ -351,7 +349,7 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Act only on terminal phases; ignore intermediate notifications.
-	if orkamig.TerminalPhase(p.Phase) {
+	if orka.TerminalPhase(p.Phase) {
 		s.mu.Lock()
 		s.patchTask(p)
 		s.mu.Unlock()
@@ -379,7 +377,7 @@ func (s *webhookServer) patchTask(p webhookPayload) {
 				if tc.Status != "failed" {
 					continue
 				}
-				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), s.version)
+				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), s.version)
 				if name != p.TaskName {
 					continue
 				}

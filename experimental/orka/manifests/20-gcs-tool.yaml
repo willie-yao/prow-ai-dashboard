@@ -3,8 +3,8 @@
 # endpoints Orka Tools can call. Pinned to one build via BUILD_PREFIX.
 #
 # Build + load the image into kind first:
-#   docker build -f experimental/orka/Dockerfile -t orka-gcs-tool-spike:latest backend/
-#   kind load docker-image orka-gcs-tool-spike:latest --name orka-spike
+#   docker build -f experimental/orka/Dockerfile -t orka-gcs-tool:latest backend/
+#   kind load docker-image orka-gcs-tool:latest --name orka-spike
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: gcs-tool
-        image: orka-gcs-tool-spike:latest
+        image: orka-gcs-tool:latest
         imagePullPolicy: IfNotPresent
         ports: [{containerPort: 8080}]
         env:

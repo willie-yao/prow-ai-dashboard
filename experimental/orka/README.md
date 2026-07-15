@@ -6,8 +6,10 @@ orchestration platform, instead of the engine's in-process agentic loop. Discove
 and output are unchanged; only the per-failure analysis step moves to Orka Tasks
 that run alongside your inference stack.
 
-> Experimental, `orka` branch only. Nothing here is wired into `main`, CI, or the
-> product image. No production code depends on it.
+> Opt-in and experimental. The engine's default analysis backend is the
+> in-process agentic loop; select this path explicitly with `analysis: orka` in
+> the Helm chart (see [USAGE.md](USAGE.md)). It requires Orka, the tool shim, a
+> Provider, and the ai-worker patches installed in the cluster.
 
 ## Docs
 

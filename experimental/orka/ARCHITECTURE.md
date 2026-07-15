@@ -26,7 +26,7 @@ server / Pages           unchanged
 ```
 
 Three of these are code in this repo (`backend/cmd/orka-producer`,
-`orka-ingestor`, `orka-gcs-tool-spike`); the ai-worker is Orka's own binary,
+`orka-ingestor`, `orka-gcs-tool`); the ai-worker is Orka's own binary,
 carrying the patches in [worker-patches/](worker-patches/).
 
 ## Where Orka resources are created
@@ -62,8 +62,8 @@ spec:
 
 The producer walks `jobs/*.json`, and for every `status: "failed"` test case
 (`main.go:136-156`) emits one Task named by
-`orkamig.TaskName(buildID, FailureHash(testName, failureMessage), version)`
-(`internal/orkamig/naming.go`).
+`orka.TaskName(buildID, FailureHash(testName, failureMessage), version)`
+(`internal/orka/naming.go`).
 
 ### Tool (one clone per distinct build x tool group)
 
@@ -81,14 +81,14 @@ spec:
 ```
 
 The shim resolves its backend per request from those headers
-(`orka-gcs-tool-spike/toolenv.go`), so a tool always reads the Task's own
+(`orka-gcs-tool/toolenv.go`), so a tool always reads the Task's own
 build in the right bucket regardless of what the model passes. Base Tool CRDs are
 loaded from `experimental/orka/manifests/` by `loadBaseTools` (`main.go:319`).
 
 ### The apply
 
 `applyAll` (`main.go:187`) applies Tools before Tasks (Tasks reference them),
-using `KubeClient.Apply` (`internal/orkamig/kube.go`), a server-side-apply Patch
+using `KubeClient.Apply` (`internal/orka/kube.go`), a server-side-apply Patch
 with `FieldManager: orka-producer` and `Force: true`. `RESTConfig`
 (`kube.go`) prefers in-cluster config and falls back to kubeconfig + a
 `-context` override for local runs. Running without `-apply` only writes the YAML
@@ -97,7 +97,7 @@ to `-tasks-out` / `-tools-out` for inspection.
 ## How the result comes back
 
 `orka-ingestor` re-derives each Task name from the same skeleton
-(`FailureHash` is shared through `orkamig`, so both sides agree) and patches the
+(`FailureHash` is shared through `orka`, so both sides agree) and patches the
 result in place. `applyResult` (`cmd/orka-ingestor/main.go:225`) fetches the
 Task's result, parses the analysis JSON, and writes `tc.AISummary` +
 `tc.AIAnalysis` with `Mode: "agentic"`, the same wire shape the in-process path
@@ -125,15 +125,15 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 
 | Engine harness piece | Orka reconstruction | Where |
 |---|---|---|
-| On-disk analysis cache (keyed by mode+hash) | Content-addressed Task name; re-applying an existing Task is a no-op, so the K8s object store *is* the cache. Bump `-version` to force re-analysis. | `orkamig.TaskName` / `FailureHash`; `Apply` is idempotent |
+| On-disk analysis cache (keyed by mode+hash) | Content-addressed Task name; re-applying an existing Task is a no-op, so the K8s object store *is* the cache. Bump `-version` to force re-analysis. | `orka.TaskName` / `FailureHash`; `Apply` is idempotent |
 | Per-failure build isolation (fetcher scopes each analysis to one build) | Per-build Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; the model cannot read the wrong build. | `cloneToolForBuild` + shim `toolenv.go` |
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `main.go:117`, `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
-| Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-gcs-tool-spike/validate.go` |
+| Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-gcs-tool/validate.go` |
 | Critique gate: transient discipline | Worker re-prompts an `is_transient=true` that never called `verify_timeline`, per the engine's confirm-or-default-to-bug contract. | `worker-patches/` (4) + `timeline.go` |
-| Cross-build pattern correlation | `check_recurrence` tool correlates a failure across recent builds. | `orka-gcs-tool-spike/recurrence.go` |
-| Skill-driven required evidence | `required_evidence` tool returns the must-read artifacts for a failure class. | `orka-gcs-tool-spike/requiredevidence.go` |
-| Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-gcs-tool-spike/transient.go` |
+| Cross-build pattern correlation | `check_recurrence` tool correlates a failure across recent builds. | `orka-gcs-tool/recurrence.go` |
+| Skill-driven required evidence | `required_evidence` tool returns the must-read artifacts for a failure class. | `orka-gcs-tool/requiredevidence.go` |
+| Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-gcs-tool/transient.go` |
 
 The engine enforces these *in code*; Orka enforces them as *tools the agent must
 call* plus *worker re-prompts*. The consequence, quantified in

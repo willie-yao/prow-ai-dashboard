@@ -16,8 +16,6 @@
 // By default the producer is pure: it writes Task + Tool YAMLs to -tasks-out /
 // -tools-out for a separate apply step. With -apply it server-side applies them
 // directly (in-cluster config, or -context for local runs), Tools before Tasks.
-//
-// TEMPORARY: lives only on the `orka` branch alongside experimental/orka/.
 package main
 
 import (
@@ -35,7 +33,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orkamig"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
@@ -145,7 +143,7 @@ func main() {
 					continue
 				}
 				builds[run.BuildID] = buildPrefix
-				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), *version)
+				name := orka.TaskName(run.BuildID, orka.FailureHash(tc.Name, tc.FailureMessage), *version)
 				task := buildTask(name, *namespace, run.BuildID, *provider, *model, *timeout, *retries, *webhookURL,
 					buildToolNames(toolNames, run.BuildID), systemPrompt,
 					userPrompt(projectLabel, detail.JobID, buildPrefix, tc))
@@ -185,22 +183,22 @@ type namedObj struct {
 
 // applyAll server-side applies the Tools before the Tasks that reference them.
 func applyAll(namespace, kubeContext string, tools, tasks []namedObj) error {
-	cfg, err := orkamig.RESTConfig(kubeContext)
+	cfg, err := orka.RESTConfig(kubeContext)
 	if err != nil {
 		return fmt.Errorf("kube config: %w", err)
 	}
-	kc, err := orkamig.NewKubeClient(cfg)
+	kc, err := orka.NewKubeClient(cfg)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
 	for _, t := range tools {
-		if err := kc.Apply(ctx, orkamig.ToolsGVR, namespace, t.obj); err != nil {
+		if err := kc.Apply(ctx, orka.ToolsGVR, namespace, t.obj); err != nil {
 			return err
 		}
 	}
 	for _, t := range tasks {
-		if err := kc.Apply(ctx, orkamig.TasksGVR, namespace, t.obj); err != nil {
+		if err := kc.Apply(ctx, orka.TasksGVR, namespace, t.obj); err != nil {
 			return err
 		}
 	}
@@ -306,8 +304,8 @@ func buildTask(name, namespace, buildID, provider, model, timeout string, maxRet
 			"name":      name,
 			"namespace": namespace,
 			"labels": map[string]any{
-				orkamig.ManagedByLabel: orkamig.ManagedByValue,
-				orkamig.BuildLabel:     buildID,
+				orka.ManagedByLabel: orka.ManagedByValue,
+				orka.BuildLabel:     buildID,
 			},
 		},
 		"spec": spec,
@@ -358,8 +356,8 @@ func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, bucket, n
 	meta["name"] = buildToolName(baseName, buildID)
 	meta["namespace"] = namespace
 	meta["labels"] = map[string]any{
-		orkamig.ManagedByLabel: orkamig.ManagedByValue,
-		orkamig.BuildLabel:     buildID,
+		orka.ManagedByLabel: orka.ManagedByValue,
+		orka.BuildLabel:     buildID,
 	}
 
 	spec, _ := doc["spec"].(map[string]any)
@@ -444,7 +442,7 @@ func buildToolNames(base []string, buildID string) []string {
 	return out
 }
 
-func buildToolName(base, buildID string) string { return orkamig.Sanitize(base + "-b" + buildID) }
+func buildToolName(base, buildID string) string { return orka.Sanitize(base + "-b" + buildID) }
 
 // --- helpers ---
 

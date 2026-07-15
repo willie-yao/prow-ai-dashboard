@@ -1,9 +1,7 @@
-// Package orkamig holds naming helpers shared by the experimental Orka migration
-// commands (orka-producer and orka-ingestor) so the content-addressed Task name
-// derived from a failure is identical on both sides.
-//
-// TEMPORARY: lives only on the `orka` branch alongside experimental/orka/.
-package orkamig
+// Package orka holds naming helpers shared by the Orka pipeline commands
+// (orka-producer and orka-ingestor) so the content-addressed Task name derived
+// from a failure is identical on both sides.
+package orka
 
 import (
 	"crypto/sha256"

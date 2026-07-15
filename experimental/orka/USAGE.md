@@ -17,9 +17,9 @@ orka-ingestor       ->  patches each Task's result into jobs/*.json
 server              ->  unchanged
 ```
 
-> Experimental, `orka` branch only. Not wired into `main`, CI, or the product
-> image. See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works and the README
-> "Headline finding" for the evaluation and recommendation.
+> Opt-in path: the engine defaults to in-process analysis. Select this with
+> `analysis: orka` in the Helm chart. See [ARCHITECTURE.md](ARCHITECTURE.md) for
+> how it works and the README "Headline finding" for the evaluation.
 
 ## What you provide vs what Orka provides
 
@@ -75,9 +75,9 @@ Orka ai-worker (see `worker-patches/`), not in config.
      needs it.
 4. **Tool shim.** Build and deploy the multi-bucket GCS tool shim:
    ```bash
-   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool-spike \
-     -t orka-gcs-tool-spike:latest backend/
-   kind load docker-image orka-gcs-tool-spike:latest --name orka-spike
+   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool \
+     -t orka-gcs-tool:latest backend/
+   kind load docker-image orka-gcs-tool:latest --name orka-spike
    kubectl apply -f experimental/orka/manifests/20-gcs-tool.yaml
    ```
    One shim serves every bucket and build (routed per request by the `X-Bucket` /

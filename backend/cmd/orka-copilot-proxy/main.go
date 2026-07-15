@@ -1,5 +1,5 @@
-// Command orka-copilot-proxy is an experimental OpenAI-compatible reverse proxy
-// that lets Orka talk to GitHub Copilot's chat-completions API. It solves two
+// Command orka-copilot-proxy is an OpenAI-compatible reverse proxy that lets
+// Orka talk to GitHub Copilot's chat-completions API. It solves two
 // Copilot-specific incompatibilities so an Orka `type: openai` Provider pointed
 // at this service works with the caller's copilot_chat PAT:
 //
@@ -17,9 +17,6 @@
 // The bearer is passed through from Orka (from the Provider secretRef); the proxy
 // holds no secret of its own. Requests without tools, and any non-chat path
 // (e.g. the /responses probe), are proxied through unchanged.
-//
-// TEMPORARY: this lives only on the `orka` branch alongside experimental/orka/.
-// Remove it when the Orka evaluation concludes or Orka is dropped.
 package main
 
 import (

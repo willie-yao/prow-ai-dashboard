@@ -1,4 +1,4 @@
-package orkamig
+package orka
 
 import (
 	"context"

@@ -1,17 +1,13 @@
-// Command orka-gcs-tool-spike is an experimental HTTP shim for the Orka
-// evaluation. It exposes the engine's real artifact tools (filesystem:
-// list/read/tail/grep/find and k8s: discover_clusters/find_my_cluster/... over a
-// Prow build's GCS artifact tree) as plain HTTP endpoints so Orka Tool CRDs can
-// call them. It proves our existing domain code repackages as Orka-reachable
-// Tools without any change to the tools themselves.
+// Command orka-gcs-tool is an HTTP shim that exposes the engine's artifact
+// tools (filesystem: list/read/tail/grep/find and k8s:
+// discover_clusters/find_my_cluster/... over a Prow build's GCS artifact tree)
+// as plain HTTP endpoints so Orka Tool CRDs can call them. The engine's domain
+// code is reused unchanged; only the transport is HTTP.
 //
 // One shim serves any build from any bucket: a request selects its bucket via
 // the X-Bucket header (or "bucket" body field) and its build via X-Build-Prefix
 // (or "build"), so a single service backs many concurrent per-build Tasks across
 // consumers (e.g. capz's kubernetes-ci-logs and istio's istio-prow).
-//
-// TEMPORARY: this lives only on the `orka` branch. Remove it (together with
-// experimental/orka/) when the Orka evaluation concludes or Orka is dropped.
 package main
 
 import (
@@ -97,7 +93,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	log.Printf("orka-gcs-tool-spike on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
+	log.Printf("orka-gcs-tool on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
