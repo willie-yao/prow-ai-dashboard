@@ -216,7 +216,10 @@ func opencodeCmd(bin string) func(ctx context.Context, spec GenerateSpec, workdi
 		if err := writeOpencodeConfig(home, spec); err != nil {
 			return nil, err
 		}
-		args := []string{"run", "--format", "json"}
+		// --dir pins opencode's project root to the clone. opencode's `run` can
+		// otherwise attach to an ambient server and ignore the process cwd,
+		// writing edits outside the workspace.
+		args := []string{"run", "--dir", workdir, "--format", "json"}
 		if spec.Model != "" {
 			args = append(args, "--model", "engine/"+spec.Model)
 		}
@@ -255,7 +258,13 @@ func writeOpencodeConfig(home string, spec GenerateSpec) error {
 	}
 	models := map[string]any{}
 	if spec.Model != "" {
-		models[spec.Model] = map[string]any{}
+		// opencode requires context+output together when a limit is set. Cap
+		// output so opencode does not send an oversized max_tokens default a
+		// metadata-less custom model may reject; ample for a minimal fix. Context
+		// is opencode's compaction threshold only; the model enforces its own.
+		models[spec.Model] = map[string]any{
+			"limit": map[string]any{"context": 128000, "output": 8192},
+		}
 	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
