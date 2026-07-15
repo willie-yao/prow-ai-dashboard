@@ -236,7 +236,30 @@ Istio `prompts/system.md`) is a throwaway scaffold, not committed.
 Only capz today. Generalize per-build tool routing + skills for another consumer
 (capi/kubelet/dynamo/qwen) and validate one more end to end.
 
-### F3 - Larger adjudicated batch / outcome ground truth
+### F3 - Objective quality metrics on the current pipeline (DONE)
+Re-ran the same 15 A2 failures through the current pipeline (Copilot, post-M5 +
+F1a) and computed ground-truth-free metrics (full write-up: session
+`files/orka-f3-report.md`):
+- Grounding: 35/35 cited artifact paths exist in GCS (100%; no hallucinated
+  artifacts).
+- Determinism: is_transient stable on 4/5 across 3 runs (one flip on an ambiguous
+  case).
+- M5/F1a delta: aggregate transient rate dropped from A2's 12/15 to 8/15, now
+  matching the engine's own 8/15 - the "default to bug unless proven" instruction
+  removed the over-transient bias in aggregate.
+- Per-case engine agreement stayed 5/15 (A2 was 7/15): the reduction redistributed
+  which cases are transient; all 10 disagreements are on the same hard/ambiguous
+  cases as A2, and on several (f05/f06/f08) native's "bug" call is at least as
+  defensible as the engine's "transient".
+- Weak spot: only 3/8 is_transient=true verdicts consulted verify_timeline. Soft
+  prompt discipline is not reliably followed; a deterministic gate requiring a
+  verify_timeline confirmation before is_transient=true (the engine's mechanism)
+  would make the classification axis production-grade.
+
+Remaining ground-truth work (needs a CAPZ expert or outcome data): score the 10
+disagreements against artifacts / did-a-fix-land outcomes.
+
+### F3 (original) - Larger adjudicated batch / outcome ground truth
 Beyond the 15-failure A2: a larger adjudicated batch + outcome-based labels with a
 CAPZ expert to firm up the comparable-or-better claim.
 
