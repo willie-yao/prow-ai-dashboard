@@ -84,8 +84,38 @@ Orka ai-worker (see `worker-patches/`), not in config.
 
 ## Deploy the pipeline
 
+Two options: the Helm chart's `analysis: orka` mode (recommended), or the raw
+manifests.
+
+### Via the Helm chart (recommended)
+
+The `deploy/helm/prow-ai-dashboard` chart runs the whole flow when
+`analysis: orka` (requires `mode: cron`). The fetcher CronJob becomes
+fetch(-ai=false) -> orka-producer -> orka-ingestor, and the chart creates the
+pipeline RBAC. Prerequisites (the chart deploys the pipeline, not Orka): Orka + the
+tool shim + a Provider + the ai-worker patches installed in the Orka namespace, and
+the base Tool CRDs as a ConfigMap. Then:
+
 ```bash
-# Producer + ingestor images (the engine image supplies the fetcher).
+kubectl create configmap orka-base-tools -n orka-system \
+  --from-file=experimental/orka/manifests/
+
+helm install dash deploy/helm/prow-ai-dashboard \
+  --set mode=cron --set analysis=orka \
+  --set orka.provider=copilot --set orka.model=claude-sonnet-4.5 \
+  --set orka.producerImage=orka-producer:latest \
+  --set orka.ingestorImage=orka-ingestor:latest \
+  --set-file project.config=<consumer>/project.yaml \
+  --set-file project.systemPrompt=<consumer>/prompts/system.md
+```
+
+`analysis: inprocess` (the default) is unchanged: the engine runs the in-process
+loop and the Orka path is not deployed. See `deploy/helm/prow-ai-dashboard/values.yaml`
+for the full `orka:` block (namespace, apiBase, version, timeouts, RBAC).
+
+### Via the raw manifests
+
+
 docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-producer -t orka-producer:latest backend/
 docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-ingestor -t orka-ingestor:latest backend/
 kind load docker-image orka-producer:latest orka-ingestor:latest --name orka-spike
