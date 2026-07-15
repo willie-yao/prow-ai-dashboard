@@ -281,19 +281,55 @@ deterministic gate regardless of model.
 Beyond the 15-failure A2: a larger adjudicated batch + outcome-based labels with a
 CAPZ expert to firm up the comparable-or-better claim.
 
-### F4 - Port remediation (issues / fix-PR) to Orka
-Move the on-demand issue/fix-PR agentic loop to an Orka RepositoryScan-style flow.
-Unlocks the Tier C deletions (internal/actions, internal/fixpr, internal/issues,
-toolloop.go, tools/).
+### F4 - Port remediation (issues / fix-PR) to Orka (FEASIBILITY ASSESSED)
+Assessment (not a full build; a full port is ~3500 LOC and is gated on the F6
+decision). Two findings:
 
-### F5 - Decommission the in-engine analysis path (Tier A deletions)
-Once Orka is the default and F1-F4 are proven, delete the fetcher's in-process
-agentic analysis (service.go, agentic.go, critique.go, cache.go, modules/,
-pattern/semantic) and add a Helm `analysis: orka|inprocess` switch.
+1. Orka HAS a native remediation primitive: the `RepositoryScan` CRD, with
+   `forkRepo` + `patchAgentRef` + `prBaseBranch` + `gitSecretRef` + `validationMode`.
+   So Orka can do GitHub-write remediation (propose patch PRs from a fork). BUT it
+   is a PROACTIVE repo scanner (scheduled, scan-whole-repo -> findings -> patches),
+   a different paradigm from the engine's REACTIVE, CI-failure-driven fix-PR
+   ("this specific test failed with this root cause -> here is the targeted fix").
+   RepositoryScan is a complementary capability, not a drop-in for failure-driven
+   remediation.
+
+2. A failure-driven port follows the proven analysis-port pattern exactly:
+   - a repotree source-tree tool shim (analogous to gcs-tool) serving
+     list_repo_tree / read_repo_file / grep_repo over HTTP, backed by
+     `ai.NewGitHubRepoReader`, per-request repo routing (X-Repo / X-Ref headers);
+   - a fix producer: given a failing test + its analysis root cause, emit an Orka
+     Task that runs the locate -> propose-edits -> critique loop over the repotree
+     tools (the same loop `internal/fixpr` runs today), producing edit JSON;
+   - a fix ingestor: turn the Task's edits + issue draft into a PR / issue by
+     REUSING the engine's `internal/ghpr` / `internal/issues` (Orka's Task store
+     does not do the GitHub write; or use RepositoryScan's fork-PR path).
+   Feasibility is high-confidence: repotree uses the identical `tools.Registry`
+   mechanism the gcs-tool shim already validated, and the shim + Task + ingestor
+   pipeline is proven by M2-M4. A live proof is deferred as low-risk.
+
+Recommendation: do NOT build the full port on spec. It is large, and its stated
+purpose ("unlock the Tier C deletions") is moot because F5 should not decommission
+(see below). Build it only if F6 chooses a full Orka migration; otherwise adopt
+Orka RepositoryScan as an optional proactive-scan complement.
+
+### F5 - In-engine analysis path: Helm switch, NOT decommission (REVISED)
+The original F5 (delete service.go/agentic.go/critique.go/cache.go/modules/
+pattern-semantic) is PREMATURE and is not done. The F3 same-model control showed
+the migration is a cost/quality TRADE, not a clear win: the engine's harness
+(convergence machinery, always-on critique, on-disk cache) does real work, and
+Orka's quality edge was the strong model, not the harness. Deleting the in-engine
+path now would violate the project's founding "superset, not rewrite" principle and
+throw away the cheaper-model production path that still works.
+
+What F5 SHOULD be: add a config/Helm `analysis: inprocess | orka` switch so a
+consumer selects the backend, keep BOTH paths, and keep a documented list of
+in-engine deletion candidates (Tier A) gated on a future "Orka is the default and
+proven at the target cost point" decision. The Tier map is already recorded above;
+no code is deleted now.
 
 ### F6 - Productization decision
-Fork vs keep-on-branch vs upstream-as-selectable-backend, based on manager
-interest + F1-F5 outcomes.
+See "F6 recommendation" below.
 
 ## F3 same-model control (Orka on gemini-3.5-flash) - corrects the harness read
 
@@ -350,3 +386,57 @@ guardrail (a transient claim must be grounded in a timeline check) that pays off
 most with a capable model. Net across G-Converge + G-Critique: Orka now matches the
 engine's PROCESS on a cheap model (converges 15/15, transient discipline 11/11), and
 the residual quality gap is pure model capability, not harness.
+
+## F6 recommendation: keep as a selectable backend, do not decommission
+
+Synthesis of the whole evaluation (M0-M5, hardening H1-H5, F1-F5, G-Converge/
+G-Critique) into a productization call.
+
+### What is proven
+- Orka runs the dashboard's analysis end to end, Kubernetes-native, co-located
+  with the inference stack: fetcher(-ai=false) -> producer -> Orka Tasks -> ingestor,
+  with multi-build + multi-bucket routing (many consumers, one shim), event-driven
+  webhook ingestion, retries, Tool GC, and a /status surface.
+- Orka + a STRONG model (claude-sonnet-4.5) is genuinely excellent: 35/35 cited
+  artifact paths exist, 4/5 determinism, and on the 10 hardest CAPZ disagreements
+  its classifications were as-good-or-better than the engine's reference labels,
+  verified against raw artifacts.
+- After G-Converge + G-Critique, Orka is at PROCESS parity with the engine on a
+  cheap model too: converges 15/15 (was 6/15) and grounds every transient verdict
+  in verify_timeline (11/11, was 3/8).
+- Orka has a native remediation primitive (RepositoryScan, proactive) and the
+  reactive fix-PR port follows the proven analysis pattern.
+
+### What is NOT proven / the real cost
+- The F3 "Orka beats the engine" result was MODEL-driven (claude vs the engine's
+  gemini-3.5-flash), not harness-driven. On the same cheap model, Orka's
+  classification is no better and its harness needed patching just to converge.
+- The engine's harness (always-on critique, investigation floors, on-disk cache)
+  and its cheap-model tuning do real, load-bearing work. On-disk caching in
+  particular has no Orka equivalent beyond content-addressed run-once.
+- Orka needs carried patches (worker convergence + critique gate) that are not yet
+  upstream, plus the shims and (for Copilot only) a de-streaming proxy.
+
+### Recommendation
+1. KEEP both paths (superset, not rewrite). Do not delete the in-engine analysis.
+   Expose an `analysis: inprocess | orka` selection (today: the fetcher `-ai` flag
+   plus which pipeline runs); pick per consumer by cost/quality need.
+2. Use Orka where it wins: co-located with an in-cluster strong model, for
+   consumers that want Kubernetes-native operation and can afford the model. Use
+   the engine's in-process path where a cheap hosted model at low cost is the
+   priority.
+3. Upstream the worker patches (empty-final re-prompt, forced finalization,
+   transient-critique) to Orka; they are generally useful and remove the carry cost.
+4. Keep it on the `orka` branch as a selectable backend rather than forking:
+   forking duplicates maintenance, and the engine and Orka paths share the fetcher,
+   tools, prompt composition, and output. Adopt Orka RepositoryScan as an optional
+   proactive-scan complement, not a fix-PR replacement.
+5. Revisit a fuller migration only when (a) a strong in-cluster model is affordable
+   at fleet scale, or (b) the harness gaps (cache, cheap-model classification) are
+   closed. Until then Orka is a strong, Kubernetes-native ALTERNATIVE backend, not
+   a replacement.
+
+Bottom line: adopt Orka as an optional, co-located, strong-model backend and a
+proactive-scan complement; keep the engine as the default cheap-model path; do not
+decommission. This matches the manager's interest in Orka without betting the
+product on a model-cost assumption the data does not yet support.
