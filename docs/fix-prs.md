@@ -165,9 +165,12 @@ isolated home directory, so no opencode account or extra key is needed.
 Like `verify`, this needs a toolchain on the runner: the `opencode` CLI and git.
 When either is absent the feature reports "unavailable" and the fix is skipped,
 so the distroless server/worker image degrades gracefully. Install `opencode` in
-the deploy workflow (Pages path) or a runner/image that has it. Because the agent
-runs `bash` in a clone of the source repo, enable it only for a source repo you
-trust; it runs on the same trust boundary as `verify`.
+the deploy workflow (Pages path) or a runner/image that has it. For the
+Kubernetes-native path, [`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile)
+builds a fetcher image on a glibc base with `opencode` and git preinstalled; run
+it as the fetcher CronJob/Job. Because the agent runs `bash` in a clone of the
+source repo, enable it only for a source repo you trust; it runs on the same
+trust boundary as `verify`.
 
 The agent path is opt-in and additive: omit `agent_runtime` to keep the anchored
 generator. A pod-isolated agent runtime can replace the local one later behind
