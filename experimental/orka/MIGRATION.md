@@ -207,7 +207,32 @@ quality on the in-cluster model (Kimi needed softer prompts + a higher iter cap)
 Removes the only external dependency and the rate limit; the biggest unknown is
 quality/tuning parity. Independent of the H-series; high value.
 
-### F2 - Generalize the producer for a second consumer
+### F2 - Generalize the producer for a second consumer (VALIDATED on Istio)
+Proved the pipeline works for a structurally different consumer: Istio (bucket
+`istio-prow`, Go integration tests, no CAPI/Azure cluster-per-test model). Fixed
+the capz couplings in the producer and shim:
+- The shim (`orka-gcs-tool-spike`) is now multi-bucket: it resolves the GCS bucket
+  per request via an `X-Bucket` header (or "bucket" body field), mirroring the
+  existing multi-build design. One shim backs many consumers.
+- The producer derives its tool set from the consumer's `project.yaml` `ai.tools`
+  (mapping the `filesystem` / `k8s` groups to Orka Tool CRD names) instead of a
+  hardcoded list, gates the cluster-navigation prompt guidance on the `k8s` tools
+  being enabled, de-hardcodes the "CAPZ" project label (uses the project's short
+  name), stamps the consumer's bucket as `X-Bucket` on each cloned Tool, and
+  derives the build prefix from the skeleton's artifact URL so presubmit
+  (`pr-logs/pull/...`) builds work, not just periodic (`logs/...`).
+
+Validated end to end: a real failing Istio presubmit
+(`integ-pilot_istio` `TestTunnelingOutboundTraffic`) analyzed on Copilot produced
+a grounded, Istio-specific root cause (HTTP/2 egress-gateway tunneling strips the
+hostname, causing an EOF; `is_transient=false`), citing the exact `build-log.txt`
+line, with zero capz/cluster/Azure contamination. The producer emitted only the
+filesystem + quality tools (no `find_my_cluster`), and the multi-bucket shim served
+`istio-prow` in-cluster. The Istio consumer config
+(`project.yaml` with `discovery.source: bucket`, `ai.tools: [filesystem]`, and an
+Istio `prompts/system.md`) is a throwaway scaffold, not committed.
+
+### F2 (original) - Generalize the producer for a second consumer
 Only capz today. Generalize per-build tool routing + skills for another consumer
 (capi/kubelet/dynamo/qwen) and validate one more end to end.
 

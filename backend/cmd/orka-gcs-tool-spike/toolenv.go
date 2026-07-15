@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,28 +16,67 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-// buildResolver serves any build from one process so a single shared tool
-// service can back many concurrent per-build analysis Tasks. A request selects
-// its build via the "build" field in the JSON body or the X-Build-Prefix header;
-// absent that, defaultPrefix is used. Browsers and per-build caches are memoized.
+// buildResolver serves any build from any bucket in one process so a single
+// shared tool service can back many concurrent per-build analysis Tasks across
+// consumers. A request selects its bucket via the X-Bucket header or a "bucket"
+// body field, and its build via X-Build-Prefix or a "build" body field; absent
+// those, defaultBucket / defaultPrefix are used. Backends, Browsers and caches
+// are memoized per bucket and per (bucket, build).
 type buildResolver struct {
-	backend       storage.Backend
-	factory       *artifacts.BackendFactory
-	bucket        string
+	defaultBucket string
 	defaultPrefix string
 
 	mu       sync.Mutex
-	browsers map[string]artifacts.Browser
-	caches   map[string]*tools.Cache
+	buckets  map[string]*bucketBackend    // bucket -> backend + factory
+	browsers map[string]artifacts.Browser // "bucket\x00prefix" -> browser
+	caches   map[string]*tools.Cache      // "bucket\x00prefix" -> cache
 }
 
-func newBuildResolver(backend storage.Backend, factory *artifacts.BackendFactory, bucket, defaultPrefix string) *buildResolver {
-	return &buildResolver{
-		backend: backend, factory: factory, bucket: bucket,
+// bucketBackend is the storage backend + artifact factory for one GCS bucket.
+type bucketBackend struct {
+	bucket  string
+	backend storage.Backend
+	factory *artifacts.BackendFactory
+}
+
+func newBuildResolver(defaultBucket, defaultPrefix string) (*buildResolver, error) {
+	r := &buildResolver{
+		defaultBucket: defaultBucket,
 		defaultPrefix: normalizeBuildPrefix(defaultPrefix),
+		buckets:       map[string]*bucketBackend{},
 		browsers:      map[string]artifacts.Browser{},
 		caches:        map[string]*tools.Cache{},
 	}
+	// Eagerly create the default bucket so a misconfiguration fails fast and the
+	// per-request fallback always has a backend to fall back to.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, err := r.bucketLocked(defaultBucket); r.buckets[defaultBucket] == nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// bucketLocked returns the backend for bucket, creating it on first use. The
+// caller must hold r.mu. On a bad bucket it logs and falls back to the default.
+func (r *buildResolver) bucketLocked(bucket string) (*bucketBackend, error) {
+	if bucket == "" {
+		bucket = r.defaultBucket
+	}
+	if bb, ok := r.buckets[bucket]; ok {
+		return bb, nil
+	}
+	backend, err := storage.New(storage.Config{Provider: storage.ProviderGCS, Bucket: bucket}, nil)
+	if err != nil {
+		if bb, ok := r.buckets[r.defaultBucket]; ok {
+			log.Printf("⚠ bucket %q init failed (%v); using default %q", bucket, err, r.defaultBucket)
+			return bb, nil
+		}
+		return nil, fmt.Errorf("storage.New bucket=%s: %w", bucket, err)
+	}
+	bb := &bucketBackend{bucket: bucket, backend: backend, factory: artifacts.NewBackendFactory(backend, bucket)}
+	r.buckets[bucket] = bb
+	return bb, nil
 }
 
 func normalizeBuildPrefix(p string) string {
@@ -49,60 +90,80 @@ func normalizeBuildPrefix(p string) string {
 	return p
 }
 
-// resolve returns the Browser + web-URL base + normalized prefix for a build.
-func (r *buildResolver) resolve(prefix string) (artifacts.Browser, string, string) {
+// resolve returns the backend, Browser, web-URL base and normalized prefix for a
+// build in a bucket, memoizing the Browser per (bucket, build).
+func (r *buildResolver) resolve(bucket, prefix string) (*bucketBackend, artifacts.Browser, string, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	bb, _ := r.bucketLocked(bucket)
 	prefix = normalizeBuildPrefix(prefix)
 	if prefix == "" {
 		prefix = r.defaultPrefix
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	b, ok := r.browsers[prefix]
+	key := bb.bucket + "\x00" + prefix
+	b, ok := r.browsers[key]
 	if !ok {
-		b = r.factory.ForBuild(prefix, prefix)
-		r.browsers[prefix] = b
+		b = bb.factory.ForBuild(prefix, prefix)
+		r.browsers[key] = b
 	}
-	return b, r.backend.WebURL(prefix), prefix
+	return bb, b, bb.backend.WebURL(prefix), prefix
 }
 
-func (r *buildResolver) cache(prefix string) *tools.Cache {
+func (r *buildResolver) cache(bucket, prefix string) *tools.Cache {
 	prefix = normalizeBuildPrefix(prefix)
 	if prefix == "" {
 		prefix = r.defaultPrefix
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	c, ok := r.caches[prefix]
+	bb, _ := r.bucketLocked(bucket)
+	key := bb.bucket + "\x00" + prefix
+	c, ok := r.caches[key]
 	if !ok {
 		c = tools.NewCache()
-		r.caches[prefix] = c
+		r.caches[key] = c
 	}
 	return c
 }
 
-// aiEnv builds the engine-tool Env for a build.
-func (r *buildResolver) aiEnv(prefix string) *tools.Env {
-	b, web, p := r.resolve(prefix)
+// aiEnv builds the engine-tool Env for a build in a bucket.
+func (r *buildResolver) aiEnv(bucket, prefix string) *tools.Env {
+	bb, b, web, p := r.resolve(bucket, prefix)
 	return &tools.Env{
 		Browser:             b,
-		Cache:               r.cache(p),
+		Cache:               r.cache(bb.bucket, p),
 		WebURLBase:          web,
 		RemainingModelBytes: 1 << 30,
 		RemainingGCSBytes:   1 << 30,
 	}
 }
 
-// toolEnvFor builds the quality-tool toolEnv for a build.
-func (r *buildResolver) toolEnvFor(prefix string) *toolEnv {
-	b, web, p := r.resolve(prefix)
+// toolEnvFor builds the quality-tool toolEnv for a build in a bucket.
+func (r *buildResolver) toolEnvFor(bucket, prefix string) *toolEnv {
+	bb, b, web, p := r.resolve(bucket, prefix)
 	return &toolEnv{
-		backend:         r.backend,
-		bucket:          r.bucket,
+		backend:         bb.backend,
+		bucket:          bb.bucket,
 		buildPrefix:     p,
 		webURLBase:      web,
 		browser:         b,
-		browserForBuild: r.factory.ForBuild,
+		browserForBuild: bb.factory.ForBuild,
 	}
+}
+
+// requestBucket extracts the caller-selected GCS bucket from the X-Bucket header
+// (preferred) or a "bucket" field in the JSON body. Empty means default.
+func requestBucket(r *http.Request, body []byte) string {
+	if h := strings.TrimSpace(r.Header.Get("X-Bucket")); h != "" {
+		return h
+	}
+	var meta struct {
+		Bucket string `json:"bucket"`
+	}
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &meta)
+	}
+	return meta.Bucket
 }
 
 // requestBuild extracts the caller-selected build prefix from the X-Build-Prefix

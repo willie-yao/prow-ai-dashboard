@@ -5,6 +5,11 @@
 // call them. It proves our existing domain code repackages as Orka-reachable
 // Tools without any change to the tools themselves.
 //
+// One shim serves any build from any bucket: a request selects its bucket via
+// the X-Bucket header (or "bucket" body field) and its build via X-Build-Prefix
+// (or "build"), so a single service backs many concurrent per-build Tasks across
+// consumers (e.g. capz's kubernetes-ci-logs and istio's istio-prow).
+//
 // TEMPORARY: this lives only on the `orka` branch. Remove it (together with
 // experimental/orka/) when the Orka evaluation concludes or Orka is dropped.
 package main
@@ -22,8 +27,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 func env(key, def string) string {
@@ -38,29 +41,27 @@ func main() {
 	buildPrefix := env("BUILD_PREFIX", "logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/")
 	addr := env("ADDR", ":8080")
 
-	backend, err := storage.New(storage.Config{Provider: storage.ProviderGCS, Bucket: bucket}, nil)
-	if err != nil {
-		log.Fatalf("storage.New: %v", err)
-	}
-	factory := artifacts.NewBackendFactory(backend, bucket)
-
 	reg := tools.NewRegistry()
 	filesystem.Register(reg)
 	k8s.Register(reg)
 
-	// The resolver serves any build per-request (via the "build" body field or
-	// the X-Build-Prefix header), so one shared service backs many concurrent
-	// per-build analysis Tasks. Absent a selector, it uses BUILD_PREFIX.
-	resolver := newBuildResolver(backend, factory, bucket, buildPrefix)
+	// The resolver serves any build from any bucket per-request (via the
+	// X-Bucket / X-Build-Prefix headers or "bucket" / "build" body fields), so
+	// one shared service backs many concurrent per-build analysis Tasks across
+	// consumers. Absent a selector it uses BUCKET / BUILD_PREFIX.
+	resolver, err := newBuildResolver(bucket, buildPrefix)
+	if err != nil {
+		log.Fatalf("newBuildResolver: %v", err)
+	}
 
 	// Self-registered deterministic quality tools each live in their own file
 	// and register via registerQTool (see validate.go for the template). Each
-	// request resolves its own build-scoped toolEnv.
+	// request resolves its own bucket- and build-scoped toolEnv.
 	for _, qt := range qtools {
 		qt := qt
 		http.HandleFunc(qt.route, func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			tenv := resolver.toolEnvFor(requestBuild(r, body))
+			tenv := resolver.toolEnvFor(requestBucket(r, body), requestBuild(r, body))
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			qt.h(tenv, w, r)
 		})
@@ -84,9 +85,9 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
-		// Engine tools ignore the extra "build" field; the resolver uses it to
-		// pick the build-scoped Env.
-		res := reg.Dispatch(ctx, resolver.aiEnv(requestBuild(r, raw)), name, json.RawMessage(raw))
+		// Engine tools ignore the extra "bucket"/"build" fields; the resolver
+		// uses them to pick the bucket- and build-scoped Env.
+		res := reg.Dispatch(ctx, resolver.aiEnv(requestBucket(r, raw), requestBuild(r, raw)), name, json.RawMessage(raw))
 		log.Printf("🛠  %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(res.Payload)
@@ -96,7 +97,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	log.Printf("orka-gcs-tool-spike on %s bucket=%s build=%s", addr, bucket, buildPrefix)
+	log.Printf("orka-gcs-tool-spike on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 

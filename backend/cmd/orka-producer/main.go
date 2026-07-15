@@ -39,11 +39,50 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
-var defaultTools = []string{
-	"list-artifacts", "find-artifacts", "grep-artifact", "read-artifact", "tail-artifact",
-	"discover-clusters", "find-my-cluster", "list-cluster-machines", "list-machine-logs",
-	"discover-controllers", "resolve-controller-log",
-	"validate-analysis", "verify-timeline", "check-transient-signatures", "recurrence", "required-evidence",
+// engineToolGroups maps the engine's tool GROUP names (as selected in a
+// consumer's project.yaml ai.tools) to the per-group Orka Tool CRD names.
+var engineToolGroups = map[string][]string{
+	"filesystem": {"list-artifacts", "find-artifacts", "grep-artifact", "read-artifact", "tail-artifact"},
+	"k8s":        {"discover-clusters", "find-my-cluster", "list-cluster-machines", "list-machine-logs", "discover-controllers", "resolve-controller-log"},
+}
+
+// qualityTools are the deterministic shim tools added to every analysis. They
+// degrade gracefully on non-CAPZ projects (return "no match" when their patterns
+// do not apply), so they are safe to always include.
+var qualityTools = []string{"validate-analysis", "verify-timeline", "check-transient-signatures", "recurrence", "required-evidence"}
+
+// resolveTools maps a consumer's ai.tools group selection to the Orka Tool CRD
+// names, always appending the quality tools. Group names expand; anything else
+// passes through so an individual tool name still works. k8sEnabled reports
+// whether the CAPZ-style cluster navigation tools are in the set, which gates the
+// cluster-specific prompt guidance.
+func resolveTools(aiTools []string) (names []string, k8sEnabled bool) {
+	if len(aiTools) == 0 {
+		aiTools = []string{"filesystem", "k8s"}
+	}
+	seen := map[string]bool{}
+	add := func(n string) {
+		if !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	for _, t := range aiTools {
+		if group, ok := engineToolGroups[t]; ok {
+			if t == "k8s" {
+				k8sEnabled = true
+			}
+			for _, n := range group {
+				add(n)
+			}
+			continue
+		}
+		add(t)
+	}
+	for _, q := range qualityTools {
+		add(q)
+	}
+	return names, k8sEnabled
 }
 
 func main() {
@@ -57,20 +96,32 @@ func main() {
 	model := flag.String("model", "claude-sonnet-4.5", "model id")
 	version := flag.String("version", "v1", "content-address version suffix; bump to force re-analysis")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
-	toolsCSV := flag.String("tools", strings.Join(defaultTools, ","), "comma-separated base Tool names to enable")
+	toolsCSV := flag.String("tools", "", "override the comma-separated base Tool names (default: derive from the consumer's project.yaml ai.tools + quality tools)")
+	bucketFlag := flag.String("bucket", "", "GCS bucket routed to the shim via the X-Bucket header (default: the consumer's storage.bucket)")
 	retries := flag.Int("retries", 1, "Task retryPolicy maxRetries for transient model/tool errors")
 	webhookURL := flag.String("webhook-url", "", "Task webhookURL for event-driven ingestion (must be a same-namespace ClusterIP service, e.g. http://orka-ingestor.orka-system.svc:8080/webhook)")
 	apply := flag.Bool("apply", false, "apply Tools+Tasks to the cluster via client-go (in-cluster or -context) instead of only writing YAML")
 	kubeContext := flag.String("context", "", "kubeconfig context to use when -apply runs outside the cluster")
 	flag.Parse()
 
-	_, addendum, err := project.LoadDir(*projectDir)
+	cfg, addendum, err := project.LoadDir(*projectDir)
 	if err != nil {
 		log.Fatalf("load project %s: %v", *projectDir, err)
 	}
-	systemPrompt := ai.ComposeSystemPrompt(addendum) + toolUsageAddendum
 
-	toolNames := splitCSV(*toolsCSV)
+	toolNames, k8sEnabled := resolveTools(cfg.AI.EffectiveAgentic().Tools)
+	if *toolsCSV != "" {
+		toolNames = splitCSV(*toolsCSV)
+		k8sEnabled = hasK8sTool(toolNames)
+	}
+	systemPrompt := ai.ComposeSystemPrompt(addendum) + toolUsageAddendum(k8sEnabled)
+
+	bucket := *bucketFlag
+	if bucket == "" {
+		bucket = cfg.Storage.Bucket
+	}
+	projectLabel := cfg.DisplayShortName()
+
 	baseTools, err := loadBaseTools(*toolManifests, toolNames)
 	if err != nil {
 		log.Fatalf("load base tools: %v", err)
@@ -88,7 +139,7 @@ func main() {
 			continue
 		}
 		for _, run := range detail.Runs {
-			buildPrefix := fmt.Sprintf("logs/%s/%s/", detail.JobID, run.BuildID)
+			buildPrefix := buildPrefixFor(bucket, detail.JobID, run)
 			for _, tc := range run.TestCases {
 				if tc.Status != "failed" {
 					continue
@@ -97,7 +148,7 @@ func main() {
 				name := orkamig.TaskName(run.BuildID, orkamig.FailureHash(tc.Name, tc.FailureMessage), *version)
 				task := buildTask(name, *namespace, run.BuildID, *provider, *model, *timeout, *retries, *webhookURL,
 					buildToolNames(toolNames, run.BuildID), systemPrompt,
-					userPrompt(detail.JobID, buildPrefix, tc))
+					userPrompt(projectLabel, detail.JobID, buildPrefix, tc))
 				writeYAML(filepath.Join(*tasksOut, name+".yaml"), task)
 				taskObjs = append(taskObjs, namedObj{name, task})
 			}
@@ -109,15 +160,15 @@ func main() {
 	for buildID, prefix := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, buildID, prefix, *namespace)
+			clone := cloneToolForBuild(doc, base, buildID, prefix, bucket, *namespace)
 			toolName := buildToolName(base, buildID)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
 		}
 	}
 
-	log.Printf("wrote %d Tasks (%s) and %d per-build Tools across %d builds (%s)",
-		len(taskObjs), *tasksOut, len(toolObjs), len(builds), *toolsOut)
+	log.Printf("wrote %d Tasks (%s) and %d per-build Tools across %d builds (%s) for %s [bucket=%s, k8s-tools=%v]",
+		len(taskObjs), *tasksOut, len(toolObjs), len(builds), *toolsOut, projectLabel, bucket, k8sEnabled)
 
 	if *apply {
 		if err := applyAll(*namespace, *kubeContext, toolObjs, taskObjs); err != nil {
@@ -157,12 +208,22 @@ func applyAll(namespace, kubeContext string, tools, tasks []namedObj) error {
 	return nil
 }
 
-const toolUsageAddendum = `
+// toolUsageAddendum returns the engine-owned tool-usage guidance appended to the
+// composed system prompt. The cluster-navigation guidance is included only when
+// the CAPZ-style k8s tools are enabled, so a filesystem-only consumer (e.g. a
+// project without a cluster-per-test model) is not told to call find_my_cluster.
+func toolUsageAddendum(k8sEnabled bool) string {
+	clusterGuidance := ""
+	clusterBudgetStep := "read the logs around the EARLIEST failure"
+	if k8sEnabled {
+		clusterGuidance = "Resolve the right per-spec cluster (find_my_cluster) before reading\nper-cluster logs. "
+		clusterBudgetStep = "find the failing test's cluster, read the logs around the EARLIEST\nfailure"
+	}
+	return `
 
 ## Tool usage for this analysis
 The tools are scoped to THIS task's build automatically; just call them normally.
-Resolve the right per-spec cluster (find_my_cluster) before reading per-cluster
-logs. For a transient-vs-bug decision, confirm any transient claim with
+` + clusterGuidance + `For a transient-vs-bug decision, confirm any transient claim with
 verify_timeline (did the expected operation actually register?) and
 check_transient_signatures, and consult recurrence. Default to is_transient=false
 unless a known transient class is proven from the evidence. Call validate_analysis
@@ -170,13 +231,12 @@ on every artifact path you cite.
 
 ## Tool budget: converge, do not exhaust it
 You have a limited tool-call budget (aim for ~20 calls). Investigate along ONE
-focused path: find the failing test's cluster, read the logs around the EARLIEST
-failure, confirm the timeline once, then conclude. Do not re-read a file you have
-already seen, re-run a search that already answered your question, or gather
-redundant confirmation of a conclusion you can already support. The moment your
-evidence is sufficient for a grounded root cause, run the self-critique below and
-emit the JSON. A well-supported answer now is better than a marginally more
-certain one that never finishes.
+focused path: ` + clusterBudgetStep + `, confirm the timeline once, then conclude.
+Do not re-read a file you have already seen, re-run a search that already answered
+your question, or gather redundant confirmation of a conclusion you can already
+support. The moment your evidence is sufficient for a grounded root cause, run the
+self-critique below and emit the JSON. A well-supported answer now is better than a
+marginally more certain one that never finishes.
 
 ## Self-critique before you finalize
 Before emitting your JSON, re-check your own draft for these specific defects and
@@ -185,18 +245,19 @@ revise if any applies:
    downstream/teardown symptom (namespace/cluster deletion, cleanup timeout,
    credential expiry, a cascade of dependent timeouts)? Those happen AFTER the
    real failure.
-2. Attribution: if you blamed an external/platform cause (throttling, a hung Azure
-   operation, upstream flakiness) and set is_transient=true, did verify_timeline
-   actually show the expected operation never registered? If you did not confirm
-   it, treat the failure as a real bug (is_transient=false).
+2. Attribution: if you blamed an external/platform cause (throttling, a hung
+   infrastructure operation, upstream flakiness) and set is_transient=true, did
+   verify_timeline actually show the expected operation never registered? If you
+   did not confirm it, treat the failure as a real bug (is_transient=false).
 3. Grounding: is every claim tied to evidence you actually read (validate_analysis
    passed), not plausible-sounding speculation?
 4. Fix validity: would suggested_fix actually resolve the stated root_cause?
 Respond with ONLY the required JSON object.`
+}
 
-func userPrompt(jobID, buildPrefix string, tc models.TestCase) string {
+func userPrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "This CAPZ CI test FAILED. Root-cause it and classify transient vs real bug.\n\n")
+	fmt.Fprintf(&b, "This %s CI test FAILED. Root-cause it and classify transient vs real bug.\n\n", projectLabel)
 	fmt.Fprintf(&b, "Job: %s\n", jobID)
 	fmt.Fprintf(&b, "Build: %s\n", buildPrefix)
 	fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
@@ -282,8 +343,9 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 }
 
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
-// X-Build-Prefix header so the shim serves this build.
-func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, namespace string) map[string]any {
+// X-Build-Prefix (and, when set, X-Bucket) headers so the shim serves this build
+// from the right bucket.
+func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, bucket, namespace string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -313,7 +375,62 @@ func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, namespace
 		httpCfg["headers"] = headers
 	}
 	headers["X-Build-Prefix"] = prefix
+	if bucket != "" {
+		headers["X-Bucket"] = bucket
+	}
 	return doc
+}
+
+// hasK8sTool reports whether an explicit tool list includes any CAPZ-style
+// cluster navigation tool, so the cluster prompt guidance can be gated.
+func hasK8sTool(names []string) bool {
+	for _, n := range names {
+		for _, k := range engineToolGroups["k8s"] {
+			if n == k {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// buildPrefixFor returns the bucket-relative build directory. It prefers deriving
+// the prefix from the skeleton's stored artifact URL, which handles any Prow
+// layout (periodic logs/<job>/<build>/ and presubmit
+// pr-logs/pull/<org_repo>/<pr>/<job>/<build>/) and any bucket. It falls back to
+// the periodic layout when no URL is present.
+func buildPrefixFor(bucket, jobID string, run models.BuildResult) string {
+	for _, u := range []string{run.WebURL, run.BuildLogURL} {
+		if p := prefixFromURL(u, bucket); p != "" {
+			return p
+		}
+	}
+	return fmt.Sprintf("logs/%s/%s/", jobID, run.BuildID)
+}
+
+// prefixFromURL extracts the bucket-relative directory from an artifact URL by
+// taking everything after "/<bucket>/", reducing a file URL to its directory.
+func prefixFromURL(u, bucket string) string {
+	if u == "" || bucket == "" {
+		return ""
+	}
+	marker := "/" + bucket + "/"
+	i := strings.Index(u, marker)
+	if i < 0 {
+		return ""
+	}
+	p := u[i+len(marker):]
+	if k := strings.IndexAny(p, "?#"); k >= 0 {
+		p = p[:k]
+	}
+	if !strings.HasSuffix(p, "/") {
+		j := strings.LastIndex(p, "/")
+		if j < 0 {
+			return ""
+		}
+		p = p[:j+1]
+	}
+	return p
 }
 
 func buildToolNames(base []string, buildID string) []string {
