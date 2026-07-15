@@ -390,13 +390,12 @@ type FixPRs struct {
 	MaxNewPerRun int `yaml:"max_new_per_run,omitempty" json:"max_new_per_run,omitempty"`
 	// Labels are applied to every fix PR. Defaults to ["ai-proposed-fix"].
 	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
-	// DryRun runs the full generation pipeline (locate, fetch, edit, validate)
-	// and records the proposed change without opening any PR. Defaults to false.
+	// DryRun runs the full generation pipeline and records the proposed change
+	// without opening any PR. Defaults to false.
 	DryRun bool `yaml:"dry_run,omitempty" json:"dry_run,omitempty"`
-	// CritiqueRetries bounds how many times the edit step is re-prompted to
-	// resolve an LLM reviewer's objections (or a validation error) before the
-	// fix is dropped. Defaults to 1; 0 disables the review. Excluded from
-	// manifest.json.
+	// CritiqueRetries bounds how many times generation is re-prompted to resolve
+	// an LLM reviewer's objections before the fix is dropped. Defaults to 1; 0
+	// disables the review. Excluded from manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
 	// Verify builds and vets a proposed fix in a local Runtime before the PR is
 	// opened, recording the verdict on the PR and preview. Off by default; it
@@ -404,10 +403,9 @@ type FixPRs struct {
 	// image lacks (verification then reports "skipped"). Excluded from
 	// manifest.json.
 	Verify *FixVerify `yaml:"verify,omitempty" json:"-"`
-	// AgentRuntime, when set, generates the fix with a coding-agent CLI in a real
-	// workspace clone (multi-file edits, can build/test) instead of the default
-	// anchored single-file edit generator. Off by default. Excluded from
-	// manifest.json.
+	// AgentRuntime tunes the coding-agent fix generator (a coding-agent CLI in a
+	// real workspace clone). A nil block uses opencode with defaults. Excluded
+	// from manifest.json.
 	AgentRuntime *FixAgentRuntime `yaml:"agent_runtime,omitempty" json:"-"`
 }
 
@@ -511,17 +509,18 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		n := 1
 		out.CritiqueRetries = &n
 	}
-	if out.AgentRuntime != nil {
-		if strings.TrimSpace(out.AgentRuntime.Type) == "" {
-			out.AgentRuntime.Type = "opencode"
-		}
-		if out.AgentRuntime.MaxTurns <= 0 {
-			out.AgentRuntime.MaxTurns = 30
-		}
-		if out.AgentRuntime.AllowBash == nil {
-			t := true
-			out.AgentRuntime.AllowBash = &t
-		}
+	if out.AgentRuntime == nil {
+		out.AgentRuntime = &FixAgentRuntime{}
+	}
+	if strings.TrimSpace(out.AgentRuntime.Type) == "" {
+		out.AgentRuntime.Type = "opencode"
+	}
+	if out.AgentRuntime.MaxTurns <= 0 {
+		out.AgentRuntime.MaxTurns = 30
+	}
+	if out.AgentRuntime.AllowBash == nil {
+		t := true
+		out.AgentRuntime.AllowBash = &t
 	}
 	return out
 }

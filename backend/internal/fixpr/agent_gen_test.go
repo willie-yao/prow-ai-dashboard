@@ -2,6 +2,7 @@ package fixpr
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -25,6 +26,15 @@ func agentGenParams(ar *AgentConfig) genParams {
 	return genParams{owner: "o", repo: "r", ref: "ref", maxFiles: 3, agent: ar}
 }
 
+// goodAgent returns a fake agent runtime that proposes a canned single-file fix,
+// used by the Reconcile tests to drive the (only) generation path.
+func goodAgent() *fakeAgentRuntime {
+	return &fakeAgentRuntime{res: runtime.GenerateResult{
+		Files: map[string]string{"templates/cluster.yaml": strings.Replace(sampleFile, "StandardSSD_LRS", "Premium_LRS", 1)},
+		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n@@\n-  diskType: StandardSSD_LRS\n+  diskType: Premium_LRS\n",
+	}}
+}
+
 func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
 		Files: map[string]string{"templates/cluster.yaml": "diskType: Premium_LRS\n"},
@@ -32,9 +42,9 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	}}
 	gp := agentGenParams(&AgentConfig{Runtime: fa, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true})
 
-	fix, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
-		t.Fatalf("generateFix: %v", err)
+		t.Fatalf("generateWithAgent: %v", err)
 	}
 	if fix.files["templates/cluster.yaml"] != "diskType: Premium_LRS\n" {
 		t.Errorf("changed file not carried through: %v", fix.files)
@@ -56,7 +66,7 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 
 func TestGenerateWithAgent_NoChangeIsNotFixable(t *testing.T) {
 	fa := &fakeAgentRuntime{res: runtime.GenerateResult{Files: map[string]string{}}}
-	_, err := generateFix(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
+	_, err := generateWithAgent(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "no code change") {
 		t.Errorf("expected a not-auto-fixable error, got %v", err)
 	}
@@ -67,7 +77,7 @@ func TestGenerateWithAgent_RejectsTooManyFiles(t *testing.T) {
 		"a": "1", "b": "2", "c": "3", "d": "4",
 	}}}
 	gp := agentGenParams(&AgentConfig{Runtime: fa}) // maxFiles 3
-	_, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	_, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "exceeding max_files") {
 		t.Errorf("expected a max_files rejection, got %v", err)
 	}
@@ -76,7 +86,7 @@ func TestGenerateWithAgent_RejectsTooManyFiles(t *testing.T) {
 func TestGenerateWithAgent_UnavailableSurfaces(t *testing.T) {
 	// Wrap the sentinel so errors.Is matches through the fixpr error.
 	fa := &fakeAgentRuntime{err: errWrap{runtime.ErrUnavailable}}
-	_, err := generateFix(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
+	_, err := generateWithAgent(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Errorf("expected an unavailable error, got %v", err)
 	}
@@ -96,9 +106,9 @@ func TestGenerateWithAgent_CritiqueApproves(t *testing.T) {
 	gp.critique = rev
 	gp.critiqueRetries = 1
 
-	fix, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
-		t.Fatalf("generateFix: %v", err)
+		t.Fatalf("generateWithAgent: %v", err)
 	}
 	if fix.files["a.yaml"] != "fixed\n" {
 		t.Errorf("fix not returned: %v", fix.files)
@@ -114,12 +124,26 @@ func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
 	gp.critique = rev
 	gp.critiqueRetries = 1
 
-	_, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	_, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "rejected by review") {
 		t.Errorf("expected a review rejection, got %v", err)
 	}
 	// The reviewer's objection must be fed back into the retry instruction.
 	if !strings.Contains(fa.spec.Instruction, "wrong value") {
 		t.Errorf("retry instruction missing reviewer feedback: %q", fa.spec.Instruction)
+	}
+}
+
+func TestGenerateWithAgent_CritiqueErrorFailsClosed(t *testing.T) {
+	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
+	}}
+	rev := &fakeCompleter{critiqueErr: errors.New("review endpoint down")}
+	gp := agentGenParams(&AgentConfig{Runtime: fa})
+	gp.critique = rev
+	gp.critiqueRetries = 1
+
+	if _, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "review failed") {
+		t.Errorf("a review error should drop the fix (fail closed), got %v", err)
 	}
 }

@@ -158,12 +158,13 @@ ai:
   #   labels: [skill-suggestion]  # default [skill-suggestion]
 
   # Optional: agent-proposed fix PRs. After each fetch, for a systemic recurring
-  # pattern with a concrete fix, the engine drafts a minimal anchored edit and
-  # opens a DRAFT PR against the source repo via fork-and-PR. Off by default and
-  # the highest-risk feature (writes code upstream). Needs a FIX_TOKEN secret: a
-  # CLA-signed contributor's PAT that can fork the source repo. author_name and
-  # author_email MUST be that CLA-signed identity (EasyCLA/DCO). Start with
-  # dry_run to inspect proposals. See docs/fix-prs.md.
+  # pattern with a concrete fix, a coding agent (opencode) drafts a minimal
+  # change in a clone of the source repo and opens a DRAFT PR via fork-and-PR.
+  # Off by default and the highest-risk feature (writes code upstream). Needs a
+  # FIX_TOKEN secret: a CLA-signed contributor's PAT that can fork the source
+  # repo, and the opencode CLI + git on the runner (use deploy/fixer.Dockerfile
+  # on the Kubernetes-native path). author_name and author_email MUST be that
+  # CLA-signed identity (EasyCLA/DCO). Start with dry_run. See docs/fix-prs.md.
   # fix_prs:
   #   enabled: true
   #   author_name: "Jane Maintainer"     # required: CLA-signed identity
@@ -179,12 +180,8 @@ ai:
   #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
   #   dry_run: true               # propose to fix_previews.json without a PR
   #   critique_retries: 1         # LLM review re-prompts before dropping (default 1)
-  #   # Optional: generate the fix with a coding-agent CLI in a real clone of the
-  #   # source repo (multi-file edits; can build/test itself), instead of the
-  #   # default anchored single-file edit generator. Off unless set. The agent
-  #   # reuses the engine's ai.endpoint/model and its output flows through the
-  #   # same review, verify, and PR path. Needs the opencode CLI on the runner
-  #   # (the feature reports "unavailable" and skips when absent).
+  #   # Optional: tune the coding-agent generator. A nil block uses opencode with
+  #   # these defaults. The agent reuses the engine's ai.endpoint/model.
   #   agent_runtime:
   #     type: opencode           # default (only supported value)
   #     model: ""                # defaults to ai.model

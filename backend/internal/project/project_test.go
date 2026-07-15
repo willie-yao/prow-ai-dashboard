@@ -752,6 +752,21 @@ func TestEffectiveFixPRs_AgentRuntimeDefaults(t *testing.T) {
 	}
 }
 
+func TestEffectiveFixPRs_NilAgentRuntimeDefaultsToOpencode(t *testing.T) {
+	// A nil agent_runtime block means "opencode with defaults": the coding-agent
+	// generator is the only fix path, so the effective config always resolves.
+	c := &Config{
+		Branding: Branding{SourceRepo: SourceRepo{Owner: "o", Name: "n"}},
+		AI: &AI{FixPRs: &FixPRs{
+			Enabled: true, AuthorName: "J", AuthorEmail: "j@e.com",
+		}},
+	}
+	ar := c.EffectiveFixPRs().AgentRuntime
+	if ar == nil || ar.Type != "opencode" || ar.MaxTurns != 30 || ar.AllowBash == nil || !*ar.AllowBash {
+		t.Fatalf("nil agent_runtime should default to opencode: %+v", ar)
+	}
+}
+
 func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	base := func() *Config {
 		c, err := parse(strings.NewReader(validYAML))

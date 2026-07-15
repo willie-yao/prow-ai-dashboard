@@ -11,14 +11,15 @@ import (
 )
 
 // generateWithAgent produces a fix by running a coding-agent CLI in a real clone
-// of the source repo, instead of the anchored single-file edit generator. The
-// agent can touch multiple files and (when allowed) run the build and tests
-// while fixing. A reviewer model gates the result the same way the anchored
-// path does; a rejected change re-runs the agent with the objections, up to
-// critiqueRetries. The accepted fix flows through the same verify / open-PR /
-// preview path as the default generator.
+// of the source repo. The agent can touch multiple files and (when allowed) run
+// the build and tests while fixing. A reviewer model gates the result; a
+// rejected change re-runs the agent with the objections, up to critiqueRetries.
+// The accepted fix flows through the verify / open-PR / preview path.
 func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
 	a := gp.agent
+	if a == nil || a.Runtime == nil {
+		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
+	}
 	var reviewFeedback string
 	for attempt := 0; ; attempt++ {
 		res, err := a.Runtime.Generate(ctx, runtime.GenerateSpec{
@@ -67,9 +68,9 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 }
 
 // critiqueAgentFix asks a reviewer model whether the agent's change has concrete
-// defects, reusing the anchored path's reviewer contract. It sees the diff plus
-// the full changed file(s) so it can judge context. Returns a "; "-joined issue
-// string, empty when the change is acceptable.
+// defects. It sees the diff plus the full changed file(s) so it can judge
+// context. Returns a "; "-joined issue string, empty when the change is
+// acceptable.
 func critiqueAgentFix(ctx context.Context, c Completer, p models.PatternAnalysis, files map[string]string, diff string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString(diff)
@@ -100,10 +101,9 @@ Does this change have concrete defects (not style)? Answer with one line of JSON
 }
 
 // agentInstruction composes the fix task for the coding agent from the pattern,
-// carrying the same guardrails the anchored generator's prompts enforce:
-// minimal, targeted, no unrelated reformatting, and decline when the fix is not
-// a code change. reviewFeedback, when non-empty, carries a prior reviewer's
-// objections for a retry.
+// enforcing the guardrails: minimal, targeted, no unrelated reformatting, and
+// decline when the fix is not a code change. reviewFeedback, when non-empty,
+// carries a prior reviewer's objections for a retry.
 func agentInstruction(p models.PatternAnalysis, maintainer, reviewFeedback string, maxFiles int, allowBash bool) string {
 	var b strings.Builder
 	b.WriteString("A CI failure recurs systematically in this repository. Make the MINIMAL code change that fixes its root cause.\n\n")

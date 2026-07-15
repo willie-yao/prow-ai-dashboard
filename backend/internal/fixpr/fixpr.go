@@ -76,9 +76,8 @@ type Options struct {
 	// the PR is opened, recording the verdict in the PR body and preview. nil
 	// skips verification (the verdict is "skipped").
 	Verify *VerifyConfig
-	// Agent, when set, generates the fix with a coding-agent CLI in a real
-	// workspace clone (multi-file edits, can build/test) instead of the default
-	// anchored single-file edit generator. nil uses the default generator.
+	// Agent generates the fix with a coding-agent CLI in a real workspace clone
+	// (multi-file edits, can build/test). Required: it is the fix generator.
 	Agent *AgentConfig
 }
 
@@ -149,8 +148,6 @@ type PRBodyFiller interface {
 // Manager reconciles systemic recurring patterns into fix PRs.
 type Manager struct {
 	pr        prClient
-	completer Completer
-	source    sourceReader
 	stateFile string
 	opts      Options
 	state     *State
@@ -190,18 +187,16 @@ type Failure struct {
 	Reason  string
 }
 
-// NewClients builds the GitHub PR client and source reader from a token.
-func NewClients(token string) (*ghpr.Client, sourceReader) {
-	return ghpr.NewClient(nil, token), newHTTPSource(token)
+// NewClients builds the GitHub PR client from a token.
+func NewClients(token string) *ghpr.Client {
+	return ghpr.NewClient(nil, token)
 }
 
 // NewManager builds a Manager and loads prior state from stateFile if present.
-func NewManager(pr prClient, completer Completer, source sourceReader, stateFile string, opts Options) *Manager {
+func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
 	return &Manager{
 		pr:        pr,
-		completer: completer,
-		source:    source,
 		stateFile: stateFile,
 		opts:      opts,
 		state:     statefile.Load[TrackedFix](stateFile, repo, "fix PRs"),
@@ -310,10 +305,8 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
 func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string) (*proposedFix, error) {
-	return generateFix(ctx, genParams{
-		completer:       m.completer,
+	return generateWithAgent(ctx, genParams{
 		critique:        m.opts.Critique,
-		source:          m.source,
 		owner:           m.opts.SourceOwner,
 		repo:            m.opts.SourceName,
 		ref:             ref,
