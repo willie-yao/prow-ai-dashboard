@@ -13,9 +13,9 @@ that run alongside your inference stack.
 
 - **[USAGE.md](USAGE.md)** - how to deploy and run the Orka path, the config it
   reads, and the knobs. Start here.
-- **[MIGRATION.md](MIGRATION.md)** - the evaluation (what was proven, the
-  same-model control, the honest cost/quality trade) and the productization
-  recommendation.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - how it works: where each Orka resource
+  is created, the CRD shapes, and how the engine's harness (cache, convergence,
+  critique, skills) is reconstructed out of Kubernetes objects.
 - **[worker-patches/](worker-patches/)** - the required Orka ai-worker changes
   (convergence + transient-critique) and the numbers behind them.
 
@@ -29,7 +29,8 @@ patches just to converge. After those patches Orka is at process parity with the
 engine on a cheap model (converges 15/15, grounds every transient verdict), and the
 residual quality gap is pure model capability. Recommendation: adopt Orka as an
 optional, co-located, strong-model backend; keep the engine as the default
-cheap-model path; do not decommission. Details and numbers in MIGRATION.md.
+cheap-model path; do not decommission. Convergence and discipline numbers are in
+[worker-patches/README.md](worker-patches/README.md).
 
 ## Known constraints
 

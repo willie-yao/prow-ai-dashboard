@@ -18,7 +18,8 @@ server              ->  unchanged
 ```
 
 > Experimental, `orka` branch only. Not wired into `main`, CI, or the product
-> image. See `MIGRATION.md` for the evaluation and the recommendation.
+> image. See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works and the README
+> "Headline finding" for the evaluation and recommendation.
 
 ## What you provide vs what Orka provides
 
