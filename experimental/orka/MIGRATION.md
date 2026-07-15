@@ -259,6 +259,22 @@ F1a) and computed ground-truth-free metrics (full write-up: session
 Remaining ground-truth work (needs a CAPZ expert or outcome data): score the 10
 disagreements against artifacts / did-a-fix-land outcomes.
 
+Expert adjudication (DONE, 2026-07-14): all 10 disagreements were decided against
+the raw GCS artifacts using the debug-capz-k8s skill (full write-up in
+`files/orka-f3-report.md`). Result: on every one of the 10, the Orka pipeline's
+classification is as good or better than the engine's reference label - native
+clearly correct on 6 (f03/f04/f05/f06/f08 real bugs the engine mislabeled
+transient; f15 an Azure-extension hang the engine mislabeled a bug), better
+attribution on 2 (f13/f14 upstream DRA-alpha, not CAPZ), genuinely split on 2
+(f09/f11, native's client-rate-limiter mechanism correct vs the engine's
+unsupported scale-down guess), and never clearly worse. Key inversions: (1) the
+naive engine-agreement metric was penalizing native for being RIGHT; (2) native
+is not merely "over-transient" - it discriminates correctly (real CAPZ bugs ->
+bug: azl3 etcd-join, NSG reconcile; Azure/upstream -> transient/not-ours). This
+measures correctness, not process: the 3/8 verify_timeline discipline gap stands,
+so a deterministic gate is still warranted so correctness does not depend on the
+model choosing to verify.
+
 ### F3 (original) - Larger adjudicated batch / outcome ground truth
 Beyond the 15-failure A2: a larger adjudicated batch + outcome-based labels with a
 CAPZ expert to firm up the comparable-or-better claim.
