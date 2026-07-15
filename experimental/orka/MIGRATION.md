@@ -315,3 +315,20 @@ a MODEL upgrade, not a harness upgrade; the engine's convergence/critique machin
 does real work a small model needs. To migrate at the engine's cost point, Orka
 needs that machinery ported (deterministic verify_timeline gate + floors + forced
 final answer). Otherwise run Orka on a strong model and pay for it.
+
+## G-Converge (DONE): closed the small-model convergence gap
+
+Acting on the same-model finding, ported the engine's convergence machinery into
+the Orka worker + producer. Measured on the same 15 (Orka on gemini-3.5-flash,
+valid final analyses): baseline 6/15 -> forced tools-free finalization 9/15 ->
++re-prompt on empty final message **15/15**. The decisive diagnosis: gemini was not
+looping to the cap, it terminated early with an EMPTY final message (no tool calls,
+no content), which the loop submitted as an empty result. Two worker changes fix it
+(`experimental/orka/worker-patches/ai-worker-convergence.patch`: forced tools-free
+finalization in the last 2 iterations + a one-shot re-prompt on empty final
+content); the producer prompt was hardened too (committed). Orka now matches the
+engine's convergence robustness on the same cheap model. This closes gap #1
+(convergence); gap #2 (classification: gemini still mislabels azl3 transient) is
+model-limited and remains the target of the deterministic critique gate
+(G-Critique, not yet built). Worker changes are Orka-side (carried as a patch, to
+be upstreamed).
