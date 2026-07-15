@@ -827,6 +827,21 @@ func (c *Config) Validate() error {
 		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {
 			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables the review)")
 		}
+		if ar := f.AgentRuntime; ar != nil {
+			switch strings.TrimSpace(ar.Type) {
+			case "", "opencode":
+			default:
+				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q)", ar.Type, "opencode")
+			}
+			if ar.MaxTurns < 0 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be >= 0")
+			}
+			if s := strings.TrimSpace(ar.Timeout); s != "" {
+				if _, err := time.ParseDuration(s); err != nil {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout %q is not a valid duration", ar.Timeout)
+				}
+			}
+		}
 	}
 
 	return nil

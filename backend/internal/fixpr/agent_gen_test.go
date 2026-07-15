@@ -86,3 +86,40 @@ type errWrap struct{ err error }
 
 func (e errWrap) Error() string { return "agent: " + e.err.Error() }
 func (e errWrap) Unwrap() error { return e.err }
+
+func TestGenerateWithAgent_CritiqueApproves(t *testing.T) {
+	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
+	}}
+	rev := &fakeCompleter{} // empty critique -> approved
+	gp := agentGenParams(&AgentConfig{Runtime: fa})
+	gp.critique = rev
+	gp.critiqueRetries = 1
+
+	fix, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	if err != nil {
+		t.Fatalf("generateFix: %v", err)
+	}
+	if fix.files["a.yaml"] != "fixed\n" {
+		t.Errorf("fix not returned: %v", fix.files)
+	}
+}
+
+func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
+	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+		Files: map[string]string{"a.yaml": "still wrong\n"}, Diff: "diff",
+	}}
+	rev := &fakeCompleter{critique: `{"issues": ["wrong value"]}`}
+	gp := agentGenParams(&AgentConfig{Runtime: fa})
+	gp.critique = rev
+	gp.critiqueRetries = 1
+
+	_, err := generateFix(context.Background(), gp, systemicPattern("etcd"))
+	if err == nil || !strings.Contains(err.Error(), "rejected by review") {
+		t.Errorf("expected a review rejection, got %v", err)
+	}
+	// The reviewer's objection must be fed back into the retry instruction.
+	if !strings.Contains(fa.spec.Instruction, "wrong value") {
+		t.Errorf("retry instruction missing reviewer feedback: %q", fa.spec.Instruction)
+	}
+}

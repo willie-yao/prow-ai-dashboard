@@ -127,6 +127,52 @@ returns concrete defects (not style). If it objects, the engine re-prompts the
 edit step with that feedback, up to `critique_retries` times (default 1), then
 drops the fix. The review uses the same AI client as generation.
 
+### Coding-agent generator (`agent_runtime`)
+
+By default the fix is drafted as an **anchored single-file edit**: the engine
+picks a target file, reads it, and the model returns a verbatim search/replace.
+That is deliberately minimal but cannot create files, span several files
+coherently, or run the build while fixing.
+
+Setting `agent_runtime` swaps the generation step for a **coding-agent CLI**
+running in a real clone of the source repo. The agent can make multi-file
+changes and, with `allow_bash: true`, run the build and tests to check its own
+work before finishing. Everything else is unchanged: the same reviewer gate
+(`critique_retries`), `verify`, `max_files`, `max_new_per_run`, `dry_run`, and
+the fork-and-PR path all apply to the agent's output exactly as to the anchored
+generator's.
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    author_name: "Jane Maintainer"
+    author_email: "jane@example.com"
+    agent_runtime:
+      type: opencode        # default and only supported value
+      model: ""             # defaults to ai.model
+      max_turns: 30         # bound the agent loop (default 30)
+      allow_bash: true      # let it build/test while fixing (default true)
+      timeout: 10m          # default: the Runtime default
+```
+
+The agent uses the engine's own `ai.endpoint` and `ai.model`, so the fix is
+produced by the same model as the analysis, including an open-weight model served
+over an OpenAI-compatible endpoint. `opencode` is provider-agnostic; the engine
+configures it with a single custom provider pointed at your endpoint in an
+isolated home directory, so no opencode account or extra key is needed.
+
+Like `verify`, this needs a toolchain on the runner: the `opencode` CLI and git.
+When either is absent the feature reports "unavailable" and the fix is skipped,
+so the distroless server/worker image degrades gracefully. Install `opencode` in
+the deploy workflow (Pages path) or a runner/image that has it. Because the agent
+runs `bash` in a clone of the source repo, enable it only for a source repo you
+trust; it runs on the same trust boundary as `verify`.
+
+The agent path is opt-in and additive: omit `agent_runtime` to keep the anchored
+generator. A pod-isolated agent runtime can replace the local one later behind
+the same interface without any config change.
+
 ### Verification (`verify`)
 
 When `verify.enabled` is set, the engine builds and vets the proposed change
@@ -189,7 +235,9 @@ the template uses `FIX_TOKEN`, which already has Contents read on the source rep
 
 - **Opt-in** per project; **draft-only** PRs; never pushes to a protected branch.
 - Only **systemic**, at-or-above-`min_confidence` patterns with a concrete fix.
-- **Anchored edits**, exact-match-once or rejected; bounded by `max_files`.
+- **Anchored edits**, exact-match-once or rejected; bounded by `max_files`. With
+  `agent_runtime`, a coding agent makes the change instead, still bounded by
+  `max_files` and gated by the same review.
 - Dedicated **`FIX_TOKEN`** with a CLA-signed author and DCO sign-off.
 - **Idempotent**: a hidden marker keyed by job + root-cause fingerprint (local
   state plus an open-PR search) means a pattern is never proposed twice, and a
