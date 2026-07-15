@@ -294,3 +294,24 @@ pattern/semantic) and add a Helm `analysis: orka|inprocess` switch.
 ### F6 - Productization decision
 Fork vs keep-on-branch vs upstream-as-selectable-backend, based on manager
 interest + F1-F5 outcomes.
+
+## F3 same-model control (Orka on gemini-3.5-flash) - corrects the harness read
+
+Ran the same 15 through Orka on Copilot `gemini-3.5-flash` (the engine's model) to
+separate harness from model (full write-up in `files/orka-f3-report.md`). Two
+findings that qualify the adjudication above:
+1. The F3 "native wins" were MODEL-driven. On the decisive azl3 cases (f05/f08),
+   holding the Orka harness constant and swapping claude->gemini flips the answer
+   from RIGHT (bug) to WRONG (transient) - the same mistake engine+gemini makes.
+   The correct calls came from claude-sonnet-4.5, not the Orka harness.
+2. Reversal on robustness: Orka+gemini produced a valid final analysis on only
+   6/15 (the other 9 dug deep but never emitted final JSON), whereas the engine's
+   production config (gemini-3.5-flash + floors + critique retries + forced
+   final-answer) yields a label on all 15. With the same cheap model, the Orka
+   harness is currently WORSE at convergence.
+
+Bottom line: Orka+claude is genuinely excellent and artifact-grounded, but that is
+a MODEL upgrade, not a harness upgrade; the engine's convergence/critique machinery
+does real work a small model needs. To migrate at the engine's cost point, Orka
+needs that machinery ported (deterministic verify_timeline gate + floors + forced
+final answer). Otherwise run Orka on a strong model and pay for it.
