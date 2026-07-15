@@ -12,7 +12,7 @@ metadata:
 spec:
   description: "Deterministically report how many recent builds of this job had the exact same JUnit test fail. Pass the failing test name and optional count; returns the builds checked, how many failed this test, and the per-build result."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/recurrence
+    url: http://artifact-tool.orka-system.svc:8080/tool/recurrence
     method: POST
   parameters:
     type: object

@@ -26,7 +26,7 @@ server / Pages           unchanged
 ```
 
 Three of these are code in this repo (`backend/cmd/orka-producer`,
-`orka-ingestor`, `orka-gcs-tool`); the ai-worker is Orka's own binary,
+`orka-ingestor`, `orka-artifact-tool`); the ai-worker is Orka's own binary,
 carrying the patches in [worker-patches/](worker-patches/).
 
 ## Where Orka resources are created
@@ -67,10 +67,10 @@ The producer walks `jobs/*.json`, and for every `status: "failed"` test case
 
 ### Tool (one clone per distinct build x tool group)
 
-A single GCS tool shim serves every build and bucket. The producer does **not**
-create a tool per Task; it clones each base Tool CRD once per distinct build
-(`main.go:159-169`) via `cloneToolForBuild` (`main.go:351`), injecting two static
-headers:
+A single artifact tool shim serves every build and bucket. The producer does
+**not** create a tool per Task; it clones each base Tool CRD once per distinct
+build (`main.go:159-169`) via `cloneToolForBuild` (`main.go:351`), injecting
+static routing headers:
 
 ```yaml
 spec:
@@ -78,12 +78,18 @@ spec:
     headers:
       X-Build-Prefix: <bucket-relative build dir>
       X-Bucket: <bucket>
+      X-Storage-Provider: <gcs | gcsweb>   # from the consumer's project.yaml
+      X-Storage-Base: <gcsweb gateway root>  # only for gcsweb (e.g. S3)
 ```
 
 The shim resolves its backend per request from those headers
-(`orka-gcs-tool/toolenv.go`), so a tool always reads the Task's own
-build in the right bucket regardless of what the model passes. Base Tool CRDs are
-loaded from `experimental/orka/manifests/` by `loadBaseTools` (`main.go:319`).
+(`orka-artifact-tool/toolenv.go`), so a tool always reads the Task's own build
+in the right bucket **and on the right storage provider** regardless of what the
+model passes. Storage is provider-agnostic: the shim reuses the engine's
+`internal/storage` (gcs, or gcsweb over an S3 gateway), defaulting from its
+`STORAGE_*` env and overriding per request from the `X-Storage-*` headers the
+producer derives from `project.yaml`. Base Tool CRDs are loaded from
+`experimental/orka/manifests/` by `loadBaseTools` (`main.go:319`).
 
 ### The apply
 
@@ -129,11 +135,11 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Per-failure build isolation (fetcher scopes each analysis to one build) | Per-build Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; the model cannot read the wrong build. | `cloneToolForBuild` + shim `toolenv.go` |
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `main.go:117`, `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
-| Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-gcs-tool/validate.go` |
+| Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-artifact-tool/validate.go` |
 | Critique gate: transient discipline | Worker re-prompts an `is_transient=true` that never called `verify_timeline`, per the engine's confirm-or-default-to-bug contract. | `worker-patches/` (4) + `timeline.go` |
-| Cross-build pattern correlation | `check_recurrence` tool correlates a failure across recent builds. | `orka-gcs-tool/recurrence.go` |
-| Skill-driven required evidence | `required_evidence` tool returns the must-read artifacts for a failure class. | `orka-gcs-tool/requiredevidence.go` |
-| Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-gcs-tool/transient.go` |
+| Cross-build pattern correlation | `check_recurrence` tool correlates a failure across recent builds. | `orka-artifact-tool/recurrence.go` |
+| Skill-driven required evidence | `required_evidence` tool returns the must-read artifacts for a failure class. | `orka-artifact-tool/requiredevidence.go` |
+| Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-artifact-tool/transient.go` |
 
 The engine enforces these *in code*; Orka enforces them as *tools the agent must
 call* plus *worker re-prompts*. The consequence, quantified in
@@ -153,11 +159,12 @@ for Claude, so `manifests/50-copilot-proxy.yaml` de-streams and injects the
 
 ## Consumer-driven, multi-consumer
 
-The producer reads only three fields from a consumer's `project.yaml`:
-`ai.tools` (via `resolveTools`, `main.go:59`), `storage.bucket`, and the display
-id. Tool selection, bucket routing, and the prompt all follow from those, so the
-same binaries serve CAPZ (`kubernetes-ci-logs`, cluster-per-test, `k8s` tools) and
-Istio (`istio-prow`, Go integration tests, `filesystem` only) unchanged. Every
-other `ai.*` knob (`max_iters`, `min_tool_calls`, `critique.*`, `evidence.*`) is
-engine-only and inert on this path: it lives in the worker patches and the shim
-tools, not in `project.yaml`.
+The producer reads the tool, storage, and id fields from a consumer's
+`project.yaml`: `ai.tools` (via `resolveTools`, `main.go:59`), the `storage`
+block (`bucket` + `provider`/`base`/`prow_base`), and the display id. Tool
+selection, bucket + provider routing, and the prompt all follow from those, so
+the same binaries serve CAPZ (`kubernetes-ci-logs` on GCS, cluster-per-test,
+`k8s` tools) and a project on an S3-backed Prow behind gcsweb (`filesystem` only)
+unchanged. Every other `ai.*` knob (`max_iters`, `min_tool_calls`, `critique.*`,
+`evidence.*`) is engine-only and inert on this path: it lives in the worker
+patches and the shim tools, not in `project.yaml`.

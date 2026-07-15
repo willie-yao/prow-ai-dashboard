@@ -9,7 +9,7 @@
 #   orka-ingestor        -> patches ai_summary/ai_analysis back into jobs/*.json
 #
 # Prereqs: the Orka stack deployed on kind (see experimental/orka/README.md):
-# Orka + CRDs, the copilot Provider + proxy, and the gcs-tool Deployment.
+# Orka + CRDs, the copilot Provider + proxy, and the artifact-tool Deployment.
 #
 # Usage: experimental/orka/run-demo.sh <consumer-project-dir>
 #   env: BUILDS (default 3), VERSION (default v1), CTX (default kind-orka-spike),

@@ -16,7 +16,7 @@ metadata:
 spec:
   description: "Deterministically verify that artifact paths cited in an analysis actually exist in this build's tree. Pass the list of artifact paths the analysis relies on; returns which are present and which are missing. Reject any analysis that cites a missing path."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/validate_analysis
+    url: http://artifact-tool.orka-system.svc:8080/tool/validate_analysis
     method: POST
   parameters:
     type: object

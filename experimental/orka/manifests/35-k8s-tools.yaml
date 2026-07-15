@@ -1,4 +1,4 @@
-# Tier-2 k8s discovery Tool CRDs, layered on the same gcs-tool service. These
+# Tier-2 k8s discovery Tool CRDs, layered on the same artifact-tool service. These
 # encode Kubernetes-shaped navigation over the artifact tree (they use the same
 # artifact Browser as the filesystem tools, not a live cluster). They exist to
 # close the biggest gap seen in the filesystem-only evaluation: mapping a failed
@@ -14,7 +14,7 @@ metadata:
 spec:
   description: "List workload Kubernetes clusters whose debug artifacts were captured under artifacts/clusters/ for this build. Excludes the management (bootstrap) cluster."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/discover_clusters
+    url: http://artifact-tool.orka-system.svc:8080/tool/discover_clusters
     method: POST
   parameters:
     type: object
@@ -28,7 +28,7 @@ metadata:
 spec:
   description: "Resolve which workload cluster a failed test most likely ran against. Returns the chosen cluster plus reason and the full candidate list so you can override. If no confident match, reason explains why and you should pick from candidates by reasoning about the test's flavor."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/find_my_cluster
+    url: http://artifact-tool.orka-system.svc:8080/tool/find_my_cluster
     method: POST
   parameters:
     type: object
@@ -46,7 +46,7 @@ metadata:
 spec:
   description: "List the per-machine (per-VM/node) debug directories under a discovered cluster. Use list-machine-logs to see which log files each machine has."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/list_cluster_machines
+    url: http://artifact-tool.orka-system.svc:8080/tool/list_cluster_machines
     method: POST
   parameters:
     type: object
@@ -64,7 +64,7 @@ metadata:
 spec:
   description: "List the log files present in a machine's debug directory (boot.log, kubelet.log, journal.log, etc.), in priority order. Use before tail/grep so you do not fetch missing files."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/list_machine_logs
+    url: http://artifact-tool.orka-system.svc:8080/tool/list_machine_logs
     method: POST
   parameters:
     type: object
@@ -85,7 +85,7 @@ metadata:
 spec:
   description: "List management-cluster controller deployments captured under artifacts/clusters/bootstrap/logs/. One entry per (namespace, deployment). Pass a namespace to scope; omit for all."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/discover_controllers
+    url: http://artifact-tool.orka-system.svc:8080/tool/discover_controllers
     method: POST
   parameters:
     type: object
@@ -102,7 +102,7 @@ metadata:
 spec:
   description: "Find the concrete pod-level container-log path for a controller deployment. Use the returned path with tail-artifact or grep-artifact."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/resolve_controller_log
+    url: http://artifact-tool.orka-system.svc:8080/tool/resolve_controller_log
     method: POST
   parameters:
     type: object

@@ -11,7 +11,7 @@ metadata:
 spec:
   description: "Return the CAPZ-specific artifacts that must be read before claiming a failure class such as control plane init, CNI, security group, upgrade, cloud-init, or image pull. Pass a failure-class keyword or phrase; the tool returns the matched class, required evidence, and notes."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/required_evidence
+    url: http://artifact-tool.orka-system.svc:8080/tool/required_evidence
     method: POST
   parameters:
     type: object

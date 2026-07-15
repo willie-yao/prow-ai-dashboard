@@ -12,7 +12,7 @@ metadata:
 spec:
   description: "Deterministically extract timestamped events from a log or Azure activity-log artifact and return them ordered by time. Use this before making causal-ordering or is_transient claims; optionally filter to lines containing a resource substring."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/verify_timeline
+    url: http://artifact-tool.orka-system.svc:8080/tool/verify_timeline
     method: POST
   parameters:
     type: object

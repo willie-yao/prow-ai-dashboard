@@ -12,7 +12,7 @@ metadata:
 spec:
   description: "Deterministically scan artifact paths and optional raw text for known CAPZ transient failure signatures before setting is_transient. Provide relevant artifact paths relative to the build root, raw text, or both; returns matched transient classes, evidence lines, and unreadable paths."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/check_transient_signatures
+    url: http://artifact-tool.orka-system.svc:8080/tool/check_transient_signatures
     method: POST
   parameters:
     type: object

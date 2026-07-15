@@ -40,7 +40,7 @@ backend/                       Go 1.25
     worker/                    Continuous watch worker (in-cluster incremental fetch)
     orka-producer/             Opt-in Orka backend: emits analysis Tasks + Tools
     orka-ingestor/             Opt-in Orka backend: patches Task results into jobs/*.json
-    orka-gcs-tool/             Opt-in Orka backend: HTTP shim exposing artifact tools
+    orka-artifact-tool/        Opt-in Orka backend: HTTP shim exposing artifact tools
     orka-copilot-proxy/        Opt-in Orka backend: Copilot de-streaming proxy
     ai-toolcall-spike/         Throwaway probe; safe to ignore
     _manifest_check/           Build-time check on manifest schema

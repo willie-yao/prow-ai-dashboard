@@ -23,6 +23,7 @@ import (
 // those, defaultBucket / defaultPrefix are used. Backends, Browsers and caches
 // are memoized per bucket and per (bucket, build).
 type buildResolver struct {
+	defaultCfg    storage.Config
 	defaultBucket string
 	defaultPrefix string
 
@@ -32,15 +33,16 @@ type buildResolver struct {
 	caches   map[string]*tools.Cache      // "bucket\x00prefix" -> cache
 }
 
-// bucketBackend is the storage backend + artifact factory for one GCS bucket.
+// bucketBackend is the storage backend + artifact factory for one bucket.
 type bucketBackend struct {
 	bucket  string
 	backend storage.Backend
 	factory *artifacts.BackendFactory
 }
 
-func newBuildResolver(defaultBucket, defaultPrefix string) (*buildResolver, error) {
+func newBuildResolver(defaultCfg storage.Config, defaultBucket, defaultPrefix string) (*buildResolver, error) {
 	r := &buildResolver{
+		defaultCfg:    defaultCfg,
 		defaultBucket: defaultBucket,
 		defaultPrefix: normalizeBuildPrefix(defaultPrefix),
 		buckets:       map[string]*bucketBackend{},
@@ -51,22 +53,47 @@ func newBuildResolver(defaultBucket, defaultPrefix string) (*buildResolver, erro
 	// per-request fallback always has a backend to fall back to.
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, err := r.bucketLocked(defaultBucket); r.buckets[defaultBucket] == nil {
+	if _, err := r.bucketLocked(defaultBucket, storage.Config{}); r.buckets[defaultBucket] == nil {
 		return nil, err
 	}
 	return r, nil
 }
 
-// bucketLocked returns the backend for bucket, creating it on first use. The
-// caller must hold r.mu. On a bad bucket it logs and falls back to the default.
-func (r *buildResolver) bucketLocked(bucket string) (*bucketBackend, error) {
+// effectiveCfg merges the shim's default storage config with a per-request
+// override (X-Storage-* headers), so a single shim can serve consumers on
+// different storage providers (gcs, gcsweb over an S3 gateway, ...).
+func (r *buildResolver) effectiveCfg(bucket string, override storage.Config) storage.Config {
+	cfg := r.defaultCfg
+	cfg.Bucket = bucket
+	if override.Provider != "" {
+		cfg.Provider = override.Provider
+	}
+	if override.Base != "" {
+		cfg.Base = override.Base
+	}
+	if override.WebBase != "" {
+		cfg.WebBase = override.WebBase
+	}
+	if override.ProwBase != "" {
+		cfg.ProwBase = override.ProwBase
+	}
+	if cfg.Provider == "" {
+		cfg.Provider = storage.ProviderGCS
+	}
+	return cfg
+}
+
+// bucketLocked returns the backend for bucket, creating it on first use from the
+// merged default + override storage config. The caller must hold r.mu. On a bad
+// bucket it logs and falls back to the default.
+func (r *buildResolver) bucketLocked(bucket string, override storage.Config) (*bucketBackend, error) {
 	if bucket == "" {
 		bucket = r.defaultBucket
 	}
 	if bb, ok := r.buckets[bucket]; ok {
 		return bb, nil
 	}
-	backend, err := storage.New(storage.Config{Provider: storage.ProviderGCS, Bucket: bucket}, nil)
+	backend, err := storage.New(r.effectiveCfg(bucket, override), nil)
 	if err != nil {
 		if bb, ok := r.buckets[r.defaultBucket]; ok {
 			log.Printf("⚠ bucket %q init failed (%v); using default %q", bucket, err, r.defaultBucket)
@@ -92,10 +119,10 @@ func normalizeBuildPrefix(p string) string {
 
 // resolve returns the backend, Browser, web-URL base and normalized prefix for a
 // build in a bucket, memoizing the Browser per (bucket, build).
-func (r *buildResolver) resolve(bucket, prefix string) (*bucketBackend, artifacts.Browser, string, string) {
+func (r *buildResolver) resolve(bucket, prefix string, override storage.Config) (*bucketBackend, artifacts.Browser, string, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	bb, _ := r.bucketLocked(bucket)
+	bb, _ := r.bucketLocked(bucket, override)
 	prefix = normalizeBuildPrefix(prefix)
 	if prefix == "" {
 		prefix = r.defaultPrefix
@@ -116,7 +143,7 @@ func (r *buildResolver) cache(bucket, prefix string) *tools.Cache {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	bb, _ := r.bucketLocked(bucket)
+	bb, _ := r.bucketLocked(bucket, storage.Config{})
 	key := bb.bucket + "\x00" + prefix
 	c, ok := r.caches[key]
 	if !ok {
@@ -127,8 +154,8 @@ func (r *buildResolver) cache(bucket, prefix string) *tools.Cache {
 }
 
 // aiEnv builds the engine-tool Env for a build in a bucket.
-func (r *buildResolver) aiEnv(bucket, prefix string) *tools.Env {
-	bb, b, web, p := r.resolve(bucket, prefix)
+func (r *buildResolver) aiEnv(bucket, prefix string, override storage.Config) *tools.Env {
+	bb, b, web, p := r.resolve(bucket, prefix, override)
 	return &tools.Env{
 		Browser:             b,
 		Cache:               r.cache(bb.bucket, p),
@@ -139,8 +166,8 @@ func (r *buildResolver) aiEnv(bucket, prefix string) *tools.Env {
 }
 
 // toolEnvFor builds the quality-tool toolEnv for a build in a bucket.
-func (r *buildResolver) toolEnvFor(bucket, prefix string) *toolEnv {
-	bb, b, web, p := r.resolve(bucket, prefix)
+func (r *buildResolver) toolEnvFor(bucket, prefix string, override storage.Config) *toolEnv {
+	bb, b, web, p := r.resolve(bucket, prefix, override)
 	return &toolEnv{
 		backend:         bb.backend,
 		bucket:          bb.bucket,
@@ -148,6 +175,18 @@ func (r *buildResolver) toolEnvFor(bucket, prefix string) *toolEnv {
 		webURLBase:      web,
 		browser:         b,
 		browserForBuild: bb.factory.ForBuild,
+	}
+}
+
+// requestStorage extracts per-request storage overrides from the X-Storage-*
+// headers, so a shared shim can serve consumers on different providers. Empty
+// fields fall back to the shim's default storage config.
+func requestStorage(r *http.Request) storage.Config {
+	return storage.Config{
+		Provider: storage.Provider(strings.TrimSpace(r.Header.Get("X-Storage-Provider"))),
+		Base:     strings.TrimSpace(r.Header.Get("X-Storage-Base")),
+		WebBase:  strings.TrimSpace(r.Header.Get("X-Web-Base")),
+		ProwBase: strings.TrimSpace(r.Header.Get("X-Prow-Base")),
 	}
 }
 

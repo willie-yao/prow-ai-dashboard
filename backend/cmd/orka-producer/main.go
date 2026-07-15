@@ -118,6 +118,22 @@ func main() {
 	if bucket == "" {
 		bucket = cfg.Storage.Bucket
 	}
+	// Storage headers let the shim serve this consumer's provider (gcs, gcsweb
+	// over an S3 gateway, ...) instead of assuming GCS. Only non-empty fields
+	// are sent; the shim falls back to its own defaults for the rest.
+	storageMeta := map[string]string{}
+	if v := cfg.Storage.Provider; v != "" {
+		storageMeta["X-Storage-Provider"] = v
+	}
+	if v := cfg.Storage.Base; v != "" {
+		storageMeta["X-Storage-Base"] = v
+	}
+	if v := cfg.Storage.WebBase; v != "" {
+		storageMeta["X-Web-Base"] = v
+	}
+	if v := cfg.Storage.ProwBase; v != "" {
+		storageMeta["X-Prow-Base"] = v
+	}
 	projectLabel := cfg.DisplayShortName()
 
 	baseTools, err := loadBaseTools(*toolManifests, toolNames)
@@ -158,7 +174,7 @@ func main() {
 	for buildID, prefix := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, buildID, prefix, bucket, *namespace)
+			clone := cloneToolForBuild(doc, base, buildID, prefix, bucket, *namespace, storageMeta)
 			toolName := buildToolName(base, buildID)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
@@ -346,7 +362,10 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
 // X-Build-Prefix (and, when set, X-Bucket) headers so the shim serves this build
 // from the right bucket.
-func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, bucket, namespace string) map[string]any {
+// cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
+// build/bucket/storage headers so the shim serves this build from the right
+// bucket and provider.
+func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, bucket, namespace string, storageMeta map[string]string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -378,6 +397,9 @@ func cloneToolForBuild(base map[string]any, baseName, buildID, prefix, bucket, n
 	headers["X-Build-Prefix"] = prefix
 	if bucket != "" {
 		headers["X-Bucket"] = bucket
+	}
+	for k, v := range storageMeta {
+		headers[k] = v
 	}
 	return doc
 }

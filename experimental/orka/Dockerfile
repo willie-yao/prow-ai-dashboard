@@ -2,8 +2,8 @@
 # which with the CMD build-arg. Build context MUST be the backend/ directory.
 #
 # Long-lived shims (serve on :8080):
-#   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool \
-#     -t orka-gcs-tool:latest backend/
+#   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-artifact-tool \
+#     -t orka-artifact-tool:latest backend/
 #   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-copilot-proxy \
 #     -t orka-copilot-proxy:latest backend/
 #
@@ -13,7 +13,7 @@
 #   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-ingestor \
 #     -t orka-ingestor:latest backend/
 FROM golang:1.25.12-bookworm AS build
-ARG CMD=orka-gcs-tool
+ARG CMD=orka-artifact-tool
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

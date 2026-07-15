@@ -12,7 +12,7 @@ metadata:
 spec:
   description: "Deterministically compare one artifact in the current build with the same artifact from the most recent passing run of this periodic job. Pass an artifact path relative to the build root, such as build-log.txt; returns the passing build ID and a bounded unified-style diff."
   http:
-    url: http://gcs-tool.orka-system.svc:8080/tool/diff_last_passing
+    url: http://artifact-tool.orka-system.svc:8080/tool/diff_last_passing
     method: POST
   parameters:
     type: object

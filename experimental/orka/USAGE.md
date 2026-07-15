@@ -23,18 +23,21 @@ server              ->  unchanged
 
 ## What you provide vs what Orka provides
 
-You bring: a consumer `project.yaml` + `prompts/system.md`, a GCS bucket of Prow
-builds, and an OpenAI-compatible model endpoint (a `Provider`). Orka provides the
-Task CRD, the agentic worker loop, retries, and the result store.
+You bring: a consumer `project.yaml` + `prompts/system.md`, a bucket of Prow
+builds (GCS, or an S3 bucket behind a gcsweb gateway), and an OpenAI-compatible
+model endpoint (a `Provider`). Orka provides the Task CRD, the agentic worker
+loop, retries, and the result store.
 
 ## Configuration the Orka path reads
 
-The Orka path reads only THREE things from the consumer's `project.yaml`:
+The Orka path reads only the storage + tool + id fields from the consumer's
+`project.yaml`:
 
 | Field | Used for |
 |---|---|
 | `ai.tools` | which tool groups to enable (`filesystem`, `k8s`); default `[filesystem, k8s]` |
-| `storage.bucket` | the GCS bucket, routed to the shim via the `X-Bucket` header |
+| `storage.bucket` | the bucket, routed to the shim via the `X-Bucket` header |
+| `storage.provider` / `storage.base` / `storage.prow_base` | the storage backend (gcs or gcsweb/S3), routed via `X-Storage-*` headers so the shim reads the right provider |
 | `id` / `short_name` | the project label in the prompt |
 
 Everything else under `ai:` is ENGINE-ONLY and has NO effect on the Orka path:
@@ -73,12 +76,12 @@ Orka ai-worker (see `worker-patches/`), not in config.
    - GitHub Copilot: needs the de-streaming proxy (`manifests/50-copilot-proxy.yaml`
      + `manifests/11-copilot-provider.yaml`); Copilot is the only endpoint that
      needs it.
-4. **Tool shim.** Build and deploy the multi-bucket GCS tool shim:
+4. **Tool shim.** Build and deploy the multi-bucket artifact tool shim:
    ```bash
-   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-gcs-tool \
-     -t orka-gcs-tool:latest backend/
-   kind load docker-image orka-gcs-tool:latest --name orka-spike
-   kubectl apply -f experimental/orka/manifests/20-gcs-tool.yaml
+   docker build -f experimental/orka/Dockerfile --build-arg CMD=orka-artifact-tool \
+     -t orka-artifact-tool:latest backend/
+   kind load docker-image orka-artifact-tool:latest --name orka-spike
+   kubectl apply -f experimental/orka/manifests/20-artifact-tool.yaml
    ```
    One shim serves every bucket and build (routed per request by the `X-Bucket` /
    `X-Build-Prefix` headers the producer stamps).
@@ -196,7 +199,7 @@ manifests/
   00-rbac.yaml              Orka SA access to core.orka.ai (chart gap).
   11-copilot-provider.yaml  GitHub Copilot Provider (via the proxy).
   12-kimi-provider.yaml     In-cluster OpenAI-compatible Provider (no proxy).
-  20-gcs-tool.yaml          The multi-bucket GCS tool shim Deployment + Service.
+  20-artifact-tool.yaml          The multi-bucket artifact tool shim Deployment + Service.
   30-tools.yaml             Filesystem Tool CRDs (list/find/grep/read/tail).
   35-k8s-tools.yaml         k8s discovery Tool CRDs (CAPZ cluster navigation).
   36-41-*.yaml              Deterministic quality Tool CRDs (validate/verify/...).

@@ -1,4 +1,4 @@
-// Command orka-gcs-tool is an HTTP shim that exposes the engine's artifact
+// Command orka-artifact-tool is an HTTP shim that exposes the engine's artifact
 // tools (filesystem: list/read/tail/grep/find and k8s:
 // discover_clusters/find_my_cluster/... over a Prow build's GCS artifact tree)
 // as plain HTTP endpoints so Orka Tool CRDs can call them. The engine's domain
@@ -23,6 +23,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 func env(key, def string) string {
@@ -37,6 +38,17 @@ func main() {
 	buildPrefix := env("BUILD_PREFIX", "logs/periodic-cluster-api-provider-azure-e2e-main/2073230525962653696/")
 	addr := env("ADDR", ":8080")
 
+	// Default storage config. STORAGE_PROVIDER selects the backend (gcs, gcsweb
+	// over an S3 gateway, local); the *_BASE vars point gcsweb at its gateway.
+	// Per-request X-Storage-* headers override these, so one shim can serve
+	// consumers on different providers.
+	defaultCfg := storage.Config{
+		Provider: storage.Provider(env("STORAGE_PROVIDER", string(storage.ProviderGCS))),
+		Base:     os.Getenv("STORAGE_BASE"),
+		WebBase:  os.Getenv("STORAGE_WEB_BASE"),
+		ProwBase: os.Getenv("STORAGE_PROW_BASE"),
+	}
+
 	reg := tools.NewRegistry()
 	filesystem.Register(reg)
 	k8s.Register(reg)
@@ -44,8 +56,8 @@ func main() {
 	// The resolver serves any build from any bucket per-request (via the
 	// X-Bucket / X-Build-Prefix headers or "bucket" / "build" body fields), so
 	// one shared service backs many concurrent per-build analysis Tasks across
-	// consumers. Absent a selector it uses BUCKET / BUILD_PREFIX.
-	resolver, err := newBuildResolver(bucket, buildPrefix)
+	// consumers. Absent a selector it uses BUCKET / BUILD_PREFIX / STORAGE_*.
+	resolver, err := newBuildResolver(defaultCfg, bucket, buildPrefix)
 	if err != nil {
 		log.Fatalf("newBuildResolver: %v", err)
 	}
@@ -57,7 +69,7 @@ func main() {
 		qt := qt
 		http.HandleFunc(qt.route, func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			tenv := resolver.toolEnvFor(requestBucket(r, body), requestBuild(r, body))
+			tenv := resolver.toolEnvFor(requestBucket(r, body), requestBuild(r, body), requestStorage(r))
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			qt.h(tenv, w, r)
 		})
@@ -83,7 +95,7 @@ func main() {
 		defer cancel()
 		// Engine tools ignore the extra "bucket"/"build" fields; the resolver
 		// uses them to pick the bucket- and build-scoped Env.
-		res := reg.Dispatch(ctx, resolver.aiEnv(requestBucket(r, raw), requestBuild(r, raw)), name, json.RawMessage(raw))
+		res := reg.Dispatch(ctx, resolver.aiEnv(requestBucket(r, raw), requestBuild(r, raw), requestStorage(r)), name, json.RawMessage(raw))
 		log.Printf("🛠  %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(res.Payload)
@@ -93,7 +105,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	log.Printf("orka-gcs-tool on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
+	log.Printf("orka-artifact-tool on %s default-bucket=%s build=%s", addr, bucket, buildPrefix)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
