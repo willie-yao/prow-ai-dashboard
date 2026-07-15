@@ -626,6 +626,23 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			Token:    fixToken,
 		}
 	}
+	if ar := eff.AgentRuntime; ar != nil {
+		allowBash := ar.AllowBash == nil || *ar.AllowBash
+		model := ar.Model
+		if model == "" {
+			model = aiModel(cfg)
+		}
+		fixOpts.Agent = &fixpr.AgentConfig{
+			Runtime:    runtime.NewLocalAgent(),
+			Model:      model,
+			Endpoint:   aiEndpoint(cfg),
+			ModelToken: aiToken,
+			MaxTurns:   ar.MaxTurns,
+			AllowBash:  allowBash,
+			Timeout:    ar.ParsedTimeout(),
+			GitToken:   fixToken,
+		}
+	}
 	mgr := fixpr.NewManager(prClient, aiClient, source,
 		filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	stats, err := mgr.Reconcile(ctx, patterns)

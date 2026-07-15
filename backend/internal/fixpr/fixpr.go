@@ -76,6 +76,30 @@ type Options struct {
 	// the PR is opened, recording the verdict in the PR body and preview. nil
 	// skips verification (the verdict is "skipped").
 	Verify *VerifyConfig
+	// Agent, when set, generates the fix with a coding-agent CLI in a real
+	// workspace clone (multi-file edits, can build/test) instead of the default
+	// anchored single-file edit generator. nil uses the default generator.
+	Agent *AgentConfig
+}
+
+// AgentConfig configures the coding-agent fix generator.
+type AgentConfig struct {
+	// Runtime runs the coding agent against a clone of the source repo.
+	Runtime runtime.AgentRuntime
+	// Model, Endpoint, and ModelToken point the agent at the model. Empty Model
+	// uses the CLI default.
+	Model      string
+	Endpoint   string
+	ModelToken string
+	// MaxTurns bounds the agent loop; zero uses the CLI default.
+	MaxTurns int
+	// AllowBash lets the agent run build/tests while fixing.
+	AllowBash bool
+	// Timeout bounds the whole generation. Zero uses the Runtime default.
+	Timeout time.Duration
+	// GitToken authenticates the source clone. Empty clones anonymously, which
+	// is enough for a public repo.
+	GitToken string
 }
 
 // VerifyConfig configures pre-PR verification of a proposed fix.
@@ -296,6 +320,7 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 		maxFiles:        m.opts.MaxFiles,
 		critiqueRetries: m.opts.CritiqueRetries,
 		instruction:     instruction,
+		agent:           m.opts.Agent,
 	}, p)
 }
 

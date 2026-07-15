@@ -75,6 +75,9 @@ type genParams struct {
 	// instruction is an optional maintainer directive that steers the edit
 	// (e.g. "patch the kustomize base instead"). Empty for the batch path.
 	instruction string
+	// agent, when set, generates the fix with a coding-agent CLI instead of the
+	// anchored single-file edit generator.
+	agent *AgentConfig
 }
 
 // generateFix turns a pattern into a validated minimal edit: pick target
@@ -83,6 +86,9 @@ type genParams struct {
 // Validation or review failures re-prompt up to critiqueRetries, then the fix is
 // dropped.
 func generateFix(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
+	if gp.agent != nil {
+		return generateWithAgent(ctx, gp, p)
+	}
 	tree, err := gp.source.ListTree(ctx, gp.owner, gp.repo, gp.ref)
 	if err != nil {
 		return nil, fmt.Errorf("listing %s/%s tree: %w", gp.owner, gp.repo, err)

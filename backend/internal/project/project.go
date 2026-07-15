@@ -404,6 +404,28 @@ type FixPRs struct {
 	// image lacks (verification then reports "skipped"). Excluded from
 	// manifest.json.
 	Verify *FixVerify `yaml:"verify,omitempty" json:"-"`
+	// AgentRuntime, when set, generates the fix with a coding-agent CLI in a real
+	// workspace clone (multi-file edits, can build/test) instead of the default
+	// anchored single-file edit generator. Off by default. Excluded from
+	// manifest.json.
+	AgentRuntime *FixAgentRuntime `yaml:"agent_runtime,omitempty" json:"-"`
+}
+
+// FixAgentRuntime configures the coding-agent generator for fix PRs.
+type FixAgentRuntime struct {
+	// Type selects the coding-agent CLI. Defaults to "opencode".
+	Type string `yaml:"type,omitempty" json:"type,omitempty"`
+	// Model overrides the model the agent uses, in the CLI's id form. Empty uses
+	// the engine's configured ai.model.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// MaxTurns bounds the agent loop. Defaults to 30.
+	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+	// AllowBash lets the agent run shell commands (build, tests) while fixing.
+	// Defaults to true.
+	AllowBash *bool `yaml:"allow_bash,omitempty" json:"allow_bash,omitempty"`
+	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
+	// default.
+	Timeout string `yaml:"timeout,omitempty" json:"-"`
 }
 
 // FixVerify configures pre-PR verification of a proposed fix.
@@ -445,6 +467,19 @@ func (v *FixVerify) ParsedTimeout() time.Duration {
 	return d
 }
 
+// ParsedTimeout returns the agent generation timeout, or 0 when unset or
+// unparseable (the Runtime default then applies).
+func (a *FixAgentRuntime) ParsedTimeout() time.Duration {
+	if a == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(a.Timeout))
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
 // EffectiveFixPRs resolves the fix-PR config with defaults applied. The target
 // repo defaults to branding.source_repo when `repo` is omitted entirely. Safe on
 // a nil receiver.
@@ -475,6 +510,18 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	if out.CritiqueRetries == nil {
 		n := 1
 		out.CritiqueRetries = &n
+	}
+	if out.AgentRuntime != nil {
+		if strings.TrimSpace(out.AgentRuntime.Type) == "" {
+			out.AgentRuntime.Type = "opencode"
+		}
+		if out.AgentRuntime.MaxTurns <= 0 {
+			out.AgentRuntime.MaxTurns = 30
+		}
+		if out.AgentRuntime.AllowBash == nil {
+			t := true
+			out.AgentRuntime.AllowBash = &t
+		}
 	}
 	return out
 }
