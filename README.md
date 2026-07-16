@@ -51,7 +51,7 @@ to light up server-only features. Whichever you pick, you never fork the engine.
 | --- | --- | --- |
 | Runs the fetch | In-cluster worker/CronJob | GitHub Actions runner |
 | Serves the site | In-cluster server (+ ingress) | GitHub Pages |
-| AI endpoint | In-cluster or public | Public (or self-hosted runner) |
+| AI endpoint | In-cluster or public | Public (private via `skip-fetch`) |
 | Interactive actions | Yes (admin sign-in) | No (read-only) |
 | Needs a cluster | Yes | No |
 
@@ -102,9 +102,6 @@ A dashboard is shaped by three things:
 - [Orka analysis backend](experimental/orka/): the recommended Kubernetes-native
   analysis backend, running failure analysis as Orka Tasks alongside your
   inference stack.
-- [In-cluster runner](docs/self-hosted-runner-in-cluster.md): for the Pages
-  path, run the deploy on a self-hosted runner to reach a private, in-cluster
-  AI endpoint.
 - [Releasing](docs/releasing.md): cut an engine release and how consumers pin.
 
 **Development**
