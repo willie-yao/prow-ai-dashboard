@@ -256,6 +256,17 @@ jobs:
           VITE_BASE_PATH: ${{ steps.cfg.outputs.base_path }}
         run: npm run build
 
+      # Keep operational files out of the public site. Vite copies public/data/
+      # into dist/data/ at build; strip the AI cache and write-automation state
+      # (they carry operational metadata, never dashboard data). Kept in sync
+      # with output.NonPublishedFiles in the backend.
+      - name: Strip non-published data files
+        run: |
+          d=engine/frontend/dist/data
+          [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/issue_state.json \
+            "$d"/fix_pr_state.json "$d"/fix_previews.json \
+            "$d"/skill_suggest_state.json "$d"/notification_state.json || true
+
       # --- Deploy to GitHub Pages ---
       - uses: actions/configure-pages@v5
 
