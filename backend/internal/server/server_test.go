@@ -91,7 +91,7 @@ func TestHandler_Capabilities(t *testing.T) {
 	if got.Mode != "server" {
 		t.Errorf("Mode = %q, want server", got.Mode)
 	}
-	if got.Features.Chat || got.Features.Actions {
+	if got.Features.Actions {
 		t.Errorf("Features = %+v, want all false at read parity", got.Features)
 	}
 }

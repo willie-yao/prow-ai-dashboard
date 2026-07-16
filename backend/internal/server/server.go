@@ -91,8 +91,6 @@ type AuthInfo struct {
 
 // Features enumerates the optional interactive capabilities.
 type Features struct {
-	// Chat enables conversational triage UI.
-	Chat bool `json:"chat"`
 	// Actions enables on-page create-issue / propose-fix buttons.
 	Actions bool `json:"actions"`
 }
