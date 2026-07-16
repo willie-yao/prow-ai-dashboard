@@ -960,6 +960,7 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 	}
 
 	var transientSkipped atomic.Int64
+	var judgeRan, judgeObjected, judgeRevised atomic.Int64
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	for _, w := range work {
@@ -973,10 +974,24 @@ func analyzeFailuresWithAI(ctx context.Context, cfg *project.Config, details []m
 			if before == nil && w.tc.AISummary != nil && w.tc.AISummary.IsTransient && w.tc.AIAnalysis == nil {
 				transientSkipped.Add(1)
 			}
+			if a := w.tc.AIAnalysis; a != nil {
+				if a.JudgeRan {
+					judgeRan.Add(1)
+				}
+				if a.JudgeObjected {
+					judgeObjected.Add(1)
+				}
+				if a.JudgeRevised {
+					judgeRevised.Add(1)
+				}
+			}
 		}(w)
 	}
 	wg.Wait()
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
+	if n := judgeRan.Load(); n > 0 {
+		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
+	}
 
 	// Always run the job-level pattern pass. It self-gates on failed build count
 	// and is cached.

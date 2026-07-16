@@ -111,6 +111,14 @@ type AIAnalysis struct {
 	// CritiquePassed reports whether this analysis cleared the critique gate.
 	CritiquePassed bool `json:"critique_passed,omitempty"`
 
+	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
+	// whether the second-line LLM judge ran, whether it raised objections, and
+	// whether its objections drove an accepted revision. Recorded so the judge's
+	// value can be measured before deciding to keep it always-on.
+	JudgeRan      bool `json:"judge_ran,omitempty"`
+	JudgeObjected bool `json:"judge_objected,omitempty"`
+	JudgeRevised  bool `json:"judge_revised,omitempty"`
+
 	// CritiqueVersion records the critique contract this analysis passed.
 	// Cache gates require the current version.
 	CritiqueVersion int `json:"critique_version,omitempty"`
