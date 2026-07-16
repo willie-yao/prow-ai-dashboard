@@ -23,7 +23,6 @@ var NonPublishedFiles = []string{
 	"issue_state.json",
 	"fix_pr_state.json",
 	"fix_previews.json",
-	"skill_suggest_state.json",
 	"notification_state.json",
 }
 

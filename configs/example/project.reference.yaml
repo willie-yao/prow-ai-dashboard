@@ -145,18 +145,6 @@ ai:
   # <project_dir>/skills/*.yaml when present; no config flag. See
   # docs/skills.md for the schema.
 
-  # Optional: auto-suggest skill recipes. After each fetch, for any systemic
-  # recurring pattern no existing skill covers, the engine drafts a
-  # skills/<id>.yaml recipe and opens a draft PR adding it to this repo. Off by
-  # default. Needs a SKILL_TOKEN secret (contents:write + pull-requests:write on
-  # this repo) wired into the deploy workflow; a dedicated token, like
-  # ISSUE_TOKEN. See docs/skills.md#auto-suggesting-recipes.
-  # suggest_skills:
-  #   enabled: true
-  #   min_confidence: high        # default high; only systemic patterns qualify
-  #   max_new_per_run: 1          # default 1
-  #   labels: [skill-suggestion]  # default [skill-suggestion]
-
   # Optional: agent-proposed fix PRs. After each fetch, for a systemic recurring
   # pattern with a concrete fix, a coding agent (opencode) drafts a minimal
   # change in a clone of the source repo and opens a DRAFT PR via fork-and-PR.
