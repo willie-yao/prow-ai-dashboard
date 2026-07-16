@@ -78,7 +78,8 @@ frontend/                      React 19 + Vite 8 + Tailwind 4
   src/
     hooks/useData.ts           Loads dashboard.json, flakiness.json, jobs/*
     components/ManifestProvider.tsx   Loads manifest.json
-configs/example/               Docs-only sample project.yaml + prompts/
+configs/example/               Docs-only sample project.yaml (minimal) +
+                               project.reference.yaml (full) + prompts/
 deploy/helm/                   Helm chart for the Kubernetes-native mode
 experimental/orka/             Opt-in Orka analysis backend (docs, manifests, worker-patches)
 Dockerfile                     Multi-stage image: fetcher + server + SPA
