@@ -295,6 +295,12 @@ type agenticCacheData struct {
 	// effective evidence requirements differ.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
+	// ModelHash is the fingerprint of the model + endpoint that produced
+	// this draft. The cache-read gate invalidates the entry when it differs
+	// from the current model, so a provider or model swap re-analyzes instead
+	// of serving the prior model's verdict.
+	ModelHash string `json:"model_hash,omitempty"`
+
 	// PromptHash is the fingerprint of the composed system prompt under
 	// which this entry was produced. The cache-read gate invalidates the
 	// entry when it differs from the current prompt.
@@ -617,6 +623,11 @@ func (c *Client) doAnalyzeAgentic(
 			if cached.SkillSetHash != wantHash {
 				critiqueOK = false
 			}
+			// A model or endpoint swap invalidates the entry: a new model must
+			// not serve the prior model's cached verdict.
+			if cached.ModelHash != c.modelFingerprint() {
+				critiqueOK = false
+			}
 			// The prompt is always sent to the model, so a prompt change
 			// invalidates the entry regardless of critique. Editing
 			// prompts/system.md re-analyzes on the next run with no cache clear.
@@ -642,6 +653,7 @@ func (c *Client) doAnalyzeAgentic(
 				analysis.CritiquePassed = cached.CritiquePassed
 				analysis.CritiqueVersion = cached.CritiqueVersion
 				analysis.SkillSetHash = cached.SkillSetHash
+				analysis.ModelHash = cached.ModelHash
 				analysis.PromptHash = cached.PromptHash
 				return summary, analysis, nil
 			}
@@ -1210,6 +1222,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 		CritiquePassed:   critiquePassed,
 		CritiqueVersion:  version,
 		SkillSetHash:     skillHash,
+		ModelHash:        c.modelFingerprint(),
 		PromptHash:       state.promptHash,
 	})
 }

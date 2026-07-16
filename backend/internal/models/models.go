@@ -120,6 +120,11 @@ type AIAnalysis struct {
 	// Empty when no recipes are loaded.
 	SkillSetHash string `json:"skill_set_hash,omitempty"`
 
+	// ModelHash fingerprints the model + endpoint that produced this
+	// analysis. A provider or model swap changes it, forcing re-analysis so a
+	// new model does not serve the prior model's cached verdict.
+	ModelHash string `json:"model_hash,omitempty"`
+
 	// PromptHash fingerprints the composed system prompt for this analysis.
 	// Prompt edits refresh affected failures on the next run.
 	PromptHash string `json:"prompt_hash,omitempty"`
