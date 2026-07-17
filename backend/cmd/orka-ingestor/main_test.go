@@ -56,6 +56,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 	const namespace = "orka-system"
 	results := map[string]string{}
 	detail := models.JobDetail{Name: "periodic-controller", JobID: "periodic-controller"}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", "v1")
 	for _, buildID := range []string{"103", "102", "101"} {
 		tc := models.TestCase{
 			Name:            "should reconcile",
@@ -63,12 +64,17 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 			FailureMessage:  "timed out waiting for controller update",
 			FailureLocation: "test/e2e/controller.go:44",
 		}
-		detail.Runs = append(detail.Runs, models.BuildResult{
+		run := models.BuildResult{
 			BuildInfo: models.BuildInfo{BuildID: buildID, Result: "FAILURE", Passed: false},
 			TestCases: []models.TestCase{tc},
-		})
-		name := orkaapi.TaskName(buildID, orkaapi.FailureHash(tc.Name, tc.FailureMessage), "v1")
-		results[name] = `{"root_cause":"the controller wrote stale configuration","severity":"High","is_transient":false,"suggested_fix":"serialize the update","relevant_files":["config/controller.yaml"]}`
+		}
+		detail.Runs = append(detail.Runs, run)
+		manifest.SetBuild(detail.JobID, buildID, "scope-"+buildID, "logs/job/"+buildID+"/")
+		ref, err := manifest.TaskRef(detail.JobID, run, 0, tc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results[ref.Name] = `{"root_cause":"the controller wrote stale configuration","severity":"High","is_transient":false,"suggested_fix":"serialize the update","relevant_files":["config/controller.yaml"]}`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +105,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 	}
 	client := &orkaClient{base: server.URL, http: server.Client()}
 	builds := map[string]bool{}
-	patched, failed, missing := ingestPass(client, nil, namespace, dir, "v1", "test-model", false, builds)
+	patched, failed, missing := ingestPass(client, nil, namespace, dir, manifest, "test-model", false, builds)
 	if patched != 3 || failed != 3 || missing != 0 {
 		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
 	}
@@ -190,9 +196,22 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	if err := output.WriteJobDetail(dir, detail); err != nil {
 		t.Fatal(err)
 	}
-	s := &webhookServer{dataDir: dir, namespace: "orka-system", version: "v1", model: "m"}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", "v1")
+	manifest.SetBuild("job", "1", "scope-1", "logs/job/1/")
+	s := &webhookServer{dataDir: dir, namespace: "orka-system", model: "m"}
 	s.rebuildIndex()
-	name := orkaapi.TaskName("1", orkaapi.FailureHash("test", "boom"), "v1")
+	if len(s.index) != 0 {
+		t.Fatalf("index before manifest = %+v, want empty", s.index)
+	}
+	if err := manifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	s.rebuildIndex()
+	ref, err := manifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := ref.Name
 	path := filepath.Join(dir, "jobs", models.JobDataFilename("job"))
 	if got := s.index[name]; got != path {
 		t.Fatalf("index[%q] = %q, want %q", name, got, path)
