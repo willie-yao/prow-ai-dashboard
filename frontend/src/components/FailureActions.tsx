@@ -566,8 +566,8 @@ export function FailureActions({ failureID }: { failureID: string }) {
           </Typography>
           {features.action_requests && (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-              Generation continues in the background. The dashboard emails you
-              when the draft is ready.
+              Generation continues in the background. If draft-ready email is
+              configured, the dashboard emails you when the draft is ready.
             </Typography>
           )}
           {requestError && (

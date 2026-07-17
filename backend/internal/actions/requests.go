@@ -84,17 +84,18 @@ func (s *Service) loadActionRequests() {
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	changed := false
+	now := time.Now().UTC()
+	s.requests = state
+	changed := s.expireRequestsLocked(now)
+	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
 		if request.Status == RequestPending {
 			request.Status = RequestFailed
 			request.Error = "server restarted before draft generation completed"
-			request.UpdatedAt = now
+			request.UpdatedAt = nowText
 			changed = true
 		}
 	}
-	s.requests = state
 	if changed {
 		if err := statefile.WriteJSON(s.requestStatePath(), state); err != nil {
 			log.Printf("Warning: failed to save recovered action request state: %v", err)
@@ -112,10 +113,16 @@ func (s *Service) ConfigureAsyncRequests(timeout time.Duration, notifier Request
 		return
 	}
 	s.rmu.Lock()
+	changed := s.expireRequestsLocked(time.Now().UTC())
 	var pending []ActionRequestView
 	for _, request := range s.requests.Requests {
 		if request.Status == RequestReady && !request.EmailSent {
 			pending = append(pending, request.ActionRequestView)
+		}
+	}
+	if changed {
+		if err := s.saveRequestsLocked(); err != nil {
+			log.Printf("Warning: failed to save expired action requests: %v", err)
 		}
 	}
 	s.rmu.Unlock()
@@ -174,10 +181,11 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction s
 		s.rmu.Unlock()
 		return ActionRequestView{}, err
 	}
+	view := request.ActionRequestView
 	s.rmu.Unlock()
 
 	go s.generateRequest(request.ID, userToken)
-	return request.ActionRequestView, nil
+	return view, nil
 }
 
 func (s *Service) generateRequest(id, userToken string) {
@@ -246,13 +254,28 @@ func (s *Service) generateRequest(id, userToken string) {
 }
 
 func (s *Service) notifyRequestReady(view ActionRequestView) {
-	if s.requestNotify == nil {
+	s.rmu.Lock()
+	changed := s.expireRequestsLocked(time.Now().UTC())
+	if changed {
+		if err := s.saveRequestsLocked(); err != nil {
+			log.Printf("Warning: failed to save expired action requests: %v", err)
+		}
+	}
+	current := s.requests.Requests[view.ID]
+	if current == nil || current.Status != RequestReady || current.EmailSent {
+		s.rmu.Unlock()
+		return
+	}
+	view = current.ActionRequestView
+	notifier := s.requestNotify
+	s.rmu.Unlock()
+	if notifier == nil {
 		return
 	}
 	var notifyErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		notifyErr = s.requestNotify(notifyCtx, view)
+		notifyErr = notifier(notifyCtx, view)
 		notifyCancel()
 		if notifyErr == nil {
 			break
@@ -281,7 +304,11 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 func (s *Service) GetRequest(id, owner string) (ActionRequestView, error) {
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
-	s.expireRequestsLocked(time.Now().UTC())
+	if s.expireRequestsLocked(time.Now().UTC()) {
+		if err := s.saveRequestsLocked(); err != nil {
+			return ActionRequestView{}, err
+		}
+	}
 	request := s.requests.Requests[id]
 	if request == nil || request.Owner != strings.ToLower(strings.TrimSpace(owner)) {
 		return ActionRequestView{}, ErrRequestNotFound
@@ -293,7 +320,12 @@ func (s *Service) GetRequest(id, owner string) (ActionRequestView, error) {
 func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken string) (string, error) {
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	s.rmu.Lock()
-	s.expireRequestsLocked(time.Now().UTC())
+	if s.expireRequestsLocked(time.Now().UTC()) {
+		if err := s.saveRequestsLocked(); err != nil {
+			s.rmu.Unlock()
+			return "", err
+		}
+	}
 	request := s.requests.Requests[id]
 	if request == nil || request.Owner != owner {
 		s.rmu.Unlock()
@@ -308,6 +340,10 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		status := request.Status
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is %s", status)
+	}
+	if _, confirming := s.requestConfirms[id]; confirming {
+		s.rmu.Unlock()
+		return "", fmt.Errorf("action request is being confirmed")
 	}
 	if request.Preview == nil {
 		s.rmu.Unlock()
@@ -331,7 +367,13 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has invalid preview kind %q", entry.kind)
 	}
+	s.requestConfirms[id] = struct{}{}
 	s.rmu.Unlock()
+	defer func() {
+		s.rmu.Lock()
+		delete(s.requestConfirms, id)
+		s.rmu.Unlock()
+	}()
 
 	url, err := s.confirmEntry(ctx, entry, userToken)
 	if err != nil {
@@ -356,30 +398,55 @@ func (s *Service) CancelRequest(id, owner string) error {
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
+	if s.expireRequestsLocked(time.Now().UTC()) {
+		if err := s.saveRequestsLocked(); err != nil {
+			return err
+		}
+	}
 	request := s.requests.Requests[id]
 	if request == nil || request.Owner != owner {
 		return ErrRequestNotFound
 	}
+	if _, confirming := s.requestConfirms[id]; confirming {
+		return fmt.Errorf("action request is being confirmed")
+	}
+	if request.Status != RequestPending && request.Status != RequestReady {
+		return fmt.Errorf("action request is %s", request.Status)
+	}
 	if cancel := s.requestCancels[id]; cancel != nil {
 		cancel()
-	}
-	if request.Status == RequestConfirmed {
-		return fmt.Errorf("confirmed action request cannot be cancelled")
 	}
 	request.Status = RequestCancelled
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return s.saveRequestsLocked()
 }
 
-func (s *Service) expireRequestsLocked(now time.Time) {
-	for _, request := range s.requests.Requests {
+func (s *Service) expireRequestsLocked(now time.Time) bool {
+	changed := false
+	for id, request := range s.requests.Requests {
+		if _, confirming := s.requestConfirms[id]; confirming {
+			continue
+		}
 		expires, err := time.Parse(time.RFC3339, request.ExpiresAt)
-		if err == nil && now.After(expires) && request.Status != RequestConfirmed {
-			request.Status = RequestExpired
+		if err == nil && now.After(expires) {
+			if request.Status != RequestExpired {
+				request.Status = RequestExpired
+				request.UpdatedAt = now.Format(time.RFC3339)
+				changed = true
+			}
+			if request.Error != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.Fix != nil || request.EmailError != "" {
+				request.Error = ""
+				request.Preview = nil
+				request.Instruction = ""
+				request.Issue = nil
+				request.Fix = nil
+				request.EmailError = ""
+				changed = true
+			}
 		}
 	}
 	if len(s.requests.Requests) <= 200 {
-		return
+		return changed
 	}
 	type item struct{ id, updated string }
 	var completed []item
@@ -392,7 +459,9 @@ func (s *Service) expireRequestsLocked(now time.Time) {
 	for len(s.requests.Requests) > 200 && len(completed) > 0 {
 		delete(s.requests.Requests, completed[0].id)
 		completed = completed[1:]
+		changed = true
 	}
+	return changed
 }
 
 func (s *Service) saveRequestsLocked() error {

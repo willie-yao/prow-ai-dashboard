@@ -89,11 +89,12 @@ type Service struct {
 	pmu      sync.Mutex
 	previews map[string]*previewEntry
 
-	rmu            sync.Mutex
-	requests       *actionRequestState
-	requestTimeout time.Duration
-	requestNotify  RequestReadyNotifier
-	requestCancels map[string]context.CancelFunc
+	rmu             sync.Mutex
+	requests        *actionRequestState
+	requestTimeout  time.Duration
+	requestNotify   RequestReadyNotifier
+	requestCancels  map[string]context.CancelFunc
+	requestConfirms map[string]struct{}
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -101,7 +102,7 @@ type Service struct {
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
-		previews: map[string]*previewEntry{}, requestCancels: map[string]context.CancelFunc{},
+		previews: map[string]*previewEntry{}, requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{},
 		requestTimeout: defaultRequestTimeout,
 	}
 	s.loadActionRequests()

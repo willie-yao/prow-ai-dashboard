@@ -61,7 +61,13 @@ export function ActionRequestPage() {
       return;
     let cancelled = false;
     let timer: number | undefined;
-    const load = async () => {
+    let retryCount = 0;
+    function scheduleRetry() {
+      const delay = Math.min(10_000, 1000 * 2 ** retryCount);
+      retryCount += 1;
+      timer = window.setTimeout(load, delay);
+    }
+    async function load() {
       try {
         const res = await fetch(
           `${API_BASE}api/action-requests/${encodeURIComponent(requestID)}`,
@@ -72,17 +78,24 @@ export function ActionRequestPage() {
         );
         if (!res.ok) {
           const text = await res.text();
-          throw new Error(text.trim() || `HTTP ${res.status}`);
+          const message = text.trim() || `HTTP ${res.status}`;
+          if (cancelled) return;
+          setError(message);
+          if (res.status >= 500) scheduleRetry();
+          return;
         }
         const value = (await res.json()) as ActionRequest;
         if (cancelled) return;
+        retryCount = 0;
         setRequest(value);
         setError(null);
         if (value.status === "pending") timer = window.setTimeout(load, 2000);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : String(e));
+        scheduleRetry();
       }
-    };
+    }
     void load();
     return () => {
       cancelled = true;
@@ -195,8 +208,17 @@ export function ActionRequestPage() {
         <Alert severity="info">This request was cancelled.</Alert>
       )}
       {request.status === "expired" && (
-        <Alert severity="warning">
-          This draft expired. Start a new request from the recurring pattern.
+        <Alert severity={request.result_url ? "info" : "warning"}>
+          {request.result_url ? (
+            <>
+              This request expired after creating:{" "}
+              <Link href={request.result_url} target="_blank" rel="noopener">
+                {request.result_url}
+              </Link>
+            </>
+          ) : (
+            "This draft expired. Start a new request from the recurring pattern."
+          )}
         </Alert>
       )}
       {request.status === "confirmed" && request.result_url && (
@@ -250,6 +272,25 @@ export function ActionRequestPage() {
               Verification: {preview.verify_status}
               {preview.verify_summary ? ` · ${preview.verify_summary}` : ""}
             </Alert>
+          )}
+          {preview.verify_status === "failed" && preview.verify_output && (
+            <Panel>
+              <Typography variant="label" color="text.secondary">
+                Verification output
+              </Typography>
+              <Box
+                component="pre"
+                sx={{
+                  whiteSpace: "pre-wrap",
+                  overflow: "auto",
+                  overflowWrap: "anywhere",
+                  maxHeight: 200,
+                  fontSize: 13,
+                }}
+              >
+                {preview.verify_output}
+              </Box>
+            </Panel>
           )}
           <Stack direction="row" spacing={1}>
             <Button
