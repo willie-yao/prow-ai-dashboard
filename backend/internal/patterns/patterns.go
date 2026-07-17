@@ -44,19 +44,62 @@ func Analyze(ctx context.Context, analyzer Analyzer, details []models.JobDetail)
 			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, err)
 			continue
 		}
-		if pa == nil {
-			continue
+		if applyAnalysis(d, pa) {
+			stats.Completed++
 		}
-		stats.Completed++
-		pa.JobID = d.JobID
-		d.PatternAnalyses = []models.PatternAnalysis{*pa}
-		verdict := "not systemic"
-		if pa.Systemic {
-			verdict = fmt.Sprintf("SYSTEMIC (%s): %s", pa.Confidence, pa.SharedRootCause)
-		}
-		log.Printf("  🔗 pattern analysis for %s across %d builds: %s", d.Name, pa.BuildsAnalyzed, verdict)
 	}
 	return stats
+}
+
+// AnalyzeConcurrent starts every eligible correlation before waiting for
+// results, so one slow job cannot consume the finalization budget for the rest.
+func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.JobDetail) AnalyzeStats {
+	type result struct {
+		index int
+		pa    *models.PatternAnalysis
+		err   error
+	}
+	results := make(chan result, len(details))
+	var stats AnalyzeStats
+	for i := range details {
+		d := &details[i]
+		failures := GatherFailures(d)
+		if CountFailedBuilds(d) < MinFailedBuilds || len(failures) < 2 {
+			continue
+		}
+		stats.Eligible++
+		go func(index int, jobID, subject string, failures []ai.PatternFailure) {
+			pa, err := analyzer.AnalyzePattern(ctx, jobID, subject, failures)
+			results <- result{index: index, pa: pa, err: err}
+		}(i, d.JobID, d.Name, failures)
+	}
+	for range stats.Eligible {
+		result := <-results
+		d := &details[result.index]
+		if result.err != nil {
+			stats.Failed++
+			log.Printf("  ⚠ pattern analysis failed for %s: %v", d.Name, result.err)
+			continue
+		}
+		if applyAnalysis(d, result.pa) {
+			stats.Completed++
+		}
+	}
+	return stats
+}
+
+func applyAnalysis(detail *models.JobDetail, pa *models.PatternAnalysis) bool {
+	if pa == nil {
+		return false
+	}
+	pa.JobID = detail.JobID
+	detail.PatternAnalyses = []models.PatternAnalysis{*pa}
+	verdict := "not systemic"
+	if pa.Systemic {
+		verdict = fmt.Sprintf("SYSTEMIC (%s): %s", pa.Confidence, pa.SharedRootCause)
+	}
+	log.Printf("  🔗 pattern analysis for %s across %d builds: %s", detail.Name, pa.BuildsAnalyzed, verdict)
+	return true
 }
 
 // AssignIDs gives every pattern its stable frontend and actions identifier.

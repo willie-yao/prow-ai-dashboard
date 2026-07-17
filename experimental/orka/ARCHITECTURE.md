@@ -130,7 +130,9 @@ After per-test ingestion, the ingestor runs the same bounded cross-build pattern
 contract as the in-process backend. It applies one content-addressed, tool-free
 AI Task per eligible job, ingests its `PatternAnalysis`, assigns stable pattern
 IDs, and folds systemic verdicts into `flakiness.json`. This makes recurring
-patterns available to the existing dashboard and interactive actions.
+patterns available to the existing dashboard and interactive actions. Because
+the correlation Task has no source-repository tools, any file path it introduces
+in `suggested_fix` is marked as unverified.
 
 ## How the harness is replicated
 

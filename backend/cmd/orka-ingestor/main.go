@@ -42,7 +42,7 @@ func main() {
 	model := flag.String("model", "claude-sonnet-4.5", "model label recorded on each analysis")
 	wait := flag.Duration("wait", 0, "keep polling until every failing test is patched or this deadline elapses (0 = single pass)")
 	poll := flag.Duration("poll", 15*time.Second, "interval between passes when -wait is set")
-	patternWait := flag.Duration("pattern-wait", 10*time.Minute, "total deadline for job-level pattern analysis (0 disables it)")
+	patternWait := flag.Duration("pattern-wait", 25*time.Minute, "total deadline for job-level pattern analysis (0 disables it)")
 	patternPoll := flag.Duration("pattern-poll", 5*time.Second, "poll interval for job-level pattern Tasks")
 	patternTimeout := flag.String("pattern-timeout", "10m", "per-Task timeout for job-level pattern analysis")
 	patternRetries := flag.Int("pattern-retries", 1, "pattern Task retryPolicy maxRetries")

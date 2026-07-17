@@ -265,7 +265,7 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | per-Task timeout | `orka.taskTimeout` | `-timeout` | `10m` |
 | retries | `orka.retries` | `-retries` | `1` |
 | re-analysis version | `orka.version` | `-version` | `v1` |
-| job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `10m` |
+| job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |
 
 Iteration budget, forced finalization, and the transient-critique gate live in the
 Orka ai-worker (see [worker-patches/](worker-patches/)), not in config.

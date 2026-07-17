@@ -193,6 +193,9 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 	if !validPatternResponse(parsed) {
 		return nil, fmt.Errorf("pattern analysis: incomplete verdict (empty summary, or systemic without a root cause)")
 	}
+	// The Orka correlation task has no source-repository tools. Mark every path
+	// it introduces as unverified rather than presenting a guessed target as fact.
+	parsed.SuggestedFix = annotateUnverifiedPaths(parsed.SuggestedFix, func(string) bool { return false })
 	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
 }
 

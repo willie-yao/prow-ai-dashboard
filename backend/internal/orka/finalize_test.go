@@ -50,6 +50,17 @@ func TestFinalizePatternsWritesJobAndFlakinessPatterns(t *testing.T) {
 	if err := output.WriteJobDetail(dir, detail); err != nil {
 		t.Fatal(err)
 	}
+	stale := detail
+	stale.Name = "removed-job"
+	stale.JobID = "removed-job"
+	if err := output.WriteJobDetail(dir, stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.WriteDashboard(dir, models.Dashboard{Jobs: []models.JobSummary{{
+		ProwJob: models.ProwJob{Name: detail.Name, JobID: detail.JobID},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := output.WriteFlakinessReport(dir, models.FlakinessReport{}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +103,9 @@ func TestFinalizePatternsWritesJobAndFlakinessPatterns(t *testing.T) {
 	}
 	if len(report.RecurringPatterns) != 1 || report.RecurringPatterns[0].ID != pattern.ID {
 		t.Fatalf("recurring patterns = %+v, want the job pattern", report.RecurringPatterns)
+	}
+	if report.RecurringPatterns[0].JobID == stale.JobID {
+		t.Fatalf("stale job appeared in recurring patterns: %+v", report.RecurringPatterns)
 	}
 }
 

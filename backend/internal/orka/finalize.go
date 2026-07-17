@@ -34,7 +34,7 @@ func FinalizePatterns(ctx context.Context, dataDir string, analyzer patterns.Ana
 		return FinalizeStats{}, err
 	}
 
-	analyzeStats := patterns.Analyze(ctx, analyzer, details)
+	analyzeStats := patterns.AnalyzeConcurrent(ctx, analyzer, details)
 	patterns.AssignIDs(details)
 	recurring := patterns.CollectRecurring(details)
 
@@ -72,6 +72,10 @@ func FinalizePatterns(ctx context.Context, dataDir string, analyzer patterns.Ana
 }
 
 func loadJobDetails(dataDir string) ([]models.JobDetail, error) {
+	active, err := loadActiveJobIDs(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	paths, err := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
 	if err != nil {
 		return nil, fmt.Errorf("orka finalization: list jobs: %w", err)
@@ -90,9 +94,31 @@ func loadJobDetails(dataDir string) ([]models.JobDetail, error) {
 		if detail.JobID == "" {
 			return nil, fmt.Errorf("orka finalization: %s has no job_id", path)
 		}
+		if !active[detail.JobID] {
+			continue
+		}
 		details = append(details, detail)
 	}
 	return details, nil
+}
+
+func loadActiveJobIDs(dataDir string) (map[string]bool, error) {
+	path := filepath.Join(dataDir, "dashboard.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("orka finalization: read dashboard: %w", err)
+	}
+	var dashboard models.Dashboard
+	if err := json.Unmarshal(data, &dashboard); err != nil {
+		return nil, fmt.Errorf("orka finalization: parse dashboard: %w", err)
+	}
+	active := make(map[string]bool, len(dashboard.Jobs))
+	for _, job := range dashboard.Jobs {
+		if job.JobID != "" {
+			active[job.JobID] = true
+		}
+	}
+	return active, nil
 }
 
 func loadFlakinessReport(dataDir string) (models.FlakinessReport, error) {

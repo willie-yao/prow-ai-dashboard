@@ -89,6 +89,11 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 	if err := output.WriteJobDetail(dir, detail); err != nil {
 		t.Fatal(err)
 	}
+	if err := output.WriteDashboard(dir, models.Dashboard{Jobs: []models.JobSummary{{
+		ProwJob: models.ProwJob{Name: detail.Name, JobID: detail.JobID},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := output.WriteFlakinessReport(dir, models.FlakinessReport{}); err != nil {
 		t.Fatal(err)
 	}

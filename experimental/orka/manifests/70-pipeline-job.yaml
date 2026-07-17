@@ -104,7 +104,7 @@ spec:
                 - -provider=copilot
                 - -model=claude-sonnet-4.5
                 - -namespace=orka-system
-                - -pattern-wait=10m
+                - -pattern-wait=25m
                 - -pattern-timeout=10m
                 - -pattern-retries=1
                 - -gc=true
