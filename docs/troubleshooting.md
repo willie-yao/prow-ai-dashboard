@@ -39,3 +39,19 @@ curl -fsS http://localhost:8080/api/capabilities
 
 For deeper AI-loop behavior, see the troubleshooting section in
 [Agentic analysis](agentic.md#troubleshooting).
+
+
+## Email notifications are not sent
+
+Check the fetcher logs for the email notification summary or configuration
+warning. Confirm:
+
+- `notifications.email.enabled` is true.
+- `from`, at least one `to` recipient, and `smtp.host` are configured.
+- `EMAIL_SMTP_PASSWORD` is present when `smtp.username` is set.
+- The SMTP relay is reachable from the GitHub Actions runner or Kubernetes pod.
+- `smtp.tls` matches the relay. STARTTLS is required by default and never falls
+  back to plaintext.
+
+A failed delivery does not fail the fetch. Its state is left unchanged so the
+next full pass retries it.
