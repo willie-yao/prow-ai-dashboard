@@ -27,8 +27,8 @@ func TestBuildToolNameSeparatesConsumerScopes(t *testing.T) {
 	projectB := orka.ProjectScopeID("b", "gcs", "bucket", "", "", "")
 	scopeA := orka.BuildScopeID(projectA, "job", "1", "logs/job/1/")
 	scopeB := orka.BuildScopeID(projectB, "job", "1", "logs/job/1/")
-	nameA := buildToolName("read-artifact", scopeA)
-	nameB := buildToolName("read-artifact", scopeB)
+	nameA := buildToolName("read-artifact", orka.ToolScopeID(scopeA, "contract"))
+	nameB := buildToolName("read-artifact", orka.ToolScopeID(scopeB, "contract"))
 	if nameA == nameB {
 		t.Fatalf("consumer-scoped Tool names collided: %q", nameA)
 	}

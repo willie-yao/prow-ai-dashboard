@@ -181,6 +181,7 @@ func main() {
 		for _, run := range detail.Runs {
 			buildPrefix := buildPrefixFor(bucket, detail.JobID, run)
 			buildScope := orka.BuildScopeID(projectScope, detail.JobID, run.BuildID, buildPrefix)
+			toolScope := orka.ToolScopeID(buildScope, contractHash)
 			registered := false
 			for ti := range run.TestCases {
 				tc := run.TestCases[ti]
@@ -188,8 +189,8 @@ func main() {
 					continue
 				}
 				if !registered {
-					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, buildPrefix)
-					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: buildScope, prefix: buildPrefix}
+					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix)
+					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 					registered = true
 				}
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
@@ -204,12 +205,12 @@ func main() {
 					Timeout:      *timeout,
 					MaxRetries:   *retries,
 					WebhookURL:   *webhookURL,
-					Tools:        buildToolNames(toolNames, ref.BuildScope),
+					Tools:        buildToolNames(toolNames, ref.ToolScope),
 					SystemPrompt: systemPrompt,
 					Prompt:       ref.Prompt,
 					Labels: map[string]string{
 						orka.ManagedByLabel: orka.ManagedByValue,
-						orka.BuildLabel:     ref.BuildScope,
+						orka.BuildLabel:     ref.ToolScope,
 					},
 				})
 				writeYAML(filepath.Join(*tasksOut, ref.Name+".yaml"), task)
@@ -230,7 +231,7 @@ func main() {
 		}
 	}
 
-	log.Printf("wrote %d Tasks (%s) and %d per-build Tools across %d builds (%s) for %s [bucket=%s, k8s-tools=%v]",
+	log.Printf("wrote %d Tasks (%s) and %d contract-scoped Tools across %d builds (%s) for %s [bucket=%s, k8s-tools=%v]",
 		len(taskObjs), *tasksOut, len(toolObjs), len(builds), *toolsOut, projectLabel, bucket, k8sEnabled)
 	if err := manifest.Write(*dataDir); err != nil {
 		log.Fatalf("write analysis manifest: %v", err)

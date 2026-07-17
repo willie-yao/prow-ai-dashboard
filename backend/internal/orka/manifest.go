@@ -30,15 +30,16 @@ type AnalysisManifest struct {
 
 // AnalysisBuild holds the content-addressed Tool scope for one job build.
 type AnalysisBuild struct {
-	Scope  string `json:"scope"`
-	Prefix string `json:"prefix"`
+	BuildScope string `json:"build_scope"`
+	ToolScope  string `json:"tool_scope"`
+	Prefix     string `json:"prefix"`
 }
 
 // AnalysisTaskRef is the Task and Tool identity for one failed test.
 type AnalysisTaskRef struct {
-	Name       string
-	BuildScope string
-	Prompt     string
+	Name      string
+	ToolScope string
+	Prompt    string
 }
 
 // NewAnalysisManifest constructs an empty manifest for one producer pass.
@@ -57,9 +58,9 @@ func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, mod
 }
 
 // SetBuild records the build scope needed to re-derive Task names.
-func (m *AnalysisManifest) SetBuild(jobID, buildID, scope, prefix string) {
+func (m *AnalysisManifest) SetBuild(jobID, buildID, buildScope, toolScope, prefix string) {
 	m.Jobs[jobID] = true
-	m.Builds[BuildKey(jobID, buildID)] = AnalysisBuild{Scope: scope, Prefix: prefix}
+	m.Builds[BuildKey(jobID, buildID)] = AnalysisBuild{BuildScope: buildScope, ToolScope: toolScope, Prefix: prefix}
 }
 
 // TaskRef re-derives the exact Task name emitted by the producer.
@@ -70,9 +71,9 @@ func (m *AnalysisManifest) TaskRef(jobID string, run models.BuildResult, testInd
 	}
 	prompt := FailurePrompt(m.ProjectLabel, jobID, build.Prefix, tc)
 	return AnalysisTaskRef{
-		Name:       AnalysisTaskName(m.ProjectScope, build.Scope, m.ContractHash, testIndex, prompt),
-		BuildScope: build.Scope,
-		Prompt:     prompt,
+		Name:      AnalysisTaskName(m.ProjectScope, build.BuildScope, m.ContractHash, testIndex, prompt),
+		ToolScope: build.ToolScope,
+		Prompt:    prompt,
 	}, nil
 }
 

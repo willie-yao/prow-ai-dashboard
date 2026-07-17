@@ -74,6 +74,13 @@ func TestBuildScopeSeparatesProjectsAndJobs(t *testing.T) {
 	}
 }
 
+func TestToolScopeTracksContract(t *testing.T) {
+	base := ToolScopeID("build", "contract-a")
+	if got := ToolScopeID("build", "contract-b"); got == base {
+		t.Fatalf("different Tool contracts produced the same scope %q", got)
+	}
+}
+
 func TestFailurePromptIncludesShardAndLocation(t *testing.T) {
 	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{
 		Name: "test", FailureLocation: "test/e2e/foo.go:42", JUnitFile: "junit-03.xml", FailureMessage: "boom",

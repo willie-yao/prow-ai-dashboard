@@ -50,9 +50,14 @@ func BuildKey(jobID, buildID string) string {
 	return digest(jobID, buildID)
 }
 
-// BuildScopeID separates per-build Tool clones across consumers and jobs.
+// BuildScopeID identifies one consumer, job, and artifact build route.
 func BuildScopeID(projectScope, jobID, buildID, buildPrefix string) string {
 	return digest(projectScope, jobID, buildID, buildPrefix)
+}
+
+// ToolScopeID versions a build's Tool resources by their analysis contract.
+func ToolScopeID(buildScope, contractHash string) string {
+	return digest(buildScope, contractHash)
 }
 
 // AnalysisTaskName identifies one exact failure under one analysis contract.

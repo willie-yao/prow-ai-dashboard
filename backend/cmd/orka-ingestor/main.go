@@ -234,8 +234,9 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			continue
 		}
 		type pendingTest struct {
-			tc   *models.TestCase
-			name string
+			tc    *models.TestCase
+			name  string
+			stale bool
 		}
 		var pending []pendingTest
 		var changed atomic.Bool
@@ -255,11 +256,11 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 					}
 					continue
 				}
-				builds[ref.BuildScope] = true
-				if tc.AIAnalysis != nil {
+				builds[ref.ToolScope] = true
+				if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == manifest.ContractHash {
 					continue // already patched by an earlier pass
 				}
-				pending = append(pending, pendingTest{tc: tc, name: ref.Name})
+				pending = append(pending, pendingTest{tc: tc, name: ref.Name, stale: tc.AIAnalysis != nil})
 			}
 		}
 		var patchedCount, missingCount atomic.Int64
@@ -271,14 +272,21 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				if applyResult(item.tc, client, namespace, item.name, model) {
+				if applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash) {
 					patchedCount.Add(1)
 					changed.Store(true)
 					return
 				}
 				missingCount.Add(1)
-				if final && markUnavailable(item.tc, kube, namespace, item.name) {
-					changed.Store(true)
+				if final {
+					if item.stale {
+						item.tc.AISummary = nil
+						item.tc.AIAnalysis = nil
+						changed.Store(true)
+					}
+					if markUnavailable(item.tc, kube, namespace, item.name) {
+						changed.Store(true)
+					}
 				}
 			}(item)
 		}
@@ -296,7 +304,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model string) bool {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string) bool {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false
@@ -305,11 +313,11 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if !ok {
 		return false
 	}
-	applyParsedAnalysis(tc, a, model)
+	applyParsedAnalysis(tc, a, model, contractHash)
 	return true
 }
 
-func applyParsedAnalysis(tc *models.TestCase, a analysis, model string) {
+func applyParsedAnalysis(tc *models.TestCase, a analysis, model, contractHash string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	tc.AISummary = &models.AISummary{GeneratedAt: now, Summary: a.RootCause, IsTransient: a.IsTransient}
 	tc.AIAnalysis = &models.AIAnalysis{
@@ -320,6 +328,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, model string) {
 		SuggestedFix:  a.SuggestedFix,
 		RelevantFiles: a.RelevantFiles,
 		Mode:          "agentic",
+		ContractHash:  contractHash,
 	}
 }
 
@@ -537,13 +546,15 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 }
 
 func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) bool {
-	if tc.AIAnalysis != nil {
+	if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == s.manifest.ContractHash {
 		return false
 	}
 	if patch.analysis != nil {
-		applyParsedAnalysis(tc, *patch.analysis, s.model)
+		applyParsedAnalysis(tc, *patch.analysis, s.model, s.manifest.ContractHash)
 		return true
 	}
+	tc.AISummary = nil
+	tc.AIAnalysis = nil
 	return setUnavailable(tc, patch.reason)
 }
 

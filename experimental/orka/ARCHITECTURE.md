@@ -47,7 +47,7 @@ metadata:
   name: az-analysis-<identityHash>              # content address
   labels:
     app.kubernetes.io/managed-by: orka-producer
-    orka.dashboard/build: <project/job/build scope hash>
+    orka.dashboard/build: <build + analysis-contract Tool scope hash>
 spec:
   type: ai
   timeout: <ai.timeout>
@@ -56,7 +56,7 @@ spec:
   ai:
     providerRef: { name: <provider> }
     model: <model>
-    tools: [<tool-b<buildScope>>, ...]          # the scoped Tool clones
+    tools: [<tool-b<toolScope>>, ...]           # contract-versioned Tool clones
     systemPrompt: <composed engine prompt + tool addendum>
     prompt: <per-failure user prompt>
 ```
@@ -68,11 +68,11 @@ retry, composed system prompt, selected Tool definitions, and manual version.
 This prevents cross-consumer and same-build shard collisions and automatically
 invalidates results when the model-visible analysis contract changes.
 
-### Tool (one clone per distinct project x job x build x tool group)
+### Tool (one clone per project x job x build x analysis contract x tool group)
 
 A single artifact tool shim serves every build and bucket. The producer does
 **not** create a tool per Task; it clones each base Tool CRD once per distinct
-scoped build via `cloneToolForBuild`, injecting
+scoped build and analysis contract via `cloneToolForBuild`, injecting
 static routing headers:
 
 ```yaml
@@ -107,12 +107,13 @@ to `-tasks-out` / `-tools-out` for inspection.
 
 The producer writes a private `orka_analysis.json` manifest beside the dashboard
 data. It records the project scope, analysis-contract hash, active jobs, and
-per-build scope/prefix mapping. `orka-ingestor` loads that manifest and re-derives
+per-build routing and Tool scopes. `orka-ingestor` loads that manifest and re-derives
 each exact Task name from the same job/test index and shared prompt renderer,
 then patches the result in place. `applyResult` fetches the
 Task's result, parses the analysis JSON, and writes `tc.AISummary` +
 `tc.AIAnalysis` with `Mode: "agentic"`, the same wire shape the in-process path
-produces. Failing/absent results get the engine's `unavailable` placeholder via
+produces. Each analysis stores the contract hash, so a cached result is reused
+only while it matches the current producer manifest. Failing/absent results get the engine's `unavailable` placeholder via
 `setUnavailable`, mirroring `internal/ai/service.go`.
 
 Two ingest modes:
@@ -148,7 +149,7 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Engine harness piece | Orka reconstruction | Where |
 |---|---|---|
 | On-disk analysis cache (keyed by mode+hash) | The Task name fingerprints project/build/test identity plus prompt, provider/model, timeout/retry, and Tool definitions. Re-applying it is a no-op, so the K8s object store is the cache. `-version` remains a manual override for external semantic changes. | `AnalysisTaskName` / `AnalysisContractHash`; `Apply` is idempotent |
-| Per-failure build isolation (fetcher scopes each analysis to one build) | Per-build Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; the model cannot read the wrong build. | `cloneToolForBuild` + shim `toolenv.go` |
+| Per-failure build isolation (fetcher scopes each analysis to one build) | Contract-versioned Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; old and new Task contracts cannot share mutable Tool objects. | `ToolScopeID`, `cloneToolForBuild`, shim `toolenv.go` |
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
 | Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-artifact-tool/validate.go` |

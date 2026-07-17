@@ -69,7 +69,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 			TestCases: []models.TestCase{tc},
 		}
 		detail.Runs = append(detail.Runs, run)
-		manifest.SetBuild(detail.JobID, buildID, "scope-"+buildID, "logs/job/"+buildID+"/")
+		manifest.SetBuild(detail.JobID, buildID, "build-"+buildID, "tool-"+buildID, "logs/job/"+buildID+"/")
 		ref, err := manifest.TaskRef(detail.JobID, run, 0, tc)
 		if err != nil {
 			t.Fatal(err)
@@ -197,7 +197,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", "v1")
-	manifest.SetBuild("job", "1", "scope-1", "logs/job/1/")
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
 	s := &webhookServer{dataDir: dir, namespace: "orka-system", model: "m"}
 	s.rebuildIndex()
 	if len(s.index) != 0 {
@@ -226,5 +226,77 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	}
 	if detail.Runs[0].TestCases[0].AIAnalysis == nil {
 		t.Fatal("analysis was not patched")
+	}
+	if got := detail.Runs[0].TestCases[0].AIAnalysis.ContractHash; got != manifest.ContractHash {
+		t.Fatalf("contract hash = %q, want %q", got, manifest.ContractHash)
+	}
+}
+
+func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
+	const namespace = "orka-system"
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "new-contract", "models", "model", "v1")
+	tc := models.TestCase{
+		Name: "test", Status: "failed", FailureMessage: "boom",
+		AISummary:  &models.AISummary{Summary: "old"},
+		AIAnalysis: &models.AIAnalysis{RootCause: "old root", Mode: "agentic", ContractHash: "old-contract"},
+	}
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
+	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
+	ref, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, ref.Name) {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"root_cause":"new root","severity":"High","is_transient":false,"suggested_fix":"fix it"}`})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	patched, failed, missing := ingestPass(
+		&orkaClient{base: server.URL, http: server.Client()}, nil, namespace, dir, manifest, "model", false, map[string]bool{},
+	)
+	if patched != 1 || failed != 1 || missing != 0 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename("job")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &detail); err != nil {
+		t.Fatal(err)
+	}
+	got := detail.Runs[0].TestCases[0].AIAnalysis
+	if got == nil || got.RootCause != "new root" || got.ContractHash != manifest.ContractHash {
+		t.Fatalf("refreshed analysis = %+v", got)
+	}
+}
+
+func TestIngestKeepsMatchingContractHash(t *testing.T) {
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1")
+	tc := models.TestCase{
+		Name: "test", Status: "failed", FailureMessage: "boom",
+		AISummary:  &models.AISummary{Summary: "current"},
+		AIAnalysis: &models.AIAnalysis{RootCause: "current root", Mode: "agentic", ContractHash: manifest.ContractHash},
+	}
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
+	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/")
+
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	client := &orkaClient{base: "http://127.0.0.1:1", http: &http.Client{}}
+	patched, failed, missing := ingestPass(client, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
+	if patched != 0 || failed != 1 || missing != 0 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
 	}
 }

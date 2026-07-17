@@ -8,7 +8,7 @@ import (
 
 func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", "v1")
-	manifest.SetBuild("job", "1", "build-scope", "logs/job/1/")
+	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/")
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", JUnitFile: "junit.xml", FailureMessage: "boom"}
 	first, err := manifest.TaskRef("job", run, 0, tc)
@@ -22,7 +22,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if first.Name == second.Name {
 		t.Fatalf("duplicate test indices produced the same Task %q", first.Name)
 	}
-	if first.BuildScope != "build-scope" || first.Prompt == "" {
+	if first.ToolScope != "tool-scope" || first.Prompt == "" {
 		t.Fatalf("task ref = %+v", first)
 	}
 
