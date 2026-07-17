@@ -171,10 +171,19 @@ export function ActionRequestPage() {
           <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
             <CircularProgress size={20} />
             <Typography>
-              Generating the draft. You may leave this page; an email is sent
-              when it is ready.
+              Generating the draft. You may leave this page; when draft-ready
+              email is configured, a review link is sent when it is ready.
             </Typography>
           </Stack>
+          <Button
+            sx={{ mt: 2 }}
+            color="inherit"
+            variant="outlined"
+            disabled={cancelling}
+            onClick={cancel}
+          >
+            {cancelling ? "Cancelling…" : "Cancel request"}
+          </Button>
         </Panel>
       )}
       {request.status === "failed" && (

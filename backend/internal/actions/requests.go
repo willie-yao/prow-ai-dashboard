@@ -249,9 +249,18 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	if s.requestNotify == nil {
 		return
 	}
-	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	notifyErr := s.requestNotify(notifyCtx, view)
-	notifyCancel()
+	var notifyErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		notifyErr = s.requestNotify(notifyCtx, view)
+		notifyCancel()
+		if notifyErr == nil {
+			break
+		}
+		if attempt < 2 {
+			time.Sleep(time.Duration(1+attempt*2) * time.Second)
+		}
+	}
 	s.rmu.Lock()
 	if current := s.requests.Requests[view.ID]; current != nil && current.Status == RequestReady {
 		current.EmailSent = notifyErr == nil
