@@ -192,6 +192,9 @@ func encodeMessage(message Message, date time.Time, messageID string) ([]byte, e
 			return nil, fmt.Errorf("email %s contains a newline", name)
 		}
 	}
+	if message.ReplyTo != nil && (strings.ContainsAny(message.ReplyTo.Name, "\r\n") || strings.ContainsAny(message.ReplyTo.Address, "\r\n")) {
+		return nil, fmt.Errorf("email reply-to contains a newline")
+	}
 	for _, recipient := range message.To {
 		if strings.ContainsAny(recipient.String(), "\r\n") {
 			return nil, fmt.Errorf("email recipient contains a newline")
@@ -205,6 +208,9 @@ func encodeMessage(message Message, date time.Time, messageID string) ([]byte, e
 	writeHeader("Date", date.Format(time.RFC1123Z))
 	writeHeader("Message-ID", messageID)
 	writeHeader("From", message.From.String())
+	if message.ReplyTo != nil {
+		writeHeader("Reply-To", message.ReplyTo.String())
+	}
 	recipients := make([]string, 0, len(message.To))
 	for _, recipient := range message.To {
 		recipients = append(recipients, recipient.String())

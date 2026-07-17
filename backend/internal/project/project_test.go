@@ -1,6 +1,7 @@
 package project
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -924,5 +925,98 @@ func TestValidateFixVerifyTimeout(t *testing.T) {
 	}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "verify.timeout") {
 		t.Fatalf("Validate error = %v, want verify.timeout", err)
+	}
+}
+
+func TestValidateInboundEmailReplies(t *testing.T) {
+	cfg := validConfig()
+	cfg.Notifications = &Notifications{Email: &EmailNotifications{
+		Enabled: true, ActionLinks: true, From: "dashboard@example.com", To: []string{"team@example.com"},
+		SMTP: EmailSMTP{Host: "smtp.example.com", TLS: EmailTLSStartTLS},
+		Inbound: &EmailInbound{
+			Enabled: true, ReplyTo: "{token}@replies.example.com",
+			Maintainers: map[string]string{"Alice": "Alice <alice@example.com>"},
+		},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	email, enabled := cfg.EffectiveEmailNotifications()
+	if !enabled || email.Inbound == nil || email.Inbound.Maintainers["alice"] != "Alice <alice@example.com>" {
+		t.Fatalf("email = %+v enabled=%v", email, enabled)
+	}
+}
+
+func TestValidateInboundEmailReplyErrors(t *testing.T) {
+	base := func() *Config {
+		cfg := validConfig()
+		cfg.Notifications = &Notifications{Email: &EmailNotifications{
+			Enabled: true, ActionLinks: true, From: "dashboard@example.com", To: []string{"team@example.com"},
+			SMTP: EmailSMTP{Host: "smtp.example.com", TLS: EmailTLSStartTLS},
+			Inbound: &EmailInbound{
+				Enabled: true, ReplyTo: "{token}@replies.example.com",
+				Maintainers: map[string]string{"alice": "alice@example.com"},
+			},
+		}}
+		return cfg
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{"action links disabled", func(c *Config) { c.Notifications.Email.ActionLinks = false }, "action_links"},
+		{"missing token", func(c *Config) { c.Notifications.Email.Inbound.ReplyTo = "replies@example.com" }, "{token}"},
+		{"long local part", func(c *Config) { c.Notifications.Email.Inbound.ReplyTo = "prefix-{token}@example.com" }, "64 characters"},
+		{"missing maintainers", func(c *Config) { c.Notifications.Email.Inbound.Maintainers = nil }, "at least one"},
+		{"empty login", func(c *Config) {
+			c.Notifications.Email.Inbound.Maintainers = map[string]string{" ": "alice@example.com"}
+		}, "empty admin identity"},
+		{"invalid maintainer", func(c *Config) { c.Notifications.Email.Inbound.Maintainers["alice"] = "bad" }, "valid email"},
+		{"duplicate login", func(c *Config) { c.Notifications.Email.Inbound.Maintainers["Alice"] = "other@example.com" }, "duplicate admin identity"},
+		{"duplicate maintainer", func(c *Config) { c.Notifications.Email.Inbound.Maintainers["bob"] = "alice@example.com" }, "same email address"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base()
+			tc.mutate(cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() err=%v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseInboundEmailReplies(t *testing.T) {
+	yaml := validYAML + `
+notifications:
+  email:
+    enabled: true
+    action_links: true
+    from: dashboard@example.com
+    to: [team@example.com]
+    smtp:
+      host: smtp.example.com
+      tls: starttls
+    inbound:
+      enabled: true
+      reply_to: "{token}@replies.example.com"
+      maintainers:
+        willie-yao: william@example.com
+`
+	cfg, err := parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	email, enabled := cfg.EffectiveEmailNotifications()
+	if !enabled || email.Inbound == nil || email.Inbound.Maintainers["willie-yao"] != "william@example.com" {
+		t.Fatalf("email = %+v enabled=%v", email, enabled)
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "replies.example.com") || strings.Contains(string(data), "william@example.com") {
+		t.Fatalf("manifest leaked inbound email config: %s", data)
 	}
 }

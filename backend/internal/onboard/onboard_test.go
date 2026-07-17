@@ -354,7 +354,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render project config: %v", err)
 	}
-	for _, want := range []string{"notifications:", "EMAIL_SMTP_PASSWORD", "tls: starttls"} {
+	for _, want := range []string{"notifications:", "EMAIL_SMTP_PASSWORD", "tls: starttls", "{token}@replies.example.com"} {
 		if !strings.Contains(projectYAML+deploy, want) {
 			t.Errorf("scaffold missing email hint %q:\n%s\n%s", want, projectYAML, deploy)
 		}
@@ -480,7 +480,7 @@ func TestScaffold_K8sIncludesEmailSecretSetup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"EMAIL_SMTP_PASSWORD", "secretKeyRef", "kubectl -n " + data.Namespace + " create secret generic"} {
+	for _, want := range []string{"EMAIL_SMTP_PASSWORD", "EMAIL_REPLY_TOKEN_SECRET", "EMAIL_INBOUND_WEBHOOK_SECRET", "secretKeyRef", "kubectl -n " + data.Namespace + " create secret generic", "/api/email/inbound"} {
 		if !strings.Contains(values+checklist, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, checklist)
 		}

@@ -102,7 +102,9 @@ A dashboard is shaped by three things:
   and open a guardrailed draft PR against the source repo.
 - [Email notifications](docs/notifications.md): alert on persistent failures,
   changed errors, recoveries, and optionally link systemic patterns into the
-  authenticated issue and fix review flow.
+  authenticated issue and fix review flow. Kubernetes-native deployments can
+  accept trusted email replies that request or refine drafts without allowing
+  email to post to GitHub.
 
 **Operations**
 - [Kubernetes deploy](docs/kubernetes.md): run the dashboard in-cluster, a

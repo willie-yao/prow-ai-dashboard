@@ -94,7 +94,7 @@ branding:
 # notifications:
 #   email:
 #     enabled: true
-#     action_links: false  # set true only for a server deploy with actions enabled
+#     action_links: false  # set true for server actions and inbound replies
 #     from: "Prow AI Dashboard <prow-dashboard@example.com>"
 #     to:
 #       - "ci-team@example.com"
@@ -103,6 +103,13 @@ branding:
 #       port: 587               # default 587 for starttls, 465 for tls, 25 for none
 #       username: "prow-dashboard@example.com"
 #       tls: starttls           # starttls (default), tls, or none
+#     # Kubernetes-native only. Set action_links: true before enabling. A
+#     # trusted mail gateway forwards normalized replies to POST /api/email/inbound.
+#     inbound:
+#       enabled: true
+#       reply_to: "{token}@replies.example.com"
+#       maintainers:
+#         your-github-login: "maintainer@example.com"
 
 # AI configuration. Composed at fetcher startup from:
 #   1. engine's universal Prow base prompt

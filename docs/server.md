@@ -36,6 +36,7 @@ backend choice.
 | `GET /api/action-requests/{id}` | Read the owning admin's pending, ready, failed, or confirmed request. |
 | `POST /api/action-requests/{id}/confirm` | Post the exact persisted ready draft. |
 | `POST /api/action-requests/{id}/cancel` | Cancel a pending or ready request. |
+| `POST /api/email/inbound` | Trusted mail gateway: request or refine an asynchronous draft. Bearer authenticated and unavailable unless inbound replies are configured. |
 | `POST /api/failures/{id}/resolve` | Admin-gated: mark a recurring pattern resolved at its latest-build watermark. |
 | `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
 
@@ -187,11 +188,20 @@ Email deep links use persistent action requests. Generation runs in the server
 process while request metadata and ready drafts are stored in
 `action_request_state.json`. The state file is not served under `/data`.
 Requests expire after 24 hours, are bound to the requesting authenticated login,
-and require the current user's GitHub token only when generating or confirming.
-Raw GitHub tokens are never persisted. A server restart marks unfinished pending
-requests failed; ready drafts survive and remain reviewable.
+and require the current user's GitHub token when generated from the dashboard or
+when confirmed. Email-requested generation may use the server's read-only
+`GITHUB_READ_TOKEN`. Raw GitHub tokens are never persisted. A server restart
+marks unfinished pending requests failed; ready drafts survive and remain
+reviewable.
 
 When `notifications.email.action_links` is enabled and the server receives
 `EMAIL_SMTP_PASSWORD`, it emails the configured recipients after a draft becomes
 ready. The review link still requires the same authenticated login that created
 the request.
+
+Inbound replies use `POST /api/email/inbound`. This endpoint is authenticated by
+`EMAIL_INBOUND_WEBHOOK_SECRET`, validates the signed envelope recipient with
+`EMAIL_REPLY_TOKEN_SECRET`, and accepts only senders mapped under
+`notifications.email.inbound.maintainers`. It can create or regenerate a draft,
+but it has no confirmation operation. Posting to GitHub always requires the
+request owner to sign in and confirm through the dashboard.

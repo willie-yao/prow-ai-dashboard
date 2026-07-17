@@ -111,11 +111,10 @@ ai:
   existingSecret: ""
   tokenSecretKey: AI_TOKEN
   # githubReadToken grounds the recurring-pattern agent on the source repo's
-  # file tree (read-only, via branding.source_repo). Optional: without it the
-  # pattern agent falls back to a tool-free correlation plus a path-verification
-  # guard. Reuse a read-only PAT. Stored in the AI Secret when set here; with
-  # existingSecret, that Secret must hold the key named by
-  # githubReadTokenSecretKey.
+  # file tree and lets the server generate email-requested drafts for private
+  # repos. Optional for public repos. Reuse a read-only PAT. Stored in the AI
+  # Secret when set here; with existingSecret, that Secret must hold the key
+  # named by githubReadTokenSecretKey.
   githubReadToken: ""
   githubReadTokenSecretKey: GITHUB_READ_TOKEN
 
@@ -148,7 +147,8 @@ server:
   staticDir: /app/web
   port: 8080
   # Extra environment variables for the server container. Standard core/v1
-  # EnvVar entries. Add EMAIL_SMTP_PASSWORD here for async draft-ready emails.
+  # EnvVar entries. Add EMAIL_SMTP_PASSWORD for draft-ready emails, and
+  # EMAIL_INBOUND_WEBHOOK_SECRET plus EMAIL_REPLY_TOKEN_SECRET for replies.
   # Example: COOKIE_INSECURE=1 to allow the session cookie over
   # plain http when testing behind a local port-forward.
   extraEnv: []

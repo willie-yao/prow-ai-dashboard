@@ -381,6 +381,14 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 						p.backend.ProwURL("logs/"),
 						email.ActionLinks,
 					)
+					if email.Inbound != nil && email.Inbound.Enabled {
+						replySigner, err := notify.NewReplySigner(email.Inbound.ReplyTo, os.Getenv("EMAIL_REPLY_TOKEN_SECRET"))
+						if err != nil {
+							log.Printf("Warning: inbound email replies disabled for notifications: %v", err)
+						} else {
+							notifier.ConfigureReplies(replySigner)
+						}
+					}
 					stats, processErr := notifier.ProcessFailures(ctx, flakinessReport, details)
 					log.Printf("📧 Email notifications: %d failure alerts, %d pattern alerts, %d recoveries, %d failed deliveries",
 						stats.NewAlerts, stats.PatternAlerts, stats.Recoveries, stats.Failed)

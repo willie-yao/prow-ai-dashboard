@@ -20,7 +20,9 @@ import (
 const (
 	defaultRequestTimeout = 10 * time.Minute
 	actionRequestTTL      = 24 * time.Hour
+	inboundReceiptTTL     = 7 * 24 * time.Hour
 	maxActiveRequests     = 50
+	maxInboundReceipts    = 1000
 	maxPendingPerOwner    = 3
 )
 
@@ -66,6 +68,12 @@ type actionRequest struct {
 type actionRequestState struct {
 	Version  int                       `json:"version"`
 	Requests map[string]*actionRequest `json:"requests"`
+	Inbound  map[string]inboundReceipt `json:"inbound,omitempty"`
+}
+
+type inboundReceipt struct {
+	RequestID  string `json:"request_id"`
+	ReceivedAt string `json:"received_at"`
 }
 
 func (s *Service) requestStatePath() string {
@@ -73,17 +81,21 @@ func (s *Service) requestStatePath() string {
 }
 
 func (s *Service) loadActionRequests() {
-	state := &actionRequestState{Version: 1, Requests: map[string]*actionRequest{}}
+	state := &actionRequestState{Version: 2, Requests: map[string]*actionRequest{}, Inbound: map[string]inboundReceipt{}}
 	data, err := os.ReadFile(s.requestStatePath())
 	if err == nil {
 		if err := json.Unmarshal(data, state); err != nil {
 			log.Printf("Warning: failed to parse action request state: %v", err)
-			state = &actionRequestState{Version: 1, Requests: map[string]*actionRequest{}}
+			state = &actionRequestState{Version: 2, Requests: map[string]*actionRequest{}, Inbound: map[string]inboundReceipt{}}
 		}
 	}
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}
 	}
+	if state.Inbound == nil {
+		state.Inbound = map[string]inboundReceipt{}
+	}
+	state.Version = 2
 	now := time.Now().UTC()
 	s.requests = state
 	changed := s.expireRequestsLocked(now)
@@ -137,16 +149,21 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction s
 	if owner == "" || userToken == "" {
 		return ActionRequestView{}, fmt.Errorf("authenticated owner and token are required")
 	}
+	view, _, err := s.createRequest(failureID, kind, owner, userToken, instruction, "")
+	return view, err
+}
+
+func (s *Service) createRequest(failureID, kind, owner, userToken, instruction, receiptKey string) (ActionRequestView, bool, error) {
 	if kind != "create-issue" && kind != "propose-fix" {
-		return ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
+		return ActionRequestView{}, false, fmt.Errorf("unsupported action %q", kind)
 	}
 	if _, err := s.findPattern(failureID); err != nil {
-		return ActionRequestView{}, err
+		return ActionRequestView{}, false, err
 	}
 
 	id, err := newToken()
 	if err != nil {
-		return ActionRequestView{}, fmt.Errorf("creating action request id: %w", err)
+		return ActionRequestView{}, false, fmt.Errorf("creating action request id: %w", err)
 	}
 	now := time.Now().UTC()
 	request := &actionRequest{ActionRequestView: ActionRequestView{
@@ -157,6 +174,12 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction s
 
 	s.rmu.Lock()
 	s.expireRequestsLocked(now)
+	if receiptKey != "" {
+		if existing, duplicate, err := s.inboundRequestLocked(receiptKey, owner); duplicate || err != nil {
+			s.rmu.Unlock()
+			return existing, duplicate, err
+		}
+	}
 	pending := 0
 	active := 0
 	for _, existing := range s.requests.Requests {
@@ -169,23 +192,27 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction s
 	}
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("too many pending action requests")
+		return ActionRequestView{}, false, fmt.Errorf("too many pending action requests")
 	}
 	if active >= maxActiveRequests {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("too many active action requests")
+		return ActionRequestView{}, false, fmt.Errorf("too many active action requests")
 	}
 	s.requests.Requests[request.ID] = request
+	if receiptKey != "" {
+		s.requests.Inbound[receiptKey] = inboundReceipt{RequestID: request.ID, ReceivedAt: now.Format(time.RFC3339)}
+	}
 	if err := s.saveRequestsLocked(); err != nil {
 		delete(s.requests.Requests, request.ID)
+		delete(s.requests.Inbound, receiptKey)
 		s.rmu.Unlock()
-		return ActionRequestView{}, err
+		return ActionRequestView{}, false, err
 	}
 	view := request.ActionRequestView
 	s.rmu.Unlock()
 
 	go s.generateRequest(request.ID, userToken)
-	return view, nil
+	return view, false, nil
 }
 
 func (s *Service) generateRequest(id, userToken string) {
@@ -445,6 +472,26 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			}
 		}
 	}
+	for key, receipt := range s.requests.Inbound {
+		receivedAt, err := time.Parse(time.RFC3339, receipt.ReceivedAt)
+		if err != nil || now.Sub(receivedAt) > inboundReceiptTTL {
+			delete(s.requests.Inbound, key)
+			changed = true
+		}
+	}
+	if len(s.requests.Inbound) > maxInboundReceipts {
+		type receiptItem struct{ key, received string }
+		items := make([]receiptItem, 0, len(s.requests.Inbound))
+		for key, receipt := range s.requests.Inbound {
+			items = append(items, receiptItem{key: key, received: receipt.ReceivedAt})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].received < items[j].received })
+		for len(s.requests.Inbound) > maxInboundReceipts {
+			delete(s.requests.Inbound, items[0].key)
+			items = items[1:]
+			changed = true
+		}
+	}
 	if len(s.requests.Requests) <= 200 {
 		return changed
 	}
@@ -457,11 +504,27 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 	}
 	sort.Slice(completed, func(i, j int) bool { return completed[i].updated < completed[j].updated })
 	for len(s.requests.Requests) > 200 && len(completed) > 0 {
-		delete(s.requests.Requests, completed[0].id)
+		requestID := completed[0].id
+		delete(s.requests.Requests, requestID)
 		completed = completed[1:]
 		changed = true
 	}
 	return changed
+}
+
+func (s *Service) inboundRequestLocked(receiptKey, owner string) (ActionRequestView, bool, error) {
+	receipt, ok := s.requests.Inbound[receiptKey]
+	if !ok {
+		return ActionRequestView{}, false, nil
+	}
+	request := s.requests.Requests[receipt.RequestID]
+	if request == nil {
+		return ActionRequestView{}, true, ErrRequestNotFound
+	}
+	if request.Owner != owner {
+		return ActionRequestView{}, true, fmt.Errorf("inbound email message was already processed for another owner")
+	}
+	return request.ActionRequestView, true, nil
 }
 
 func (s *Service) saveRequestsLocked() error {

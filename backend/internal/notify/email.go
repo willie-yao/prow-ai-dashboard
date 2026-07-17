@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"log"
 	"net/mail"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
@@ -179,6 +181,7 @@ type patternEmailView struct {
 	DashboardURL   string
 	IssueURL       string
 	FixURL         string
+	Replies        bool
 }
 
 var patternHTMLTemplate = template.Must(template.New("pattern-notification").Parse(`<!doctype html>
@@ -200,6 +203,7 @@ var patternHTMLTemplate = template.Must(template.New("pattern-notification").Par
     <a href="{{.FixURL}}" style="display:inline-block;padding:10px 14px;background:#1d4ed8;color:#ffffff;text-decoration:none;border-radius:6px">Review fix proposal</a>
   </p>
   <p>These links open the authenticated dashboard. Nothing is created until a maintainer generates, reviews, and confirms the draft.</p>
+  {{if .Replies}}<p>You may also reply with <strong>issue</strong> or <strong>fix</strong>, followed by optional instructions. Email replies only generate a draft; authenticated dashboard confirmation is still required.</p>{{end}}
   {{end}}
 </body>
 </html>`))
@@ -218,13 +222,24 @@ func (n *Notifier) patternMessage(pattern models.PatternAnalysis) Message {
 		view.IssueURL = n.patternActionURL(pattern, "create-issue")
 		view.FixURL = n.patternActionURL(pattern, "propose-fix")
 	}
-	return Message{
+	message := Message{
 		From:     n.from,
 		To:       append([]mail.Address(nil), n.to...),
 		Subject:  notificationSubject(n.projectName, "Systemic recurring failure", pattern.Subject),
 		TextBody: patternText(view),
 		HTMLBody: renderPatternHTML(view),
 	}
+	if n.replySigner != nil && pattern.ID != "" {
+		if replyTo, err := n.replySigner.Address(ReplyPattern, pattern.ID, time.Now().UTC().Add(patternReplyTTL)); err == nil {
+			message.ReplyTo = &replyTo
+			view.Replies = true
+			message.TextBody = patternText(view)
+			message.HTMLBody = renderPatternHTML(view)
+		} else {
+			log.Printf("Warning: pattern %s has no inbound reply address: %v", pattern.ID, err)
+		}
+	}
+	return message
 }
 
 func patternText(view patternEmailView) string {
@@ -241,6 +256,9 @@ func patternText(view patternEmailView) string {
 	if view.IssueURL != "" {
 		fmt.Fprintf(&b, "Review issue draft: %s\nReview fix proposal: %s\n", view.IssueURL, view.FixURL)
 		b.WriteString("\nNothing is created until a maintainer generates, reviews, and confirms the draft in the authenticated dashboard.\n")
+		if view.Replies {
+			b.WriteString("Reply with 'issue' or 'fix', followed by optional instructions. Email replies only generate a draft; authenticated dashboard confirmation is still required.\n")
+		}
 	}
 	return b.String()
 }
@@ -281,6 +299,7 @@ type ActionDraftReady struct {
 	Kind      string
 	Title     string
 	ReviewURL string
+	ReplyTo   *mail.Address
 }
 
 // ActionDraftReadyMessage renders the email sent after async generation.
@@ -292,9 +311,13 @@ func ActionDraftReadyMessage(input ActionDraftReady) Message {
 	subject := notificationSubject(input.Project, "Draft ready", input.Title)
 	text := fmt.Sprintf("Draft ready for review\n\nProject: %s\nRequested by: %s\nType: %s\nTitle: %s\n\nReview and confirm: %s\n\nNothing has been posted to GitHub. Sign in as the requesting maintainer to review and confirm the exact draft.\n",
 		input.Project, input.Owner, label, input.Title, input.ReviewURL)
+	if input.ReplyTo != nil {
+		text += "\nReply with additional instructions to regenerate the draft. A reply cannot confirm or post it.\n"
+	}
 	view := struct {
 		Project, Owner, Label, Title, ReviewURL string
-	}{input.Project, input.Owner, label, input.Title, input.ReviewURL}
+		Replies                                 bool
+	}{input.Project, input.Owner, label, input.Title, input.ReviewURL, input.ReplyTo != nil}
 	var html bytes.Buffer
 	_ = template.Must(template.New("draft-ready").Parse(`<!doctype html>
 <html><body>
@@ -305,6 +328,7 @@ func ActionDraftReadyMessage(input ActionDraftReady) Message {
 <p><strong>Title:</strong> {{.Title}}</p>
 <p><a href="{{.ReviewURL}}" style="display:inline-block;padding:10px 14px;background:#1d4ed8;color:#ffffff;text-decoration:none;border-radius:6px">Review and confirm</a></p>
 <p>Nothing has been posted to GitHub. Sign in as the requesting maintainer to review and confirm the exact draft.</p>
+{{if .Replies}}<p>Reply with additional instructions to regenerate the draft. A reply cannot confirm or post it.</p>{{end}}
 </body></html>`)).Execute(&html, view)
-	return Message{From: input.From, To: append([]mail.Address(nil), input.To...), Subject: subject, TextBody: text, HTMLBody: html.String()}
+	return Message{From: input.From, To: append([]mail.Address(nil), input.To...), ReplyTo: input.ReplyTo, Subject: subject, TextBody: text, HTMLBody: html.String()}
 }

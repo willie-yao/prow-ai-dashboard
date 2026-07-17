@@ -20,6 +20,8 @@ import (
 
 const notificationChannel = "email-v1"
 
+const patternReplyTTL = 7 * 24 * time.Hour
+
 // NotificationState tracks which persistent failures have been notified.
 type NotificationState struct {
 	Channel  string                     `json:"channel"`
@@ -48,6 +50,7 @@ type NotifiedPattern struct {
 type Message struct {
 	From     mail.Address
 	To       []mail.Address
+	ReplyTo  *mail.Address
 	Subject  string
 	TextBody string
 	HTMLBody string
@@ -69,6 +72,12 @@ type Notifier struct {
 	dashboardBaseURL string
 	prowURLBase      string
 	actionLinks      bool
+	replySigner      *ReplySigner
+}
+
+// ConfigureReplies adds signed Reply-To addresses to actionable pattern emails.
+func (n *Notifier) ConfigureReplies(signer *ReplySigner) {
+	n.replySigner = signer
 }
 
 // Stats tracks notification counts for logging.

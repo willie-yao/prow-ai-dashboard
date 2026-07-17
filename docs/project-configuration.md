@@ -168,7 +168,7 @@ Email notifications are optional and configured under `notifications.email`:
 notifications:
   email:
     enabled: true
-    action_links: false
+    action_links: true
     from: "Prow AI Dashboard <prow-dashboard@example.com>"
     to:
       - "ci-team@example.com"
@@ -177,6 +177,11 @@ notifications:
       port: 587
       username: "prow-dashboard@example.com"
       tls: starttls
+    inbound:
+      enabled: true
+      reply_to: "{token}@replies.example.com"
+      maintainers:
+        jane-maintainer: "jane@example.com"
 ```
 
 `tls` accepts `starttls` (default), `tls` for implicit TLS, or `none` for an
@@ -184,7 +189,11 @@ explicit unauthenticated relay. The default ports are 587, 465, and 25
 respectively. When `smtp.username` is set, provide `EMAIL_SMTP_PASSWORD` through
 the deployment secret environment. Set `action_links: true` only for a
 Kubernetes-native server with authenticated actions; it adds pattern-level issue
-and fix review links. See [Email notifications](notifications.md).
+and fix review links. `inbound` is also Kubernetes-native only and requires
+`action_links: true`. The `reply_to` template must contain exactly one `{token}`
+in the local part, and `maintainers` maps allowed server admin identities to their sender
+addresses. OAuth deployments use GitHub logins; proxy deployments use the
+configured proxy identities. See [Email notifications](notifications.md).
 
 ## Optional write features
 

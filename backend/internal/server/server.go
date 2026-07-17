@@ -8,12 +8,14 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"path"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 )
 
@@ -44,6 +47,19 @@ type ActionRequestRunner interface {
 	GetRequest(id, login string) (actions.ActionRequestView, error)
 	ConfirmRequest(ctx context.Context, id, login, userToken string) (string, error)
 	CancelRequest(id, login string) error
+}
+
+// EmailReplyRunner creates or revises drafts from authenticated mail gateway input.
+type EmailReplyRunner interface {
+	HandleEmailReply(messageID, targetKind, targetID, login, generationToken, body string) (actions.EmailReplyResult, error)
+}
+
+// EmailReplyOptions configures the inbound mail gateway endpoint.
+type EmailReplyOptions struct {
+	WebhookSecret   string
+	Signer          *notify.ReplySigner
+	Maintainers     map[string]string
+	GenerationToken string
 }
 
 // defaultActionTimeout bounds a single on-demand action. Fix-PR drafting calls
@@ -76,6 +92,8 @@ type Options struct {
 	// hostname but forwards a different Host to this server, so the browser's
 	// Origin never equals r.Host. Empty keeps strict same-origin behavior.
 	TrustedOrigins []string
+	// EmailReplies enables the bearer-authenticated inbound mail webhook.
+	EmailReplies *EmailReplyOptions
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -105,6 +123,8 @@ type Features struct {
 	Actions bool `json:"actions"`
 	// ActionRequests enables persisted asynchronous draft generation.
 	ActionRequests bool `json:"action_requests,omitempty"`
+	// EmailReplies indicates that the inbound mail gateway endpoint is active.
+	EmailReplies bool `json:"email_replies,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -173,6 +193,13 @@ func Handler(opts Options) (http.Handler, error) {
 				auth.Middleware(opts.Auth, guard(confirmActionRequestHandler(timeout, requests.ConfirmRequest))))
 			mux.Handle("POST /api/action-requests/{id}/cancel",
 				auth.Middleware(opts.Auth, guard(cancelActionRequestHandler(requests.CancelRequest))))
+		}
+		if replies, ok := opts.Actions.(EmailReplyRunner); ok && opts.EmailReplies != nil {
+			if opts.EmailReplies.WebhookSecret == "" || opts.EmailReplies.Signer == nil || len(opts.EmailReplies.Maintainers) == 0 {
+				return nil, fmt.Errorf("server: incomplete email reply configuration")
+			}
+			caps.Features.EmailReplies = true
+			mux.Handle("POST /api/email/inbound", inboundEmailHandler(*opts.EmailReplies, replies.HandleEmailReply))
 		}
 	}
 	mux.HandleFunc("/api/capabilities", capabilitiesHandler(caps))
@@ -424,6 +451,92 @@ func cancelActionRequestHandler(run cancelActionRequestFunc) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+type inboundEmailPayload struct {
+	MessageID     string `json:"message_id"`
+	From          string `json:"from"`
+	Recipient     string `json:"recipient"`
+	Text          string `json:"text"`
+	Authenticated bool   `json:"authenticated"`
+}
+
+type inboundEmailFunc func(messageID, targetKind, targetID, login, generationToken, body string) (actions.EmailReplyResult, error)
+
+func inboundEmailHandler(options EmailReplyOptions, run inboundEmailFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validBearerToken(r.Header.Get("Authorization"), options.WebhookSecret) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var payload inboundEmailPayload
+		if err := decoder.Decode(&payload); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "invalid inbound email payload", http.StatusBadRequest)
+			}
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid inbound email payload", http.StatusBadRequest)
+			return
+		}
+		if !payload.Authenticated {
+			http.Error(w, "sender authentication required", http.StatusForbidden)
+			return
+		}
+		sender, err := mail.ParseAddress(payload.From)
+		if err != nil {
+			http.Error(w, "invalid sender", http.StatusBadRequest)
+			return
+		}
+		login := options.Maintainers[strings.ToLower(sender.Address)]
+		if login == "" {
+			http.Error(w, "sender is not an allowed maintainer", http.StatusForbidden)
+			return
+		}
+		target, err := options.Signer.ParseRecipient(payload.Recipient, time.Now().UTC())
+		if err != nil {
+			if errors.Is(err, notify.ErrExpiredReplyToken) {
+				http.Error(w, "reply token expired", http.StatusGone)
+			} else {
+				http.Error(w, "not found", http.StatusNotFound)
+			}
+			return
+		}
+		result, err := run(payload.MessageID, string(target.Kind), target.ID, login, options.GenerationToken, payload.Text)
+		if err != nil {
+			writeActionError(w, target.ID, login, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if result.Duplicate {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusAccepted)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"request_id": result.Request.ID,
+			"status":     result.Request.Status,
+		})
+	})
+}
+
+func validBearerToken(header, secret string) bool {
+	const prefix = "Bearer "
+	if secret == "" || !strings.HasPrefix(header, prefix) {
+		return false
+	}
+	provided := strings.TrimSpace(strings.TrimPrefix(header, prefix))
+	if len(provided) != len(secret) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) == 1
 }
 
 // resolveHandler marks a systemic pattern resolved with an optional {"note":...}.

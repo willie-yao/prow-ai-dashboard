@@ -82,6 +82,101 @@ Do not enable `action_links` for a static Pages deployment. Pages has no action
 API or administrator authentication. Fix proposal links also require a server
 image that contains `opencode` and git.
 
+## Inbound email replies
+
+Kubernetes-native deployments may accept replies through a trusted inbound mail
+gateway. The dashboard does not expose an SMTP server and does not parse raw
+MIME. Your mail provider or gateway receives the message, validates the sender,
+extracts plain text, and forwards a normalized JSON request to the dashboard.
+
+Enable the feature in `project.yaml`:
+
+```yaml
+notifications:
+  email:
+    enabled: true
+    action_links: true
+    from: "Prow AI Dashboard <prow-dashboard@example.com>"
+    to: ["ci-team@example.com"]
+    smtp:
+      host: "smtp.example.com"
+      username: "prow-dashboard@example.com"
+      tls: starttls
+    inbound:
+      enabled: true
+      reply_to: "{token}@replies.example.com"
+      maintainers:
+        willie-yao: "william@example.com"
+```
+
+`reply_to` must be an address template with exactly one `{token}` placeholder in
+the local part. The receiving domain must route every generated local part to
+the gateway. `maintainers` maps the authenticated sender address to the server admin
+identity that owns the resulting action request. In OAuth mode this is the
+GitHub login; in proxy mode it is the proxy identity. Every mapped identity must
+also be present in the server's `ADMIN_LOGINS` allowlist. These addresses live in
+`project.yaml`, so use the same care as the public `to` recipient list.
+
+The worker adds signed Reply-To addresses to systemic-pattern emails. The server
+adds them to draft-ready emails. Both processes must receive the same
+`EMAIL_REPLY_TOKEN_SECRET`. The server also requires
+`EMAIL_INBOUND_WEBHOOK_SECRET` to authenticate the mail gateway. Generate
+independent secrets with at least 32 characters:
+
+```bash
+openssl rand -base64 32
+```
+
+The gateway sends:
+
+```http
+POST /api/email/inbound
+Authorization: Bearer <EMAIL_INBOUND_WEBHOOK_SECRET>
+Content-Type: application/json
+```
+
+```json
+{
+  "message_id": "<provider-message-id@example.com>",
+  "from": "Maintainer <william@example.com>",
+  "recipient": "<signed-token>@replies.example.com",
+  "text": "issue:\nMention the IPv6 impact.",
+  "authenticated": true
+}
+```
+
+Gateway requirements:
+
+- Preserve the envelope recipient containing the signed token.
+- Supply a stable message id so retries are idempotent.
+- Set `authenticated: true` only after the sender passes the gateway's trusted
+  sender-authentication policy, such as SPF, DKIM, and DMARC validation.
+- Send only the new plain-text reply, or include quoted content after a standard
+  reply marker. The dashboard removes common quoted-message and signature lines.
+- Retry 5xx responses. Treat 2xx as accepted and 4xx as a permanent rejection.
+- Keep the bearer secret out of URLs and provider logs.
+
+Reply behavior:
+
+- Reply to a systemic-pattern email with `issue` or `fix` on the first line.
+  Optional instructions may follow after a colon or on later lines.
+- Reply to a draft-ready email with additional instructions to regenerate that
+  same draft.
+- `confirm`, `approve`, `post`, `send`, and similar authorization replies are
+  rejected. Email never confirms or writes to GitHub.
+- The draft-ready review link still requires the mapped GitHub login to sign in,
+  review the exact persisted content, and confirm it in the dashboard.
+
+Pattern reply tokens expire after seven days. Draft-ready reply tokens expire
+with their 24-hour action request. Processed message ids are stored only as
+SHA-256 hashes in non-public `action_request_state.json` to prevent duplicate
+generation when the gateway retries.
+
+For private source repositories, provide a read-only `GITHUB_READ_TOKEN` to the
+server. It is used only while generating an email-requested draft. Final issue or
+PR creation uses the authenticated dashboard user's token, or the configured bot
+identity in proxy mode.
+
 ## SMTP security modes
 
 `smtp.tls` accepts:

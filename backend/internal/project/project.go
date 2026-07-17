@@ -13,6 +13,7 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -194,11 +195,12 @@ type Notifications struct {
 
 // EmailNotifications configures persistent-failure email alerts.
 type EmailNotifications struct {
-	Enabled     bool      `yaml:"enabled,omitempty" json:"-"`
-	ActionLinks bool      `yaml:"action_links,omitempty" json:"-"`
-	From        string    `yaml:"from,omitempty" json:"-"`
-	To          []string  `yaml:"to,omitempty" json:"-"`
-	SMTP        EmailSMTP `yaml:"smtp,omitempty" json:"-"`
+	Enabled     bool          `yaml:"enabled,omitempty" json:"-"`
+	ActionLinks bool          `yaml:"action_links,omitempty" json:"-"`
+	From        string        `yaml:"from,omitempty" json:"-"`
+	To          []string      `yaml:"to,omitempty" json:"-"`
+	SMTP        EmailSMTP     `yaml:"smtp,omitempty" json:"-"`
+	Inbound     *EmailInbound `yaml:"inbound,omitempty" json:"-"`
 }
 
 // EmailSMTP configures the SMTP relay used for email alerts.
@@ -209,6 +211,13 @@ type EmailSMTP struct {
 	TLS      string `yaml:"tls,omitempty" json:"-"`
 }
 
+// EmailInbound configures replies delivered by a trusted inbound mail gateway.
+type EmailInbound struct {
+	Enabled     bool              `yaml:"enabled,omitempty" json:"-"`
+	ReplyTo     string            `yaml:"reply_to,omitempty" json:"-"`
+	Maintainers map[string]string `yaml:"maintainers,omitempty" json:"-"`
+}
+
 // EffectiveEmailNotifications returns enabled email settings with defaults.
 func (c *Config) EffectiveEmailNotifications() (EmailNotifications, bool) {
 	if c == nil || c.Notifications == nil || c.Notifications.Email == nil || !c.Notifications.Email.Enabled {
@@ -216,6 +225,14 @@ func (c *Config) EffectiveEmailNotifications() (EmailNotifications, bool) {
 	}
 	out := *c.Notifications.Email
 	out.To = append([]string(nil), c.Notifications.Email.To...)
+	if c.Notifications.Email.Inbound != nil {
+		inbound := *c.Notifications.Email.Inbound
+		inbound.Maintainers = make(map[string]string, len(c.Notifications.Email.Inbound.Maintainers))
+		for login, address := range c.Notifications.Email.Inbound.Maintainers {
+			inbound.Maintainers[strings.ToLower(strings.TrimSpace(login))] = strings.TrimSpace(address)
+		}
+		out.Inbound = &inbound
+	}
 	out.SMTP.TLS = strings.ToLower(strings.TrimSpace(out.SMTP.TLS))
 	if out.SMTP.TLS == "" {
 		out.SMTP.TLS = EmailTLSStartTLS
@@ -837,6 +854,60 @@ func (c *Config) Validate() error {
 		}
 		if email.SMTP.TLS == EmailTLSNone && strings.TrimSpace(email.SMTP.Username) != "" {
 			return fmt.Errorf("notifications.email.smtp.username requires encrypted SMTP (smtp.tls must be %q or %q)", EmailTLSStartTLS, EmailTLSImplicit)
+		}
+		if inbound := email.Inbound; inbound != nil && inbound.Enabled {
+			rawInbound := c.Notifications.Email.Inbound
+			seenLogins := map[string]string{}
+			for rawLogin := range rawInbound.Maintainers {
+				normalized := strings.ToLower(strings.TrimSpace(rawLogin))
+				if previous := seenLogins[normalized]; previous != "" && previous != rawLogin {
+					return fmt.Errorf("notifications.email.inbound.maintainers contains duplicate admin identity %q", normalized)
+				}
+				seenLogins[normalized] = rawLogin
+			}
+			if !email.ActionLinks {
+				return fmt.Errorf("notifications.email.inbound requires notifications.email.action_links: true")
+			}
+			if strings.Count(inbound.ReplyTo, "{token}") != 1 {
+				return fmt.Errorf("notifications.email.inbound.reply_to must contain exactly one {token} placeholder")
+			}
+			prefix, suffix, _ := strings.Cut(inbound.ReplyTo, "{token}")
+			if strings.Contains(prefix, "@") || !strings.HasPrefix(suffix, "@") {
+				return fmt.Errorf("notifications.email.inbound.reply_to must place {token} in the local part")
+			}
+			rendered := strings.Replace(inbound.ReplyTo, "{token}", strings.Repeat("a", 60), 1)
+			parsed, err := mail.ParseAddress(rendered)
+			if err != nil || parsed.Name != "" || parsed.Address != rendered {
+				return fmt.Errorf("notifications.email.inbound.reply_to %q is not a valid address template", inbound.ReplyTo)
+			}
+			local, _, ok := strings.Cut(parsed.Address, "@")
+			if !ok || len(local) > 64 {
+				return fmt.Errorf("notifications.email.inbound.reply_to local part exceeds 64 characters with a reply token")
+			}
+			if len(inbound.Maintainers) == 0 {
+				return fmt.Errorf("notifications.email.inbound.maintainers requires at least one admin identity to email mapping")
+			}
+			logins := make([]string, 0, len(inbound.Maintainers))
+			for login := range inbound.Maintainers {
+				logins = append(logins, login)
+			}
+			sort.Strings(logins)
+			seenAddresses := map[string]string{}
+			for _, login := range logins {
+				if login == "" {
+					return fmt.Errorf("notifications.email.inbound.maintainers contains an empty admin identity")
+				}
+				address := inbound.Maintainers[login]
+				parsed, err := mail.ParseAddress(address)
+				if err != nil {
+					return fmt.Errorf("notifications.email.inbound.maintainers[%q] %q is not a valid email address: %w", login, address, err)
+				}
+				normalized := strings.ToLower(parsed.Address)
+				if other := seenAddresses[normalized]; other != "" && other != login {
+					return fmt.Errorf("notifications.email.inbound.maintainers maps %q and %q to the same email address", other, login)
+				}
+				seenAddresses[normalized] = login
+			}
 		}
 	}
 

@@ -177,6 +177,9 @@ The SMTP host must be reachable from the selected runner. Keep
 no authenticated action API. See [Email notifications](notifications.md) for the
 project configuration and TLS modes.
 
+Inbound email replies are also unavailable on Pages because they require the
+Kubernetes-native server webhook and persistent action-request state.
+
 
 Email notifications, automatic issues, and scheduled fix PRs run during the
 fetch step when configured. Interactive actions are not available on a static

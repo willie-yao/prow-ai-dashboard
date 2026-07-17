@@ -77,7 +77,10 @@ func newTestSMTPSender(t *testing.T, config SMTPConfig, session *fakeSMTPSession
 func TestSMTPSenderStartTLSAndMIME(t *testing.T) {
 	session := &fakeSMTPSession{startTLSAvailable: true}
 	sender, implicit, tlsConfig, _ := newTestSMTPSender(t, SMTPConfig{Host: "smtp.example.com", Port: 587, TLSMode: "starttls"}, session)
-	if err := sender.Send(context.Background(), testMessage()); err != nil {
+	messageToSend := testMessage()
+	replyTo := mail.Address{Address: "reply@example.com"}
+	messageToSend.ReplyTo = &replyTo
+	if err := sender.Send(context.Background(), messageToSend); err != nil {
 		t.Fatal(err)
 	}
 	if *implicit || !session.startTLSCalled || session.authCalled {
@@ -94,7 +97,7 @@ func TestSMTPSenderStartTLSAndMIME(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.Header.Get("Message-ID") != "<test@example.com>" || !strings.Contains(message.Header.Get("To"), "two@example.com") {
+	if message.Header.Get("Message-ID") != "<test@example.com>" || !strings.Contains(message.Header.Get("To"), "two@example.com") || message.Header.Get("Reply-To") != "<reply@example.com>" {
 		t.Fatalf("headers = %+v", message.Header)
 	}
 	mediaType, params, err := mimeParseMediaType(message.Header.Get("Content-Type"))
@@ -204,6 +207,15 @@ func TestEncodeMessageRejectsHeaderInjection(t *testing.T) {
 	message.Subject = "subject\r\nBcc: victim@example.com"
 	if _, err := encodeMessage(message, time.Now(), "<id@example.com>"); err == nil {
 		t.Fatal("expected header injection error")
+	}
+}
+
+func TestEncodeMessageRejectsReplyToHeaderInjection(t *testing.T) {
+	message := testMessage()
+	replyTo := mail.Address{Address: "reply@example.com\r\nBcc: victim@example.com"}
+	message.ReplyTo = &replyTo
+	if _, err := encodeMessage(message, time.Now(), "<id@example.com>"); err == nil {
+		t.Fatal("expected reply-to header injection error")
 	}
 }
 

@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 )
 
 // writeFile writes content under dir, creating parents.
@@ -572,7 +574,13 @@ func TestTrustedOriginSet_NormalizesToHosts(t *testing.T) {
 
 type fakeAsyncRunner struct {
 	fakeRunner
-	request actions.ActionRequestView
+	request            actions.ActionRequestView
+	gotEmailMessageID  string
+	gotEmailTargetKind string
+	gotEmailTargetID   string
+	gotEmailLogin      string
+	gotGenerationToken string
+	gotEmailBody       string
 }
 
 func (f *fakeAsyncRunner) CreateRequest(failureID, kind, login, userToken, instruction string) (actions.ActionRequestView, error) {
@@ -602,6 +610,12 @@ func (f *fakeAsyncRunner) CancelRequest(id, login string) error {
 	}
 	f.request.Status = actions.RequestCancelled
 	return nil
+}
+func (f *fakeAsyncRunner) HandleEmailReply(messageID, targetKind, targetID, login, generationToken, body string) (actions.EmailReplyResult, error) {
+	f.gotEmailMessageID, f.gotEmailTargetKind, f.gotEmailTargetID = messageID, targetKind, targetID
+	f.gotEmailLogin, f.gotGenerationToken, f.gotEmailBody = login, generationToken, body
+	f.request = actions.ActionRequestView{ID: "request-email", FailureID: targetID, Kind: "create-issue", Owner: login, Status: actions.RequestPending}
+	return actions.EmailReplyResult{Request: f.request, Duplicate: messageID == "duplicate"}, nil
 }
 
 func TestHandler_AsyncActionRequestFlow(t *testing.T) {
@@ -661,5 +675,136 @@ func TestHandler_AsyncActionRequestFlow(t *testing.T) {
 	_ = capsResp.Body.Close()
 	if !caps.Features.ActionRequests {
 		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestHandler_InboundEmailReply(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{}`)
+	signer, err := notify.NewReplySigner("{token}@replies.example.com", strings.Repeat("s", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyTo, err := signer.Address(notify.ReplyPattern, "0123456789abcdef", time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeAsyncRunner{}
+	h, err := Handler(Options{
+		DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, Actions: runner, AuthMode: "dev",
+		EmailReplies: &EmailReplyOptions{
+			WebhookSecret: strings.Repeat("w", 32), Signer: signer,
+			Maintainers: map[string]string{"alice@example.com": "alice"}, GenerationToken: "read-token",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	post := func(secret string, payload map[string]any) *http.Response {
+		data, _ := json.Marshal(payload)
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/email/inbound", strings.NewReader(string(data)))
+		if secret != "" {
+			req.Header.Set("Authorization", "Bearer "+secret)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	payload := map[string]any{
+		"message_id": "message-1", "from": "Alice <alice@example.com>",
+		"recipient": replyTo.Address, "text": "issue", "authenticated": true,
+	}
+	if resp := post("", payload); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	} else {
+		_ = resp.Body.Close()
+	}
+	unauthenticated := map[string]any{}
+	for key, value := range payload {
+		unauthenticated[key] = value
+	}
+	unauthenticated["authenticated"] = false
+	if resp := post(strings.Repeat("w", 32), unauthenticated); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unauthenticated sender status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	} else {
+		_ = resp.Body.Close()
+	}
+	unknown := map[string]any{}
+	for key, value := range payload {
+		unknown[key] = value
+	}
+	unknown["from"] = "mallory@example.com"
+	if resp := post(strings.Repeat("w", 32), unknown); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unknown sender status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	} else {
+		_ = resp.Body.Close()
+	}
+	resp := post(strings.Repeat("w", 32), payload)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("valid status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	_ = resp.Body.Close()
+	if runner.gotEmailMessageID != "message-1" || runner.gotEmailTargetKind != "pattern" || runner.gotEmailTargetID != "0123456789abcdef" ||
+		runner.gotEmailLogin != "alice" || runner.gotGenerationToken != "read-token" || runner.gotEmailBody != "issue" {
+		t.Fatalf("runner = %+v", runner)
+	}
+	duplicatePayload := map[string]any{}
+	for key, value := range payload {
+		duplicatePayload[key] = value
+	}
+	duplicatePayload["message_id"] = "duplicate"
+	if resp := post(strings.Repeat("w", 32), duplicatePayload); resp.StatusCode != http.StatusOK {
+		t.Fatalf("duplicate status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	} else {
+		_ = resp.Body.Close()
+	}
+	tampered := map[string]any{}
+	for key, value := range payload {
+		tampered[key] = value
+	}
+	tampered["recipient"] = strings.Replace(replyTo.Address, "0123456789abcdef", "1123456789abcdef", 1)
+	if resp := post(strings.Repeat("w", 32), tampered); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("tampered status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	} else {
+		_ = resp.Body.Close()
+	}
+	expiredAddress, err := signer.Address(notify.ReplyPattern, "0123456789abcdef", time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := map[string]any{}
+	for key, value := range payload {
+		expired[key] = value
+	}
+	expired["recipient"] = expiredAddress.Address
+	if resp := post(strings.Repeat("w", 32), expired); resp.StatusCode != http.StatusGone {
+		t.Fatalf("expired status=%d body=%s", resp.StatusCode, readBody(t, resp))
+	} else {
+		_ = resp.Body.Close()
+	}
+
+	capsResp, _ := http.Get(srv.URL + "/api/capabilities")
+	var caps Capabilities
+	_ = json.NewDecoder(capsResp.Body).Decode(&caps)
+	_ = capsResp.Body.Close()
+	if !caps.Features.EmailReplies {
+		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestValidBearerToken(t *testing.T) {
+	secret := strings.Repeat("s", 32)
+	if !validBearerToken("Bearer "+secret, secret) {
+		t.Fatal("valid token was rejected")
+	}
+	for _, header := range []string{"", secret, "bearer " + secret, "Bearer wrong"} {
+		if validBearerToken(header, secret) {
+			t.Fatalf("header %q was accepted", header)
+		}
 	}
 }

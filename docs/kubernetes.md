@@ -259,6 +259,42 @@ pattern emails. Also expose `EMAIL_SMTP_PASSWORD` through `server.extraEnv` so
 the server can send draft-ready review emails. See [Email notifications](notifications.md) for TLS modes,
 message behavior, and unauthenticated relay configuration.
 
+Inbound replies additionally require two independent secrets. The reply-token
+secret must be identical in the worker and server because the worker signs
+pattern Reply-To addresses and the server validates them. The webhook secret is
+server-only:
+
+```bash
+kubectl -n dashboards create secret generic capz-email-replies \
+  --from-literal=reply-token-secret="$(openssl rand -base64 32)" \
+  --from-literal=webhook-secret="$(openssl rand -base64 32)"
+```
+
+```yaml
+fetcher:
+  extraEnv:
+    - name: EMAIL_REPLY_TOKEN_SECRET
+      valueFrom:
+        secretKeyRef: { name: capz-email-replies, key: reply-token-secret }
+server:
+  extraEnv:
+    - name: EMAIL_SMTP_PASSWORD
+      valueFrom:
+        secretKeyRef: { name: capz-smtp, key: password }
+    - name: EMAIL_REPLY_TOKEN_SECRET
+      valueFrom:
+        secretKeyRef: { name: capz-email-replies, key: reply-token-secret }
+    - name: EMAIL_INBOUND_WEBHOOK_SECRET
+      valueFrom:
+        secretKeyRef: { name: capz-email-replies, key: webhook-secret }
+```
+
+Point the trusted mail gateway at `POST /api/email/inbound` on the public server
+origin. If the source repository is private, configure `ai.githubReadToken` or
+place `GITHUB_READ_TOKEN` in the existing AI Secret. See
+[Inbound email replies](notifications.md#inbound-email-replies) for the gateway
+payload and security contract.
+
 ## Automatic issues and fix PRs
 
 Both features are off by default. When enabled, the fetcher files GitHub issues

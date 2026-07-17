@@ -6,6 +6,7 @@
 export interface CapabilityFeatures {
   actions: boolean;
   action_requests?: boolean;
+  email_replies?: boolean;
 }
 
 // AuthInfo tells the frontend how admins sign in for write actions.

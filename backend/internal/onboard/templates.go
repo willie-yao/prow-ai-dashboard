@@ -77,7 +77,7 @@ branding:
 # notifications:
 #   email:
 #     enabled: true
-#     action_links: false  # set true only for a server deploy with actions enabled
+#     action_links: false  # set true for server actions and inbound replies
 #     from: "Prow Dashboard <prow-dashboard@example.com>"
 #     to: ["ci-team@example.com"]
 #     smtp:
@@ -85,6 +85,13 @@ branding:
 #       port: 587
 #       username: "prow-dashboard@example.com"
 #       tls: starttls
+#     # Kubernetes-native only. Set action_links: true before enabling. See
+#     # docs/notifications.md#inbound-email-replies.
+#     inbound:
+#       enabled: true
+#       reply_to: "{token}@replies.example.com"
+#       maintainers:
+#         <your-github-login>: "maintainer@example.com"
 {{if .IncludePresubmits}}
 # This project's dashboard includes presubmit jobs.
 source:
@@ -196,6 +203,9 @@ fetcher:
   #   - name: EMAIL_SMTP_PASSWORD
   #     valueFrom:
   #       secretKeyRef: { name: {{.Namespace}}-smtp, key: password }
+  #   - name: EMAIL_REPLY_TOKEN_SECRET
+  #     valueFrom:
+  #       secretKeyRef: { name: {{.Namespace}}-email-replies, key: reply-token-secret }
 
 # Optional: admin-gated File issue / Mark resolved actions. Propose fix also
 # requires a custom server image with opencode and git. Register a GitHub OAuth
@@ -206,6 +216,12 @@ fetcher:
 #   #   - name: EMAIL_SMTP_PASSWORD
 #   #     valueFrom:
 #   #       secretKeyRef: { name: {{.Namespace}}-smtp, key: password }
+#   #   - name: EMAIL_REPLY_TOKEN_SECRET
+#   #     valueFrom:
+#   #       secretKeyRef: { name: {{.Namespace}}-email-replies, key: reply-token-secret }
+#   #   - name: EMAIL_INBOUND_WEBHOOK_SECRET
+#   #     valueFrom:
+#   #       secretKeyRef: { name: {{.Namespace}}-email-replies, key: webhook-secret }
 #   actions:
 #     enabled: true
 #     mode: oauth
@@ -312,6 +328,23 @@ resolved work in the standard image. Propose fix requires a custom server image
 with opencode and git. See
 https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/server.md
 for the OAuth setup.
+
+## 5. Optional: inbound email replies
+
+After enabling ` + "`notifications.email.inbound`" + `, create independent reply-token
+and webhook secrets. Expose the reply-token secret to both ` + "`fetcher.extraEnv`" + ` and
+` + "`server.extraEnv`" + `, and expose the webhook secret only to the server:
+
+` + "```bash" + `
+kubectl -n {{.Namespace}} create secret generic {{.Namespace}}-email-replies \
+  --from-literal=reply-token-secret="$(openssl rand -base64 32)" \
+  --from-literal=webhook-secret="$(openssl rand -base64 32)"
+` + "```" + `
+
+Configure the trusted mail gateway to send normalized replies to
+` + "`POST /api/email/inbound`" + `. See
+https://github.com/willie-yao/prow-ai-dashboard/blob/{{.EngineRef}}/docs/notifications.md#inbound-email-replies
+for the payload and sender-authentication requirements.
 
 The chart pins the engine image via ` + "`image.tag`" + ` in ` + "`deploy/values.yaml`" + `
 (defaults to ` + "`main`" + `); see

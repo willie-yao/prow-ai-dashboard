@@ -81,3 +81,24 @@ git in the server image.
 - Draft-ready email requires `EMAIL_SMTP_PASSWORD` in `server.extraEnv`, not only
   `fetcher.extraEnv`.
 - The review link is bound to the authenticated login that created the request.
+
+## Inbound email reply is rejected
+
+- Confirm `notifications.email.inbound.enabled: true` and
+  `notifications.email.action_links: true`.
+- Confirm the worker and server receive the same `EMAIL_REPLY_TOKEN_SECRET`.
+- Confirm the server receives `EMAIL_INBOUND_WEBHOOK_SECRET` and the gateway
+  sends it as a Bearer token, not in the URL.
+- A 403 means the gateway did not assert authenticated sender validation or the
+  parsed sender address is not listed in `inbound.maintainers`.
+- Server startup rejects any inbound maintainer login that is not also present
+  in `ADMIN_LOGINS`.
+- A 404 means the envelope recipient is not a valid signed reply address. Make
+  sure the gateway forwards the envelope recipient rather than only the `To`
+  header.
+- A 410 means the reply token expired. Pattern tokens last seven days and draft
+  tokens expire with the 24-hour request.
+- Pattern replies must start with `issue` or `fix`. Draft-ready replies contain
+  only refinement instructions. Confirmation words are intentionally rejected.
+- For private repositories, expose a read-only `GITHUB_READ_TOKEN` to the server
+  so it can generate the draft. Email still cannot post to GitHub.

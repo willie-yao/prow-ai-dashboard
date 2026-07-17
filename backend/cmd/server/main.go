@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"os/signal"
@@ -119,6 +120,10 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		Headers:  provider.Headers,
 	})
 	opts.Actions = actionService
+	replySigner, err := emailReplySigner(cfg)
+	if err != nil {
+		return err
+	}
 
 	// A single fix draft runs locate + edit + critique against the model; the
 	// 5-minute default is tight for slow self-hosted endpoints, so allow an
@@ -135,7 +140,7 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	if requestTimeout <= 0 {
 		requestTimeout = 10 * time.Minute
 	}
-	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg))
+	actionService.ConfigureAsyncRequests(requestTimeout, actionRequestNotifier(cfg, replySigner))
 
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
@@ -191,10 +196,17 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 	// OAuth redirect URL's host is exactly that public origin; TRUSTED_ORIGINS
 	// adds any extra hosts (and covers proxy auth mode, which has no redirect).
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
+	if replySigner != nil {
+		replies, err := emailReplyOptions(cfg, replySigner, admins, opts.AuthMode)
+		if err != nil {
+			return err
+		}
+		opts.EmailReplies = replies
+	}
 	return nil
 }
 
-func actionRequestNotifier(cfg *project.Config) actions.RequestReadyNotifier {
+func actionRequestNotifier(cfg *project.Config, replySigner *notify.ReplySigner) actions.RequestReadyNotifier {
 	email, enabled := cfg.EffectiveEmailNotifications()
 	if !enabled || !email.ActionLinks {
 		return nil
@@ -223,13 +235,77 @@ func actionRequestNotifier(cfg *project.Config) actions.RequestReadyNotifier {
 		if request.Preview != nil && request.Preview.Title != "" {
 			title = request.Preview.Title
 		}
-		message := notify.ActionDraftReadyMessage(notify.ActionDraftReady{
+		input := notify.ActionDraftReady{
 			From: from, To: recipients, Project: cfg.Name, Owner: request.Owner,
 			RequestID: request.ID, Kind: request.Kind, Title: title,
 			ReviewURL: baseURL + "/action-request/" + url.PathEscape(request.ID),
-		})
+		}
+		if replySigner != nil {
+			expiresAt, err := time.Parse(time.RFC3339, request.ExpiresAt)
+			if err != nil {
+				return fmt.Errorf("parsing action request expiry: %w", err)
+			}
+			replyTo, err := replySigner.Address(notify.ReplyRequest, request.ID, expiresAt)
+			if err != nil {
+				return fmt.Errorf("building action request reply address: %w", err)
+			}
+			input.ReplyTo = &replyTo
+		}
+		message := notify.ActionDraftReadyMessage(input)
 		return sender.Send(ctx, message)
 	}
+}
+
+func emailReplySigner(cfg *project.Config) (*notify.ReplySigner, error) {
+	email, enabled := cfg.EffectiveEmailNotifications()
+	if !enabled || email.Inbound == nil || !email.Inbound.Enabled {
+		return nil, nil
+	}
+	signer, err := notify.NewReplySigner(email.Inbound.ReplyTo, os.Getenv("EMAIL_REPLY_TOKEN_SECRET"))
+	if err != nil {
+		return nil, fmt.Errorf("configuring email reply tokens: %w", err)
+	}
+	return signer, nil
+}
+
+func emailReplyOptions(cfg *project.Config, signer *notify.ReplySigner, admins []string, authMode string) (*server.EmailReplyOptions, error) {
+	email, _ := cfg.EffectiveEmailNotifications()
+	secret := os.Getenv("EMAIL_INBOUND_WEBHOOK_SECRET")
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("EMAIL_INBOUND_WEBHOOK_SECRET must be at least 32 characters when inbound email is enabled")
+	}
+	maintainers := make(map[string]string, len(email.Inbound.Maintainers))
+	allowedLogins := make(map[string]bool, len(admins)+1)
+	for _, login := range admins {
+		allowedLogins[strings.ToLower(strings.TrimSpace(login))] = true
+	}
+	if authMode == "dev" {
+		login := os.Getenv("DEV_LOGIN")
+		if login == "" {
+			login = "dev-admin"
+		}
+		allowedLogins[strings.ToLower(login)] = true
+	}
+	for login, rawAddress := range email.Inbound.Maintainers {
+		if !allowedLogins[login] {
+			return nil, fmt.Errorf("inbound email maintainer %q is not present in ADMIN_LOGINS", login)
+		}
+		address, err := mail.ParseAddress(rawAddress)
+		if err != nil {
+			return nil, fmt.Errorf("parsing inbound maintainer address for %s: %w", login, err)
+		}
+		maintainers[strings.ToLower(address.Address)] = login
+	}
+	generationToken := os.Getenv("GITHUB_READ_TOKEN")
+	if generationToken == "" {
+		generationToken = os.Getenv("BOT_TOKEN")
+	}
+	return &server.EmailReplyOptions{
+		WebhookSecret:   secret,
+		Signer:          signer,
+		Maintainers:     maintainers,
+		GenerationToken: generationToken,
+	}, nil
 }
 
 // trustedOrigins collects the public origins the CSRF guard should accept: the

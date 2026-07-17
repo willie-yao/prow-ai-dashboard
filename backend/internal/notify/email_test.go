@@ -4,6 +4,7 @@ import (
 	"net/mail"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -110,14 +111,42 @@ func TestPatternMessageEscapesContentAndBuildsInertLinks(t *testing.T) {
 }
 
 func TestActionDraftReadyMessage(t *testing.T) {
+	replyTo := mail.Address{Address: "reply@example.com"}
 	message := ActionDraftReadyMessage(ActionDraftReady{
 		From: mail.Address{Address: "from@example.com"}, To: []mail.Address{{Address: "to@example.com"}},
 		Project: "Example", Owner: "alice", Kind: "propose-fix", Title: "Fix timeout",
-		ReviewURL: "https://dash.example.com/action-request/request-1",
+		ReviewURL: "https://dash.example.com/action-request/request-1", ReplyTo: &replyTo,
 	})
-	for _, want := range []string{"Draft ready", "alice", "fix proposal", "Fix timeout", "request-1", "Nothing has been posted"} {
+	for _, want := range []string{"Draft ready", "alice", "fix proposal", "Fix timeout", "request-1", "Nothing has been posted", "Reply with additional instructions", "cannot confirm or post"} {
 		if !strings.Contains(message.Subject+message.TextBody+message.HTMLBody, want) {
 			t.Errorf("message missing %q", want)
+		}
+	}
+	if message.ReplyTo == nil || message.ReplyTo.Address != replyTo.Address {
+		t.Fatalf("reply-to = %+v", message.ReplyTo)
+	}
+}
+
+func TestPatternMessageAddsSignedReplyAddress(t *testing.T) {
+	signer, err := NewReplySigner("{token}@replies.example.com", strings.Repeat("s", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &Notifier{
+		from: mail.Address{Address: "from@example.com"}, to: []mail.Address{{Address: "to@example.com"}},
+		projectName: "Example", dashboardBaseURL: "https://dash.example.com", actionLinks: true, replySigner: signer,
+	}
+	message := n.patternMessage(systemicPattern("0123456789abcdef", "job-id", "periodic-job"))
+	if message.ReplyTo == nil {
+		t.Fatal("reply-to was not set")
+	}
+	target, err := signer.ParseRecipient(message.ReplyTo.Address, time.Now().UTC())
+	if err != nil || target.Kind != ReplyPattern || target.ID != "0123456789abcdef" {
+		t.Fatalf("target=%+v err=%v", target, err)
+	}
+	for _, want := range []string{"Reply with 'issue' or 'fix'", "authenticated dashboard confirmation"} {
+		if !strings.Contains(message.TextBody, want) {
+			t.Fatalf("body missing %q: %s", want, message.TextBody)
 		}
 	}
 }

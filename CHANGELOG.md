@@ -34,7 +34,9 @@ for how to pin a release.
   STARTTLS is the default transport. Kubernetes-native deployments can opt into
   inert email links that open the authenticated issue or fix preview flow for
   systemic recurring patterns. Draft generation can run asynchronously with
-  persisted 24-hour review requests and draft-ready email links.
+  persisted 24-hour review requests and draft-ready email links. Kubernetes-
+  native deployments can also accept authenticated inbound replies that request
+  or refine drafts while keeping final GitHub confirmation in the dashboard.
 
 ### Changed
 
