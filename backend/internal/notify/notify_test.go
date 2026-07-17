@@ -398,3 +398,62 @@ func TestPatternNotificationComputesMissingIDAndSkipsNonSystemic(t *testing.T) {
 		}
 	}
 }
+
+func failedRuns(count int) []models.BuildResult {
+	runs := make([]models.BuildResult, count)
+	for i := range runs {
+		runs[i] = models.BuildResult{BuildInfo: models.BuildInfo{Passed: false, Result: "FAILURE"}}
+	}
+	return runs
+}
+
+func TestPatternStateClearsAfterAuthoritativeRecovery(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	details := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{pattern}}}
+
+	if _, err := n.ProcessFailures(context.Background(), report, details); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.state.Patterns) != 1 {
+		t.Fatalf("pattern state = %+v", n.state.Patterns)
+	}
+
+	nonSystemic := pattern
+	nonSystemic.Systemic = false
+	clearDetails := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{nonSystemic}}}
+	if _, err := n.ProcessFailures(context.Background(), makeReport(), clearDetails); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.state.Patterns) != 0 {
+		t.Fatalf("recovered pattern remained deduped: %+v", n.state.Patterns)
+	}
+
+	stats, err := n.ProcessFailures(context.Background(), report, details)
+	if err != nil || stats.PatternAlerts != 1 || len(sender.messages) != 2 {
+		t.Fatalf("recurrence stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+}
+
+func TestPatternStateSurvivesUnavailableAnalysis(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	details := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{pattern}}}
+	if _, err := n.ProcessFailures(context.Background(), report, details); err != nil {
+		t.Fatal(err)
+	}
+
+	unavailable := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3)}}
+	if _, err := n.ProcessFailures(context.Background(), makeReport(), unavailable); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.state.Patterns) != 1 {
+		t.Fatalf("unavailable analysis cleared pattern state: %+v", n.state.Patterns)
+	}
+}

@@ -232,14 +232,64 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 			stats.PatternAlerts++
 			n.state.Patterns[pattern.ID] = NotifiedPattern{
 				PatternID:       pattern.ID,
-				JobID:           pattern.JobID,
+				JobID:           patternJobID(pattern),
 				Subject:         pattern.Subject,
 				SharedRootCause: pattern.SharedRootCause,
 			}
 		}
+		n.reconcilePatternState(report.RecurringPatterns, jobDetails)
 	}
 
 	return stats, errors.Join(sendErrs...)
+}
+
+func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDetails []models.JobDetail) {
+	if len(jobDetails) == 0 || len(n.state.Patterns) == 0 {
+		return
+	}
+	currentIDs := make(map[string]bool, len(current))
+	for _, pattern := range current {
+		if !pattern.Systemic {
+			continue
+		}
+		id := pattern.ID
+		if id == "" {
+			id = models.PatternID(pattern)
+		}
+		currentIDs[id] = true
+	}
+
+	presentJobs := make(map[string]bool, len(jobDetails))
+	authoritativeJobs := make(map[string]bool, len(jobDetails))
+	for _, detail := range jobDetails {
+		jobID := detail.JobID
+		if jobID == "" {
+			jobID = detail.Name
+		}
+		presentJobs[jobID] = true
+		if len(detail.PatternAnalyses) > 0 || completedFailedBuilds(detail) < 3 {
+			authoritativeJobs[jobID] = true
+		}
+	}
+
+	for id, notified := range n.state.Patterns {
+		if currentIDs[id] {
+			continue
+		}
+		if !presentJobs[notified.JobID] || authoritativeJobs[notified.JobID] {
+			delete(n.state.Patterns, id)
+		}
+	}
+}
+
+func completedFailedBuilds(detail models.JobDetail) int {
+	count := 0
+	for _, run := range detail.Runs {
+		if !run.Passed && run.Result != "PENDING" {
+			count++
+		}
+	}
+	return count
 }
 
 func sortedKeys[V any](m map[string]V) []string {

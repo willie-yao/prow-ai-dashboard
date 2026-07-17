@@ -24,6 +24,7 @@ type fakeSMTPSession struct {
 	data              bytes.Buffer
 	quitCalled        bool
 	authErr           error
+	quitErr           error
 }
 
 func (f *fakeSMTPSession) Extension(name string) (bool, string) {
@@ -36,7 +37,7 @@ func (f *fakeSMTPSession) Rcpt(to string) error       { f.recipients = append(f.
 func (f *fakeSMTPSession) Data() (io.WriteCloser, error) {
 	return nopWriteCloser{Writer: &f.data}, nil
 }
-func (f *fakeSMTPSession) Quit() error  { f.quitCalled = true; return nil }
+func (f *fakeSMTPSession) Quit() error  { f.quitCalled = true; return f.quitErr }
 func (f *fakeSMTPSession) Close() error { return nil }
 
 type nopWriteCloser struct{ io.Writer }
@@ -207,3 +208,14 @@ func TestEncodeMessageRejectsHeaderInjection(t *testing.T) {
 }
 
 var mimeParseMediaType = mime.ParseMediaType
+
+func TestSMTPSenderIgnoresQuitFailureAfterAcceptance(t *testing.T) {
+	session := &fakeSMTPSession{quitErr: errors.New("connection closed")}
+	sender, _, _, _ := newTestSMTPSender(t, SMTPConfig{Host: "relay.internal", Port: 25, TLSMode: "none"}, session)
+	if err := sender.Send(context.Background(), testMessage()); err != nil {
+		t.Fatalf("accepted message should not fail on QUIT: %v", err)
+	}
+	if !session.quitCalled {
+		t.Fatal("QUIT was not attempted")
+	}
+}

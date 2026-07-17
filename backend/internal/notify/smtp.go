@@ -149,9 +149,9 @@ func (s *SMTPSender) Send(ctx context.Context, message Message) error {
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("closing SMTP message on %s: %w", s.config.Host, err)
 	}
-	if err := client.Quit(); err != nil {
-		return fmt.Errorf("closing SMTP session with %s: %w", s.config.Host, err)
-	}
+	// DATA close already received the server's 250 acceptance response. QUIT is
+	// best-effort so a teardown failure cannot cause an accepted email to retry.
+	_ = client.Quit()
 	return nil
 }
 
