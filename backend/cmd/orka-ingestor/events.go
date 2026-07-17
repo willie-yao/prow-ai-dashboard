@@ -27,7 +27,7 @@ type analysisTelemetry struct {
 	Provider         string
 	Model            string
 	TimelineVerified bool
-	ValidationRan    bool
+	ValidationPassed bool
 	BudgetExhausted  bool
 }
 
@@ -131,7 +131,7 @@ func summarizeEvents(events []executionEvent) analysisTelemetry {
 			case matchesScopedTool(name, "verify_timeline"):
 				out.TimelineVerified = true
 			case matchesScopedTool(name, "validate_analysis"):
-				out.ValidationRan = true
+				out.ValidationPassed = true
 			}
 		case "ModelRequestCompleted":
 			out.InputTokens += event.InputTokens

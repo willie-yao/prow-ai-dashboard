@@ -351,7 +351,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		OutputTokens:           telemetry.OutputTokens,
 		BudgetExhausted:        telemetry.BudgetExhausted,
 		TimelineVerified:       telemetry.TimelineVerified,
-		ArtifactPathsValidated: telemetry.ValidationRan,
+		ArtifactPathsValidated: telemetry.ValidationPassed,
 		CritiquePassed:         true,
 		CritiqueVersion:        orkaAcceptanceVersion,
 	}
@@ -677,8 +677,8 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minTool
 	if telemetry.ToolCalls < minToolCalls {
 		return fmt.Errorf("only %d tool call(s), need at least %d", telemetry.ToolCalls, minToolCalls)
 	}
-	if !telemetry.ValidationRan {
-		return fmt.Errorf("analysis did not complete validate_analysis")
+	if !telemetry.ValidationPassed {
+		return fmt.Errorf("analysis did not successfully complete validate_analysis")
 	}
 	if *a.IsTransient && !telemetry.TimelineVerified {
 		return fmt.Errorf("transient verdict did not complete verify_timeline")

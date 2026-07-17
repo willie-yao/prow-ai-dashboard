@@ -50,23 +50,40 @@ func TestAnalysisTelemetryPaginatesAndSummarizes(t *testing.T) {
 	}
 }
 
+func TestSummarizeEventsRequiresCompletedValidation(t *testing.T) {
+	events := []executionEvent{
+		{Seq: 1, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-1"},
+		{Seq: 2, Type: "ToolCallFailed", ToolName: "validate-analysis-bscope", ToolCallID: "call-1"},
+	}
+	if got := summarizeEvents(events); got.ValidationPassed {
+		t.Fatal("failed validate_analysis call counted as passed")
+	}
+	events = append(events,
+		executionEvent{Seq: 3, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		executionEvent{Seq: 4, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+	)
+	if got := summarizeEvents(events); !got.ValidationPassed {
+		t.Fatal("completed validate_analysis call did not count as passed")
+	}
+}
+
 func TestValidateAnalysisAcceptance(t *testing.T) {
 	transient, nonTransient := true, false
 	valid := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationRan: true}, 2); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}, 2); err != nil {
 		t.Fatalf("valid non-transient analysis rejected: %v", err)
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 1, ValidationRan: true}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 1, ValidationPassed: true}, 2); err == nil {
 		t.Fatal("analysis below the tool-call floor was accepted")
 	}
 	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2}, 2); err == nil {
 		t.Fatal("analysis without validate_analysis was accepted")
 	}
 	valid.IsTransient = &transient
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationRan: true}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}, 2); err == nil {
 		t.Fatal("transient analysis without verify_timeline was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationRan: true, TimelineVerified: true}, 2); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true}, 2); err != nil {
 		t.Fatalf("timeline-verified transient analysis rejected: %v", err)
 	}
 }

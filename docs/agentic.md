@@ -624,7 +624,7 @@ contract hash, so cached job JSON is refreshed whenever the current contract
 changes. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
-schema and `min_tool_calls`, requires a completed `validate_analysis` call, and
+schema and `min_tool_calls`, requires a successful `validate_analysis` call, and
 requires a completed `verify_timeline` call for every transient verdict.
 Accepted analyses publish Tool-call count, duration, provider token usage, and
 quality-tool evidence alongside the result.
