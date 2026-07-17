@@ -168,3 +168,105 @@ func ParseAddresses(from string, recipients []string) (mail.Address, []mail.Addr
 	}
 	return *parsedFrom, parsedRecipients, nil
 }
+
+type patternEmailView struct {
+	ProjectName    string
+	Subject        string
+	Confidence     string
+	BuildsAnalyzed int
+	RootCause      string
+	SuggestedFix   string
+	DashboardURL   string
+	IssueURL       string
+	FixURL         string
+}
+
+var patternHTMLTemplate = template.Must(template.New("pattern-notification").Parse(`<!doctype html>
+<html>
+<body>
+  <h2>Systemic recurring failure</h2>
+  <p><strong>Project:</strong> {{.ProjectName}}</p>
+  <table>
+    <tr><td><strong>Job</strong></td><td>{{.Subject}}</td></tr>
+    <tr><td><strong>Confidence</strong></td><td>{{.Confidence}}</td></tr>
+    <tr><td><strong>Builds analyzed</strong></td><td>{{.BuildsAnalyzed}}</td></tr>
+  </table>
+  {{if .RootCause}}<h3>Shared root cause</h3><p>{{.RootCause}}</p>{{end}}
+  {{if .SuggestedFix}}<h3>Suggested fix</h3><p>{{.SuggestedFix}}</p>{{end}}
+  <p><a href="{{.DashboardURL}}">View recurring pattern</a></p>
+  {{if .IssueURL}}
+  <p>
+    <a href="{{.IssueURL}}" style="display:inline-block;padding:10px 14px;background:#b45309;color:#ffffff;text-decoration:none;border-radius:6px;margin-right:8px">Review issue draft</a>
+    <a href="{{.FixURL}}" style="display:inline-block;padding:10px 14px;background:#1d4ed8;color:#ffffff;text-decoration:none;border-radius:6px">Review fix proposal</a>
+  </p>
+  <p>These links open the authenticated dashboard. Nothing is created until a maintainer generates, reviews, and confirms the draft.</p>
+  {{end}}
+</body>
+</html>`))
+
+func (n *Notifier) patternMessage(pattern models.PatternAnalysis) Message {
+	view := patternEmailView{
+		ProjectName:    n.projectName,
+		Subject:        pattern.Subject,
+		Confidence:     pattern.Confidence,
+		BuildsAnalyzed: pattern.BuildsAnalyzed,
+		RootCause:      textutil.Truncate(pattern.SharedRootCause, 1000),
+		SuggestedFix:   textutil.Truncate(pattern.SuggestedFix, 1000),
+		DashboardURL:   n.patternURL(pattern),
+	}
+	if n.actionLinks && pattern.ID != "" {
+		view.IssueURL = n.patternActionURL(pattern, "create-issue")
+		view.FixURL = n.patternActionURL(pattern, "propose-fix")
+	}
+	return Message{
+		From:     n.from,
+		To:       append([]mail.Address(nil), n.to...),
+		Subject:  notificationSubject(n.projectName, "Systemic recurring failure", pattern.Subject),
+		TextBody: patternText(view),
+		HTMLBody: renderPatternHTML(view),
+	}
+}
+
+func patternText(view patternEmailView) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Systemic recurring failure\n\nProject: %s\nJob: %s\nConfidence: %s\nBuilds analyzed: %d\n",
+		view.ProjectName, view.Subject, view.Confidence, view.BuildsAnalyzed)
+	if view.RootCause != "" {
+		fmt.Fprintf(&b, "\nShared root cause:\n%s\n", view.RootCause)
+	}
+	if view.SuggestedFix != "" {
+		fmt.Fprintf(&b, "\nSuggested fix:\n%s\n", view.SuggestedFix)
+	}
+	fmt.Fprintf(&b, "\nDashboard: %s\n", view.DashboardURL)
+	if view.IssueURL != "" {
+		fmt.Fprintf(&b, "Review issue draft: %s\nReview fix proposal: %s\n", view.IssueURL, view.FixURL)
+		b.WriteString("\nNothing is created until a maintainer generates, reviews, and confirms the draft in the authenticated dashboard.\n")
+	}
+	return b.String()
+}
+
+func renderPatternHTML(view patternEmailView) string {
+	var b bytes.Buffer
+	if err := patternHTMLTemplate.Execute(&b, view); err != nil {
+		return ""
+	}
+	return b.String()
+}
+
+func (n *Notifier) patternURL(pattern models.PatternAnalysis) string {
+	return fmt.Sprintf("%s/job/%s#pattern-%s", n.dashboardBaseURL, url.PathEscape(patternJobID(pattern)), url.PathEscape(pattern.ID))
+}
+
+func (n *Notifier) patternActionURL(pattern models.PatternAnalysis, action string) string {
+	values := url.Values{}
+	values.Set("failure", pattern.ID)
+	values.Set("action", action)
+	return fmt.Sprintf("%s/job/%s?%s#pattern-%s", n.dashboardBaseURL, url.PathEscape(patternJobID(pattern)), values.Encode(), url.PathEscape(pattern.ID))
+}
+
+func patternJobID(pattern models.PatternAnalysis) string {
+	if pattern.JobID != "" {
+		return pattern.JobID
+	}
+	return pattern.Subject
+}

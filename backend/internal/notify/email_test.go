@@ -87,3 +87,24 @@ func TestFailureMessageTruncatesLongFields(t *testing.T) {
 		t.Fatal("message fields were not truncated")
 	}
 }
+
+func TestPatternMessageEscapesContentAndBuildsInertLinks(t *testing.T) {
+	n := &Notifier{
+		from:             mail.Address{Address: "from@example.com"},
+		to:               []mail.Address{{Address: "to@example.com"}},
+		projectName:      "Example",
+		dashboardBaseURL: "https://dash.example.com",
+		actionLinks:      true,
+	}
+	pattern := systemicPattern("pattern-1", "periodic/job", "Job<script>")
+	pattern.SharedRootCause = `<script>alert(1)</script>`
+	message := n.patternMessage(pattern)
+	if strings.Contains(message.HTMLBody, "<script>") || !strings.Contains(message.HTMLBody, "&lt;script&gt;") {
+		t.Fatalf("pattern HTML was not escaped: %s", message.HTMLBody)
+	}
+	for _, want := range []string{"action=create-issue", "action=propose-fix", "failure=pattern-1", "Nothing is created"} {
+		if !strings.Contains(message.HTMLBody+message.TextBody, want) {
+			t.Errorf("pattern message missing %q", want)
+		}
+	}
+}

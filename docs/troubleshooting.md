@@ -55,3 +55,18 @@ warning. Confirm:
 
 A failed delivery does not fail the fetch. Its state is left unchanged so the
 next full pass retries it.
+
+
+## Email action link does not show issue or fix controls
+
+Email action links require all of the following:
+
+- `notifications.email.action_links: true`.
+- A Kubernetes-native server deployment rather than static Pages.
+- `server.actions.enabled: true` with OAuth or proxy authentication.
+- The signed-in identity is present in `server.actions.admins`.
+- The recurring pattern still exists in the current job data.
+
+Opening the link only displays an intent prompt. Click **Generate draft** before
+the dashboard calls the preview API. Fix proposals also require `opencode` and
+git in the server image.

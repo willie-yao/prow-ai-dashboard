@@ -172,9 +172,10 @@ jobs:
 gh secret set EMAIL_SMTP_PASSWORD --repo my-org/my-dashboard
 ```
 
-The SMTP host must be reachable from the selected runner. See
-[Email notifications](notifications.md) for the project configuration and TLS
-modes.
+The SMTP host must be reachable from the selected runner. Keep
+`notifications.email.action_links` false because a static Pages deployment has
+no authenticated action API. See [Email notifications](notifications.md) for the
+project configuration and TLS modes.
 
 
 Email notifications, automatic issues, and scheduled fix PRs run during the

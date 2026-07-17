@@ -77,6 +77,7 @@ branding:
 # notifications:
 #   email:
 #     enabled: true
+#     action_links: false  # set true only for a server deploy with actions enabled
 #     from: "Prow Dashboard <prow-dashboard@example.com>"
 #     to: ["ci-team@example.com"]
 #     smtp:

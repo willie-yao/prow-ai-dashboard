@@ -32,7 +32,7 @@ func newTestNotifier(t *testing.T, sender Sender, stateFile string) *Notifier {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewNotifier(sender, from, to, stateFile, "Example", "https://dash.example.com", "https://prow.example.com/view/")
+	return NewNotifier(sender, from, to, stateFile, "Example", "https://dash.example.com", "https://prow.example.com/view/", true)
 }
 
 func makeReport(failures ...models.TestFlakiness) models.FlakinessReport {
@@ -284,3 +284,117 @@ func TestParseAddresses(t *testing.T) {
 }
 
 var _ Sender = (*fakeSender)(nil)
+
+func systemicPattern(id, jobID, subject string) models.PatternAnalysis {
+	return models.PatternAnalysis{
+		ID:              id,
+		JobID:           jobID,
+		Subject:         subject,
+		Systemic:        true,
+		Confidence:      "high",
+		BuildsAnalyzed:  5,
+		SharedRootCause: "shared controller timeout",
+		SuggestedFix:    "increase the controller timeout",
+	}
+}
+
+func TestSystemicPatternSendsActionableEmailOnce(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{systemicPattern("pattern-1", "job-id", "periodic-job")}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	message := sender.messages[0]
+	for _, want := range []string{"Systemic recurring failure", "Review issue draft", "Review fix proposal", "failure=pattern-1", "action=create-issue", "action=propose-fix"} {
+		if !strings.Contains(message.Subject+message.TextBody, want) {
+			t.Errorf("message missing %q: subject=%q body=%s", want, message.Subject, message.TextBody)
+		}
+	}
+	if _, ok := n.state.Patterns["pattern-1"]; !ok {
+		t.Fatal("pattern notification state was not recorded")
+	}
+
+	stats, err = n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 1 {
+		t.Fatalf("repeat stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+}
+
+func TestPatternEmailOmitsActionsWhenDisabled(t *testing.T) {
+	sender := &fakeSender{}
+	from, to, err := ParseAddresses("Prow Dashboard <prow@example.com>", []string{"team@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := NewNotifier(sender, from, to, filepath.Join(t.TempDir(), "state.json"), "Example", "https://dash.example.com", "https://prow.example.com/view/", false)
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{systemicPattern("pattern-1", "job-id", "periodic-job")}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 0 || len(sender.messages) != 0 || len(n.state.Patterns) != 0 {
+		t.Fatalf("disabled action links sent pattern email: stats=%+v messages=%d state=%+v", stats, len(sender.messages), n.state.Patterns)
+	}
+}
+
+func TestFailedPatternEmailRetries(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{systemicPattern("pattern-1", "job-id", "periodic-job")}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err == nil || stats.Failed != 1 || len(n.state.Patterns) != 0 {
+		t.Fatalf("first stats=%+v err=%v state=%+v", stats, err, n.state.Patterns)
+	}
+	stats, err = n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 1 || len(n.state.Patterns) != 1 {
+		t.Fatalf("retry stats=%+v err=%v state=%+v", stats, err, n.state.Patterns)
+	}
+}
+
+func TestCurrentEmailStateInitializesPatternMap(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	state := NotificationState{Channel: notificationChannel, Notified: map[string]NotifiedFailure{}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := newTestNotifier(t, &fakeSender{}, stateFile)
+	if n.state.Patterns == nil {
+		t.Fatal("pattern state map was not initialized")
+	}
+}
+
+func TestPatternNotificationComputesMissingIDAndSkipsNonSystemic(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("", "job-id", "periodic-job")
+	notSystemic := pattern
+	notSystemic.JobID = "other-job"
+	notSystemic.Systemic = false
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern, notSystemic}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 1 || len(n.state.Patterns) != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v state=%+v messages=%d", stats, n.state.Patterns, len(sender.messages))
+	}
+	for id := range n.state.Patterns {
+		if id == "" {
+			t.Fatal("computed pattern id is empty")
+		}
+	}
+}

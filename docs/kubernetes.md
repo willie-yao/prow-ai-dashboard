@@ -253,7 +253,9 @@ fetcher:
 ```
 
 The SMTP host in `notifications.email.smtp.host` must be reachable from the
-worker or CronJob. See [Email notifications](notifications.md) for TLS modes,
+worker or CronJob. Set `notifications.email.action_links: true` after server
+actions are enabled to add authenticated issue and fix review links to systemic
+pattern emails. See [Email notifications](notifications.md) for TLS modes,
 message behavior, and unauthenticated relay configuration.
 
 ## Automatic issues and fix PRs

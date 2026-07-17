@@ -24,6 +24,7 @@ const notificationChannel = "email-v1"
 type NotificationState struct {
 	Channel  string                     `json:"channel"`
 	Notified map[string]NotifiedFailure `json:"notified"`
+	Patterns map[string]NotifiedPattern `json:"patterns,omitempty"`
 }
 
 // NotifiedFailure tracks a single notified persistent failure.
@@ -33,6 +34,14 @@ type NotifiedFailure struct {
 	ErrorHash        string `json:"error_hash"`
 	JobName          string `json:"job_name"`
 	TestName         string `json:"test_name"`
+}
+
+// NotifiedPattern tracks one systemic recurring pattern email.
+type NotifiedPattern struct {
+	PatternID       string `json:"pattern_id"`
+	JobID           string `json:"job_id"`
+	Subject         string `json:"subject"`
+	SharedRootCause string `json:"shared_root_cause"`
 }
 
 // Message is one rendered email notification.
@@ -59,17 +68,19 @@ type Notifier struct {
 	projectName      string
 	dashboardBaseURL string
 	prowURLBase      string
+	actionLinks      bool
 }
 
 // Stats tracks notification counts for logging.
 type Stats struct {
-	NewAlerts  int
-	Recoveries int
-	Failed     int
+	NewAlerts     int
+	PatternAlerts int
+	Recoveries    int
+	Failed        int
 }
 
 // NewNotifier creates a Notifier and loads existing state from stateFile.
-func NewNotifier(sender Sender, from mail.Address, to []mail.Address, stateFile, projectName, dashboardBaseURL, prowURLBase string) *Notifier {
+func NewNotifier(sender Sender, from mail.Address, to []mail.Address, stateFile, projectName, dashboardBaseURL, prowURLBase string, actionLinks bool) *Notifier {
 	n := &Notifier{
 		sender:           sender,
 		from:             from,
@@ -78,6 +89,7 @@ func NewNotifier(sender Sender, from mail.Address, to []mail.Address, stateFile,
 		projectName:      projectName,
 		dashboardBaseURL: strings.TrimRight(dashboardBaseURL, "/"),
 		prowURLBase:      prowURLBase,
+		actionLinks:      actionLinks,
 		state:            newNotificationState(),
 	}
 	n.loadState()
@@ -88,6 +100,7 @@ func newNotificationState() *NotificationState {
 	return &NotificationState{
 		Channel:  notificationChannel,
 		Notified: make(map[string]NotifiedFailure),
+		Patterns: make(map[string]NotifiedPattern),
 	}
 }
 
@@ -107,6 +120,9 @@ func (n *Notifier) loadState() {
 	}
 	if s.Notified == nil {
 		s.Notified = make(map[string]NotifiedFailure)
+	}
+	if s.Patterns == nil {
+		s.Patterns = make(map[string]NotifiedPattern)
 	}
 	n.state = &s
 }
@@ -195,6 +211,32 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 		}
 		stats.Recoveries++
 		delete(n.state.Notified, key)
+	}
+
+	if n.actionLinks {
+		for _, pattern := range report.RecurringPatterns {
+			if !pattern.Systemic {
+				continue
+			}
+			if pattern.ID == "" {
+				pattern.ID = models.PatternID(pattern)
+			}
+			if _, notified := n.state.Patterns[pattern.ID]; notified {
+				continue
+			}
+			if err := n.sender.Send(ctx, n.patternMessage(pattern)); err != nil {
+				stats.Failed++
+				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", pattern.ID, err))
+				continue
+			}
+			stats.PatternAlerts++
+			n.state.Patterns[pattern.ID] = NotifiedPattern{
+				PatternID:       pattern.ID,
+				JobID:           pattern.JobID,
+				Subject:         pattern.Subject,
+				SharedRootCause: pattern.SharedRootCause,
+			}
+		}
 	}
 
 	return stats, errors.Join(sendErrs...)

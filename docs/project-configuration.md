@@ -168,6 +168,7 @@ Email notifications are optional and configured under `notifications.email`:
 notifications:
   email:
     enabled: true
+    action_links: false
     from: "Prow AI Dashboard <prow-dashboard@example.com>"
     to:
       - "ci-team@example.com"
@@ -181,7 +182,9 @@ notifications:
 `tls` accepts `starttls` (default), `tls` for implicit TLS, or `none` for an
 explicit unauthenticated relay. The default ports are 587, 465, and 25
 respectively. When `smtp.username` is set, provide `EMAIL_SMTP_PASSWORD` through
-the deployment secret environment. See [Email notifications](notifications.md).
+the deployment secret environment. Set `action_links: true` only for a
+Kubernetes-native server with authenticated actions; it adds pattern-level issue
+and fix review links. See [Email notifications](notifications.md).
 
 ## Optional write features
 

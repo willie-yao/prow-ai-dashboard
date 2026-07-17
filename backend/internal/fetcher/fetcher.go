@@ -375,10 +375,11 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 						cfg.Name,
 						cfg.Branding.SiteURL,
 						p.backend.ProwURL("logs/"),
+						email.ActionLinks,
 					)
 					stats, processErr := notifier.ProcessFailures(ctx, flakinessReport, details)
-					log.Printf("📧 Email notifications: %d failure alerts, %d recoveries, %d failed deliveries",
-						stats.NewAlerts, stats.Recoveries, stats.Failed)
+					log.Printf("📧 Email notifications: %d failure alerts, %d pattern alerts, %d recoveries, %d failed deliveries",
+						stats.NewAlerts, stats.PatternAlerts, stats.Recoveries, stats.Failed)
 					if processErr != nil {
 						log.Printf("Warning: email notification processing failed: %v", processErr)
 					}

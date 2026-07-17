@@ -18,6 +18,11 @@ Failure emails include the project, job, test, consecutive count, latest error,
 available AI root cause or summary, dashboard link, and Prow link. Each message
 contains plain-text and HTML alternatives.
 
+When `action_links: true`, the notifier also sends one pattern-level email for
+each newly observed systemic recurring root cause. That email includes inert
+**Review issue draft** and **Review fix proposal** links. Pattern emails are
+deduplicated by the stable pattern id.
+
 ## Project configuration
 
 Add the email block to the consumer's `project.yaml`:
@@ -26,6 +31,7 @@ Add the email block to the consumer's `project.yaml`:
 notifications:
   email:
     enabled: true
+    action_links: false
     from: "Prow AI Dashboard <prow-dashboard@example.com>"
     to:
       - "ci-team@example.com"
@@ -43,6 +49,36 @@ valid email addresses.
 Use a team distribution list rather than personal addresses when `project.yaml`
 is stored in a public repository. Notification settings are omitted from the
 published `manifest.json`, but the source YAML itself remains visible.
+
+## Action links for maintainers
+
+Action links are opt-in and only work with a Kubernetes-native server that has
+admin actions enabled:
+
+```yaml
+notifications:
+  email:
+    enabled: true
+    action_links: true
+    # from, to, and smtp omitted here
+```
+
+The links contain only the public pattern id, requested action, and dashboard
+URL. They contain no GitHub token, SMTP password, preview token, or authorization
+data.
+
+Opening a link performs an inert GET. After GitHub OAuth or proxy authentication,
+the dashboard shows a second **Generate draft** prompt. Only that explicit click
+starts the preview POST. The maintainer then reviews the exact issue or diff and
+must confirm it before the dashboard writes to GitHub.
+
+This extra step is intentional. Email security scanners and forwarded messages
+must not be able to start generation or create an issue or PR merely by opening
+a URL.
+
+Do not enable `action_links` for a static Pages deployment. Pages has no action
+API or administrator authentication. Fix proposal links also require a server
+image that contains `opencode` and git.
 
 ## SMTP security modes
 
@@ -116,7 +152,8 @@ Deduplication state is stored in `notification_state.json` alongside the fetcher
 cache. It is preserved between runs but is not published by Pages or served by
 the Kubernetes server.
 
-State changes only after successful delivery:
+State tracks both persistent-test alerts and action-enabled systemic-pattern
+alerts. State changes only after successful delivery:
 
 - A failed new or changed-failure email is retried on the next full pass.
 - A failed recovery email keeps its state entry and is retried.

@@ -897,6 +897,7 @@ func TestParseEmailNotifications(t *testing.T) {
 notifications:
   email:
     enabled: true
+    action_links: true
     from: "Dashboard <dashboard@example.com>"
     to:
       - "team@example.com"
@@ -910,7 +911,7 @@ notifications:
 		t.Fatal(err)
 	}
 	email, enabled := c.EffectiveEmailNotifications()
-	if !enabled || email.SMTP.Port != 587 || email.SMTP.Host != "smtp.example.com" || len(email.To) != 1 {
+	if !enabled || !email.ActionLinks || email.SMTP.Port != 587 || email.SMTP.Host != "smtp.example.com" || len(email.To) != 1 {
 		t.Fatalf("email config = %+v enabled=%v", email, enabled)
 	}
 }

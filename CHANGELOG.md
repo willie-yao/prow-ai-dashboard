@@ -25,7 +25,9 @@ for how to pin a release.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;
-  STARTTLS is the default transport.
+  STARTTLS is the default transport. Kubernetes-native deployments can opt into
+  inert email links that open the authenticated issue or fix preview flow for
+  systemic recurring patterns.
 
 ### Removed
 

@@ -194,10 +194,11 @@ type Notifications struct {
 
 // EmailNotifications configures persistent-failure email alerts.
 type EmailNotifications struct {
-	Enabled bool      `yaml:"enabled,omitempty" json:"-"`
-	From    string    `yaml:"from,omitempty" json:"-"`
-	To      []string  `yaml:"to,omitempty" json:"-"`
-	SMTP    EmailSMTP `yaml:"smtp,omitempty" json:"-"`
+	Enabled     bool      `yaml:"enabled,omitempty" json:"-"`
+	ActionLinks bool      `yaml:"action_links,omitempty" json:"-"`
+	From        string    `yaml:"from,omitempty" json:"-"`
+	To          []string  `yaml:"to,omitempty" json:"-"`
+	SMTP        EmailSMTP `yaml:"smtp,omitempty" json:"-"`
 }
 
 // EmailSMTP configures the SMTP relay used for email alerts.
