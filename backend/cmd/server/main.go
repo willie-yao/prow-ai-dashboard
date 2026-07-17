@@ -203,6 +203,7 @@ func enableActions(opts *server.Options, projectDir, dataDir string) error {
 		}
 		opts.EmailReplies = replies
 	}
+	actionService.ResumeInboundRequests(os.Getenv("GITHUB_READ_TOKEN"))
 	return nil
 }
 
@@ -297,9 +298,6 @@ func emailReplyOptions(cfg *project.Config, signer *notify.ReplySigner, admins [
 		maintainers[strings.ToLower(address.Address)] = login
 	}
 	generationToken := os.Getenv("GITHUB_READ_TOKEN")
-	if generationToken == "" {
-		generationToken = os.Getenv("BOT_TOKEN")
-	}
 	return &server.EmailReplyOptions{
 		WebhookSecret:   secret,
 		Signer:          signer,

@@ -121,6 +121,7 @@ func (s *Service) reviseRequestFromEmail(receiptKey, id, owner, generationToken,
 	request.Issue = nil
 	request.Fix = nil
 	request.Instruction = combinedInstruction
+	request.Inbound = true
 	s.requests.Inbound[receiptKey] = inboundReceipt{RequestID: id, ReceivedAt: now.Format(time.RFC3339)}
 	if err := s.saveRequestsLocked(); err != nil {
 		*request = previous

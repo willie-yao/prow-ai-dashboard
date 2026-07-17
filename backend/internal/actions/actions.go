@@ -95,6 +95,7 @@ type Service struct {
 	requestNotify   RequestReadyNotifier
 	requestCancels  map[string]context.CancelFunc
 	requestConfirms map[string]struct{}
+	inboundResumed  bool
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding

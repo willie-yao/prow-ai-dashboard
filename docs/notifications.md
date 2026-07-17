@@ -175,7 +175,8 @@ generation when the gateway retries.
 For private source repositories, provide a read-only `GITHUB_READ_TOKEN` to the
 server. It is used only while generating an email-requested draft. Final issue or
 PR creation uses the authenticated dashboard user's token, or the configured bot
-identity in proxy mode.
+identity in proxy mode. The write-scoped `BOT_TOKEN` is never used for draft
+generation.
 
 ## SMTP security modes
 

@@ -87,3 +87,25 @@ func TestEmailReplyConfigurationRequiresAdminMapping(t *testing.T) {
 		t.Fatalf("options err=%v", err)
 	}
 }
+
+func TestEmailReplyConfigurationDoesNotUseBotTokenForGeneration(t *testing.T) {
+	cfg := &project.Config{Notifications: &project.Notifications{Email: &project.EmailNotifications{
+		Enabled: true, ActionLinks: true,
+		Inbound: &project.EmailInbound{Enabled: true, ReplyTo: "{token}@replies.example.com", Maintainers: map[string]string{"alice": "alice@example.com"}},
+	}}}
+	t.Setenv("EMAIL_REPLY_TOKEN_SECRET", strings.Repeat("r", 32))
+	t.Setenv("EMAIL_INBOUND_WEBHOOK_SECRET", strings.Repeat("w", 32))
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	t.Setenv("BOT_TOKEN", "write-token")
+	signer, err := emailReplySigner(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := emailReplyOptions(cfg, signer, []string{"alice"}, "proxy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.GenerationToken != "" {
+		t.Fatalf("generation token = %q, want empty without GITHUB_READ_TOKEN", options.GenerationToken)
+	}
+}

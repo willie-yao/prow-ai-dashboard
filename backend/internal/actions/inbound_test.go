@@ -1,10 +1,12 @@
 package actions
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHandleEmailReplyCreatesDraftAndDeduplicates(t *testing.T) {
@@ -112,5 +114,50 @@ func TestHandleEmailReplyDedupSurvivesRestart(t *testing.T) {
 	duplicate, err := reloaded.HandleEmailReply("<message-3@example.com>", "pattern", pattern.ID, "alice", "", "fix")
 	if err != nil || !duplicate.Duplicate || duplicate.Request.ID != first.Request.ID {
 		t.Fatalf("duplicate=%+v err=%v", duplicate, err)
+	}
+}
+
+func TestPendingInboundRequestResumesAfterRestart(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	receiptKey, err := emailMessageKey("<restart@example.com>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := actionRequestState{
+		Version: 2,
+		Requests: map[string]*actionRequest{
+			"request-inbound": {ActionRequestView: ActionRequestView{
+				ID: "request-inbound", FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestPending,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			}},
+		},
+		Inbound: map[string]inboundReceipt{
+			receiptKey: {RequestID: "request-inbound", ReceivedAt: now.Format(time.RFC3339)},
+		},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	pending, err := reloaded.GetRequest("request-inbound", "alice")
+	if err != nil || pending.Status != RequestPending {
+		t.Fatalf("pending=%+v err=%v", pending, err)
+	}
+	reloaded.ResumeInboundRequests("")
+	ready := waitRequest(t, reloaded, "request-inbound", "alice", RequestReady)
+	if ready.Preview == nil || ready.Preview.Kind != "issue" {
+		t.Fatalf("ready=%+v", ready)
+	}
+	reloaded.rmu.Lock()
+	inbound := reloaded.requests.Requests["request-inbound"].Inbound
+	reloaded.rmu.Unlock()
+	if !inbound {
+		t.Fatal("legacy inbound receipt did not mark the request as inbound")
 	}
 }

@@ -63,6 +63,7 @@ type actionRequest struct {
 	Instruction string                      `json:"instruction,omitempty"`
 	Issue       *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix         *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	Inbound     bool                        `json:"inbound,omitempty"`
 }
 
 type actionRequestState struct {
@@ -100,8 +101,16 @@ func (s *Service) loadActionRequests() {
 	s.requests = state
 	changed := s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
-	for _, request := range state.Requests {
-		if request.Status == RequestPending {
+	inboundIDs := make(map[string]bool, len(state.Inbound))
+	for _, receipt := range state.Inbound {
+		inboundIDs[receipt.RequestID] = true
+	}
+	for id, request := range state.Requests {
+		if inboundIDs[id] && !request.Inbound {
+			request.Inbound = true
+			changed = true
+		}
+		if request.Status == RequestPending && !request.Inbound {
 			request.Status = RequestFailed
 			request.Error = "server restarted before draft generation completed"
 			request.UpdatedAt = nowText
@@ -112,6 +121,27 @@ func (s *Service) loadActionRequests() {
 		if err := statefile.WriteJSON(s.requestStatePath(), state); err != nil {
 			log.Printf("Warning: failed to save recovered action request state: %v", err)
 		}
+	}
+}
+
+// ResumeInboundRequests restarts email-originated generation after a restart.
+func (s *Service) ResumeInboundRequests(generationToken string) {
+	s.rmu.Lock()
+	if s.inboundResumed {
+		s.rmu.Unlock()
+		return
+	}
+	s.inboundResumed = true
+	var pending []string
+	for id, request := range s.requests.Requests {
+		if request.Inbound && request.Status == RequestPending {
+			pending = append(pending, id)
+		}
+	}
+	s.rmu.Unlock()
+	sort.Strings(pending)
+	for _, id := range pending {
+		go s.generateRequest(id, generationToken)
 	}
 }
 
@@ -170,7 +200,7 @@ func (s *Service) createRequest(failureID, kind, owner, userToken, instruction, 
 		ID: id, FailureID: failureID, Kind: kind, Owner: owner,
 		Status: RequestPending, CreatedAt: now.Format(time.RFC3339),
 		UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(actionRequestTTL).Format(time.RFC3339),
-	}, Instruction: strings.TrimSpace(instruction)}
+	}, Instruction: strings.TrimSpace(instruction), Inbound: receiptKey != ""}
 
 	s.rmu.Lock()
 	s.expireRequestsLocked(now)
