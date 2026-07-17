@@ -82,7 +82,7 @@ Provider, and the patched ai-worker image are already installed in the cluster.
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka once those
 prerequisites are in place. See
-[experimental/orka/USAGE.md](../experimental/orka/USAGE.md) for the full setup
+[experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md) for the full setup
 and [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md) for
 how it works.
 

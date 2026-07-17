@@ -75,7 +75,7 @@ A dashboard is shaped by three things:
 - [Onboarding a new project](docs/onboarding-a-new-project.md): choose a deploy
   path, scaffold it with the `onboard` subcommand (`-mode k8s` or Pages), then a
   full field-by-field reference covers the rest.
-- [Orka backend quickstart](experimental/orka/USAGE.md): step-by-step setup for
+- [Orka backend quickstart](experimental/orka/QUICKSTART.md): step-by-step setup for
   the recommended Kubernetes-native analysis backend, running failure analysis as
   Orka Tasks alongside your in-cluster inference stack. See also the
   [overview](experimental/orka/README.md) and

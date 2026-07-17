@@ -46,7 +46,7 @@ classification. So the recommendation keeps both: Orka as an optional
 strong-model backend, the in-process loop as the default. For the code-level
 mechanics of how each harness piece is reconstructed out of Kubernetes objects,
 see [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md); for
-setup, [experimental/orka/USAGE.md](../experimental/orka/USAGE.md).
+setup, [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md).
 
 ## Endpoint requirements
 
