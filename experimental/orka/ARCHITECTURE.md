@@ -137,7 +137,8 @@ AI Task per eligible job, ingests its `PatternAnalysis`, assigns stable pattern
 IDs, and folds systemic verdicts into `flakiness.json`. This makes recurring
 patterns available to the existing dashboard and interactive actions. Because
 the correlation Task has no source-repository tools, any file path it introduces
-in `suggested_fix` is marked as unverified.
+in `suggested_fix` is marked as unverified. Its Task identity fingerprints the
+project scope, provider/model, timeout/retry policy, prompts, and manual version.
 
 ## How the harness is replicated
 

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -658,7 +659,15 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 	if len(input.Failures) < 2 {
 		return nil, nil
 	}
-	fingerprint := a.projectScope + "\x00" + a.provider + "\x00" + a.model + "\x00" + input.SystemPrompt + "\x00" + input.UserPrompt
+	fingerprint := strings.Join([]string{
+		a.projectScope,
+		a.provider,
+		a.model,
+		a.timeout,
+		strconv.Itoa(a.retries),
+		input.SystemPrompt,
+		input.UserPrompt,
+	}, "\x00")
 	name := orka.PatternTaskName(jobID, fingerprint, a.version)
 	task := orka.BuildAITask(orka.AITaskSpec{
 		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model,

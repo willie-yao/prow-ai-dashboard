@@ -155,15 +155,16 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 
 	kube := &fakePatternKube{}
 	analyzer := &patternTaskAnalyzer{
-		kube:      kube,
-		client:    &orkaClient{base: server.URL, http: server.Client()},
-		namespace: namespace,
-		provider:  "models",
-		model:     "strong-model",
-		version:   "v1",
-		timeout:   "5m",
-		retries:   1,
-		poll:      time.Millisecond,
+		kube:         kube,
+		client:       &orkaClient{base: server.URL, http: server.Client()},
+		namespace:    namespace,
+		provider:     "models",
+		model:        "strong-model",
+		version:      "v1",
+		projectScope: "project",
+		timeout:      "5m",
+		retries:      1,
+		poll:         time.Millisecond,
 	}
 	failures := []ai.PatternFailure{
 		{BuildID: "103", RootCause: "stale controller write", Severity: "High"},
@@ -184,6 +185,31 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	aiSpec := spec["ai"].(map[string]any)
 	if aiSpec["providerRef"].(map[string]any)["name"] != "models" || aiSpec["model"] != "strong-model" {
 		t.Fatalf("applied AI spec = %+v", aiSpec)
+	}
+	baseName := kube.applied["metadata"].(map[string]any)["name"].(string)
+	variants := []struct {
+		name    string
+		timeout string
+		retries int
+	}{
+		{name: "timeout", timeout: "6m", retries: analyzer.retries},
+		{name: "retries", timeout: analyzer.timeout, retries: 2},
+	}
+	for _, variant := range variants {
+		t.Run(variant.name, func(t *testing.T) {
+			variantKube := &fakePatternKube{}
+			variantAnalyzer := *analyzer
+			variantAnalyzer.kube = variantKube
+			variantAnalyzer.timeout = variant.timeout
+			variantAnalyzer.retries = variant.retries
+			if _, err := variantAnalyzer.AnalyzePattern(context.Background(), "periodic-controller", "periodic-controller", failures); err != nil {
+				t.Fatal(err)
+			}
+			name := variantKube.applied["metadata"].(map[string]any)["name"].(string)
+			if name == baseName {
+				t.Fatalf("%s change reused pattern Task name %q", variant.name, name)
+			}
+		})
 	}
 }
 
