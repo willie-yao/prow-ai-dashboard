@@ -38,14 +38,15 @@ func TestValidateAnalysisStatus(t *testing.T) {
 		wantValid   bool
 		wantMissing string
 	}{
-		{name: "all present", paths: `{"paths":["build-log.txt"]}`, wantStatus: http.StatusOK, wantValid: true},
-		{name: "missing path", paths: `{"paths":["build-log.txt","missing.log"]}`, wantStatus: http.StatusUnprocessableEntity, wantMissing: "missing.log"},
+		{name: "all present", paths: `["build-log.txt"]`, wantStatus: http.StatusOK, wantValid: true},
+		{name: "missing path", paths: `["build-log.txt","missing.log"]`, wantStatus: http.StatusUnprocessableEntity, wantMissing: "missing.log"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			env := &toolEnv{browser: &validateBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}}
-			req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(tt.paths))
+			body := `{"analysis":{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix","relevant_files":` + tt.paths + `}}`
+			req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(body))
 			recorder := httptest.NewRecorder()
 
 			validateAnalysis(env, recorder, req)
@@ -56,14 +57,18 @@ func TestValidateAnalysisStatus(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.StatusCode, tt.wantStatus)
 			}
 			var result struct {
-				AllPresent bool     `json:"all_present"`
-				Missing    []string `json:"missing"`
+				AllPresent      bool     `json:"all_present"`
+				Missing         []string `json:"missing"`
+				ValidationToken string   `json:"validation_token"`
 			}
 			if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 				t.Fatal(err)
 			}
 			if result.AllPresent != tt.wantValid {
 				t.Errorf("all_present = %t, want %t", result.AllPresent, tt.wantValid)
+			}
+			if tt.wantValid && result.ValidationToken == "" {
+				t.Error("successful validation did not return validation_token")
 			}
 			if tt.wantMissing != "" && (len(result.Missing) != 1 || result.Missing[0] != tt.wantMissing) {
 				t.Errorf("missing = %v, want [%s]", result.Missing, tt.wantMissing)
@@ -94,7 +99,8 @@ func TestValidateAnalysisEnforcesMatchedSkillEvidence(t *testing.T) {
 
 	request := func(paths string) *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"paths":`+paths+`,"analysis":"resource quota exceeded"}`))
+		body := `{"analysis":{"summary":"summary","root_cause":"resource quota exceeded","severity":"High","is_transient":false,"suggested_fix":"increase quota","relevant_files":` + paths + `}}`
+		req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(body))
 		req.Header.Set(skills.ContractHeader, header)
 		recorder := httptest.NewRecorder()
 		validateAnalysis(env, recorder, req)

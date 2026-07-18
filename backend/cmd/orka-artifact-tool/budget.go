@@ -11,33 +11,20 @@ import (
 )
 
 const (
-	defaultScopeCalls      = 256
 	defaultScopeModelBytes = 8 << 20
 	defaultScopeGCSBytes   = 64 << 20
 )
 
 type scopeBudget struct {
 	mu         sync.Mutex
-	callLimit  int
 	modelLimit int
 	gcsLimit   int
-	calls      int
 	modelUsed  int
 	gcsUsed    int
 }
 
-func newScopeBudget(callLimit, modelLimit, gcsLimit int) *scopeBudget {
-	return &scopeBudget{callLimit: callLimit, modelLimit: modelLimit, gcsLimit: gcsLimit}
-}
-
-func (b *scopeBudget) reserveCall() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.calls >= b.callLimit || b.modelUsed >= b.modelLimit || b.gcsUsed >= b.gcsLimit {
-		return false
-	}
-	b.calls++
-	return true
+func newScopeBudget(modelLimit, gcsLimit int) *scopeBudget {
+	return &scopeBudget{modelLimit: modelLimit, gcsLimit: gcsLimit}
 }
 
 func (b *scopeBudget) remaining() (model, gcs int) {
@@ -85,7 +72,9 @@ func (b *budgetBrowser) Read(ctx context.Context, file string, offset, length in
 	if remaining == 0 {
 		return nil, -1, fmt.Errorf("artifact byte budget exhausted")
 	}
-	length = min(length, remaining)
+	if length > remaining {
+		return nil, -1, fmt.Errorf("artifact byte budget exhausted: requested %d bytes with %d remaining", length, remaining)
+	}
 	data, size, err := b.Browser.Read(ctx, file, offset, length)
 	b.budget.consumeGCS(len(data))
 	return data, size, err
@@ -96,25 +85,24 @@ func (b *budgetBrowser) Tail(ctx context.Context, file string, lines, maxBytes i
 	if remaining == 0 {
 		return nil, fmt.Errorf("artifact byte budget exhausted")
 	}
-	result, err := b.Browser.Tail(ctx, file, lines, min(maxBytes, remaining))
+	if maxBytes > remaining {
+		return nil, fmt.Errorf("artifact byte budget exhausted: requested %d bytes with %d remaining", maxBytes, remaining)
+	}
+	result, err := b.Browser.Tail(ctx, file, lines, maxBytes)
 	if result != nil {
 		b.budget.consumeGCS(len(result.Content))
 	}
 	return result, err
 }
 
-func (b *budgetBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) (*artifacts.GrepResult, error) {
+func (b *budgetBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen, _ int) (*artifacts.GrepResult, error) {
 	_, remaining := b.budget.remaining()
 	if remaining == 0 {
 		return nil, fmt.Errorf("artifact byte budget exhausted")
 	}
-	result, err := b.Browser.Grep(ctx, file, re, contextLines, maxMatches, maxLineLen)
+	result, err := b.Browser.Grep(ctx, file, re, contextLines, maxMatches, maxLineLen, remaining)
 	if result != nil {
-		scanned := int(result.BytesScanned)
-		b.budget.consumeGCS(min(scanned, remaining))
-		if scanned > remaining {
-			return nil, fmt.Errorf("artifact byte budget exhausted")
-		}
+		b.budget.consumeGCS(int(result.BytesScanned))
 	}
 	return result, err
 }

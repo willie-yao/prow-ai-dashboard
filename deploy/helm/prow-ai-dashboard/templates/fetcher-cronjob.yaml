@@ -44,8 +44,13 @@ spec:
           # not used; Orka + the tool shim + a Provider must already be installed.
           initContainers:
             - name: fetch
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "prow-ai-dashboard.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else }}
               image: {{ include "prow-ai-dashboard.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- end }}
               command:
                 - /usr/local/bin/fetcher
                 - -project-dir={{ .Values.project.mountPath }}
@@ -97,8 +102,13 @@ spec:
                 - { name: tmp, mountPath: /tmp }
           containers:
             - name: ingest
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "prow-ai-dashboard.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else }}
               image: {{ .Values.orka.ingestorImage }}
               imagePullPolicy: {{ .Values.orka.imagePullPolicy }}
+              {{- end }}
               command:
                 - /usr/local/bin/orka-ingestor
                 - -data={{ .Values.persistence.mountPath }}
@@ -146,8 +156,13 @@ spec:
           {{- else }}
           containers:
             - name: fetcher
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "prow-ai-dashboard.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else }}
               image: {{ include "prow-ai-dashboard.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- end }}
               command:
                 - /usr/local/bin/fetcher
                 - -project-dir={{ .Values.project.mountPath }}

@@ -1,12 +1,11 @@
-# Deterministically verifies cited paths and consumer skill evidence. The
-# producer compiles consumer recipes into this Tool's scoped headers.
+# Deterministically verifies the exact final analysis and consumer skill evidence.
 apiVersion: core.orka.ai/v1alpha1
 kind: Tool
 metadata:
   name: validate-analysis
   namespace: orka-system
 spec:
-  description: "Verify every cited artifact path exists and that the draft analysis includes the evidence groups required by matching consumer recipes. Pass all cited paths plus the draft summary, root cause, and fix. Reject the draft if the tool reports missing paths or evidence."
+  description: "Verify the exact final analysis object: every relevant file must exist and matching consumer recipe evidence must be present. Copy validation_token from the successful result into the final JSON without changing any analysis field afterward."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/validate_analysis
     method: POST
@@ -17,12 +16,17 @@ spec:
   parameters:
     type: object
     properties:
-      paths:
-        type: array
-        items:
-          type: string
-        description: "Every artifact path cited or relied on by the draft analysis."
       analysis:
-        type: string
-        description: "The draft summary, root cause, and suggested fix used to match consumer recipe triggers."
-    required: [paths, analysis]
+        type: object
+        description: "The exact final analysis object that will be returned."
+        properties:
+          summary: {type: string}
+          root_cause: {type: string}
+          severity: {type: string}
+          is_transient: {type: boolean}
+          suggested_fix: {type: string}
+          relevant_files:
+            type: array
+            items: {type: string}
+        required: [summary, root_cause, severity, is_transient, suggested_fix, relevant_files]
+    required: [analysis]

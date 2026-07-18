@@ -28,7 +28,6 @@ type buildResolver struct {
 	defaultCfg    storage.Config
 	defaultBucket string
 	defaultPrefix string
-	callBudget    int
 	modelBudget   int
 	gcsBudget     int
 
@@ -49,7 +48,6 @@ type bucketBackend struct {
 type buildEntry struct {
 	browser artifacts.Browser
 	cache   *tools.Cache
-	budget  *scopeBudget
 	used    uint64
 }
 
@@ -58,7 +56,6 @@ func newBuildResolver(defaultCfg storage.Config, defaultBucket, defaultPrefix st
 		defaultCfg:    defaultCfg,
 		defaultBucket: defaultBucket,
 		defaultPrefix: normalizeBuildPrefix(defaultPrefix),
-		callBudget:    envPositiveInt("TOOL_CALL_BUDGET", defaultScopeCalls),
 		modelBudget:   envPositiveInt("MODEL_BYTE_BUDGET", defaultScopeModelBytes),
 		gcsBudget:     envPositiveInt("GCS_BYTE_BUDGET", defaultScopeGCSBytes),
 		backends:      map[string]*bucketBackend{},
@@ -190,7 +187,6 @@ func (r *buildResolver) resolve(bucket, prefix, scope string, override storage.C
 		entry = &buildEntry{
 			browser: bb.factory.ForBuild(prefix, prefix),
 			cache:   tools.NewCache(),
-			budget:  newScopeBudget(r.callBudget, r.modelBudget, r.gcsBudget),
 		}
 		r.builds[key] = entry
 	}
@@ -222,14 +218,15 @@ func (r *buildResolver) aiEnv(bucket, prefix, scope string, override storage.Con
 	if err != nil {
 		return nil, nil, err
 	}
-	modelRemaining, gcsRemaining := entry.budget.remaining()
+	budget := newScopeBudget(r.modelBudget, r.gcsBudget)
+	modelRemaining, gcsRemaining := budget.remaining()
 	return &tools.Env{
-		Browser:             &budgetBrowser{Browser: entry.browser, budget: entry.budget},
+		Browser:             &budgetBrowser{Browser: entry.browser, budget: budget},
 		Cache:               entry.cache,
 		WebURLBase:          web,
 		RemainingModelBytes: modelRemaining,
 		RemainingGCSBytes:   gcsRemaining,
-	}, entry.budget, nil
+	}, budget, nil
 }
 
 func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storage.Config) (*toolEnv, *scopeBudget, error) {
@@ -237,8 +234,9 @@ func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storag
 	if err != nil {
 		return nil, nil, err
 	}
+	budget := newScopeBudget(r.modelBudget, r.gcsBudget)
 	wrap := func(browser artifacts.Browser) artifacts.Browser {
-		return &budgetBrowser{Browser: browser, budget: entry.budget}
+		return &budgetBrowser{Browser: browser, budget: budget}
 	}
 	return &toolEnv{
 		backend:     bb.backend,
@@ -249,7 +247,7 @@ func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storag
 		browserForBuild: func(prefix, display string) artifacts.Browser {
 			return wrap(bb.factory.ForBuild(prefix, display))
 		},
-	}, entry.budget, nil
+	}, budget, nil
 }
 
 func requestStorage(r *http.Request) storage.Config {

@@ -42,14 +42,16 @@ validates the diff, runs critique and independent verification, and opens the
 PR. Enable chart RBAC with `orka.fixRuntime.enabled: true`; private repositories
 should use a separate read-only `git_secret` for the Orka workspace. The
 referenced Agent runtime must support workspace diff capture and structured
-results, such as the OpenCode runtime implementation maintained in Orka.
+results, such as the OpenCode runtime implementation maintained in Orka. Failed
+or cancelled content-addressed Tasks are deleted and recreated, while each Task
+also carries the configured Orka retry policy.
 
 ## Known constraints
 
 - **Execution events are required.** The ingestor reads each Task's event stream
   to enforce the tool-call floor, terminal outcome, successful quality tools,
-  consumer recipe lookup, `validate_analysis`, and transient timeline evidence
-  before publishing a result.
+  consumer recipe lookup, a `validate_analysis` token bound to the exact final
+  JSON, and transient timeline evidence before publishing a result.
 - **Scheduled side effects run in batch mode.** After job-level pattern
   finalization succeeds, the ingestor runs the same notifications, issue
   reconciliation, and fix-PR reconciliation as the in-process fetcher. Mount the

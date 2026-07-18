@@ -312,9 +312,10 @@ The tools are scoped to THIS task's build automatically; just call them normally
 ` + clusterGuidance + skillGuidance + `For a transient-vs-bug decision, confirm any transient claim with
 verify_timeline (did the expected operation actually register?) and
 check_transient_signatures, and consult recurrence. Default to is_transient=false
-unless a known transient class is proven from the evidence. Call validate_analysis
-on every artifact path you cite and pass your draft summary, root cause, and fix in
-its analysis field so consumer evidence requirements can be checked.
+unless a known transient class is proven from the evidence. Before finalizing,
+call validate_analysis with the exact JSON fields you will return, including every
+relevant_file. Copy its validation_token into the final JSON and do not change any
+analysis field afterward.
 
 ## Tool budget: converge, do not exhaust it
 You have a limited tool-call budget (aim for ~20 calls) and you WILL be forced to
@@ -342,6 +343,7 @@ revise if any applies:
 3. Grounding: is every claim tied to evidence you actually read (validate_analysis
    passed), not plausible-sounding speculation?
 4. Fix validity: would suggested_fix actually resolve the stated root_cause?
+The final JSON must also include "validation_token":"<token from validate_analysis>".
 Respond with ONLY the required JSON object.`
 }
 

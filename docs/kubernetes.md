@@ -89,8 +89,10 @@ how it works.
 
 Orka can also be used only for fix generation while analysis remains
 `inprocess`. Set `orka.fixRuntime.enabled=true`, then configure
-`ai.fix_prs.agent_runtime.type: orka` in the consumer project. This enables the
-ServiceAccount token and Task RBAC for scheduled and interactive fix generation.
+`ai.fix_prs.agent_runtime.type: orka` in the consumer project. This selects the
+git-capable fixer image and enables Task RBAC for scheduled generation. The
+server receives the ServiceAccount token only when interactive actions are also
+enabled.
 When the release namespace differs from `orka.namespace`, provide an
 `ORKA_API_TOKEN` authorized for the Orka namespace if the API's namespace policy
 does not accept the release ServiceAccount token.

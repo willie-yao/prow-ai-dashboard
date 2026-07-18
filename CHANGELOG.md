@@ -24,10 +24,11 @@ for how to pin a release.
 
 - **Orka fix generation runtime.** Fix PRs can opt into a generation-only Orka
   Agent Task while keeping base pinning, diff reconstruction, review,
-  verification, previews, credentials, and PR creation inside the engine.
+  verification, previews, credentials, and PR creation inside the engine. The
+  chart automatically selects a git-capable engine image for this mode.
 - **Orka artifact-tool hardening.** Artifact Tools now use bearer-token
   authentication, producer-owned routing headers, fail-closed storage routes,
-  bounded contract-scoped caches and byte budgets, a restrictive NetworkPolicy,
+  bounded contract-scoped caches and per-request byte ceilings, a restrictive NetworkPolicy,
   and a non-root read-only deployment.
 - **Orka consumer recipe parity.** The Orka producer now loads consumer
   `skills/*.yaml`, fingerprints them, exposes matches through
@@ -41,7 +42,7 @@ for how to pin a release.
   `ai.min_tool_calls`, requires successful quality tools, and requires
   `verify_timeline` for transient verdicts. Published analyses add optional
   model/tool failure, retry, truncation, token-usage, completion-outcome,
-  timeline-verification, and artifact-validation telemetry fields.
+  timeline-verification, and final-result-bound artifact-validation telemetry.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;

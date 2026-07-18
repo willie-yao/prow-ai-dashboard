@@ -95,7 +95,13 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 			return analysisTelemetry{}, fmt.Errorf("parse Task events: %w", err)
 		}
 		events = append(events, page.Events...)
-		if len(page.Events) == 0 || after >= page.LatestSeq {
+		if len(page.Events) == 0 {
+			if page.LatestSeq > after {
+				return analysisTelemetry{}, fmt.Errorf("task events through sequence %d are not readable yet", page.LatestSeq)
+			}
+			return summarizeEvents(events), nil
+		}
+		if after >= page.LatestSeq {
 			return summarizeEvents(events), nil
 		}
 		next := page.Events[len(page.Events)-1].Seq

@@ -130,19 +130,18 @@ func main() {
 				projectScope: manifest.ProjectScope,
 				timeout:      *patternTimeout, retries: *patternRetries, poll: *patternPoll,
 			}
-			stats, err := orka.FinalizePatterns(ctx, *dataDir, analyzer)
+			stats, err := orka.FinalizePatternsAndRun(ctx, *dataDir, analyzer, func(context.Context) error {
+				return fetcher.RunFinalizedSideEffects(context.Background(), fetcher.FinalizedSideEffectsOptions{
+					ProjectDir: *projectDir,
+					DataDir:    *dataDir,
+				})
+			})
 			cancel()
 			if err != nil {
 				log.Printf("⚠ pattern finalization failed: %v", err)
 			} else {
 				log.Printf("🔗 finalized %d pattern analyses (%d systemic, %d failed) across %d jobs",
 					stats.PatternAnalyses, stats.RecurringPatterns, stats.PatternFailures, stats.Jobs)
-				if err := fetcher.RunFinalizedSideEffects(context.Background(), fetcher.FinalizedSideEffectsOptions{
-					ProjectDir: *projectDir,
-					DataDir:    *dataDir,
-				}); err != nil {
-					log.Printf("⚠ post-finalization side effects failed: %v", err)
-				}
 			}
 		}
 	}
@@ -530,7 +529,8 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
 	}
 	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.SkillSetHash); err != nil {
-		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error())}
+		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
+		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error()), retry: retry}
 	}
 	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash}
 }
@@ -626,12 +626,13 @@ func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) 
 
 // analysis is the model's output JSON shape.
 type analysis struct {
-	Summary       string   `json:"summary"`
-	RootCause     string   `json:"root_cause"`
-	Severity      string   `json:"severity"`
-	IsTransient   *bool    `json:"is_transient"`
-	SuggestedFix  string   `json:"suggested_fix"`
-	RelevantFiles []string `json:"relevant_files"`
+	Summary         string   `json:"summary"`
+	RootCause       string   `json:"root_cause"`
+	Severity        string   `json:"severity"`
+	IsTransient     *bool    `json:"is_transient"`
+	SuggestedFix    string   `json:"suggested_fix"`
+	RelevantFiles   []string `json:"relevant_files"`
+	ValidationToken string   `json:"validation_token"`
 }
 
 // parseAnalysis extracts and validates the last analysis-shaped JSON object.
@@ -685,10 +686,16 @@ func validateAnalysisShape(a analysis) error {
 	if strings.TrimSpace(a.SuggestedFix) == "" {
 		return fmt.Errorf("suggested_fix is required")
 	}
+	if strings.TrimSpace(a.ValidationToken) == "" {
+		return fmt.Errorf("validation_token is required")
+	}
 	return nil
 }
 
 func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int, skillSetHash string) error {
+	if a.ValidationToken != orka.AnalysisValidationToken(a.validationInput()) {
+		return fmt.Errorf("validation_token does not match the final analysis")
+	}
 	if telemetry.EventCount == 0 {
 		return fmt.Errorf("execution event stream is empty")
 	}
@@ -716,6 +723,18 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minTool
 		return fmt.Errorf("transient verdict did not complete verify_timeline")
 	}
 	return nil
+}
+
+func (a analysis) validationInput() orka.AnalysisValidation {
+	isTransient := false
+	if a.IsTransient != nil {
+		isTransient = *a.IsTransient
+	}
+	return orka.AnalysisValidation{
+		Summary: a.Summary, RootCause: a.RootCause, Severity: a.Severity,
+		IsTransient: isTransient, SuggestedFix: a.SuggestedFix,
+		RelevantFiles: append([]string(nil), a.RelevantFiles...),
+	}
 }
 
 func oneLine(s string) string {

@@ -207,13 +207,9 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a local fix")
 	}
 
-	// Keep the batch critique guardrail when a reviewer client is available.
-	// retries, reuse the generation client to review the draft before opening.
-	var critique fixpr.Completer
-	critiqueRetries := 0
-	if aiClient != nil && eff.CritiqueRetries != nil && *eff.CritiqueRetries > 0 {
-		critiqueRetries = *eff.CritiqueRetries
-		critique = aiClient
+	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
+	if err != nil {
+		return nil, err
 	}
 
 	var prFiller fixpr.PRBodyFiller

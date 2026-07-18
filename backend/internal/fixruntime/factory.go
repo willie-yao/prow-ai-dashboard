@@ -25,6 +25,7 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 		APIToken:    os.Getenv("ORKA_API_TOKEN"),
 		GitSecret:   cfg.OrkaGitSecret,
 		Version:     cfg.OrkaVersion,
+		MaxRetries:  cfg.OrkaRetries,
 		KubeContext: os.Getenv("ORKA_KUBE_CONTEXT"),
 	})
 	if err != nil {

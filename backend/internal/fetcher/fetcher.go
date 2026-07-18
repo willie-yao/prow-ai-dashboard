@@ -527,6 +527,11 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	}
 }
 
+var newBatchFixRuntime = fixruntime.New
+var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixpr.Manager {
+	return fixpr.NewManager(fixpr.NewClients(token), stateFile, opts)
+}
+
 // processFixPRs drafts minimal fix PRs against the source repo for systemic
 // recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
 // operator PAT). In dry-run it writes previews instead of opening PRs. Any
@@ -559,20 +564,16 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		return
 	}
 
-	critiqueRetries := 0
-	var critique fixpr.Completer
-	if aiClient != nil && eff.CritiqueRetries != nil {
-		critiqueRetries = *eff.CritiqueRetries
-		if critiqueRetries > 0 {
-			critique = aiClient
-		}
+	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
+	if err != nil {
+		log.Printf("Fix PRs: %v; skipping", err)
+		return
 	}
 	var prFiller fixpr.PRBodyFiller
 	if aiClient != nil {
 		prFiller = repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name)
 	}
 
-	prClient := fixpr.NewClients(fixToken)
 	fixOpts := fixpr.Options{
 		SourceOwner:     eff.Repo.Owner,
 		SourceName:      eff.Repo.Name,
@@ -600,7 +601,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	ar := eff.AgentRuntime
 	allowBash := ar.AllowBash == nil || *ar.AllowBash
-	agentRuntime, err := fixruntime.New(ar)
+	agentRuntime, err := newBatchFixRuntime(ar)
 	if err != nil {
 		log.Printf("Fix PRs: %v; skipping", err)
 		return
@@ -619,8 +620,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		Timeout:    ar.ParsedTimeout(),
 		GitToken:   fixToken,
 	}
-	mgr := fixpr.NewManager(prClient,
-		filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
+	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	stats, err := mgr.Reconcile(ctx, patterns)
 	if err != nil {
 		log.Printf("Warning: fix-PR processing failed: %v", err)

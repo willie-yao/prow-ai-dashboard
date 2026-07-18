@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -20,19 +21,31 @@ import (
 // fakeTaskAPI records the applied Task and returns scripted phases in order (the
 // last entry repeats). applyErr, when set, fails Apply.
 type fakeTaskAPI struct {
-	applied  map[string]any
-	applyErr error
-	phases   []string
-	phaseErr error
-	calls    int
+	applied     map[string]any
+	applyErr    error
+	phases      []string
+	phaseErr    error
+	calls       int
+	deleted     bool
+	deleteCalls int
 }
 
 func (f *fakeTaskAPI) Apply(_ context.Context, _ schema.GroupVersionResource, _ string, obj map[string]any) error {
 	f.applied = obj
+	f.deleted = false
 	return f.applyErr
 }
 
-func (f *fakeTaskAPI) TaskPhase(_ context.Context, _, _ string) (string, error) {
+func (f *fakeTaskAPI) Delete(context.Context, schema.GroupVersionResource, string, string) error {
+	f.deleted = true
+	f.deleteCalls++
+	return nil
+}
+
+func (f *fakeTaskAPI) TaskPhase(_ context.Context, _, name string) (string, error) {
+	if f.deleted {
+		return "", apierrors.NewNotFound(schema.GroupResource{Group: "core.orka.ai", Resource: "tasks"}, name)
+	}
 	if f.phaseErr != nil {
 		return "", f.phaseErr
 	}
@@ -338,5 +351,23 @@ func TestAgentRuntimeHonorsSpecTimeout(t *testing.T) {
 	}
 	if _, err := r.Generate(context.Background(), s); err == nil || !strings.Contains(err.Error(), "did not finish") {
 		t.Fatalf("timeout error = %v", err)
+	}
+}
+
+func TestAgentRuntimeRecreatesFailedTask(t *testing.T) {
+	kube := &fakeTaskAPI{phases: []string{"Failed", "Succeeded"}}
+	results, done := resultServer(t, StructuredResult{BaseSHA: "pinned-sha", Diff: "", Files: nil})
+	defer done()
+	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", MaxRetries: 1, PollEvery: time.Millisecond}}
+	if _, err := r.Generate(context.Background(), spec()); err != nil {
+		t.Fatal(err)
+	}
+	if kube.deleteCalls != 1 {
+		t.Fatalf("delete calls = %d, want 1", kube.deleteCalls)
+	}
+	taskSpec := kube.applied["spec"].(map[string]any)
+	retry := taskSpec["retryPolicy"].(map[string]any)
+	if retry["maxRetries"] != int64(1) {
+		t.Fatalf("retryPolicy = %+v", retry)
 	}
 }

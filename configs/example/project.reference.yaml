@@ -199,7 +199,7 @@ ai:
   #   max_new_per_run: 1          # default 1
   #   labels: [ai-proposed-fix]   # default [ai-proposed-fix]
   #   dry_run: true               # write non-public fix_previews.json without a PR
-  #   critique_retries: 1         # LLM review re-prompts before dropping (default 1)
+  #   critique_retries: 1         # fails closed without an AI reviewer; set 0 to opt out
   #   verify:                      # optional build/vet before opening the draft
   #     enabled: true
   #     commands:
@@ -219,6 +219,7 @@ ai:
   #     # namespace: orka-system
   #     # git_secret: source-repo-readonly
   #     # version: v1
+  #     # retries: 1
 
 # Optional: auto-file GitHub issues for systemic recurring patterns and
 # persistent failures. Off by default. Active only when enabled AND an

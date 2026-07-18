@@ -63,10 +63,6 @@ func main() {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if !budget.reserveCall() {
-				http.Error(w, "analysis scope byte budget exhausted", http.StatusTooManyRequests)
-				return
-			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			qt.h(tenv, &budgetResponseWriter{ResponseWriter: w, budget: budget}, r)
 		}))
@@ -88,10 +84,6 @@ func main() {
 		env, budget, err := resolver.aiEnv(requestBucket(r), requestBuild(r), requestScope(r), requestStorage(r))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if !budget.reserveCall() {
-			http.Error(w, "analysis scope byte budget exhausted", http.StatusTooManyRequests)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)

@@ -626,7 +626,7 @@ old Task from observing a newly applied Tool definition. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
 schema and `min_tool_calls`, requires a successful terminal Task event, rejects
 quality tools whose last attempt failed, requires a successful
-`validate_analysis` call, and requires a completed `verify_timeline` call for
+`validate_analysis` call whose token matches the exact final JSON, and requires a completed `verify_timeline` call for
 every transient verdict. Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
 quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are

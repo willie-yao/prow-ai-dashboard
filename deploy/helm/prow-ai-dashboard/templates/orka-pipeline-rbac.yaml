@@ -21,10 +21,17 @@ metadata:
     {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
     app.kubernetes.io/component: orka-pipeline
 rules:
-  # create/patch to apply, get/list/watch to poll status, delete for Tool GC.
+  {{- if eq .Values.analysis "orka" }}
+  # Analysis applies Tasks and Tools and garbage-collects scoped Tool resources.
   - apiGroups: ["core.orka.ai"]
     resources: ["tasks", "tools"]
     verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+  {{- else }}
+  # Fix generation only creates and polls Tasks.
+  - apiGroups: ["core.orka.ai"]
+    resources: ["tasks"]
+    verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

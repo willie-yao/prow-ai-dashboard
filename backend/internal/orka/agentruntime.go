@@ -41,6 +41,7 @@ type StructuredResult struct {
 type taskAPI interface {
 	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
 	TaskPhase(context.Context, string, string) (string, error)
+	Delete(context.Context, schema.GroupVersionResource, string, string) error
 }
 
 type resultAPI interface {
@@ -49,11 +50,12 @@ type resultAPI interface {
 
 // AgentOptions configures the generation-only Orka runtime.
 type AgentOptions struct {
-	Namespace string
-	AgentRef  string
-	GitSecret string
-	Version   string
-	PollEvery time.Duration
+	Namespace  string
+	AgentRef   string
+	GitSecret  string
+	Version    string
+	MaxRetries int
+	PollEvery  time.Duration
 }
 
 // AgentRuntime implements runtime.AgentRuntime with an Orka agent Task.
@@ -77,6 +79,7 @@ type FromEnvConfig struct {
 	APIToken    string
 	GitSecret   string
 	Version     string
+	MaxRetries  int
 	KubeContext string
 }
 
@@ -101,10 +104,11 @@ func NewAgentRuntimeFromEnv(cfg FromEnvConfig) (*AgentRuntime, error) {
 	}
 	kube.Manager = FixerManagedByValue
 	return NewAgentRuntime(kube, NewResultClient(cfg.API, resolveOrkaAPIToken(cfg.APIToken)), AgentOptions{
-		Namespace: cfg.Namespace,
-		AgentRef:  cfg.AgentRef,
-		GitSecret: strings.TrimSpace(cfg.GitSecret),
-		Version:   strings.TrimSpace(cfg.Version),
+		Namespace:  cfg.Namespace,
+		AgentRef:   cfg.AgentRef,
+		GitSecret:  strings.TrimSpace(cfg.GitSecret),
+		Version:    strings.TrimSpace(cfg.Version),
+		MaxRetries: cfg.MaxRetries,
 	}), nil
 }
 
@@ -129,6 +133,9 @@ func normalizeAgentOptions(opts AgentOptions) AgentOptions {
 	}
 	if strings.TrimSpace(opts.Version) == "" {
 		opts.Version = defaultFixVersion
+	}
+	if opts.MaxRetries < 0 {
+		opts.MaxRetries = 0
 	}
 	return opts
 }
@@ -158,6 +165,13 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	}
 
 	name := FixTaskName(spec, r.opts)
+	if phase, err := r.kube.TaskPhase(ctx, r.opts.Namespace, name); err == nil && (phase == "Failed" || phase == "Cancelled") {
+		if err := r.deleteFailedTask(ctx, name); err != nil {
+			return runtime.GenerateResult{}, err
+		}
+	} else if err != nil && !IsNotFound(err) {
+		return runtime.GenerateResult{}, fmt.Errorf("%w: reading prior fix Task: %v", runtime.ErrUnavailable, err)
+	}
 	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, r.buildTask(name, spec)); err != nil {
 		return runtime.GenerateResult{}, fmt.Errorf("%w: applying fix Task: %v", runtime.ErrUnavailable, err)
 	}
@@ -234,6 +248,32 @@ func validateResultFiles(expected []string, actual map[string]string) error {
 	return nil
 }
 
+func (r *AgentRuntime) deleteFailedTask(ctx context.Context, name string) error {
+	if err := r.kube.Delete(ctx, TasksGVR, r.opts.Namespace, name); err != nil && !IsNotFound(err) {
+		return fmt.Errorf("%w: deleting prior fix Task: %v", runtime.ErrUnavailable, err)
+	}
+	every := r.opts.PollEvery
+	if every <= 0 {
+		every = time.Second
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		_, err := r.kube.TaskPhase(ctx, r.opts.Namespace, name)
+		if IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%w: waiting for prior fix Task deletion: %v", runtime.ErrUnavailable, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("deleting prior fix Task %s: %w", name, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func (r *AgentRuntime) waitResult(ctx context.Context, name string) (string, error) {
 	every := r.opts.PollEvery
 	if every <= 0 {
@@ -302,6 +342,9 @@ func (r *AgentRuntime) buildTask(name string, spec runtime.GenerateSpec) map[str
 	if spec.Timeout > 0 {
 		taskSpec["timeout"] = spec.Timeout.String()
 	}
+	if r.opts.MaxRetries > 0 {
+		taskSpec["retryPolicy"] = map[string]any{"maxRetries": int64(r.opts.MaxRetries)}
+	}
 	return map[string]any{
 		"apiVersion": "core.orka.ai/v1alpha1",
 		"kind":       "Task",
@@ -318,7 +361,7 @@ func FixTaskName(spec runtime.GenerateSpec, opts AgentOptions) string {
 	opts = normalizeAgentOptions(opts)
 	data := strings.Join([]string{
 		spec.Repo.Owner, spec.Repo.Name, spec.Repo.Ref, spec.Instruction,
-		opts.AgentRef, opts.GitSecret, opts.Version,
+		opts.AgentRef, opts.GitSecret, opts.Version, fmt.Sprintf("%d", opts.MaxRetries),
 		fmt.Sprintf("%t", spec.AllowBash), fmt.Sprintf("%d", spec.MaxTurns), spec.Timeout.String(),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(data))

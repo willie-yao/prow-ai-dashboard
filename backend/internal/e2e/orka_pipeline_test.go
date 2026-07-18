@@ -141,7 +141,20 @@ procedure: Inspect the controller configuration and its update ordering.
 		if err != nil {
 			t.Fatal(err)
 		}
-		results[ref.Name] = `{"summary":"stale controller configuration","root_cause":"the controller wrote stale configuration","severity":"High","is_transient":false,"suggested_fix":"serialize the update","relevant_files":["config/controller.yaml"]}`
+		validated := orka.AnalysisValidation{
+			Summary: "stale controller configuration", RootCause: "the controller wrote stale configuration",
+			Severity: "High", SuggestedFix: "serialize the update", RelevantFiles: []string{"config/controller.yaml"},
+		}
+		result := map[string]any{
+			"summary": validated.Summary, "root_cause": validated.RootCause, "severity": validated.Severity,
+			"is_transient": false, "suggested_fix": validated.SuggestedFix, "relevant_files": validated.RelevantFiles,
+			"validation_token": orka.AnalysisValidationToken(validated),
+		}
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results[ref.Name] = string(data)
 	}
 	if matches, _ := filepath.Glob(filepath.Join(tasksDir, "*.yaml")); len(matches) != len(results) {
 		t.Fatalf("produced tasks = %d, want %d", len(matches), len(results))
@@ -178,7 +191,27 @@ procedure: Inspect the controller configuration and its update ordering.
 		"-pattern-wait=0",
 	)
 
-	stats, err := orka.FinalizePatterns(context.Background(), dataDir, orkaPatternAnalyzer{})
+	previewFile := filepath.Join(dataDir, "fix_previews.json")
+	stats, err := orka.FinalizePatternsAndRun(context.Background(), dataDir, orkaPatternAnalyzer{}, func(ctx context.Context) error {
+		var report models.FlakinessReport
+		loadJSON(t, filepath.Join(dataDir, "flakiness.json"), &report)
+		if len(report.RecurringPatterns) != 1 || report.RecurringPatterns[0].ID == "" {
+			t.Fatalf("recurring patterns = %+v", report.RecurringPatterns)
+		}
+		manager := fixpr.NewManager(orkaFixPRClient{}, filepath.Join(dataDir, "fix_pr_state.json"), fixpr.Options{
+			SourceOwner: "example-org", SourceName: "example-repo", MinConfidence: "high",
+			MaxFiles: 3, MaxNewPerRun: 1, DryRun: true, PreviewFile: previewFile,
+			Agent: &fixpr.AgentConfig{Runtime: orkaFixAgent{}},
+		})
+		fixStats, err := manager.Reconcile(ctx, report.RecurringPatterns)
+		if err != nil {
+			return err
+		}
+		if fixStats.Previewed != 1 {
+			t.Fatalf("fix stats = %+v", fixStats)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,31 +219,6 @@ procedure: Inspect the controller configuration and its update ordering.
 		t.Fatalf("finalize stats = %+v", stats)
 	}
 
-	var report models.FlakinessReport
-	loadJSON(t, filepath.Join(dataDir, "flakiness.json"), &report)
-	if len(report.RecurringPatterns) != 1 || report.RecurringPatterns[0].ID == "" {
-		t.Fatalf("recurring patterns = %+v", report.RecurringPatterns)
-	}
-	previewFile := filepath.Join(dataDir, "fix_previews.json")
-	manager := fixpr.NewManager(orkaFixPRClient{}, filepath.Join(dataDir, "fix_pr_state.json"), fixpr.Options{
-		SourceOwner:   "example-org",
-		SourceName:    "example-repo",
-		MinConfidence: "high",
-		MaxFiles:      3,
-		MaxNewPerRun:  1,
-		DryRun:        true,
-		PreviewFile:   previewFile,
-		Agent: &fixpr.AgentConfig{
-			Runtime: orkaFixAgent{},
-		},
-	})
-	fixStats, err := manager.Reconcile(context.Background(), report.RecurringPatterns)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fixStats.Previewed != 1 {
-		t.Fatalf("fix stats = %+v", fixStats)
-	}
 	var previews []fixpr.Preview
 	loadJSON(t, previewFile, &previews)
 	if len(previews) != 1 || !strings.Contains(previews[0].Diff, "serialized: true") {

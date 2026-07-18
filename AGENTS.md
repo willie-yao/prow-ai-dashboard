@@ -108,6 +108,7 @@ make build-server    # cd backend && go build -o ../bin/server ./cmd/server/
 make serve           # serve frontend/public/data over HTTP
 make dev-actions     # serve SPA + API with admin actions enabled (local auth)
 make image           # docker build fetcher + server + SPA into one image
+make fixer-image     # drop-in image with git for fix generation
 ```
 
 ## Local development workflow

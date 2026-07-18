@@ -18,6 +18,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+func withValidation(a analysis) analysis {
+	a.ValidationToken = orkaapi.AnalysisValidationToken(a.validationInput())
+	return a
+}
+
+func validatedAnalysisJSON(t *testing.T, a analysis) string {
+	t.Helper()
+	a = withValidation(a)
+	data, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 type staticPatternAnalyzer struct{}
 
 type fakePatternKube struct {
@@ -74,7 +89,12 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		results[ref.Name] = `{"summary":"stale controller configuration","root_cause":"the controller wrote stale configuration","severity":"High","is_transient":false,"suggested_fix":"serialize the update","relevant_files":["config/controller.yaml"]}`
+		nonTransient := false
+		results[ref.Name] = validatedAnalysisJSON(t, analysis{
+			Summary: "stale controller configuration", RootCause: "the controller wrote stale configuration",
+			Severity: "High", IsTransient: &nonTransient, SuggestedFix: "serialize the update",
+			RelevantFiles: []string{"config/controller.yaml"},
+		})
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -293,6 +313,8 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	nonTransient := false
+	newResult := validatedAnalysisJSON(t, analysis{Summary: "new root", RootCause: "new root", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix it"})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, ref.Name) {
 			http.NotFound(w, r)
@@ -302,7 +324,7 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 			writeAcceptedEvents(w, false)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"summary":"new root","root_cause":"new root","severity":"High","is_transient":false,"suggested_fix":"fix it"}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": newResult})
 	}))
 	defer server.Close()
 
@@ -372,4 +394,31 @@ func writeAcceptedEvents(w http.ResponseWriter, transient bool) {
 	last := int64(len(events) + 1)
 	events = append(events, map[string]any{"seq": last, "type": "TaskSucceeded", "createdAt": base.Add(10 * time.Second)})
 	_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": last, "events": events})
+}
+
+func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
+	const namespace = "orka-system"
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			base := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
+			events := []map[string]any{
+				{"seq": 1, "type": "TaskStarted", "createdAt": base},
+				{"seq": 2, "type": "ToolCallStarted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base},
+				{"seq": 3, "type": "ToolCallStarted", "toolName": "validate-analysis", "toolCallID": "call-2", "createdAt": base},
+				{"seq": 4, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-2", "createdAt": base},
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 4, "events": events})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1", 2)
+	s := &webhookServer{client: &orkaClient{base: server.URL, http: server.Client()}, namespace: namespace}
+	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)
+	if !patch.retry || !strings.Contains(patch.reason, "no terminal") {
+		t.Fatalf("patch = %+v, want retryable terminal-event lag", patch)
+	}
 }

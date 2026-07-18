@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
 
 func init() {
@@ -17,8 +18,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var args struct {
-		Paths    []string `json:"paths"`
-		Analysis string   `json:"analysis"`
+		Analysis orka.AnalysisValidation `json:"analysis"`
 	}
 	if err := readArgs(r, &args); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -29,8 +29,8 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if set.Hash() != "" && strings.TrimSpace(args.Analysis) == "" {
-		http.Error(w, "analysis is required when consumer skills are configured", http.StatusBadRequest)
+	if strings.TrimSpace(args.Analysis.RootCause) == "" {
+		http.Error(w, "analysis.root_cause is required", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := requestCtx(r)
@@ -38,8 +38,8 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 
 	present, missing := []string{}, []string{}
 	validatedPaths := map[string]bool{}
-	for _, p := range args.Paths {
-		if p == "" {
+	for _, p := range args.Analysis.RelevantFiles {
+		if strings.TrimSpace(p) == "" {
 			continue
 		}
 		if _, _, err := env.browser.Read(ctx, p, 0, 1); err != nil {
@@ -50,7 +50,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	missingEvidence := []string{}
-	matchedSkills := set.Match(args.Analysis)
+	matchedSkills := set.Match(args.Analysis.EvidenceText())
 	for _, skill := range matchedSkills {
 		for _, group := range skill.RequiredEvidence {
 			if !group.Satisfied(validatedPaths) {
@@ -58,20 +58,22 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	valid := len(missing) == 0 && len(missingEvidence) == 0
 	result := map[string]any{
 		"checked":          len(present) + len(missing),
 		"present":          present,
 		"missing":          missing,
 		"matched_skills":   skillIDs(matchedSkills),
 		"missing_evidence": missingEvidence,
-		"all_present":      len(missing) == 0 && len(missingEvidence) == 0,
+		"all_present":      valid,
 	}
-	if len(missing) > 0 || len(missingEvidence) > 0 {
-		log.Printf("⚠ validate_analysis paths=%d present=%d missing=%d evidence_missing=%d", len(args.Paths), len(present), len(missing), len(missingEvidence))
+	if !valid {
+		log.Printf("⚠ validate_analysis paths=%d present=%d missing=%d evidence_missing=%d", len(args.Analysis.RelevantFiles), len(present), len(missing), len(missingEvidence))
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
 		return
 	}
-	log.Printf("✔ validate_analysis paths=%d present=%d matched_skills=%d", len(args.Paths), len(present), len(matchedSkills))
+	result["validation_token"] = orka.AnalysisValidationToken(args.Analysis)
+	log.Printf("✔ validate_analysis paths=%d present=%d matched_skills=%d", len(args.Analysis.RelevantFiles), len(present), len(matchedSkills))
 	writeJSON(w, result)
 }
 

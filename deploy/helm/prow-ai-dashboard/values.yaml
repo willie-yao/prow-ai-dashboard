@@ -68,9 +68,13 @@ orka:
   # Enable the Orka ServiceAccount and RBAC for scheduled and interactive
   # agent_runtime.type: orka fix generation even when analysis is inprocess.
   fixRuntime:
-    # Enables Task RBAC and ServiceAccount token mounts. The Agent/API are set in
-    # project.yaml under ai.fix_prs.agent_runtime.
+    # Enables Task RBAC, ServiceAccount token mounts, and the git-capable fixer
+    # image. The Agent/API are set in project.yaml under ai.fix_prs.agent_runtime.
     enabled: false
+    image:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/fixer
+      tag: ""
+      pullPolicy: IfNotPresent
   # RBAC: create a ServiceAccount + Role/RoleBinding for the pipeline (create/patch
   # Tasks+Tools, read status, GC Tools). Disable to reuse an existing SA.
   rbac:

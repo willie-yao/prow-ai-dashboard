@@ -69,7 +69,7 @@ func TestSummarizeEventsRequiresCompletedValidation(t *testing.T) {
 
 func TestValidateAnalysisAcceptance(t *testing.T) {
 	transient, nonTransient := true, false
-	valid := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"}
+	valid := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"})
 	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2, ""); err != nil {
 		t.Fatalf("valid non-transient analysis rejected: %v", err)
 	}
@@ -80,6 +80,7 @@ func TestValidateAnalysisAcceptance(t *testing.T) {
 		t.Fatal("analysis without validate_analysis was accepted")
 	}
 	valid.IsTransient = &transient
+	valid = withValidation(valid)
 	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2, ""); err == nil {
 		t.Fatal("transient analysis without verify_timeline was accepted")
 	}
@@ -93,6 +94,7 @@ func TestParseAnalysisRequiresCompleteSchema(t *testing.T) {
 		`{"root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix"}`,
 		`{"summary":"summary","root_cause":"cause","severity":"Unknown","is_transient":false,"suggested_fix":"fix"}`,
 		`{"summary":"summary","root_cause":"cause","severity":"High","suggested_fix":"fix"}`,
+		`{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix"}`,
 	}
 	for _, input := range cases {
 		if _, err := parseAnalysis(input); err == nil {
@@ -102,12 +104,14 @@ func TestParseAnalysisRequiresCompleteSchema(t *testing.T) {
 }
 
 func TestWebhookTelemetryUnavailableIsRetryable(t *testing.T) {
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/events") {
 			http.Error(w, "events warming", http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix"}`})
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
 	}))
 	defer server.Close()
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1", 2)
@@ -146,7 +150,7 @@ func TestSummarizeEventsRecordsFailuresRetriesAndContext(t *testing.T) {
 
 func TestValidateAnalysisAcceptanceRejectsFailedQualityTool(t *testing.T) {
 	transient := false
-	a := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
+	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
 	events := []executionEvent{
 		{Seq: 1, Type: "TaskStarted"},
 		{Seq: 2, Type: "ToolCallStarted", ToolName: "recurrence-bscope", ToolCallID: "call-1"},
@@ -173,7 +177,7 @@ func TestValidateAnalysisAcceptanceRejectsFailedQualityTool(t *testing.T) {
 
 func TestValidateAnalysisAcceptanceRequiresSucceededEvent(t *testing.T) {
 	transient := false
-	a := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
+	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
 	base := analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}
 	if err := validateAnalysisAcceptance(a, base, 2, ""); err == nil || !strings.Contains(err.Error(), "no terminal") {
 		t.Fatalf("missing terminal error = %v", err)
@@ -186,7 +190,7 @@ func TestValidateAnalysisAcceptanceRequiresSucceededEvent(t *testing.T) {
 
 func TestValidateAnalysisAcceptanceRequiresConsumerEvidence(t *testing.T) {
 	transient := false
-	a := analysis{Summary: "summary", RootCause: "quota exceeded", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
+	a := withValidation(analysis{Summary: "summary", RootCause: "quota exceeded", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
 	events := []executionEvent{
 		{Seq: 1, Type: "TaskStarted"},
 		{Seq: 2, Type: "ToolCallStarted", ToolName: "read-artifact", ToolCallID: "call-1"},
@@ -204,5 +208,26 @@ func TestValidateAnalysisAcceptanceRequiresConsumerEvidence(t *testing.T) {
 	)
 	if err := validateAnalysisAcceptance(a, summarizeEvents(events), 2, "skills-hash"); err != nil {
 		t.Fatalf("consumer evidence call rejected: %v", err)
+	}
+}
+
+func TestValidateAnalysisAcceptanceRejectsMismatchedValidationToken(t *testing.T) {
+	transient := false
+	a := withValidation(analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"})
+	a.RootCause = "changed after validation"
+	telemetry := analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}
+	if err := validateAnalysisAcceptance(a, telemetry, 2, ""); err == nil || !strings.Contains(err.Error(), "validation_token") {
+		t.Fatalf("acceptance error = %v", err)
+	}
+}
+
+func TestAnalysisTelemetryRetriesEmptyPageBeforeLatestSequence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 5, "events": []any{}})
+	}))
+	defer server.Close()
+	client := &orkaClient{base: server.URL, http: server.Client()}
+	if _, err := client.analysisTelemetry(context.Background(), "orka-system", "task"); err == nil || !strings.Contains(err.Error(), "not readable yet") {
+		t.Fatalf("telemetry error = %v", err)
 	}
 }

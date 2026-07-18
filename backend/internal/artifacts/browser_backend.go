@@ -204,7 +204,7 @@ func tailFromBytes(data []byte, fileSize int64, lines, maxBytes int) *TailResult
 	}
 }
 
-func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen int) (*GrepResult, error) {
+func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regexp, contextLines, maxMatches, maxLineLen, maxBytes int) (*GrepResult, error) {
 	clean, err := SafePath(file)
 	if err != nil {
 		return nil, err
@@ -224,16 +224,21 @@ func (b *backendBrowser) Grep(ctx context.Context, file string, re *regexp.Regex
 	if maxLineLen <= 0 {
 		maxLineLen = 1000
 	}
+	if maxBytes <= 0 || int64(maxBytes) > perCallCap {
+		maxBytes = int(perCallCap)
+	}
 	if data, ok := b.cacheGet(clean); ok {
-		return grepStream(bytes.NewReader(data), int64(len(data)), int64(len(data)), re, contextLines, maxMatches, maxLineLen)
+		limit := min(len(data), maxBytes)
+		return grepStream(bytes.NewReader(data[:limit]), int64(len(data)), int64(limit), re, contextLines, maxMatches, maxLineLen)
 	}
 	rc, size, err := b.backend.Open(ctx, b.prefix+clean)
 	if err != nil {
 		return nil, fmt.Errorf("grep %s: %w", clean, err)
 	}
 	defer rc.Close()
-	limited := io.LimitReader(rc, perCallCap)
-	return grepStream(limited, size, perCallCap, re, contextLines, maxMatches, maxLineLen)
+	limit := min(perCallCap, int64(maxBytes))
+	limited := io.LimitReader(rc, limit)
+	return grepStream(limited, size, limit, re, contextLines, maxMatches, maxLineLen)
 }
 
 // grepStream scans r for matching lines with surrounding context. Long lines

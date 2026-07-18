@@ -146,9 +146,9 @@ ai:
       timeout: 10m
 ```
 
-The runner needs `opencode` and git. The standard distroless Kubernetes image
-does not contain them; use [`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile)
-or a custom image for this backend.
+The runner needs `opencode` and git. The standard distroless Kubernetes image does not contain them. The chart selects
+the published `fixer` image when `orka.fixRuntime.enabled=true`; custom local
+runtime deployments can still build [`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile).
 
 #### `orka` (in-cluster)
 
@@ -172,6 +172,7 @@ ai:
       namespace: orka-system
       git_secret: source-repo-readonly   # optional for private repos
       version: v1
+      retries: 1
       max_turns: 30
       allow_bash: true
       timeout: 15m
@@ -181,15 +182,17 @@ The referenced Orka `Agent` owns the model configuration. For a private source
 repository, `git_secret` must be a separate read-only clone credential. Keep the
 write-capable contributor token in `FIX_TOKEN`; it remains inside the engine.
 
-For Helm deployments, set `orka.fixRuntime.enabled=true`. The chart then mounts a
-ServiceAccount token and grants the server, worker, or CronJob permission to
-create and poll Tasks in `orka.namespace`. REST authentication uses
+For Helm deployments, set `orka.fixRuntime.enabled=true`. The chart then uses the
+published git-capable fixer image, mounts a ServiceAccount token only into the
+workloads that generate fixes, and grants Task-only RBAC when analysis remains
+in-process. REST authentication uses
 `ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod ServiceAccount token. Local
 kubeconfig testing can select a context through `ORKA_KUBE_CONTEXT`.
 
-The Orka runtime can generate without the engine chat-completions client. Template
-formatting and the optional critique retry still require the normal AI endpoint.
-Enable `verify` so the returned change is tested again in a clean engine-owned
+The Orka runtime can generate without the engine chat-completions client only
+when `critique_retries: 0` is explicitly configured. A positive retry count fails
+closed unless the normal AI reviewer is available. Template formatting also
+requires that client. Enable `verify` so the returned change is tested again in a clean engine-owned
 workspace rather than trusting the agent's own test run.
 
 ### Verification (`verify`)

@@ -94,8 +94,8 @@ model passes. Storage is provider-agnostic: the shim reuses the engine's
 `internal/storage` (gcs, or gcsweb over an S3 gateway), defaulting from its
 `STORAGE_*` env and overriding per request from the `X-Storage-*` headers the
 producer derives from `project.yaml`. Invalid explicit routes fail closed.
-Contract-scoped browser/cache entries use bounded LRU eviction and cumulative
-model/artifact byte ceilings. Base Tool CRDs are loaded from
+Contract-scoped browser/cache entries use bounded LRU eviction. Each Tool call
+has explicit model-response and artifact-read ceilings. Base Tool CRDs are loaded from
 `experimental/orka/manifests/` by `loadBaseTools`.
 
 ### The apply
@@ -121,8 +121,8 @@ only while it matches the current producer manifest. The ingestor also reads the
 Task's durable execution-event stream. It rejects incomplete response schemas,
 analyses below `ai.min_tool_calls`, results without a successful terminal Task
 event, quality tools whose last attempt failed, results without a completed
-`validate_analysis` call, and transient verdicts without a successful
-`verify_timeline` call. Accepted results carry Tool/model failures, retries,
+`validate_analysis` call whose token binds the exact final result, and transient
+verdicts without a successful `verify_timeline` call. Accepted results carry Tool/model failures, retries,
 context truncations, elapsed time, tokens, stop reason, and quality-tool
 telemetry. Failing/absent results get the engine's `unavailable`
 placeholder via
