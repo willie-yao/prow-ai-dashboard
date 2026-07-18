@@ -22,6 +22,9 @@ for how to pin a release.
 
 ### Added
 
+- **Orka post-finalization automation.** Batch Orka ingestion now runs the same
+  notification, issue, and fix-PR reconciliation stage after recurring patterns
+  have been finalized.
 - **Orka result acceptance and telemetry.** The Orka ingestor now validates the
   complete analysis schema against durable Task events, enforces
   `ai.min_tool_calls`, requires `validate_analysis`, and requires

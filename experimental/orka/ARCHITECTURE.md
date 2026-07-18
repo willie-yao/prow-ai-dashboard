@@ -131,8 +131,10 @@ Two ingest modes:
   never corrupt a `jobs/*.json` file. `/status` exposes coverage via
   `skeletonStatus`.
 
-Job-level pattern finalization currently runs in batch mode after the per-test
-wait completes. The optional webhook receiver patches per-test results only.
+Job-level pattern finalization runs in batch mode after the per-test wait
+completes. A successful finalization then runs the shared notification, issue,
+and fix-PR reconciliation stage against the finalized files. The optional
+webhook receiver patches per-test results only.
 
 Per-build Tool + Task garbage collection is `gcTools`, selecting
 by the `orka.dashboard/build` label.

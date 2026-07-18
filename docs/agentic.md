@@ -627,7 +627,9 @@ result, the ingestor reads Orka's durable execution events, enforces the JSON
 schema and `min_tool_calls`, requires a successful `validate_analysis` call, and
 requires a completed `verify_timeline` call for every transient verdict.
 Accepted analyses publish Tool-call count, duration, provider token usage, and
-quality-tool evidence alongside the result.
+quality-tool evidence alongside the result. After batch pattern finalization,
+the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
+stage as the in-process fetcher.
 
 ### Pattern analysis
 

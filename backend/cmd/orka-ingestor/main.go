@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
@@ -36,6 +37,7 @@ import (
 
 func main() {
 	dataDir := flag.String("data", "data", "dashboard skeleton dir to patch in place (holds jobs/*.json)")
+	projectDir := flag.String("project-dir", ".", "consumer dir with project.yaml for post-finalization side effects")
 	apiBase := flag.String("api", "http://localhost:8080", "Orka API base URL")
 	token := flag.String("token", "", "bearer token for the Orka API (or set -token-file)")
 	tokenFile := flag.String("token-file", "", "file holding the bearer token")
@@ -135,6 +137,12 @@ func main() {
 			} else {
 				log.Printf("🔗 finalized %d pattern analyses (%d systemic, %d failed) across %d jobs",
 					stats.PatternAnalyses, stats.RecurringPatterns, stats.PatternFailures, stats.Jobs)
+				if err := fetcher.RunFinalizedSideEffects(context.Background(), fetcher.FinalizedSideEffectsOptions{
+					ProjectDir: *projectDir,
+					DataDir:    *dataDir,
+				}); err != nil {
+					log.Printf("⚠ post-finalization side effects failed: %v", err)
+				}
 			}
 		}
 	}
