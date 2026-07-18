@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -399,9 +400,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) {
 
 	processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir)
 
-	if p.enableAI {
-		processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir)
-	}
+	processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir)
 }
 
 // RunWatch runs the pipeline continuously as a single writer: a lightweight
@@ -550,21 +549,27 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		return
 	}
 
-	aiClient := ai.NewClientWithOptions(ai.Options{
-		Token:        aiToken,
-		Endpoint:     aiEndpoint(cfg),
-		Model:        aiModel(cfg),
-		ExtraHeaders: aiHeaders(cfg),
-	})
-
-	// The fix reviewer reuses the generation client (same endpoint and model).
-	critiqueRetries := 0
-	if eff.CritiqueRetries != nil {
-		critiqueRetries = *eff.CritiqueRetries
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	var aiClient *ai.Client
+	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
+		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers})
 	}
+	if eff.AgentRuntime.Type != "orka" && aiClient == nil {
+		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")
+		return
+	}
+
+	critiqueRetries := 0
 	var critique fixpr.Completer
-	if critiqueRetries > 0 {
-		critique = aiClient
+	if aiClient != nil && eff.CritiqueRetries != nil {
+		critiqueRetries = *eff.CritiqueRetries
+		if critiqueRetries > 0 {
+			critique = aiClient
+		}
+	}
+	var prFiller fixpr.PRBodyFiller
+	if aiClient != nil {
+		prFiller = repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name)
 	}
 
 	prClient := fixpr.NewClients(fixToken)
@@ -583,7 +588,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		DashboardURL:    cfg.Branding.SiteURL,
 		Critique:        critique,
 		CritiqueRetries: critiqueRetries,
-		PRFiller:        repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name),
+		PRFiller:        prFiller,
 	}
 	if eff.Verify != nil && eff.Verify.Enabled {
 		fixOpts.Verify = &fixpr.VerifyConfig{
@@ -595,12 +600,17 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	ar := eff.AgentRuntime
 	allowBash := ar.AllowBash == nil || *ar.AllowBash
+	agentRuntime, err := fixruntime.New(ar)
+	if err != nil {
+		log.Printf("Fix PRs: %v; skipping", err)
+		return
+	}
 	model := ar.Model
 	if model == "" {
 		model = aiModel(cfg)
 	}
 	fixOpts.Agent = &fixpr.AgentConfig{
-		Runtime:    runtime.NewLocalAgent(),
+		Runtime:    agentRuntime,
 		Model:      model,
 		Endpoint:   aiEndpoint(cfg),
 		ModelToken: aiToken,

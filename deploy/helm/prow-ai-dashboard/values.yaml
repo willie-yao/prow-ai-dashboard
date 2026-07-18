@@ -65,6 +65,12 @@ orka:
   producerImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:main
   ingestorImage: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:main
   imagePullPolicy: IfNotPresent
+  # Enable the Orka ServiceAccount and RBAC for scheduled and interactive
+  # agent_runtime.type: orka fix generation even when analysis is inprocess.
+  fixRuntime:
+    # Enables Task RBAC and ServiceAccount token mounts. The Agent/API are set in
+    # project.yaml under ai.fix_prs.agent_runtime.
+    enabled: false
   # RBAC: create a ServiceAccount + Role/RoleBinding for the pipeline (create/patch
   # Tasks+Tools, read status, GC Tools). Disable to reuse an existing SA.
   rbac:

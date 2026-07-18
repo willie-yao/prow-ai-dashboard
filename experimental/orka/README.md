@@ -34,6 +34,16 @@ optional, co-located, strong-model backend; keep the engine as the default
 cheap-model path; do not decommission. Convergence and discipline numbers are in
 [worker-patches/README.md](worker-patches/README.md).
 
+## Fix-PR generation runtime
+
+`ai.fix_prs.agent_runtime.type: orka` moves only coding-agent generation into an
+Orka Agent workspace. The engine still pins the base SHA, reconstructs and
+validates the diff, runs critique and independent verification, and opens the
+PR. Enable chart RBAC with `orka.fixRuntime.enabled: true`; private repositories
+should use a separate read-only `git_secret` for the Orka workspace. The
+referenced Agent runtime must support workspace diff capture and structured
+results, such as the OpenCode runtime implementation maintained in Orka.
+
 ## Known constraints
 
 - **Execution events are required.** The ingestor reads each Task's event stream

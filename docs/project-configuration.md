@@ -202,6 +202,11 @@ ai:
     author_name: "Jane Maintainer"
     author_email: "jane@example.com"
     dry_run: true
+    agent_runtime:
+      type: orka
+      agent_ref: opencode-fixer
+      api: http://orka.orka-system.svc:8080
+      namespace: orka-system
     verify:
       enabled: true
       commands:

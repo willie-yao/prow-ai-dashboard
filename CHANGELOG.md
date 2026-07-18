@@ -22,6 +22,9 @@ for how to pin a release.
 
 ### Added
 
+- **Orka fix generation runtime.** Fix PRs can opt into a generation-only Orka
+  Agent Task while keeping base pinning, diff reconstruction, review,
+  verification, previews, credentials, and PR creation inside the engine.
 - **Orka artifact-tool hardening.** Artifact Tools now use bearer-token
   authentication, producer-owned routing headers, fail-closed storage routes,
   bounded contract-scoped caches and byte budgets, a restrictive NetworkPolicy,
