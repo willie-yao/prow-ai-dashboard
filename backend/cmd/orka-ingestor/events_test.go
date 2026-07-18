@@ -70,20 +70,20 @@ func TestSummarizeEventsRequiresCompletedValidation(t *testing.T) {
 func TestValidateAnalysisAcceptance(t *testing.T) {
 	transient, nonTransient := true, false
 	valid := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2, ""); err != nil {
 		t.Fatalf("valid non-transient analysis rejected: %v", err)
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 1, ValidationPassed: true, TaskOutcome: "succeeded"}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 1, ValidationPassed: true, TaskOutcome: "succeeded"}, 2, ""); err == nil {
 		t.Fatal("analysis below the tool-call floor was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, TaskOutcome: "succeeded"}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, TaskOutcome: "succeeded"}, 2, ""); err == nil {
 		t.Fatal("analysis without validate_analysis was accepted")
 	}
 	valid.IsTransient = &transient
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2, ""); err == nil {
 		t.Fatal("transient analysis without verify_timeline was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true, TaskOutcome: "succeeded"}, 2); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true, TaskOutcome: "succeeded"}, 2, ""); err != nil {
 		t.Fatalf("timeline-verified transient analysis rejected: %v", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestValidateAnalysisAcceptanceRejectsFailedQualityTool(t *testing.T) {
 		{Seq: 6, Type: "TaskSucceeded"},
 	}
 	telemetry := summarizeEvents(events)
-	if err := validateAnalysisAcceptance(a, telemetry, 2); err == nil || !strings.Contains(err.Error(), "recurrence") {
+	if err := validateAnalysisAcceptance(a, telemetry, 2, ""); err == nil || !strings.Contains(err.Error(), "recurrence") {
 		t.Fatalf("acceptance error = %v, want failed recurrence rejection", err)
 	}
 	events = append(events[:3],
@@ -166,7 +166,7 @@ func TestValidateAnalysisAcceptanceRejectsFailedQualityTool(t *testing.T) {
 		executionEvent{Seq: 7, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
 		executionEvent{Seq: 8, Type: "TaskSucceeded"},
 	)
-	if err := validateAnalysisAcceptance(a, summarizeEvents(events), 2); err != nil {
+	if err := validateAnalysisAcceptance(a, summarizeEvents(events), 2, ""); err != nil {
 		t.Fatalf("successful quality-tool retry rejected: %v", err)
 	}
 }
@@ -175,11 +175,34 @@ func TestValidateAnalysisAcceptanceRequiresSucceededEvent(t *testing.T) {
 	transient := false
 	a := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
 	base := analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}
-	if err := validateAnalysisAcceptance(a, base, 2); err == nil || !strings.Contains(err.Error(), "no terminal") {
+	if err := validateAnalysisAcceptance(a, base, 2, ""); err == nil || !strings.Contains(err.Error(), "no terminal") {
 		t.Fatalf("missing terminal error = %v", err)
 	}
 	base.TaskOutcome = "failed"
-	if err := validateAnalysisAcceptance(a, base, 2); err == nil || !strings.Contains(err.Error(), "failed") {
+	if err := validateAnalysisAcceptance(a, base, 2, ""); err == nil || !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("failed task error = %v", err)
+	}
+}
+
+func TestValidateAnalysisAcceptanceRequiresConsumerEvidence(t *testing.T) {
+	transient := false
+	a := analysis{Summary: "summary", RootCause: "quota exceeded", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
+	events := []executionEvent{
+		{Seq: 1, Type: "TaskStarted"},
+		{Seq: 2, Type: "ToolCallStarted", ToolName: "read-artifact", ToolCallID: "call-1"},
+		{Seq: 3, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		{Seq: 4, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		{Seq: 5, Type: "TaskSucceeded"},
+	}
+	if err := validateAnalysisAcceptance(a, summarizeEvents(events), 2, "skills-hash"); err == nil || !strings.Contains(err.Error(), "required_evidence") {
+		t.Fatalf("acceptance error = %v", err)
+	}
+	events = append(events[:4],
+		executionEvent{Seq: 5, Type: "ToolCallStarted", ToolName: "required-evidence-bscope", ToolCallID: "call-3"},
+		executionEvent{Seq: 6, Type: "ToolCallCompleted", ToolName: "required-evidence-bscope", ToolCallID: "call-3"},
+		executionEvent{Seq: 7, Type: "TaskSucceeded"},
+	)
+	if err := validateAnalysisAcceptance(a, summarizeEvents(events), 2, "skills-hash"); err != nil {
+		t.Fatalf("consumer evidence call rejected: %v", err)
 	}
 }

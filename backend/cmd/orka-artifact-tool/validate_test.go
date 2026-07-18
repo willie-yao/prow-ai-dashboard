@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
@@ -68,5 +69,44 @@ func TestValidateAnalysisStatus(t *testing.T) {
 				t.Errorf("missing = %v, want [%s]", result.Missing, tt.wantMissing)
 			}
 		})
+	}
+}
+
+func TestValidateAnalysisEnforcesMatchedSkillEvidence(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["(?i)quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &toolEnv{browser: &validateBrowser{files: map[string][]byte{
+		"build-log.txt":          []byte("x"),
+		"events/quota-event.log": []byte("x"),
+	}}}
+
+	request := func(paths string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"paths":`+paths+`,"analysis":"resource quota exceeded"}`))
+		req.Header.Set(skills.ContractHeader, header)
+		recorder := httptest.NewRecorder()
+		validateAnalysis(env, recorder, req)
+		return recorder
+	}
+
+	missing := request(`["build-log.txt"]`)
+	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "quota:events") {
+		t.Fatalf("missing evidence response = %d %s", missing.Code, missing.Body.String())
+	}
+	valid := request(`["build-log.txt","events/quota-event.log"]`)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid evidence response = %d %s", valid.Code, valid.Body.String())
 	}
 }

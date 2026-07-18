@@ -25,6 +25,7 @@ type AnalysisManifest struct {
 	Model         string                   `json:"model"`
 	Version       string                   `json:"version"`
 	MinToolCalls  int                      `json:"min_tool_calls"`
+	SkillSetHash  string                   `json:"skill_set_hash,omitempty"`
 	Jobs          map[string]bool          `json:"jobs"`
 	Builds        map[string]AnalysisBuild `json:"builds"`
 }

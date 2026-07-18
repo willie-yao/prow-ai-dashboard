@@ -1,20 +1,12 @@
-# The one deterministic quality check kept from the engine's critique gate,
-# exposed Orka-natively as a tool. A reviewer agent (or the analyst) calls it
-# with the artifact paths an analysis cites; the shim checks each exists in the
-# build tree and returns which are missing, so a hallucinated citation is caught
-# deterministically. This is the "reviewer agent + one deterministic tool"
-# quality stack from the native-redesign section of orka-evaluation-spike.md,
-# which in the parity spike improved is_transient agreement with the engine from
-# 1/3 to 2/3 and caught a real hallucinated path (paths=2 present=1 missing=1).
-#
-# Same SSRF caveat as 30-tools.yaml (Available=false for the in-cluster URL).
+# Deterministically verifies cited paths and consumer skill evidence. The
+# producer compiles consumer recipes into this Tool's scoped headers.
 apiVersion: core.orka.ai/v1alpha1
 kind: Tool
 metadata:
   name: validate-analysis
   namespace: orka-system
 spec:
-  description: "Deterministically verify that artifact paths cited in an analysis actually exist in this build's tree. Pass the list of artifact paths the analysis relies on; returns which are present and which are missing. Reject any analysis that cites a missing path."
+  description: "Verify every cited artifact path exists and that the draft analysis includes the evidence groups required by matching consumer recipes. Pass all cited paths plus the draft summary, root cause, and fix. Reject the draft if the tool reports missing paths or evidence."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/validate_analysis
     method: POST
@@ -25,5 +17,8 @@ spec:
         type: array
         items:
           type: string
-        description: "Artifact paths (relative to build root) the analysis cites as evidence."
-    required: [paths]
+        description: "Every artifact path cited or relied on by the draft analysis."
+      analysis:
+        type: string
+        description: "The draft summary, root cause, and suggested fix used to match consumer recipe triggers."
+    required: [paths, analysis]

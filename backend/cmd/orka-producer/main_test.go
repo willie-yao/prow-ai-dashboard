@@ -44,3 +44,30 @@ func TestBuildToolNameSeparatesConsumerScopes(t *testing.T) {
 		t.Fatalf("consumer-scoped Tool names collided: %q", nameA)
 	}
 }
+
+func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
+	for _, tool := range []string{"required-evidence", "validate-analysis"} {
+		t.Run(tool, func(t *testing.T) {
+			base := map[string]any{
+				"metadata": map[string]any{"name": tool},
+				"spec":     map[string]any{"http": map[string]any{"url": "http://artifact-tool/tool/" + tool}},
+			}
+			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills")
+			spec := got["spec"].(map[string]any)
+			headers := spec["http"].(map[string]any)["headers"].(map[string]any)
+			if headers["X-Prow-AI-Skills"] != "encoded-skills" {
+				t.Fatalf("headers = %+v", headers)
+			}
+		})
+	}
+}
+
+func TestQualityToolsIncludeDiffLastPassing(t *testing.T) {
+	names, _ := resolveTools([]string{"filesystem"})
+	for _, name := range names {
+		if name == "diff-last-passing" {
+			return
+		}
+	}
+	t.Fatalf("resolved tools = %v, want diff-last-passing", names)
+}

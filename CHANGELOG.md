@@ -22,6 +22,10 @@ for how to pin a release.
 
 ### Added
 
+- **Orka consumer recipe parity.** The Orka producer now loads consumer
+  `skills/*.yaml`, fingerprints them, exposes matches through
+  `required_evidence`, enforces the lookup during ingestion, and enables the
+  existing `diff_last_passing` regression tool.
 - **Orka post-finalization automation.** Batch Orka ingestion now runs the same
   notification, issue, and fix-PR reconciliation stage after recurring patterns
   have been finalized.

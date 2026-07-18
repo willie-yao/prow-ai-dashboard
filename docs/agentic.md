@@ -629,8 +629,11 @@ quality tools whose last attempt failed, requires a successful
 `validate_analysis` call, and requires a completed `verify_timeline` call for
 every transient verdict. Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
-quality-tool evidence alongside the result. The acceptance contract participates
-in the Task fingerprint, so stronger gates invalidate prior results. After batch pattern finalization,
+quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are
+compiled into the scoped `required_evidence` Tool, and their hash participates
+in the Task fingerprint. When recipes are present, acceptance requires a
+completed recipe lookup before publishing the result. The Orka tool set also
+includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
 the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
 stage as the in-process fetcher.
 

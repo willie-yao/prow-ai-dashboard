@@ -3,20 +3,11 @@ package main
 import (
 	"log"
 	"net/http"
+	"strings"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 )
 
-// validate_analysis is the reference template for a self-registered quality
-// tool. It deterministically checks that every artifact path an analysis cites
-// exists in this build's tree (a 1-byte read via the Browser): the single
-// high-value check kept from the engine's critique gate (hallucinated-citation
-// guard), exposed Orka-natively as a tool a reviewer agent must call before
-// approving an analysis.
-//
-// Pattern every quality tool follows:
-//  1. one file named after the tool,
-//  2. an init() that calls registerQTool with the exact /tool/<name> route,
-//  3. a handler(*toolEnv, w, r) that reads args, does deterministic work over
-//     env.browser (or env.backend for cross-build), and writes JSON.
 func init() {
 	registerQTool("/tool/validate_analysis", validateAnalysis)
 }
@@ -26,16 +17,27 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var args struct {
-		Paths []string `json:"paths"`
+		Paths    []string `json:"paths"`
+		Analysis string   `json:"analysis"`
 	}
 	if err := readArgs(r, &args); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	set, err := skills.ParseHeader(r.Header.Get(skills.ContractHeader))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if set.Hash() != "" && strings.TrimSpace(args.Analysis) == "" {
+		http.Error(w, "analysis is required when consumer skills are configured", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := requestCtx(r)
 	defer cancel()
 
 	present, missing := []string{}, []string{}
+	validatedPaths := map[string]bool{}
 	for _, p := range args.Paths {
 		if p == "" {
 			continue
@@ -44,19 +46,43 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 			missing = append(missing, p)
 		} else {
 			present = append(present, p)
+			validatedPaths[normalizeEvidencePath(p)] = true
+		}
+	}
+	missingEvidence := []string{}
+	matchedSkills := set.Match(args.Analysis)
+	for _, skill := range matchedSkills {
+		for _, group := range skill.RequiredEvidence {
+			if !group.Satisfied(validatedPaths) {
+				missingEvidence = append(missingEvidence, skill.ID+":"+group.ID)
+			}
 		}
 	}
 	result := map[string]any{
-		"checked":     len(present) + len(missing),
-		"present":     present,
-		"missing":     missing,
-		"all_present": len(missing) == 0,
+		"checked":          len(present) + len(missing),
+		"present":          present,
+		"missing":          missing,
+		"matched_skills":   skillIDs(matchedSkills),
+		"missing_evidence": missingEvidence,
+		"all_present":      len(missing) == 0 && len(missingEvidence) == 0,
 	}
-	if len(missing) > 0 {
-		log.Printf("⚠ validate_analysis paths=%d present=%d missing=%d", len(args.Paths), len(present), len(missing))
+	if len(missing) > 0 || len(missingEvidence) > 0 {
+		log.Printf("⚠ validate_analysis paths=%d present=%d missing=%d evidence_missing=%d", len(args.Paths), len(present), len(missing), len(missingEvidence))
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
 		return
 	}
-	log.Printf("✔ validate_analysis paths=%d present=%d missing=0", len(args.Paths), len(present))
+	log.Printf("✔ validate_analysis paths=%d present=%d matched_skills=%d", len(args.Paths), len(present), len(matchedSkills))
 	writeJSON(w, result)
+}
+
+func normalizeEvidencePath(p string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(p), "\\", "/"))
+}
+
+func skillIDs(matched []skills.Skill) []string {
+	ids := make([]string, 0, len(matched))
+	for _, skill := range matched {
+		ids = append(ids, skill.ID)
+	}
+	return ids
 }

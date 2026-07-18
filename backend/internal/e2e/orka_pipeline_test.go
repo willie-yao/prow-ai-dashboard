@@ -77,6 +77,19 @@ func TestOrkaPipelineProducesFixPreview(t *testing.T) {
 	}
 	repoDir := filepath.Dir(backendDir)
 	projectDir := writeProject(t, "")
+	if err := os.MkdirAll(filepath.Join(projectDir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skill := `id: stale-controller
+triggers: ["(?i)stale.*configuration"]
+required_evidence:
+  - id: controller-config
+    any_of: ['config/controller\.yaml']
+procedure: Inspect the controller configuration and its update ordering.
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "skills", "stale-controller.yaml"), []byte(skill), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	dataDir := t.TempDir()
 	tasksDir := t.TempDir()
 	toolsDir := t.TempDir()
@@ -233,10 +246,12 @@ func writeOrkaAcceptedEvents(w http.ResponseWriter) {
 		{"seq": 1, "type": "TaskStarted", "createdAt": base},
 		{"seq": 2, "type": "ToolCallStarted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base.Add(time.Second)},
 		{"seq": 3, "type": "ToolCallStarted", "toolName": "recurrence", "toolCallID": "call-2", "createdAt": base.Add(2 * time.Second)},
-		{"seq": 4, "type": "ToolCallStarted", "toolName": "validate-analysis", "toolCallID": "call-3", "createdAt": base.Add(3 * time.Second)},
-		{"seq": 5, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-3", "content": map[string]any{"resultLength": 80}, "createdAt": base.Add(4 * time.Second)},
-		{"seq": 6, "type": "ModelRequestCompleted", "provider": "copilot", "model": "claude-sonnet-4.5", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(5 * time.Second)},
-		{"seq": 7, "type": "TaskSucceeded", "createdAt": base.Add(6 * time.Second)},
+		{"seq": 4, "type": "ToolCallStarted", "toolName": "required-evidence", "toolCallID": "call-3", "createdAt": base.Add(3 * time.Second)},
+		{"seq": 5, "type": "ToolCallCompleted", "toolName": "required-evidence", "toolCallID": "call-3", "content": map[string]any{"resultLength": 120}, "createdAt": base.Add(4 * time.Second)},
+		{"seq": 6, "type": "ToolCallStarted", "toolName": "validate-analysis", "toolCallID": "call-4", "createdAt": base.Add(5 * time.Second)},
+		{"seq": 7, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-4", "content": map[string]any{"resultLength": 80}, "createdAt": base.Add(6 * time.Second)},
+		{"seq": 8, "type": "ModelRequestCompleted", "provider": "copilot", "model": "claude-sonnet-4.5", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(7 * time.Second)},
+		{"seq": 9, "type": "TaskSucceeded", "createdAt": base.Add(8 * time.Second)},
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 7, "events": events})
+	_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 9, "events": events})
 }

@@ -26,6 +26,7 @@ type AnalysisContract struct {
 	Retries           int            `json:"retries"`
 	MinToolCalls      int            `json:"min_tool_calls"`
 	AcceptanceVersion int            `json:"acceptance_version"`
+	SkillSetHash      string         `json:"skill_set_hash,omitempty"`
 	SystemPrompt      string         `json:"system_prompt"`
 	Tools             []ToolContract `json:"tools"`
 }

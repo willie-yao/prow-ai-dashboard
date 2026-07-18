@@ -281,7 +281,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls)
+				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls, manifest.SkillSetHash)
 				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
@@ -318,7 +318,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls int) (bool, string) {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls int, skillSetHash string) (bool, string) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false, ""
@@ -331,14 +331,14 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err != nil {
 		return false, "analysis Task telemetry unavailable: " + oneLine(err.Error())
 	}
-	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls, skillSetHash); err != nil {
 		return false, "analysis Task failed acceptance: " + oneLine(err.Error())
 	}
-	applyParsedAnalysis(tc, a, telemetry, model, contractHash)
+	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
 	return true, ""
 }
 
-func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash string) {
+func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if telemetry.Model != "" {
 		model = telemetry.Model
@@ -370,6 +370,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		ArtifactPathsValidated: telemetry.ValidationPassed,
 		CritiquePassed:         true,
 		CritiqueVersion:        orka.AcceptanceVersion,
+		SkillSetHash:           skillSetHash,
 	}
 }
 
@@ -507,6 +508,7 @@ type preparedPatch struct {
 	telemetry    analysisTelemetry
 	model        string
 	contractHash string
+	skillSetHash string
 	reason       string
 	retry        bool
 }
@@ -527,10 +529,10 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	if err != nil {
 		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
 	}
-	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls); err != nil {
+	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.SkillSetHash); err != nil {
 		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error())}
 	}
-	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash}
+	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash}
 }
 
 func (s *webhookServer) rebuildIndex() {
@@ -614,7 +616,7 @@ func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) 
 		return false
 	}
 	if patch.analysis != nil {
-		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash)
+		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash, patch.skillSetHash)
 		return true
 	}
 	tc.AISummary = nil
@@ -686,7 +688,7 @@ func validateAnalysisShape(a analysis) error {
 	return nil
 }
 
-func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int) error {
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int, skillSetHash string) error {
 	if telemetry.EventCount == 0 {
 		return fmt.Errorf("execution event stream is empty")
 	}
@@ -703,6 +705,9 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minTool
 		if outcome == "failed" {
 			return fmt.Errorf("quality tool %s failed without a successful retry", name)
 		}
+	}
+	if skillSetHash != "" && telemetry.qualityToolOutcomes["required_evidence"] != "completed" {
+		return fmt.Errorf("analysis did not consult consumer required_evidence")
 	}
 	if !telemetry.ValidationPassed {
 		return fmt.Errorf("analysis did not successfully complete validate_analysis")
