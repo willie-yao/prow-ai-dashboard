@@ -115,10 +115,12 @@ Task's result, parses the analysis JSON, and writes `tc.AISummary` +
 produces. Each analysis stores the contract hash, so a cached result is reused
 only while it matches the current producer manifest. The ingestor also reads the
 Task's durable execution-event stream. It rejects incomplete response schemas,
-analyses below `ai.min_tool_calls`, results without a completed
+analyses below `ai.min_tool_calls`, results without a successful terminal Task
+event, quality tools whose last attempt failed, results without a completed
 `validate_analysis` call, and transient verdicts without a successful
-`verify_timeline` call. Accepted results carry Tool-call, elapsed-time, token,
-and quality-tool telemetry. Failing/absent results get the engine's `unavailable`
+`verify_timeline` call. Accepted results carry Tool/model failures, retries,
+context truncations, elapsed time, tokens, stop reason, and quality-tool
+telemetry. Failing/absent results get the engine's `unavailable`
 placeholder via
 `setUnavailable`, mirroring `internal/ai/service.go`.
 

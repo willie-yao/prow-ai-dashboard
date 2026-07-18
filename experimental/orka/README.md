@@ -37,8 +37,9 @@ cheap-model path; do not decommission. Convergence and discipline numbers are in
 ## Known constraints
 
 - **Execution events are required.** The ingestor reads each Task's event stream
-  to enforce the tool-call floor, `validate_analysis`, and transient timeline
-  evidence before publishing a result.
+  to enforce the tool-call floor, terminal outcome, successful quality tools,
+  `validate_analysis`, and transient timeline evidence before publishing a
+  result.
 - **Scheduled side effects run in batch mode.** After job-level pattern
   finalization succeeds, the ingestor runs the same notifications, issue
   reconciliation, and fix-PR reconciliation as the in-process fetcher. Mount the

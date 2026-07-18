@@ -13,17 +13,21 @@ import (
 
 const identityDigestBytes = 16
 
+// AcceptanceVersion identifies the Orka result acceptance contract.
+const AcceptanceVersion = 2
+
 // AnalysisContract is the model and tool contract that determines whether a
 // prior Orka result can be reused.
 type AnalysisContract struct {
-	Provider     string         `json:"provider"`
-	Model        string         `json:"model"`
-	Version      string         `json:"version"`
-	Timeout      string         `json:"timeout"`
-	Retries      int            `json:"retries"`
-	MinToolCalls int            `json:"min_tool_calls"`
-	SystemPrompt string         `json:"system_prompt"`
-	Tools        []ToolContract `json:"tools"`
+	Provider          string         `json:"provider"`
+	Model             string         `json:"model"`
+	Version           string         `json:"version"`
+	Timeout           string         `json:"timeout"`
+	Retries           int            `json:"retries"`
+	MinToolCalls      int            `json:"min_tool_calls"`
+	AcceptanceVersion int            `json:"acceptance_version"`
+	SystemPrompt      string         `json:"system_prompt"`
+	Tools             []ToolContract `json:"tools"`
 }
 
 // ToolContract is one enabled Orka Tool definition in model-visible order.

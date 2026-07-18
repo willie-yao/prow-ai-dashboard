@@ -144,7 +144,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 		if !analysis.ArtifactPathsValidated {
 			t.Fatalf("build %s did not record validate_analysis", run.BuildID)
 		}
-		if !analysis.CritiquePassed || analysis.CritiqueVersion != orkaAcceptanceVersion {
+		if !analysis.CritiquePassed || analysis.CritiqueVersion != orkaapi.AcceptanceVersion {
 			t.Fatalf("build %s acceptance metadata = %+v", run.BuildID, analysis)
 		}
 	}
@@ -356,9 +356,9 @@ func writeAcceptedEvents(w http.ResponseWriter, transient bool) {
 	events := []map[string]any{
 		{"seq": 1, "type": "TaskStarted", "createdAt": base},
 		{"seq": 2, "type": "ToolCallStarted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base.Add(time.Second)},
-		{"seq": 3, "type": "ToolCallCompleted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base.Add(2 * time.Second)},
+		{"seq": 3, "type": "ToolCallCompleted", "toolName": "read-artifact", "toolCallID": "call-1", "content": map[string]any{"resultLength": 40}, "createdAt": base.Add(2 * time.Second)},
 		{"seq": 4, "type": "ToolCallStarted", "toolName": "grep-artifact", "toolCallID": "call-2", "createdAt": base.Add(3 * time.Second)},
-		{"seq": 5, "type": "ToolCallCompleted", "toolName": "grep-artifact", "toolCallID": "call-2", "createdAt": base.Add(4 * time.Second)},
+		{"seq": 5, "type": "ToolCallCompleted", "toolName": "grep-artifact", "toolCallID": "call-2", "content": map[string]any{"resultLength": 60}, "createdAt": base.Add(4 * time.Second)},
 		{"seq": 6, "type": "ToolCallStarted", "toolName": "validate-analysis-bscope", "toolCallID": "call-3", "createdAt": base.Add(5 * time.Second)},
 		{"seq": 7, "type": "ToolCallCompleted", "toolName": "validate-analysis-bscope", "toolCallID": "call-3", "createdAt": base.Add(6 * time.Second)},
 		{"seq": 8, "type": "ModelRequestCompleted", "provider": "openai", "model": "actual-model", "stopReason": "stop", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(7 * time.Second)},

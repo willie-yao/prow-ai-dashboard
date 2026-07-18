@@ -624,10 +624,13 @@ contract hash, so cached job JSON is refreshed whenever the current contract
 changes. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
-schema and `min_tool_calls`, requires a successful `validate_analysis` call, and
-requires a completed `verify_timeline` call for every transient verdict.
-Accepted analyses publish Tool-call count, duration, provider token usage, and
-quality-tool evidence alongside the result. After batch pattern finalization,
+schema and `min_tool_calls`, requires a successful terminal Task event, rejects
+quality tools whose last attempt failed, requires a successful
+`validate_analysis` call, and requires a completed `verify_timeline` call for
+every transient verdict. Accepted analyses publish Tool/model failures, retry
+count, context truncations, duration, provider token usage, stop reason, and
+quality-tool evidence alongside the result. The acceptance contract participates
+in the Task fingerprint, so stronger gates invalidate prior results. After batch pattern finalization,
 the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
 stage as the in-process fetcher.
 

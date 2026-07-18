@@ -27,10 +27,10 @@ for how to pin a release.
   have been finalized.
 - **Orka result acceptance and telemetry.** The Orka ingestor now validates the
   complete analysis schema against durable Task events, enforces
-  `ai.min_tool_calls`, requires `validate_analysis`, and requires
+  `ai.min_tool_calls`, requires successful quality tools, and requires
   `verify_timeline` for transient verdicts. Published analyses add optional
-  `contract_hash`, token-usage, timeline-verification, and artifact-validation
-  telemetry fields.
+  model/tool failure, retry, truncation, token-usage, completion-outcome,
+  timeline-verification, and artifact-validation telemetry fields.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;

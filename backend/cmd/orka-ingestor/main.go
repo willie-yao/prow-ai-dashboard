@@ -354,6 +354,14 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		Mode:                   "agentic",
 		ContractHash:           contractHash,
 		ToolCalls:              telemetry.ToolCalls,
+		ToolFailures:           telemetry.ToolFailures,
+		ModelRequests:          telemetry.ModelRequests,
+		ModelFailures:          telemetry.ModelFailures,
+		ContextBytes:           telemetry.ContextBytes,
+		ContextTruncations:     telemetry.ContextTruncations,
+		TaskRetries:            telemetry.TaskRetries,
+		TaskOutcome:            telemetry.TaskOutcome,
+		StopReason:             telemetry.StopReason,
 		ElapsedMs:              telemetry.ElapsedMs,
 		InputTokens:            telemetry.InputTokens,
 		OutputTokens:           telemetry.OutputTokens,
@@ -361,7 +369,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		TimelineVerified:       telemetry.TimelineVerified,
 		ArtifactPathsValidated: telemetry.ValidationPassed,
 		CritiquePassed:         true,
-		CritiqueVersion:        orkaAcceptanceVersion,
+		CritiqueVersion:        orka.AcceptanceVersion,
 	}
 }
 
@@ -682,8 +690,19 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minTool
 	if telemetry.EventCount == 0 {
 		return fmt.Errorf("execution event stream is empty")
 	}
+	if telemetry.TaskOutcome != "succeeded" {
+		if telemetry.TaskOutcome == "" {
+			return fmt.Errorf("execution event stream has no terminal Task outcome")
+		}
+		return fmt.Errorf("analysis Task outcome is %s", telemetry.TaskOutcome)
+	}
 	if telemetry.ToolCalls < minToolCalls {
 		return fmt.Errorf("only %d tool call(s), need at least %d", telemetry.ToolCalls, minToolCalls)
+	}
+	for name, outcome := range telemetry.qualityToolOutcomes {
+		if outcome == "failed" {
+			return fmt.Errorf("quality tool %s failed without a successful retry", name)
+		}
 	}
 	if !telemetry.ValidationPassed {
 		return fmt.Errorf("analysis did not successfully complete validate_analysis")

@@ -42,10 +42,10 @@ func TestAnalysisTelemetryPaginatesAndSummarizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.EventCount != 5 || got.ToolCalls != 1 || !got.TimelineVerified || got.ElapsedMs != 4000 {
+	if got.EventCount != 5 || got.ToolCalls != 1 || !got.TimelineVerified || got.ElapsedMs != 4000 || got.TaskOutcome != "succeeded" {
 		t.Fatalf("telemetry = %+v", got)
 	}
-	if got.InputTokens != 10 || got.OutputTokens != 5 || got.Provider != "openai" || got.Model != "model" {
+	if got.InputTokens != 10 || got.OutputTokens != 5 || got.Provider != "openai" || got.Model != "model" || got.ModelRequests != 1 {
 		t.Fatalf("model telemetry = %+v", got)
 	}
 }
@@ -70,20 +70,20 @@ func TestSummarizeEventsRequiresCompletedValidation(t *testing.T) {
 func TestValidateAnalysisAcceptance(t *testing.T) {
 	transient, nonTransient := true, false
 	valid := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix"}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}, 2); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2); err != nil {
 		t.Fatalf("valid non-transient analysis rejected: %v", err)
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 1, ValidationPassed: true}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 1, ValidationPassed: true, TaskOutcome: "succeeded"}, 2); err == nil {
 		t.Fatal("analysis below the tool-call floor was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, TaskOutcome: "succeeded"}, 2); err == nil {
 		t.Fatal("analysis without validate_analysis was accepted")
 	}
 	valid.IsTransient = &transient
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}, 2); err == nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TaskOutcome: "succeeded"}, 2); err == nil {
 		t.Fatal("transient analysis without verify_timeline was accepted")
 	}
-	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true}, 2); err != nil {
+	if err := validateAnalysisAcceptance(valid, analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true, TimelineVerified: true, TaskOutcome: "succeeded"}, 2); err != nil {
 		t.Fatalf("timeline-verified transient analysis rejected: %v", err)
 	}
 }
@@ -115,5 +115,71 @@ func TestWebhookTelemetryUnavailableIsRetryable(t *testing.T) {
 	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)
 	if !patch.retry || !strings.Contains(patch.reason, "telemetry unavailable") {
 		t.Fatalf("patch = %+v, want retryable telemetry error", patch)
+	}
+}
+
+func TestSummarizeEventsRecordsFailuresRetriesAndContext(t *testing.T) {
+	base := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
+	events := []executionEvent{
+		{Seq: 1, Type: "TaskStarted", CreatedAt: base},
+		{Seq: 2, Type: "ModelRequestFailed", Provider: "openai", Model: "model", InputTokens: 7, StopReason: "provider_error", CreatedAt: base.Add(time.Second)},
+		{Seq: 3, Type: "ContextTruncated", CreatedAt: base.Add(2 * time.Second)},
+		{Seq: 4, Type: "ToolCallStarted", ToolName: "read-artifact", ToolCallID: "call-1", CreatedAt: base.Add(3 * time.Second)},
+		{Seq: 5, Type: "ToolCallFailed", ToolName: "read-artifact", ToolCallID: "call-1", CreatedAt: base.Add(4 * time.Second)},
+		{Seq: 6, Type: "TaskStarted", CreatedAt: base.Add(5 * time.Second)},
+		{Seq: 7, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2", CreatedAt: base.Add(6 * time.Second)},
+		{Seq: 8, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2", Content: json.RawMessage(`{"resultLength":123}`), CreatedAt: base.Add(7 * time.Second)},
+		{Seq: 9, Type: "ModelRequestCompleted", Provider: "openai", Model: "model", InputTokens: 11, OutputTokens: 5, StopReason: "stop", CreatedAt: base.Add(8 * time.Second)},
+		{Seq: 10, Type: "TaskSucceeded", CreatedAt: base.Add(9 * time.Second)},
+	}
+	got := summarizeEvents(events)
+	if got.TaskRetries != 1 || got.TaskOutcome != "succeeded" || got.ElapsedMs != 9000 {
+		t.Fatalf("task telemetry = %+v", got)
+	}
+	if got.ToolCalls != 2 || got.ToolFailures != 1 || got.ContextBytes != 123 || got.ContextTruncations != 1 {
+		t.Fatalf("tool telemetry = %+v", got)
+	}
+	if got.ModelRequests != 2 || got.ModelFailures != 1 || got.InputTokens != 18 || got.OutputTokens != 5 || got.StopReason != "stop" {
+		t.Fatalf("model telemetry = %+v", got)
+	}
+}
+
+func TestValidateAnalysisAcceptanceRejectsFailedQualityTool(t *testing.T) {
+	transient := false
+	a := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
+	events := []executionEvent{
+		{Seq: 1, Type: "TaskStarted"},
+		{Seq: 2, Type: "ToolCallStarted", ToolName: "recurrence-bscope", ToolCallID: "call-1"},
+		{Seq: 3, Type: "ToolCallFailed", ToolName: "recurrence-bscope", ToolCallID: "call-1"},
+		{Seq: 4, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		{Seq: 5, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		{Seq: 6, Type: "TaskSucceeded"},
+	}
+	telemetry := summarizeEvents(events)
+	if err := validateAnalysisAcceptance(a, telemetry, 2); err == nil || !strings.Contains(err.Error(), "recurrence") {
+		t.Fatalf("acceptance error = %v, want failed recurrence rejection", err)
+	}
+	events = append(events[:3],
+		executionEvent{Seq: 4, Type: "ToolCallStarted", ToolName: "recurrence-bscope", ToolCallID: "call-3"},
+		executionEvent{Seq: 5, Type: "ToolCallCompleted", ToolName: "recurrence-bscope", ToolCallID: "call-3"},
+		executionEvent{Seq: 6, Type: "ToolCallStarted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		executionEvent{Seq: 7, Type: "ToolCallCompleted", ToolName: "validate-analysis-bscope", ToolCallID: "call-2"},
+		executionEvent{Seq: 8, Type: "TaskSucceeded"},
+	)
+	if err := validateAnalysisAcceptance(a, summarizeEvents(events), 2); err != nil {
+		t.Fatalf("successful quality-tool retry rejected: %v", err)
+	}
+}
+
+func TestValidateAnalysisAcceptanceRequiresSucceededEvent(t *testing.T) {
+	transient := false
+	a := analysis{Summary: "summary", RootCause: "cause", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"}
+	base := analysisTelemetry{EventCount: 4, ToolCalls: 2, ValidationPassed: true}
+	if err := validateAnalysisAcceptance(a, base, 2); err == nil || !strings.Contains(err.Error(), "no terminal") {
+		t.Fatalf("missing terminal error = %v", err)
+	}
+	base.TaskOutcome = "failed"
+	if err := validateAnalysisAcceptance(a, base, 2); err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("failed task error = %v", err)
 	}
 }

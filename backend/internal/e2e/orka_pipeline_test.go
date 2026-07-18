@@ -234,7 +234,7 @@ func writeOrkaAcceptedEvents(w http.ResponseWriter) {
 		{"seq": 2, "type": "ToolCallStarted", "toolName": "read-artifact", "toolCallID": "call-1", "createdAt": base.Add(time.Second)},
 		{"seq": 3, "type": "ToolCallStarted", "toolName": "recurrence", "toolCallID": "call-2", "createdAt": base.Add(2 * time.Second)},
 		{"seq": 4, "type": "ToolCallStarted", "toolName": "validate-analysis", "toolCallID": "call-3", "createdAt": base.Add(3 * time.Second)},
-		{"seq": 5, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-3", "createdAt": base.Add(4 * time.Second)},
+		{"seq": 5, "type": "ToolCallCompleted", "toolName": "validate-analysis", "toolCallID": "call-3", "content": map[string]any{"resultLength": 80}, "createdAt": base.Add(4 * time.Second)},
 		{"seq": 6, "type": "ModelRequestCompleted", "provider": "copilot", "model": "claude-sonnet-4.5", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(5 * time.Second)},
 		{"seq": 7, "type": "TaskSucceeded", "createdAt": base.Add(6 * time.Second)},
 	}

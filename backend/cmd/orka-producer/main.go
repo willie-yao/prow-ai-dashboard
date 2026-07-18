@@ -146,8 +146,8 @@ func main() {
 	}
 	contractHash, err := orka.AnalysisContractHash(orka.AnalysisContract{
 		Provider: *provider, Model: *model, Version: *version,
-		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls, SystemPrompt: systemPrompt,
-		Tools: toolContracts,
+		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls,
+		AcceptanceVersion: orka.AcceptanceVersion, SystemPrompt: systemPrompt, Tools: toolContracts,
 	})
 	if err != nil {
 		log.Fatalf("analysis contract: %v", err)
