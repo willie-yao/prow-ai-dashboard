@@ -11,6 +11,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/required_evidence
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:

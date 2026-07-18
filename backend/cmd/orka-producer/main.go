@@ -96,6 +96,8 @@ func main() {
 	version := flag.String("version", "v1", "manual cache-bust version included in the automatic analysis fingerprint")
 	timeout := flag.String("timeout", "10m", "per-Task timeout")
 	toolsCSV := flag.String("tools", "", "override comma-separated analysis Tool names; mandatory quality tools are still appended")
+	toolAuthSecret := flag.String("tool-auth-secret", "artifact-tool-auth", "Secret containing the artifact-tool bearer token")
+	toolAuthKey := flag.String("tool-auth-key", "token", "key in -tool-auth-secret containing the bearer token")
 	bucketFlag := flag.String("bucket", "", "GCS bucket routed to the shim via the X-Bucket header (default: the consumer's storage.bucket)")
 	retries := flag.Int("retries", 1, "Task retryPolicy maxRetries for transient model/tool errors")
 	webhookURL := flag.String("webhook-url", "", "Task webhookURL for event-driven ingestion (must be a same-namespace ClusterIP service, e.g. http://orka-ingestor.orka-system.svc:8080/webhook)")
@@ -158,6 +160,7 @@ func main() {
 		Provider: *provider, Model: *model, Version: *version,
 		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls,
 		AcceptanceVersion: orka.AcceptanceVersion, SkillSetHash: skillSet.Hash(),
+		ToolAuthSecret: *toolAuthSecret, ToolAuthKey: *toolAuthKey,
 		SystemPrompt: systemPrompt, Tools: toolContracts,
 	})
 	if err != nil {
@@ -236,7 +239,7 @@ func main() {
 	for _, build := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader)
+			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, *toolAuthSecret, *toolAuthKey)
 			toolName := buildToolName(base, build.scope)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
@@ -376,7 +379,7 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
 // build/bucket/storage headers so the shim serves this build from the right
 // bucket and provider.
-func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract string) map[string]any {
+func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, authSecret, authKey string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -406,6 +409,7 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 		httpCfg["headers"] = headers
 	}
 	headers["X-Build-Prefix"] = prefix
+	headers[orka.ToolScopeHeader] = buildScope
 	if bucket != "" {
 		headers["X-Bucket"] = bucket
 	}
@@ -414,6 +418,10 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 	}
 	if (baseName == "required-evidence" || baseName == "validate-analysis") && skillContract != "" {
 		headers[skills.ContractHeader] = skillContract
+	}
+	if authSecret != "" && authKey != "" {
+		httpCfg["authSecretRef"] = map[string]any{"name": authSecret, "key": authKey}
+		httpCfg["authInject"] = "header"
 	}
 	return doc
 }

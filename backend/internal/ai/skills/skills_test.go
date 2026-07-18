@@ -421,3 +421,9 @@ procedure: Inspect the quota event before changing limits.
 		t.Fatalf("matched skills = %+v", matched)
 	}
 }
+
+func TestParseHeaderRejectsOversizedValue(t *testing.T) {
+	if _, err := ParseHeader(strings.Repeat("a", maxSkillContractHeaderBytes+1)); err == nil {
+		t.Fatal("oversized skill header was accepted")
+	}
+}

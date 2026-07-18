@@ -19,6 +19,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/list_artifacts
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -37,6 +41,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/find_artifacts
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -61,6 +69,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/grep_artifact
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -88,6 +100,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/read_artifact
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:
@@ -112,6 +128,10 @@ spec:
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/tail_artifact
     method: POST
+    authSecretRef:
+      name: artifact-tool-auth
+      key: token
+    authInject: header
   parameters:
     type: object
     properties:

@@ -78,6 +78,8 @@ spec:
                 - -tool-manifests=/base-tools
                 - -tasks-out=/tmp/tasks
                 - -tools-out=/tmp/build-tools
+                - -tool-auth-secret={{ .Values.orka.toolAuthSecret }}
+                - -tool-auth-key={{ .Values.orka.toolAuthKey }}
                 - -apply
                 - -namespace={{ .Values.orka.namespace }}
                 - -provider={{ .Values.orka.provider }}

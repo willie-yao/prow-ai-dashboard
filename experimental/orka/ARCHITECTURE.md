@@ -80,18 +80,22 @@ spec:
   http:
     headers:
       X-Build-Prefix: <bucket-relative build dir>
+      X-Prow-AI-Scope: <contract-scoped Tool identity>
       X-Bucket: <bucket>
       X-Storage-Provider: <gcs | gcsweb>   # from the consumer's project.yaml
       X-Storage-Base: <gcsweb gateway root>  # only for gcsweb (e.g. S3)
 ```
 
-The shim resolves its backend per request from those headers
-(`orka-artifact-tool/toolenv.go`), so a tool always reads the Task's own build
+The shim requires an Orka-injected bearer token and resolves its backend per
+request from producer-owned headers (`orka-artifact-tool/toolenv.go`), so a tool
+always reads the Task's own build
 in the right bucket **and on the right storage provider** regardless of what the
 model passes. Storage is provider-agnostic: the shim reuses the engine's
 `internal/storage` (gcs, or gcsweb over an S3 gateway), defaulting from its
 `STORAGE_*` env and overriding per request from the `X-Storage-*` headers the
-producer derives from `project.yaml`. Base Tool CRDs are loaded from
+producer derives from `project.yaml`. Invalid explicit routes fail closed.
+Contract-scoped browser/cache entries use bounded LRU eviction and cumulative
+model/artifact byte ceilings. Base Tool CRDs are loaded from
 `experimental/orka/manifests/` by `loadBaseTools`.
 
 ### The apply

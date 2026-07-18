@@ -28,8 +28,9 @@ import (
 // defaultPriority is assigned to any recipe that doesn't set its own
 // priority. Higher priority is preferred on ties.
 const (
-	defaultPriority       = 100
-	maxSkillContractBytes = 256 << 10
+	defaultPriority             = 100
+	maxSkillContractBytes       = 256 << 10
+	maxSkillContractHeaderBytes = 48 << 10
 )
 
 // ContractHeader carries a serialized consumer skill set to external tools.
@@ -150,13 +151,20 @@ func (s *Set) HeaderValue() (string, error) {
 	if err := w.Close(); err != nil {
 		return "", fmt.Errorf("compress skill contract: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(compressed.Bytes()), nil
+	header := base64.RawURLEncoding.EncodeToString(compressed.Bytes())
+	if len(header) > maxSkillContractHeaderBytes {
+		return "", fmt.Errorf("compressed skill contract header is %d bytes, exceeds %d", len(header), maxSkillContractHeaderBytes)
+	}
+	return header, nil
 }
 
 // ParseHeader decodes a skill contract from an HTTP Tool header.
 func ParseHeader(value string) (*Set, error) {
 	if strings.TrimSpace(value) == "" {
 		return &Set{}, nil
+	}
+	if len(value) > maxSkillContractHeaderBytes {
+		return nil, fmt.Errorf("skill contract header exceeds %d bytes", maxSkillContractHeaderBytes)
 	}
 	compressed, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {

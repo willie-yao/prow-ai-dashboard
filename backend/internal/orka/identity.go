@@ -16,6 +16,9 @@ const identityDigestBytes = 16
 // AcceptanceVersion identifies the Orka result acceptance contract.
 const AcceptanceVersion = 2
 
+// ToolScopeHeader binds artifact-tool caches and budgets to one Tool contract.
+const ToolScopeHeader = "X-Prow-AI-Scope"
+
 // AnalysisContract is the model and tool contract that determines whether a
 // prior Orka result can be reused.
 type AnalysisContract struct {
@@ -27,6 +30,8 @@ type AnalysisContract struct {
 	MinToolCalls      int            `json:"min_tool_calls"`
 	AcceptanceVersion int            `json:"acceptance_version"`
 	SkillSetHash      string         `json:"skill_set_hash,omitempty"`
+	ToolAuthSecret    string         `json:"tool_auth_secret,omitempty"`
+	ToolAuthKey       string         `json:"tool_auth_key,omitempty"`
 	SystemPrompt      string         `json:"system_prompt"`
 	Tools             []ToolContract `json:"tools"`
 }

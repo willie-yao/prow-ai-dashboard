@@ -43,6 +43,10 @@ orka:
   model: claude-sonnet-4.5
   # The multi-bucket GCS tool shim and the Orka result API (in-cluster Services).
   toolShimEnv: {}
+  # Secret in orka.namespace shared by Orka Tool authSecretRef and the
+  # artifact-tool Deployment. The key must contain the raw bearer token.
+  toolAuthSecret: artifact-tool-auth
+  toolAuthKey: token
   apiBase: http://orka.orka-system.svc:8080
   # ConfigMap holding the base Tool CRDs the producer clones per build. Create it
   # from experimental/orka/manifests (kubectl create configmap orka-base-tools

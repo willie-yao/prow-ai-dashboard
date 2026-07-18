@@ -54,6 +54,10 @@ cheap-model path; do not decommission. Convergence and discipline numbers are in
   empty results) and skip the verify_timeline discipline. Apply
   worker-patches/ai-worker-convergence.patch (iteration cap, forced finalization,
   empty-final re-prompt, transient-critique gate) and rebuild the ai-worker image.
+- **Artifact-tool authentication is required.** Create the configured bearer
+  Secret before deploying the shim or scoped Tools. The service accepts routing
+  only from producer-owned headers and the included NetworkPolicy limits ingress
+  to Orka AI-worker pods.
 - **SSRF guard.** Orka marks tools whose URL resolves to a private/loopback IP as
   Available=false. In-cluster ClusterIPs are private, so the tools show unavailable
   but still work (the worker does not gate on availability).

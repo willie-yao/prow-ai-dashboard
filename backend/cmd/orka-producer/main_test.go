@@ -52,11 +52,18 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 				"metadata": map[string]any{"name": tool},
 				"spec":     map[string]any{"http": map[string]any{"url": "http://artifact-tool/tool/" + tool}},
 			}
-			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills")
+			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "artifact-tool-auth", "token")
 			spec := got["spec"].(map[string]any)
 			headers := spec["http"].(map[string]any)["headers"].(map[string]any)
+			if headers[orka.ToolScopeHeader] != "scope" {
+				t.Fatalf("scope header = %+v", headers)
+			}
 			if headers["X-Prow-AI-Skills"] != "encoded-skills" {
 				t.Fatalf("headers = %+v", headers)
+			}
+			auth := spec["http"].(map[string]any)["authSecretRef"].(map[string]any)
+			if auth["name"] != "artifact-tool-auth" || auth["key"] != "token" {
+				t.Fatalf("authSecretRef = %+v", auth)
 			}
 		})
 	}
