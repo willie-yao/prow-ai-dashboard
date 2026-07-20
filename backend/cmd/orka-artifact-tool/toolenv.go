@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	maxResolverBackends = 32
-	maxResolverBuilds   = 128
+	maxResolverBackends     = 32
+	maxResolverBuilds       = 128
+	maxResolverCacheEntries = 64
+	maxResolverCacheBytes   = 1 << 20
 )
 
 // buildResolver serves authenticated, header-scoped artifact requests across consumers.
@@ -184,8 +186,8 @@ func (r *buildResolver) resolve(bucket, prefix, scope string, override storage.C
 	entry, ok := r.builds[key]
 	if !ok {
 		entry = &buildEntry{
-			browser: artifacts.NewBackendBrowser(bb.backend, bb.bucket, prefix, prefix),
-			cache:   tools.NewCache(),
+			browser: artifacts.NewUncachedBackendBrowser(bb.backend, bb.bucket, prefix, prefix),
+			cache:   tools.NewBoundedCache(maxResolverCacheEntries, maxResolverCacheBytes),
 		}
 		r.builds[key] = entry
 	}
@@ -244,7 +246,7 @@ func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storag
 		webURLBase:  web,
 		browser:     wrap(entry.browser),
 		browserForBuild: func(prefix, display string) artifacts.Browser {
-			return wrap(artifacts.NewBackendBrowser(bb.backend, bb.bucket, prefix, display))
+			return wrap(artifacts.NewUncachedBackendBrowser(bb.backend, bb.bucket, prefix, display))
 		},
 	}, budget, nil
 }
@@ -279,6 +281,7 @@ type toolEnv struct {
 	buildPrefix string
 	webURLBase  string
 	browser     artifacts.Browser
+	evidence    *evidenceAttestor
 	// browserForBuild returns a Browser bound to another build in the same
 	// bucket. prefix is the bucket-relative, trailing-slashed build directory.
 	browserForBuild func(prefix, display string) artifacts.Browser

@@ -14,7 +14,7 @@ import (
 const identityDigestBytes = 16
 
 // AcceptanceVersion identifies the Orka result acceptance contract.
-const AcceptanceVersion = 3
+const AcceptanceVersion = 4
 
 // ToolScopeHeader binds artifact-tool caches and budgets to one Tool contract.
 const ToolScopeHeader = "X-Prow-AI-Scope"

@@ -1,60 +1,44 @@
 package main
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
 
-type validateBrowser struct {
-	artifacts.Browser
-	files map[string][]byte
-}
-
-func (b *validateBrowser) Read(_ context.Context, file string, offset, length int) ([]byte, int64, error) {
-	content, ok := b.files[file]
-	if !ok {
-		return nil, -1, errors.New("not found")
+func TestValidateAnalysisRequiresReadEvidence(t *testing.T) {
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		SuggestedFix: "fix", RelevantFiles: []string{"build-log.txt"},
 	}
-	if offset >= len(content) {
-		return nil, int64(len(content)), nil
-	}
-	end := min(offset+length, len(content))
-	return content[offset:end], int64(len(content)), nil
-}
 
-func TestValidateAnalysisStatus(t *testing.T) {
 	tests := []struct {
 		name        string
-		paths       string
+		tokens      []string
 		wantStatus  int
 		wantValid   bool
 		wantMissing string
 	}{
-		{name: "all present", paths: `["build-log.txt"]`, wantStatus: http.StatusOK, wantValid: true},
-		{name: "missing path", paths: `["build-log.txt","missing.log"]`, wantStatus: http.StatusUnprocessableEntity, wantMissing: "missing.log"},
+		{name: "successfully read", tokens: []string{attestor.issue("scope", "build-log.txt")}, wantStatus: http.StatusOK, wantValid: true},
+		{name: "not read", wantStatus: http.StatusUnprocessableEntity, wantMissing: "build-log.txt"},
+		{name: "invalid token", tokens: []string{"invalid"}, wantStatus: http.StatusUnprocessableEntity},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := &toolEnv{browser: &validateBrowser{files: map[string][]byte{"build-log.txt": []byte("x")}}}
-			body := `{"analysis":{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix","relevant_files":` + tt.paths + `}}`
-			req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(body))
-			recorder := httptest.NewRecorder()
-
-			validateAnalysis(env, recorder, req)
-
+			recorder := runValidation(t, env, analysis, tt.tokens, "scope", "")
 			response := recorder.Result()
 			defer response.Body.Close()
 			if response.StatusCode != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", response.StatusCode, tt.wantStatus)
+				t.Fatalf("status = %d, want %d: %s", response.StatusCode, tt.wantStatus, recorder.Body.String())
 			}
 			var result struct {
 				AllPresent      bool     `json:"all_present"`
@@ -77,7 +61,7 @@ func TestValidateAnalysisStatus(t *testing.T) {
 	}
 }
 
-func TestValidateAnalysisEnforcesMatchedSkillEvidence(t *testing.T) {
+func TestValidateAnalysisEnforcesMatchedSkillReadEvidence(t *testing.T) {
 	set, err := skills.ParseContract([]byte(`{
 		"skills":[{
 			"id":"quota",
@@ -92,27 +76,38 @@ func TestValidateAnalysisEnforcesMatchedSkillEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := &toolEnv{browser: &validateBrowser{files: map[string][]byte{
-		"build-log.txt":          []byte("x"),
-		"events/quota-event.log": []byte("x"),
-	}}}
-
-	request := func(paths string) *httptest.ResponseRecorder {
-		t.Helper()
-		body := `{"analysis":{"summary":"summary","root_cause":"resource quota exceeded","severity":"High","is_transient":false,"suggested_fix":"increase quota","relevant_files":` + paths + `}}`
-		req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(body))
-		req.Header.Set(skills.ContractHeader, header)
-		recorder := httptest.NewRecorder()
-		validateAnalysis(env, recorder, req)
-		return recorder
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "resource quota exceeded", Severity: "High",
+		SuggestedFix: "increase quota", RelevantFiles: []string{"build-log.txt", "events/quota-event.log"},
 	}
 
-	missing := request(`["build-log.txt"]`)
+	missing := runValidation(t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", header)
 	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "quota:events") {
 		t.Fatalf("missing evidence response = %d %s", missing.Code, missing.Body.String())
 	}
-	valid := request(`["build-log.txt","events/quota-event.log"]`)
+	valid := runValidation(t, env, analysis, []string{
+		attestor.issue("scope", "build-log.txt"),
+		attestor.issue("scope", "events/quota-event.log"),
+	}, "scope", header)
 	if valid.Code != http.StatusOK {
 		t.Fatalf("valid evidence response = %d %s", valid.Code, valid.Body.String())
 	}
+}
+
+func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation, tokens []string, scope, skillHeader string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"analysis": analysis, "evidence_tokens": tokens})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", bytes.NewReader(body))
+	req.Header.Set(orka.ToolScopeHeader, scope)
+	if skillHeader != "" {
+		req.Header.Set(skills.ContractHeader, skillHeader)
+	}
+	recorder := httptest.NewRecorder()
+	validateAnalysis(env, recorder, req)
+	return recorder
 }

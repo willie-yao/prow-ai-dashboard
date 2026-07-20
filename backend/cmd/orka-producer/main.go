@@ -312,10 +312,12 @@ The tools are scoped to THIS task's build automatically; just call them normally
 ` + clusterGuidance + skillGuidance + `For a transient-vs-bug decision, confirm any transient claim with
 verify_timeline (did the expected operation actually register?) and
 check_transient_signatures, and consult recurrence. Default to is_transient=false
-unless a known transient class is proven from the evidence. Before finalizing,
-call validate_analysis with the exact JSON fields you will return, including every
-relevant_file. Copy its validation_token into the final JSON and do not change any
-analysis field afterward.
+unless a known transient class is proven from the evidence. Every successful
+read_artifact, tail_artifact, and grep_artifact call returns an evidence_token.
+Keep those tokens. Before finalizing, call validate_analysis with the exact JSON
+fields you will return, including every relevant_file, plus all evidence_tokens
+from the artifact reads that support the analysis. Copy its validation_token into
+the final JSON and do not change any analysis field afterward.
 
 ## Tool budget: converge, do not exhaust it
 You have a limited tool-call budget (aim for ~20 calls) and you WILL be forced to

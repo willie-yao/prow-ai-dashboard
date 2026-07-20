@@ -28,8 +28,9 @@ for how to pin a release.
   chart automatically selects a git-capable engine image for this mode.
 - **Orka artifact-tool hardening.** Artifact Tools now use bearer-token
   authentication, producer-owned routing headers, fail-closed storage routes,
-  bounded contract-scoped caches, enforced request/response byte ceilings, a restrictive NetworkPolicy,
-  and a non-root read-only deployment.
+  bounded contract-scoped caches, enforced request/response byte ceilings,
+  scoped evidence attestations for successful content reads, a restrictive
+  NetworkPolicy, and a non-root read-only deployment.
 - **Orka consumer recipe parity.** The Orka producer now loads consumer
   `skills/*.yaml`, fingerprints them, exposes matches through
   `required_evidence`, enforces the lookup during ingestion, and enables the

@@ -30,6 +30,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -119,9 +120,15 @@ func main() {
 		time.Sleep(*poll)
 	}
 
+	runSideEffects := func(sideEffectCtx context.Context) error {
+		return fetcher.RunFinalizedSideEffects(sideEffectCtx, fetcher.FinalizedSideEffectsOptions{
+			ProjectDir: *projectDir,
+			DataDir:    *dataDir,
+		})
+	}
 	if *patternWait > 0 {
 		if kube == nil {
-			log.Printf("⚠ pattern finalization skipped: no cluster access")
+			log.Fatal("pattern finalization requires cluster access")
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), *patternWait)
 			analyzer := &patternTaskAnalyzer{
@@ -130,20 +137,17 @@ func main() {
 				projectScope: manifest.ProjectScope,
 				timeout:      *patternTimeout, retries: *patternRetries, poll: *patternPoll,
 			}
-			stats, err := orka.FinalizePatternsAndRun(ctx, *dataDir, analyzer, func(sideEffectCtx context.Context) error {
-				return fetcher.RunFinalizedSideEffects(sideEffectCtx, fetcher.FinalizedSideEffectsOptions{
-					ProjectDir: *projectDir,
-					DataDir:    *dataDir,
-				})
-			})
+			stats, err := finalizeBatch(ctx, *dataDir, analyzer, runSideEffects)
 			cancel()
 			if err != nil {
-				log.Printf("⚠ pattern finalization failed: %v", err)
+				log.Fatalf("pattern finalization failed: %v", err)
 			} else {
 				log.Printf("🔗 finalized %d pattern analyses (%d systemic, %d failed) across %d jobs",
 					stats.PatternAnalyses, stats.RecurringPatterns, stats.PatternFailures, stats.Jobs)
 			}
 		}
+	} else if _, err := finalizeBatch(context.Background(), *dataDir, nil, runSideEffects); err != nil {
+		log.Fatalf("post-finalization failed: %v", err)
 	}
 
 	if *gc && kube != nil {
@@ -153,6 +157,18 @@ func main() {
 	st := skeletonStatus(*dataDir, manifest)
 	log.Printf("📊 %d failing tests: %d analyzed, %d unavailable, %d pending",
 		st.Failing, st.Analyzed, st.Unavailable, st.Pending)
+}
+
+func finalizeBatch(ctx context.Context, dataDir string, analyzer patterns.Analyzer, sideEffects func(context.Context) error) (orka.FinalizeStats, error) {
+	if analyzer != nil {
+		return orka.FinalizePatternsAndRun(ctx, dataDir, analyzer, sideEffects)
+	}
+	if sideEffects != nil {
+		if err := sideEffects(ctx); err != nil {
+			return orka.FinalizeStats{}, fmt.Errorf("side effects: %w", err)
+		}
+	}
+	return orka.FinalizeStats{}, nil
 }
 
 // status is the analysis coverage of the skeleton, for logs and the /status endpoint.

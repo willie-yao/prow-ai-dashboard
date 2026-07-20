@@ -51,12 +51,16 @@ also carries the configured Orka retry policy.
 - **Execution events are required.** The ingestor reads each Task's event stream
   to enforce the tool-call floor, terminal outcome, successful quality tools,
   consumer recipe lookup, a `validate_analysis` token bound to the exact final
-  JSON, and transient timeline evidence before publishing a result.
+  JSON, and transient timeline evidence before publishing a result. Successful
+  artifact content reads return scoped evidence tokens, and `validate_analysis`
+  requires those tokens for every cited path and recipe evidence group.
 - **Scheduled side effects run in batch mode.** The skeleton fetch disables
-  side effects. After job-level pattern finalization succeeds, the ingestor runs the same notifications, issue
-  reconciliation, and fix-PR reconciliation as the in-process fetcher. Mount the
-  consumer project config and provide the same side-effect credentials to the
-  ingestor. Webhook mode patches per-test results only.
+  side effects. The ingestor runs the same notifications, issue reconciliation,
+  and fix-PR reconciliation as the in-process fetcher after job-level pattern
+  finalization, or directly after ingestion when pattern analysis is disabled.
+  Finalization and side-effect errors fail the batch so the CronJob retries.
+  Mount the consumer project config and provide the same side-effect credentials
+  to the ingestor. Webhook mode patches per-test results only.
 - **Copilot needs the de-streaming proxy.** Copilot's non-streaming endpoint
   returns null tool_calls for Claude (the calls only arrive over streaming SSE).
   manifests/50-copilot-proxy.yaml de-streams so the worker sees real tool calls.

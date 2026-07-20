@@ -34,6 +34,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	evidence := newEvidenceAttestor(authToken)
 
 	defaultCfg := storage.Config{
 		Provider: storage.Provider(env("STORAGE_PROVIDER", string(storage.ProviderGCS))),
@@ -63,6 +64,7 @@ func main() {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			tenv.evidence = evidence
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			writeBudgetedResponse(w, budget, func(buffer http.ResponseWriter) {
 				qt.h(tenv, buffer, r)
@@ -91,6 +93,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
 		res := reg.Dispatch(ctx, env, name, json.RawMessage(raw))
+		attachEvidenceToken(evidence, requestScope(r), name, res.Payload)
 		log.Printf("🛠 %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
 		writeBudgetedResponse(w, budget, func(buffer http.ResponseWriter) {
 			buffer.Header().Set("Content-Type", "application/json")

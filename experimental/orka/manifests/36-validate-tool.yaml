@@ -5,7 +5,7 @@ metadata:
   name: validate-analysis
   namespace: orka-system
 spec:
-  description: "Verify the exact final analysis object: every relevant file must exist and matching consumer recipe evidence must be present. Copy validation_token from the successful result into the final JSON without changing any analysis field afterward."
+  description: "Verify the exact final analysis object against evidence_tokens returned by successful read_artifact, tail_artifact, and grep_artifact calls. Copy validation_token from the successful result into the final JSON without changing any analysis field afterward."
   http:
     url: http://artifact-tool.orka-system.svc:8080/tool/validate_analysis
     method: POST
@@ -29,4 +29,8 @@ spec:
             type: array
             items: {type: string}
         required: [summary, root_cause, severity, is_transient, suggested_fix, relevant_files]
-    required: [analysis]
+      evidence_tokens:
+        type: array
+        description: "Every evidence_token returned by successful artifact content reads supporting this analysis."
+        items: {type: string}
+    required: [analysis, evidence_tokens]

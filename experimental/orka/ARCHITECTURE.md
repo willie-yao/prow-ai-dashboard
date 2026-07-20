@@ -94,7 +94,8 @@ model passes. Storage is provider-agnostic: the shim reuses the engine's
 `internal/storage` (gcs, or gcsweb over an S3 gateway), defaulting from its
 `STORAGE_*` env and overriding per request from the `X-Storage-*` headers the
 producer derives from `project.yaml`. Invalid explicit routes fail closed.
-Contract-scoped browser/cache entries use bounded LRU eviction. Each Tool call
+Contract-scoped entries use bounded LRU eviction and bounded tool-result caches.
+The long-running shim disables each Browser's internal file cache. Each Tool call
 has explicit model-response and artifact-read ceilings, including storage reads
 performed directly by cross-build quality tools. Responses are buffered and
 rejected before headers are committed when they exceed the model-byte ceiling. Base Tool CRDs are loaded from
@@ -123,7 +124,8 @@ only while it matches the current producer manifest. The ingestor also reads the
 Task's durable execution-event stream. It rejects incomplete response schemas,
 analyses below `ai.min_tool_calls`, results without a successful terminal Task
 event, quality tools whose last attempt failed, results without a completed
-`validate_analysis` call whose token binds the exact final result, and transient
+`validate_analysis` call whose token binds the exact final result and verifies
+scoped evidence tokens from successful artifact content reads, and transient
 verdicts without a successful `verify_timeline` call. Quality-tool error paths
 return non-success HTTP statuses so Orka records failed calls rather than
 successful error payloads. Accepted results carry Tool/model failures, retries,
@@ -144,7 +146,9 @@ Two ingest modes:
 The skeleton fetch explicitly skips side effects. Job-level pattern finalization
 runs in batch mode after the per-test wait completes. A successful finalization
 then runs the shared notification, issue, and fix-PR reconciliation stage against
-the finalized files under the same finalization deadline. The optional
+the finalized files under the same finalization deadline. When pattern analysis
+is disabled, batch mode still runs the shared side effects directly. Finalization,
+cluster setup, and side-effect errors make the batch exit non-zero. The optional
 webhook receiver patches per-test results only.
 
 Per-build Tool + Task garbage collection is `gcTools`, selecting
@@ -172,7 +176,7 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Per-failure build isolation (fetcher scopes each analysis to one build) | Contract-versioned Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; old and new Task contracts cannot share mutable Tool objects. | `ToolScopeID`, `cloneToolForBuild`, shim `toolenv.go` |
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
-| Critique gate: hallucinated-citation guard | `validate_analysis` tool deterministically 1-byte-reads every cited path against the build tree. | `orka-artifact-tool/validate.go` |
+| Critique gate: hallucinated-citation guard | Successful `read_artifact`, `tail_artifact`, and `grep_artifact` calls return scoped HMAC evidence tokens. `validate_analysis` requires those tokens for every cited path and matching recipe group. | `orka-artifact-tool/evidence.go`, `validate.go` |
 | Critique gate: transient discipline | The worker re-prompts an unsupported transient verdict, and the ingestor independently rejects any final transient result without a completed `verify_timeline` event. | `worker-patches/` (4), `timeline.go`, ingestor event acceptance |
 | Investigation floor | The producer fingerprints `ai.min_tool_calls`; the ingestor counts `ToolCallStarted` events and rejects shallower results. | `AnalysisManifest.MinToolCalls`, Task events API |
 | Per-test recurrence evidence | `check_recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |

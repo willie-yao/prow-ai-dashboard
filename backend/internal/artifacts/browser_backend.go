@@ -43,9 +43,9 @@ func NewBackendFactory(backend storage.Backend, bucketLabel string) *BackendFact
 	}
 }
 
-// NewBackendBrowser returns an uncached Browser bound to one Prow build.
-func NewBackendBrowser(backend storage.Backend, bucketLabel, buildPrefix, displayName string) Browser {
-	return newBackendBrowser(backend, bucketLabel, buildPrefix, displayName)
+// NewUncachedBackendBrowser returns a non-memoized Browser with no file cache.
+func NewUncachedBackendBrowser(backend storage.Backend, bucketLabel, buildPrefix, displayName string) Browser {
+	return newBackendBrowser(backend, bucketLabel, buildPrefix, displayName, false)
 }
 
 // ForBuild returns a Browser bound to one Prow build. buildPrefix is the
@@ -59,20 +59,24 @@ func (f *BackendFactory) ForBuild(buildPrefix, displayName string) Browser {
 	if b, ok := f.browsers[buildPrefix]; ok {
 		return b
 	}
-	b := newBackendBrowser(f.backend, f.bucketLabel, buildPrefix, displayName)
+	b := newBackendBrowser(f.backend, f.bucketLabel, buildPrefix, displayName, true)
 	f.browsers[buildPrefix] = b
 	return b
 }
 
-func newBackendBrowser(backend storage.Backend, bucketLabel, buildPrefix, displayName string) *backendBrowser {
+func newBackendBrowser(backend storage.Backend, bucketLabel, buildPrefix, displayName string, cacheFiles bool) *backendBrowser {
 	if !strings.HasSuffix(buildPrefix, "/") {
 		buildPrefix += "/"
+	}
+	var cache map[string][]byte
+	if cacheFiles {
+		cache = map[string][]byte{}
 	}
 	return &backendBrowser{
 		backend: backend,
 		prefix:  buildPrefix,
 		root:    bucketLabel + "/" + displayName,
-		cache:   map[string][]byte{},
+		cache:   cache,
 	}
 }
 
@@ -87,6 +91,9 @@ type backendBrowser struct {
 }
 
 func (b *backendBrowser) cacheGet(key string) ([]byte, bool) {
+	if b.cache == nil {
+		return nil, false
+	}
 	b.cacheMu.Lock()
 	defer b.cacheMu.Unlock()
 	data, ok := b.cache[key]
@@ -94,6 +101,9 @@ func (b *backendBrowser) cacheGet(key string) ([]byte, bool) {
 }
 
 func (b *backendBrowser) cachePut(key string, body []byte) {
+	if b.cache == nil {
+		return
+	}
 	b.cacheMu.Lock()
 	defer b.cacheMu.Unlock()
 	b.cache[key] = append([]byte(nil), body...)

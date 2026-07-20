@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -420,5 +421,29 @@ func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
 	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)
 	if !patch.retry || !strings.Contains(patch.reason, "no terminal") {
 		t.Fatalf("patch = %+v, want retryable terminal-event lag", patch)
+	}
+}
+
+func TestFinalizeBatchPropagatesPostFinalizationFailure(t *testing.T) {
+	want := errors.New("side effects unavailable")
+	_, err := finalizeBatch(context.Background(), t.TempDir(), nil, func(context.Context) error {
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+func TestFinalizeBatchStopsBeforeSideEffectsOnFinalizationFailure(t *testing.T) {
+	called := false
+	_, err := finalizeBatch(context.Background(), t.TempDir(), staticPatternAnalyzer{}, func(context.Context) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "read dashboard") {
+		t.Fatalf("error = %v, want dashboard finalization failure", err)
+	}
+	if called {
+		t.Fatal("side effects ran after finalization failed")
 	}
 }

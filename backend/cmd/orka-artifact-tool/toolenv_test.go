@@ -135,3 +135,23 @@ func TestResolverDoesNotRetainCrossBuildBrowsers(t *testing.T) {
 		t.Fatal("cross-build browser was retained across lookups")
 	}
 }
+
+func TestResolverBoundsToolCache(t *testing.T) {
+	resolver, err := newBuildResolver(storage.Config{Provider: storage.ProviderLocal, Base: t.TempDir()}, "", "logs/job/1/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _, err := resolver.aiEnv("", "logs/job/1/", "scope", storage.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxResolverCacheEntries+20; i++ {
+		env.Cache.Set(fmt.Sprintf("key-%d", i), strings.Repeat("x", 1024))
+	}
+	if env.Cache.Len() > maxResolverCacheEntries {
+		t.Fatalf("cache entries = %d, want <= %d", env.Cache.Len(), maxResolverCacheEntries)
+	}
+	if env.Cache.Bytes() > maxResolverCacheBytes {
+		t.Fatalf("cache bytes = %d, want <= %d", env.Cache.Bytes(), maxResolverCacheBytes)
+	}
+}
