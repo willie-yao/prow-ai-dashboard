@@ -296,3 +296,28 @@ func TestRetryContextRejectsMissingPriorPatchHash(t *testing.T) {
 		t.Fatal("expected missing patch fingerprint error")
 	}
 }
+
+func TestRetryReservationExpires(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	ledger := remediation.NewState()
+	ledger.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", FindingID: "pattern",
+		Attempts: []remediation.Attempt{{Number: 1, Status: remediation.StatusStillFailingSameCause}},
+	}
+	if err := ledger.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	reservations := &retryReservationState{Version: 1, Reservations: map[string]retryReservation{
+		"pattern": {ID: "stale", PatchHash: "old", CreatedAt: time.Now().Add(-retryReservationTTL - time.Minute).UTC().Format(time.RFC3339)},
+	}}
+	if err := service.saveRetryReservations(reservations); err != nil {
+		t.Fatal(err)
+	}
+	_, id, err := service.reserveRetry("pattern", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || id == "stale" {
+		t.Fatalf("reservation id = %q", id)
+	}
+}

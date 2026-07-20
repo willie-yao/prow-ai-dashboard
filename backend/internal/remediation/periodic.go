@@ -40,6 +40,16 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 			fmt.Sprintf("pull request targets %s but Prow tests %s", attempt.TargetRepo, remediation.SourceRepo))
 		return nil
 	}
+	if remediation.CommitRepo == "" {
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			"Prow did not identify which repository owns the decorated source commit")
+		return nil
+	}
+	if remediation.CommitRepo != remediation.SourceRepo {
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			fmt.Sprintf("Prow source commit belongs to %s, not fix target %s", remediation.CommitRepo, remediation.SourceRepo))
+		return nil
+	}
 	owner, repo, ok := strings.Cut(remediation.SourceRepo, "/")
 	if !ok || owner == "" || repo == "" {
 		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive, "invalid tested repository")
@@ -47,6 +57,8 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 	}
 	detail := findJobDetail(remediation, details)
 	if detail == nil {
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			"originating Prow job is missing from the current dataset")
 		return nil
 	}
 	var errs []error

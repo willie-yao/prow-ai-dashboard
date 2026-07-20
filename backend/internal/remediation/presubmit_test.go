@@ -201,3 +201,15 @@ func TestMergeObservationsCapsHistory(t *testing.T) {
 		t.Fatalf("observations = %+v", attempt.Observations)
 	}
 }
+
+func TestApplyPresubmitOutcomePendingPrecedesPass(t *testing.T) {
+	remediation := &Remediation{}
+	attempt := &Attempt{Status: StatusOpen}
+	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "a"}, {JobName: "b"}}, []BuildObservation{
+		{JobName: "a", Outcome: OutcomePassed},
+		{JobName: "b", Outcome: OutcomePending},
+	}, true)
+	if attempt.Status != StatusPresubmitRunning {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}

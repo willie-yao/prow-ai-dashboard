@@ -5,7 +5,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { Insights } from "@mui/icons-material";
-import type { PatternAnalysis } from "../types/dashboard";
+import type { PatternAnalysis, RemediationObservation } from "../types/dashboard";
 import { confidenceColor } from "../lib/utils";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
@@ -45,6 +45,15 @@ export function PatternBanner({
   const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
   const remediation = pattern.id ? remediations.remediations[pattern.id] : undefined;
   const attempt = remediation?.attempt;
+  const latestObservation = attempt?.observations?.reduce((latest, observation) => {
+    if (!latest) return observation;
+    const completed = observation.completed_at ?? "";
+    const latestCompleted = latest.completed_at ?? "";
+    if (completed !== latestCompleted) return completed > latestCompleted ? observation : latest;
+    return observation.build_id.localeCompare(latest.build_id, undefined, { numeric: true }) > 0
+      ? observation
+      : latest;
+  }, undefined as RemediationObservation | undefined);
 
   return (
     <Box
@@ -125,12 +134,10 @@ export function PatternBanner({
                   Issue #{remediation.issue.number}
                 </Link>
               )}
-              {attempt.observations?.slice(-1).map((observation) =>
-                observation.prow_url ? (
-                  <Link key={`${observation.job_name}-${observation.build_id}`} href={observation.prow_url} target="_blank" rel="noreferrer" variant="caption">
-                    Latest Prow observation
-                  </Link>
-                ) : null,
+              {latestObservation?.prow_url && (
+                <Link href={latestObservation.prow_url} target="_blank" rel="noreferrer" variant="caption">
+                  Latest Prow observation
+                </Link>
               )}
             </Stack>
           </Stack>

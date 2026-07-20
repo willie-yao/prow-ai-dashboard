@@ -24,6 +24,7 @@ var NonPublishedFiles = []string{
 	"fix_previews.json",
 	"notification_state.json",
 	"remediation_state.json",
+	"remediation_retry_state.json",
 	"remediation_prow_catalog.json",
 	"orka_analysis.json",
 	"action_request_state.json",

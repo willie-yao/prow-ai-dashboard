@@ -24,21 +24,21 @@ type State struct {
 
 // Remediation links one finding to its issues and fix attempts.
 type Remediation struct {
-	ID             string            `json:"id"`
-	FindingID      string            `json:"finding_id"`
-	Subject        string            `json:"subject"`
-	JobID          string            `json:"job_id"`
-	JobName        string            `json:"job_name"`
-	JobType        string            `json:"job_type"`
-	SourceRepo     string            `json:"source_repo,omitempty"`
-	Classification string            `json:"classification,omitempty"`
-	Evidence       Evidence          `json:"evidence"`
-	Issue          *IssueRef         `json:"issue,omitempty"`
-	Attempts       []Attempt         `json:"attempts,omitempty"`
-	PendingRetry   *RetryReservation `json:"pending_retry,omitempty"`
-	CreatedAt      string            `json:"created_at"`
-	UpdatedAt      string            `json:"updated_at"`
-	LastTransition string            `json:"last_transition,omitempty"`
+	ID             string    `json:"id"`
+	FindingID      string    `json:"finding_id"`
+	Subject        string    `json:"subject"`
+	JobID          string    `json:"job_id"`
+	JobName        string    `json:"job_name"`
+	JobType        string    `json:"job_type"`
+	SourceRepo     string    `json:"source_repo,omitempty"`
+	CommitRepo     string    `json:"commit_repo,omitempty"`
+	Classification string    `json:"classification,omitempty"`
+	Evidence       Evidence  `json:"evidence"`
+	Issue          *IssueRef `json:"issue,omitempty"`
+	Attempts       []Attempt `json:"attempts,omitempty"`
+	CreatedAt      string    `json:"created_at"`
+	UpdatedAt      string    `json:"updated_at"`
+	LastTransition string    `json:"last_transition,omitempty"`
 }
 
 // Evidence is the deterministic failure evidence captured before a fix.
@@ -70,14 +70,6 @@ type IssueRef struct {
 	Repo           string `json:"repo,omitempty"`
 	State          string `json:"state,omitempty"`
 	LastTransition string `json:"last_transition,omitempty"`
-}
-
-// RetryReservation prevents duplicate confirmed follow-up pull requests.
-type RetryReservation struct {
-	ID        string `json:"id"`
-	PatchHash string `json:"patch_hash"`
-	CreatedAt string `json:"created_at"`
-	ResultURL string `json:"result_url,omitempty"`
 }
 
 // Attempt records one draft pull request and its observations.

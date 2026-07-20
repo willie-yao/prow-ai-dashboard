@@ -258,8 +258,8 @@ pull request, patch fingerprint, failed post-merge build IDs, and outcome reason
 It must differ from the previous patch, requires human confirmation, and is
 limited to one follow-up attempt. The engine never auto-merges.
 
-`remediation_state.json` and `remediation_prow_catalog.json` are private
-operational files. `remediations.json` is a redacted public projection used by
+`remediation_state.json`, `remediation_retry_state.json`, and
+`remediation_prow_catalog.json` are private operational files. `remediations.json` is a redacted public projection used by
 the dashboard to show pull request and verification status.
 
 Wire the token into the deploy workflow:

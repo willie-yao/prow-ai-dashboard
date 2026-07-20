@@ -76,6 +76,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	writeFile(t, dataDir, "orka_analysis.json", `{"contract_hash":"private"}`)
 	writeFile(t, dataDir, "action_request_state.json", `{"requests":{}}`)
 	writeFile(t, dataDir, "remediation_state.json", `{"version":1,"remediations":{}}`)
+	writeFile(t, dataDir, "remediation_retry_state.json", `{"version":1,"reservations":{}}`)
 	writeFile(t, dataDir, "remediation_prow_catalog.json", `{"tests":{}}`)
 
 	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
@@ -89,7 +90,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	if resp, _ := http.Get(srv.URL + "/data/dashboard.json"); resp.StatusCode != http.StatusOK {
 		t.Errorf("dashboard.json status = %d, want 200", resp.StatusCode)
 	}
-	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "action_request_state.json", "remediation_state.json", "remediation_prow_catalog.json"} {
+	for _, name := range []string{"ai_cache.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "action_request_state.json", "remediation_state.json", "remediation_retry_state.json", "remediation_prow_catalog.json"} {
 		resp, err := http.Get(srv.URL + "/data/" + name)
 		if err != nil {
 			t.Fatalf("GET %s: %v", name, err)

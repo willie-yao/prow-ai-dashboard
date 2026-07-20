@@ -221,6 +221,8 @@ export interface RemediationObservation {
   outcome: string;
   reason?: string;
   prow_url?: string;
+  started_at?: string;
+  completed_at?: string;
 }
 
 export interface RemediationAttempt {

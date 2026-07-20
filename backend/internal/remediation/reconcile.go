@@ -148,9 +148,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				Number: len(entry.Attempts) + 1, ParentAttempt: parent, PRNumber: number, URL: fix.URL,
 				TargetRepo: owner + "/" + repo, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash, Status: StatusOpen,
 			})
-			if entry.PendingRetry != nil && (entry.PendingRetry.ResultURL == "" || entry.PendingRetry.ResultURL == fix.URL) {
-				entry.PendingRetry = nil
-			}
 		}
 	}
 
@@ -183,6 +180,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			if detail := findJobDetail(entry, details); detail != nil {
 				entry.SourceRepo = sourceRepoFromDetail(*detail, attempt.TargetRepo)
 			}
+		}
+		if entry.CommitRepo == "" {
+			entry.CommitRepo = commitRepoFor(entry, r.catalog, details)
 		}
 		if r.backend != nil && attempt.PRState == StatusOpen {
 			if err := ObservePresubmits(ctx, r.backend, entry, attempt, r.coverage); err != nil {
@@ -336,6 +336,33 @@ func postMergeStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func commitRepoFor(remediation *Remediation, catalog *jobconfig.Catalog, details []models.JobDetail) string {
+	if remediation.JobType == models.JobTypePresubmit {
+		return remediation.SourceRepo
+	}
+	if catalog != nil {
+		for _, definition := range catalog.Jobs {
+			if definition.Name == remediation.JobName && definition.JobType == remediation.JobType && len(definition.Refs) > 0 {
+				return definition.Refs[0].FullRepo()
+			}
+		}
+	}
+	if detail := findJobDetail(remediation, details); detail != nil {
+		repos := map[string]bool{}
+		for _, run := range detail.Runs {
+			for repo := range run.RepoRefs {
+				repos[repo] = true
+			}
+		}
+		if len(repos) == 1 {
+			for repo := range repos {
+				return repo
+			}
+		}
+	}
+	return ""
 }
 
 func sourceRepoFromDetail(detail models.JobDetail, targetRepo string) string {

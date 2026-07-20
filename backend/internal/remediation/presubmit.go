@@ -101,7 +101,7 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 			}
 
 			info, cases, err := fetchBuildTests(ctx, b, loc)
-			if err != nil || info.Revision == "" || info.Revision != attempt.HeadSHA {
+			if info == nil || info.Revision == "" || info.Revision != attempt.HeadSHA {
 				continue
 			}
 			observation := BuildObservation{
@@ -109,7 +109,11 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 				PullNumber: attempt.PRNumber, SourceRepo: job.Repo, HeadSHA: info.Revision,
 				Result: info.Result, ProwURL: info.ProwURL,
 			}
-			classifyObservation(jobEvidence, cases, info.Passed, &observation)
+			if err != nil {
+				observation.Outcome, observation.Reason = OutcomeInconclusive, err.Error()
+			} else {
+				classifyObservation(jobEvidence, cases, info.Passed, &observation)
+			}
 			observations = append(observations, observation)
 			break
 		}
@@ -320,6 +324,7 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 		}
 	} else {
 		passed := false
+		pending := false
 		inconclusive := false
 		for _, observation := range observations {
 			switch observation.Outcome {
@@ -330,7 +335,7 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 					attempt.Outcome, attempt.OutcomeReason = OutcomeDifferentCause, observation.Reason
 				}
 			case OutcomePending:
-				attempt.Status = StatusPresubmitRunning
+				pending = true
 			case OutcomePassed:
 				passed = true
 			case OutcomeInconclusive:
@@ -351,6 +356,8 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 			if attempt.OutcomeReason == "" {
 				attempt.OutcomeReason = "completed Prow result lacked usable test evidence"
 			}
+		} else if pending {
+			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPresubmitRunning, OutcomePending, "matching Prow presubmit is still running"
 		} else if passed && coverageComplete {
 			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPremergeVerified, OutcomePassed, "matching Prow presubmit passed"
 		} else if passed {
