@@ -158,3 +158,21 @@ func TestReconcileAppendsRetryToEvidenceMatchedRemediation(t *testing.T) {
 		t.Fatalf("state = %+v", state)
 	}
 }
+
+func TestFinalizeMergedPresubmit(t *testing.T) {
+	entry := &Remediation{JobType: models.JobTypePresubmit}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, Outcome: OutcomePassed}
+	finalizeMergedPresubmit(entry, attempt)
+	if attempt.Status != StatusVerifiedFixed {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestFinalizeMergedPresubmitWithoutPassIsInconclusive(t *testing.T) {
+	entry := &Remediation{JobType: models.JobTypePresubmit}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged}
+	finalizeMergedPresubmit(entry, attempt)
+	if attempt.Status != StatusInconclusive {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}

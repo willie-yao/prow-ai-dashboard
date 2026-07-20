@@ -65,3 +65,13 @@ func TestEffectiveRerunCommand_Default(t *testing.T) {
 		t.Fatalf("periodic rerun command = %q", got)
 	}
 }
+
+func TestCatalogFromJobs(t *testing.T) {
+	catalog := CatalogFromJobs([]models.ProwJob{{
+		Name: "pull-e2e", JobType: models.JobTypePresubmit, Repo: "example/project",
+	}}, "bucket")
+	job, ok := catalog.Jobs["example/project/pull-e2e"]
+	if !ok || job.EffectiveRerunCommand() != "/test pull-e2e" {
+		t.Fatalf("catalog = %+v", catalog)
+	}
+}

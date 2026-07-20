@@ -74,6 +74,7 @@ type previewEntry struct {
 	spec      issues.IssueSpec    // issue drafts
 	fix       *fixpr.GeneratedFix // fix drafts
 	retry     bool
+	failureID string
 	createdAt time.Time
 }
 
@@ -308,7 +309,7 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
-	retry, priorPatchHash, retryInstruction, err := s.retryContext(failureID, pa.JobID)
+	retry, priorPatchHash, retryInstruction, err := s.retryContext(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
@@ -330,22 +331,19 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output,
-	}, &previewEntry{kind: gfKind, fix: gf, retry: retry}, nil
+	}, &previewEntry{kind: gfKind, fix: gf, retry: retry, failureID: failureID}, nil
 }
 
 const gfKind = "fix"
 
-func (s *Service) retryContext(failureID, jobID string) (bool, string, string, error) {
+func (s *Service) retryContext(failureID string) (bool, string, string, error) {
 	state := remediation.Load(s.dataDir)
 	entry := state.Remediations[failureID]
 	if entry == nil {
 		for _, candidate := range state.Remediations {
-			if candidate == nil || candidate.JobID != jobID || len(candidate.Attempts) == 0 {
-				continue
-			}
-			latest := candidate.Attempts[len(candidate.Attempts)-1]
-			if latest.Status == remediation.StatusStillFailingSameCause && (entry == nil || candidate.UpdatedAt > entry.UpdatedAt) {
+			if candidate != nil && candidate.FindingID == failureID {
 				entry = candidate
+				break
 			}
 		}
 	}
@@ -422,12 +420,29 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		if err != nil {
 			return "", err
 		}
+		reservationID := ""
 		if entry.retry {
+			existingURL, id, err := s.reserveRetry(entry.failureID, fixpr.PatchHash(entry.fix.Preview.Diff))
+			if err != nil {
+				return "", err
+			}
+			if existingURL != "" {
+				return existingURL, nil
+			}
+			reservationID = id
 			mgr.ForgetGenerated(entry.fix)
 		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
+			if reservationID != "" {
+				s.clearRetryReservation(entry.failureID, reservationID)
+			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
+		}
+		if reservationID != "" {
+			if err := s.completeRetryReservation(entry.failureID, reservationID, url); err != nil {
+				return "", err
+			}
 		}
 		if err := mgr.SaveState(); err != nil {
 			return "", fmt.Errorf("saving fix-PR state: %w", err)
@@ -435,6 +450,71 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		return url, nil
 	}
 	return "", ErrPreviewNotFound
+}
+
+func (s *Service) reserveRetry(failureID, patchHash string) (string, string, error) {
+	state := remediation.Load(s.dataDir)
+	entry := remediationForFinding(state, failureID)
+	if entry == nil || len(entry.Attempts) == 0 {
+		return "", "", fmt.Errorf("remediation retry is no longer available")
+	}
+	if entry.PendingRetry != nil {
+		if entry.PendingRetry.PatchHash == patchHash && entry.PendingRetry.ResultURL != "" {
+			return entry.PendingRetry.ResultURL, entry.PendingRetry.ID, nil
+		}
+		return "", "", fmt.Errorf("a remediation retry is already in progress")
+	}
+	latest := entry.Attempts[len(entry.Attempts)-1]
+	if latest.Status != remediation.StatusStillFailingSameCause || len(entry.Attempts) >= 2 {
+		return "", "", fmt.Errorf("remediation retry is no longer available")
+	}
+	id, err := newToken()
+	if err != nil {
+		return "", "", err
+	}
+	entry.PendingRetry = &remediation.RetryReservation{
+		ID: id, PatchHash: patchHash, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := state.Save(s.dataDir); err != nil {
+		entry.PendingRetry = nil
+		return "", "", err
+	}
+	return "", id, nil
+}
+
+func (s *Service) completeRetryReservation(failureID, reservationID, resultURL string) error {
+	state := remediation.Load(s.dataDir)
+	entry := remediationForFinding(state, failureID)
+	if entry == nil || entry.PendingRetry == nil || entry.PendingRetry.ID != reservationID {
+		return fmt.Errorf("remediation retry reservation was lost")
+	}
+	entry.PendingRetry.ResultURL = resultURL
+	return state.Save(s.dataDir)
+}
+
+func (s *Service) clearRetryReservation(failureID, reservationID string) {
+	state := remediation.Load(s.dataDir)
+	entry := remediationForFinding(state, failureID)
+	if entry == nil || entry.PendingRetry == nil || entry.PendingRetry.ID != reservationID || entry.PendingRetry.ResultURL != "" {
+		return
+	}
+	entry.PendingRetry = nil
+	_ = state.Save(s.dataDir)
+}
+
+func remediationForFinding(state *remediation.State, failureID string) *remediation.Remediation {
+	if state == nil {
+		return nil
+	}
+	if entry := state.Remediations[failureID]; entry != nil {
+		return entry
+	}
+	for _, entry := range state.Remediations {
+		if entry != nil && entry.FindingID == failureID {
+			return entry
+		}
+	}
+	return nil
 }
 
 // Resolve marks a systemic pattern as resolved: it is hidden from the active

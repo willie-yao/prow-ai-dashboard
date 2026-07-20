@@ -65,7 +65,11 @@ func (s *State) Public() PublicState {
 				Observations: append([]BuildObservation(nil), attempt.Observations...),
 			}
 		}
-		out.Remediations[id] = public
+		key := entry.FindingID
+		if key == "" {
+			key = id
+		}
+		out.Remediations[key] = public
 	}
 	return out
 }

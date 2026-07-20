@@ -43,12 +43,7 @@ export function PatternBanner({
   const { data: resolved } = useResolved();
   const { data: remediations } = useRemediations();
   const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
-  const remediation = pattern.id
-    ? remediations.remediations[pattern.id] ??
-      Object.values(remediations.remediations)
-        .filter((entry) => entry.job_id === pattern.job_id)
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0]
-    : undefined;
+  const remediation = pattern.id ? remediations.remediations[pattern.id] : undefined;
   const attempt = remediation?.attempt;
 
   return (

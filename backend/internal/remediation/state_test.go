@@ -57,3 +57,15 @@ func TestStateSaveWritesRedactedPublicProjection(t *testing.T) {
 		t.Fatalf("public state = %s", data)
 	}
 }
+
+func TestPublicProjectionUsesCurrentFindingID(t *testing.T) {
+	state := NewState()
+	state.Remediations["old"] = &Remediation{ID: "old", FindingID: "current"}
+	public := state.Public()
+	if _, ok := public.Remediations["current"]; !ok {
+		t.Fatalf("public = %+v", public)
+	}
+	if _, ok := public.Remediations["old"]; ok {
+		t.Fatalf("stale finding key published: %+v", public)
+	}
+}

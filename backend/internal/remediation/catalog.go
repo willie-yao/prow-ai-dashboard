@@ -28,6 +28,8 @@ type CoverageCatalog struct {
 	Revision  string                       `json:"revision,omitempty"`
 	CreatedAt string                       `json:"created_at"`
 	Repos     []string                     `json:"repos,omitempty"`
+	Complete  bool                         `json:"complete"`
+	Errors    []string                     `json:"errors,omitempty"`
 	Tests     map[string][]VerificationJob `json:"tests"`
 }
 
@@ -47,7 +49,7 @@ func LoadCoverageCatalog(dir, revision string, repos []string, now time.Time) *C
 		return nil
 	}
 	var catalog CoverageCatalog
-	if json.Unmarshal(data, &catalog) != nil || catalog.Revision != revision || catalog.Tests == nil {
+	if json.Unmarshal(data, &catalog) != nil || catalog.Revision != revision || !catalog.Complete || catalog.Tests == nil {
 		return nil
 	}
 	if !containsRepos(catalog.Repos, repos) {
@@ -68,7 +70,7 @@ func (c *CoverageCatalog) Save(dir string) error {
 // BuildCoverageCatalog reads recent completed presubmits and indexes their tests.
 func BuildCoverageCatalog(ctx context.Context, b storage.Backend, catalog *jobconfig.Catalog, repos []string) (*CoverageCatalog, error) {
 	repos = normalizedRepos(repos)
-	out := &CoverageCatalog{CreatedAt: nowString(), Repos: repos, Tests: map[string][]VerificationJob{}}
+	out := &CoverageCatalog{CreatedAt: nowString(), Repos: repos, Complete: true, Tests: map[string][]VerificationJob{}}
 	if catalog == nil {
 		return out, nil
 	}
@@ -122,6 +124,8 @@ func BuildCoverageCatalog(ctx context.Context, b storage.Backend, catalog *jobco
 		select {
 		case item := <-results:
 			if item.err != nil {
+				out.Complete = false
+				out.Errors = append(out.Errors, item.err.Error())
 				errs = append(errs, item.err)
 			}
 			for identity, verificationJobs := range item.tests {
@@ -130,10 +134,13 @@ func BuildCoverageCatalog(ctx context.Context, b storage.Backend, catalog *jobco
 				}
 			}
 		case <-ctx.Done():
+			out.Complete = false
+			out.Errors = append(out.Errors, ctx.Err().Error())
 			errs = append(errs, ctx.Err())
 			return out, errors.Join(errs...)
 		}
 	}
+	sort.Strings(out.Errors)
 	for identity := range out.Tests {
 		sort.Slice(out.Tests[identity], func(i, j int) bool {
 			return out.Tests[identity][i].JobID < out.Tests[identity][j].JobID

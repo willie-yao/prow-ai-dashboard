@@ -148,6 +148,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				Number: len(entry.Attempts) + 1, ParentAttempt: parent, PRNumber: number, URL: fix.URL,
 				TargetRepo: owner + "/" + repo, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash, Status: StatusOpen,
 			})
+			if entry.PendingRetry != nil && (entry.PendingRetry.ResultURL == "" || entry.PendingRetry.ResultURL == fix.URL) {
+				entry.PendingRetry = nil
+			}
 		}
 	}
 
@@ -186,6 +189,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				errs = append(errs, fmt.Errorf("remediation %s presubmit: %w", id, err))
 			}
 		}
+		if attempt.PRState == StatusMerged && entry.JobType == models.JobTypePresubmit {
+			finalizeMergedPresubmit(entry, attempt)
+		}
 		if r.compare != nil && attempt.PRState == StatusMerged {
 			minCleanRuns := 2
 			if entry.Classification == string(models.ClassificationFlaky) {
@@ -207,6 +213,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 		errs = append(errs, err)
 	}
 	return state, errors.Join(errs...)
+}
+
+func finalizeMergedPresubmit(remediation *Remediation, attempt *Attempt) {
+	if attempt.Status == StatusVerifiedFixed || attempt.Status == StatusStillFailingSameCause || attempt.Status == StatusFailingDifferentCause {
+		return
+	}
+	switch attempt.Outcome {
+	case OutcomePassed:
+		transitionAttempt(remediation, attempt, StatusVerifiedFixed, OutcomePassed,
+			"current-head presubmit passed before merge")
+	case OutcomeSameCause:
+		transitionAttempt(remediation, attempt, StatusStillFailingSameCause, OutcomeSameCause,
+			"pull request merged after reproducing the same presubmit failure")
+	case OutcomeDifferentCause:
+		transitionAttempt(remediation, attempt, StatusFailingDifferentCause, OutcomeDifferentCause,
+			"pull request merged with a different presubmit failure")
+	default:
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			"pull request merged without successful current-head presubmit evidence")
+	}
 }
 
 func evidenceOverlaps(left, right Evidence) bool {

@@ -214,7 +214,7 @@ func TestRetryContextUsesFailedAttemptEvidence(t *testing.T) {
 	if err := state.Save(service.dataDir); err != nil {
 		t.Fatal(err)
 	}
-	retry, patchHash, instruction, err := service.retryContext("pattern", "job")
+	retry, patchHash, instruction, err := service.retryContext("pattern")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,52 @@ func TestRetryContextEnforcesAttemptCap(t *testing.T) {
 	if err := state.Save(service.dataDir); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := service.retryContext("pattern", "job"); err == nil {
+	if _, _, _, err := service.retryContext("pattern"); err == nil {
 		t.Fatal("expected retry limit error")
+	}
+}
+
+func TestRetryContextDoesNotMatchUnrelatedFindingOnSameJob(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["old"] = &remediation.Remediation{
+		ID: "old", FindingID: "old", JobID: "job",
+		Attempts: []remediation.Attempt{{Status: remediation.StatusStillFailingSameCause}},
+	}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	retry, _, _, err := service.retryContext("new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry {
+		t.Fatal("unrelated finding was treated as a retry")
+	}
+}
+
+func TestRetryReservationReturnsCompletedResult(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", FindingID: "pattern",
+		Attempts: []remediation.Attempt{{Number: 1, Status: remediation.StatusStillFailingSameCause}},
+	}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	existing, reservationID, err := service.reserveRetry("pattern", "patch")
+	if err != nil || existing != "" || reservationID == "" {
+		t.Fatalf("existing=%q reservation=%q err=%v", existing, reservationID, err)
+	}
+	if _, _, err := service.reserveRetry("pattern", "patch"); err == nil {
+		t.Fatal("expected in-progress reservation error")
+	}
+	if err := service.completeRetryReservation("pattern", reservationID, "https://github.com/o/r/pull/8"); err != nil {
+		t.Fatal(err)
+	}
+	existing, _, err = service.reserveRetry("pattern", "patch")
+	if err != nil || existing != "https://github.com/o/r/pull/8" {
+		t.Fatalf("existing=%q err=%v", existing, err)
 	}
 }

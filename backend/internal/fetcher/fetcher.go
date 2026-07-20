@@ -834,12 +834,20 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	for key, fix := range fixState.Tracked {
 		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash}
 	}
-	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryTestGrid {
+	if p.jobCatalog == nil && p.cfg.TestGrid.Dashboard != "" {
 		_, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, p.cfg, targetRepo)
 		if err != nil {
-			log.Printf("Warning: Prow verification metadata unavailable: %v", err)
+			log.Printf("Warning: test-infra verification metadata unavailable: %v", err)
 		} else {
 			p.jobCatalog = catalog
+		}
+	}
+	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {
+		jobs, err := prowbuild.DiscoverJobs(ctx, p.backend, true, nil)
+		if err != nil {
+			log.Printf("Warning: bucket verification metadata unavailable: %v", err)
+		} else {
+			p.jobCatalog = jobconfig.CatalogFromJobs(jobs, "bucket")
 		}
 	}
 	var coverage *remediation.CoverageCatalog

@@ -405,7 +405,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{kind: request.Preview.Kind}
+	entry := &previewEntry{kind: request.Preview.Kind, failureID: request.FailureID}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {

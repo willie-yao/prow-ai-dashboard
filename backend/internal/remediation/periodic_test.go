@@ -86,3 +86,17 @@ func TestObservePeriodicPreservesVerifiedOutcomeWhenOldRunsAgeOut(t *testing.T) 
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }
+
+func TestObservePeriodicMissingSourceCommitIsInconclusive(t *testing.T) {
+	remediation := &Remediation{JobID: "job", JobName: "job", JobType: models.JobTypePeriodic, SourceRepo: "o/r", Evidence: periodicEvidence("boom")}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "11", Result: "SUCCESS", Passed: true},
+	}}}}
+	if err := ObservePeriodic(context.Background(), fakeCompare{}, remediation, attempt, details, 2); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusInconclusive || attempt.Outcome != OutcomeInconclusive {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}

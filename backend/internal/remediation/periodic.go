@@ -47,8 +47,13 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 		return nil
 	}
 	var errs []error
+	missingCommit := false
 	for _, run := range detail.Runs {
-		if run.Result == "PENDING" || run.Commit == "" || !newerBuild(run.BuildID, remediation.Evidence.BuildWatermark) {
+		if run.Result == "PENDING" || !newerBuild(run.BuildID, remediation.Evidence.BuildWatermark) {
+			continue
+		}
+		if run.Commit == "" {
+			missingCommit = true
 			continue
 		}
 		if hasObservation(attempt, models.JobTypePeriodic, detail.Name, run.BuildID, run.Commit) {
@@ -79,16 +84,23 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 	}
 	clean := 0
 	different := false
+	comparable := 0
 	for _, observation := range attempt.Observations {
 		if observation.JobType != models.JobTypePeriodic {
 			continue
 		}
+		comparable++
 		switch observation.Outcome {
 		case OutcomePassed:
 			clean++
 		case OutcomeDifferentCause:
 			different = true
 		}
+	}
+	if comparable == 0 && missingCommit {
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			"completed post-merge Prow build has no source commit")
+		return errors.Join(errs...)
 	}
 	if attempt.Status == StatusVerifiedFixed && clean < minCleanRuns && !different {
 		return errors.Join(errs...)

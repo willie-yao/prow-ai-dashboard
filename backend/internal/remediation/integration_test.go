@@ -49,7 +49,7 @@ func TestReconcilerPresubmitThenPeriodicVerification(t *testing.T) {
 		"periodic-job": {Name: "periodic-job", JobType: models.JobTypePeriodic, Refs: []jobconfig.RepoRef{{Org: "example", Repo: "project", BaseRef: "main"}}},
 	}}
 	evidence := EvidenceForPattern(pattern, before)
-	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{
 		evidence.Tests[0].Identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}},
 	}}
 	reconciler := NewReconciler(client, dir)

@@ -36,6 +36,8 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 	}
 	jobs := verificationJobs(remediation, coverage)
 	if len(jobs) == 0 {
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			"no applicable Prow presubmit could be discovered")
 		return nil
 	}
 	matching := jobs[:0]
@@ -111,7 +113,8 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 		}
 	}
 	mergeObservations(attempt, observations)
-	applyPresubmitOutcome(remediation, attempt, jobs, currentPresubmitObservations(attempt, jobs))
+	coverageComplete := coverage == nil || coverage.Complete || remediation.JobType == models.JobTypePresubmit
+	applyPresubmitOutcome(remediation, attempt, jobs, currentPresubmitObservations(attempt, jobs), coverageComplete)
 	return nil
 }
 
@@ -267,17 +270,27 @@ func currentPresubmitObservations(attempt *Attempt, jobs []VerificationJob) []Bu
 	for _, job := range jobs {
 		selected[job.JobName] = true
 	}
-	var out []BuildObservation
+	latest := map[string]BuildObservation{}
 	for _, observation := range attempt.Observations {
-		if observation.JobType == models.JobTypePresubmit && observation.HeadSHA == attempt.HeadSHA && selected[observation.JobName] {
-			out = append(out, observation)
+		if observation.JobType != models.JobTypePresubmit || observation.HeadSHA != attempt.HeadSHA || !selected[observation.JobName] {
+			continue
+		}
+		current, exists := latest[observation.JobName]
+		if !exists || newerBuild(observation.BuildID, current.BuildID) {
+			latest[observation.JobName] = observation
 		}
 	}
+	out := make([]BuildObservation, 0, len(latest))
+	for _, observation := range latest {
+		out = append(out, observation)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].JobName < out[j].JobName })
 	return out
 }
 
-func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []VerificationJob, observations []BuildObservation) {
+func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []VerificationJob, observations []BuildObservation, coverageComplete bool) {
 	previous := attempt.Status
+	attempt.Outcome, attempt.OutcomeReason = "", ""
 	if len(observations) == 0 {
 		attempt.Status = StatusAwaitingPresubmit
 		attempt.OutcomeReason = "waiting for Prow presubmit"
@@ -288,11 +301,8 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 			}
 		}
 	} else {
-		observedJobs := map[string]bool{}
-		for _, observation := range observations {
-			observedJobs[observation.JobName] = true
-		}
-		allPassed := len(observedJobs) == len(jobs)
+		passed := false
+		inconclusive := false
 		for _, observation := range observations {
 			switch observation.Outcome {
 			case OutcomeSameCause:
@@ -303,27 +313,33 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 				}
 			case OutcomePending:
 				attempt.Status = StatusPresubmitRunning
-				allPassed = false
 			case OutcomePassed:
-			default:
-				allPassed = false
+				passed = true
+			case OutcomeInconclusive:
+				inconclusive = true
 				if attempt.Outcome == "" {
 					attempt.Outcome, attempt.OutcomeReason = OutcomeInconclusive, observation.Reason
 				}
-			}
-			if observation.Outcome != OutcomePassed {
-				allPassed = false
+			default:
+				inconclusive = true
 			}
 		}
 		if attempt.Outcome == OutcomeSameCause {
 			attempt.Status = StatusPresubmitFailedSameCause
 		} else if attempt.Outcome == OutcomeDifferentCause {
 			attempt.Status = StatusPresubmitFailedDifferentCause
-		} else if allPassed {
-			attempt.Status, attempt.Outcome = StatusPremergeVerified, OutcomePassed
+		} else if inconclusive {
+			attempt.Status, attempt.Outcome = StatusInconclusive, OutcomeInconclusive
+			if attempt.OutcomeReason == "" {
+				attempt.OutcomeReason = "completed Prow result lacked usable test evidence"
+			}
+		} else if passed && coverageComplete {
+			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPremergeVerified, OutcomePassed, "matching Prow presubmit passed"
+		} else if passed {
+			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusInconclusive, OutcomeInconclusive, "Prow coverage discovery was incomplete"
 		} else if attempt.Status != StatusPresubmitRunning {
 			attempt.Status = StatusAwaitingPresubmit
-			attempt.OutcomeReason = "waiting for all matching Prow presubmits"
+			attempt.OutcomeReason = "waiting for a matching Prow presubmit"
 		}
 	}
 	if previous != attempt.Status {

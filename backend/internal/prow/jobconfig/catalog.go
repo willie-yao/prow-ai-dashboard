@@ -139,3 +139,29 @@ func convertDefinition(r rawJob, filename, jobType, repo string) JobDefinition {
 		Refs: refs, Annotations: annotations,
 	}
 }
+
+// CatalogFromJobs builds a realized catalog for bucket-discovered Prow jobs.
+func CatalogFromJobs(jobs []models.ProwJob, revision string) *Catalog {
+	catalog := &Catalog{Revision: revision, Jobs: map[string]JobDefinition{}}
+	for _, job := range jobs {
+		if job.Name == "" || job.JobType == "" {
+			continue
+		}
+		definition := JobDefinition{
+			Name: job.Name, JobType: job.JobType, Repo: job.Repo,
+			ConfigFile: job.ConfigFile, MinimumInterval: job.MinimumInterval,
+		}
+		if job.Repo != "" && job.JobType == models.JobTypePeriodic {
+			org, repo, ok := strings.Cut(job.Repo, "/")
+			if ok {
+				definition.Refs = []RepoRef{{Org: org, Repo: repo, BaseRef: job.Branch}}
+			}
+		}
+		key := definition.ID()
+		if _, exists := catalog.Jobs[key]; exists {
+			continue
+		}
+		catalog.Jobs[key] = definition
+	}
+	return catalog
+}

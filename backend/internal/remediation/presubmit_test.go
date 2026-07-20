@@ -23,7 +23,7 @@ func TestObservePresubmits_PassesExactTest(t *testing.T) {
 		Identity: identity, Name: "test", ErrorHash: aggregator.HashError(aggregator.NormalizeErrorMessage(failure)),
 	}}}}
 	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "example/project", Status: StatusOpen}
-	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}}}}
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}}}}
 	if err := ObservePresubmits(context.Background(), b, remediation, attempt, coverage); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestObservePresubmits_RejectsTargetMismatch(t *testing.T) {
 	identity := "suite\x00class\x00test"
 	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}}}
 	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "fork/project", Status: StatusOpen}
-	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{identity: {{JobID: "upstream/project/pull-e2e", JobName: "pull-e2e", Repo: "upstream/project"}}}}
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{identity: {{JobID: "upstream/project/pull-e2e", JobName: "pull-e2e", Repo: "upstream/project"}}}}
 	if err := ObservePresubmits(context.Background(), memoryBackend{}, remediation, attempt, coverage); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestObservePresubmitsFallsBackToFinishedRevision(t *testing.T) {
 	}}
 	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: identity, ErrorHash: aggregator.HashError(aggregator.NormalizeErrorMessage(failure))}}}}
 	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "example/project", Status: StatusOpen}
-	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}}}}
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}}}}
 	if err := ObservePresubmits(context.Background(), b, remediation, attempt, coverage); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestObservePresubmitsSplitsEvidenceAcrossJobs(t *testing.T) {
 	}}
 	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: firstID}, {Identity: secondID}}}}
 	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "example/project", Status: StatusOpen}
-	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{
 		firstID:  {{JobID: "example/project/pull-a", JobName: "pull-a", Repo: "example/project"}},
 		secondID: {{JobID: "example/project/pull-b", JobName: "pull-b", Repo: "example/project"}},
 	}}
@@ -116,13 +116,13 @@ func TestObservePresubmitsSplitsEvidenceAcrossJobs(t *testing.T) {
 	}
 }
 
-func TestApplyPresubmitOutcomeRequiresEverySelectedJob(t *testing.T) {
+func TestApplyPresubmitOutcomeAcceptsOneApplicablePassingJob(t *testing.T) {
 	remediation := &Remediation{}
 	attempt := &Attempt{Status: StatusOpen}
 	jobs := []VerificationJob{{JobName: "pull-a"}, {JobName: "pull-b"}}
 	observations := []BuildObservation{{JobName: "pull-a", Outcome: OutcomePassed}}
-	applyPresubmitOutcome(remediation, attempt, jobs, observations)
-	if attempt.Status != StatusAwaitingPresubmit {
+	applyPresubmitOutcome(remediation, attempt, jobs, observations, true)
+	if attempt.Status != StatusPremergeVerified {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }
@@ -135,5 +135,55 @@ func TestCurrentPresubmitObservationsUsesStoredCurrentHead(t *testing.T) {
 	got := currentPresubmitObservations(attempt, []VerificationJob{{JobName: "pull-a"}})
 	if len(got) != 1 || got[0].Outcome != OutcomePassed {
 		t.Fatalf("observations = %+v", got)
+	}
+}
+
+func TestCurrentPresubmitObservationsUsesNewestRerun(t *testing.T) {
+	attempt := &Attempt{HeadSHA: "head", Observations: []BuildObservation{
+		{BuildID: "10", JobName: "pull-a", JobType: models.JobTypePresubmit, HeadSHA: "head", Outcome: OutcomeSameCause},
+		{BuildID: "11", JobName: "pull-a", JobType: models.JobTypePresubmit, HeadSHA: "head", Outcome: OutcomePassed},
+	}}
+	got := currentPresubmitObservations(attempt, []VerificationJob{{JobName: "pull-a"}})
+	if len(got) != 1 || got[0].BuildID != "11" || got[0].Outcome != OutcomePassed {
+		t.Fatalf("observations = %+v", got)
+	}
+	remediation := &Remediation{}
+	attempt.Status, attempt.Outcome = StatusPresubmitFailedSameCause, OutcomeSameCause
+	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "pull-a"}}, got, true)
+	if attempt.Status != StatusPremergeVerified || attempt.Outcome != OutcomePassed {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestObservePresubmitsWithoutJobsIsInconclusive(t *testing.T) {
+	remediation := &Remediation{JobType: models.JobTypePeriodic}
+	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "example/project", Status: StatusOpen}
+	if err := ObservePresubmits(context.Background(), memoryBackend{}, remediation, attempt, &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{}}); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusInconclusive {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestApplyPresubmitOutcomePreservesCompletedInconclusive(t *testing.T) {
+	remediation := &Remediation{}
+	attempt := &Attempt{Status: StatusOpen}
+	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "pull-a"}}, []BuildObservation{{
+		JobName: "pull-a", Outcome: OutcomeInconclusive, Reason: "no JUnit tests found",
+	}}, true)
+	if attempt.Status != StatusInconclusive || attempt.OutcomeReason != "no JUnit tests found" {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestApplyPresubmitOutcomeRejectsPartialCoveragePass(t *testing.T) {
+	remediation := &Remediation{}
+	attempt := &Attempt{Status: StatusOpen}
+	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "pull-a"}}, []BuildObservation{{
+		JobName: "pull-a", Outcome: OutcomePassed,
+	}}, false)
+	if attempt.Status != StatusInconclusive {
+		t.Fatalf("attempt = %+v", attempt)
 	}
 }
