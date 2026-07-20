@@ -1,11 +1,13 @@
-# Orka ai-worker patches (convergence + critique)
+# Orka AI-worker compatibility image
 
-Changes to Orka's `workers/ai/main.go` (Orka's own source, not this repo) that the
-migration needs. They are kept here as a patch because they live in the upstream
-Orka worker; apply against a matching Orka checkout, rebuild the ai-worker image,
-and load it into the cluster.
+Changes to Orka's AI worker that the dashboard analysis backend currently needs.
+The repository builds and publishes a tested compatibility image from a pinned
+Orka commit instead of requiring operators to patch a checkout by hand. See the
+[compatibility matrix](COMPATIBILITY.md) for source, tag, digest, validation, and
+deployment details.
 
-`ai-worker-convergence.patch` contains four changes, all in the agent loop:
+`ai-worker-convergence.patch` contains four changes in the agent loop plus
+focused regression tests:
 
 1. **Iteration budget (from F1a):** `maxIterations` 10/50 -> 80. Open-weight models
    investigate less efficiently than Claude and exhausted a 50 cap without
@@ -59,6 +61,17 @@ correctly about what it sees. Classification correctness on the ambiguous ~two
 thirds of failures remains model-bound (claude gets them right; gemini does not).
 The gate's value is a model-independent process guardrail - a transient claim must
 be grounded in a timeline check - which matters most with a capable model.
+
+## Build and validation
+
+```bash
+make orka-compat-check
+make orka-compat-image ORKA_COMPAT_IMAGE=orka-ai-worker:local
+```
+
+Pull requests run the pinned patch, focused normal and race tests, the complete
+worker package, and the worker Docker build without publishing. Merges to `main`
+publish one combined immutable tag and record its digest.
 
 ## Upstreaming
 

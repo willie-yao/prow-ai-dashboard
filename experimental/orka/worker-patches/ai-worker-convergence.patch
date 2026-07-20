@@ -1,3 +1,52 @@
+diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go
+new file mode 100644
+index 0000000..90e6fef
+--- /dev/null
++++ b/workers/ai/compatibility_test.go
+@@ -0,0 +1,43 @@
++package main
++
++import (
++	"context"
++	"testing"
++
++	"github.com/orka-agents/orka/internal/llm"
++	"github.com/orka-agents/orka/workers/common"
++)
++
++func TestExecuteAgentLoopRepromptsEmptyFinal(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{Content: "", StopReason: "end_turn", Model: "test-model"},
++		{Content: "final result", StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "analyze"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != "final result" || provider.callCount != 2 {
++		t.Fatalf("result = %q, calls = %d, want final result after one re-prompt", result, provider.callCount)
++	}
++}
++
++func TestTransientWithoutTimeline(t *testing.T) {
++	transient := `{"is_transient":true}`
++	if !transientWithoutTimeline(transient, nil) {
++		t.Fatal("transient verdict without timeline was accepted")
++	}
++	messages := []llm.Message{{
++		Role:      "assistant",
++		ToolCalls: []llm.ToolCall{{Name: "verify_timeline"}},
++	}}
++	if transientWithoutTimeline(transient, messages) {
++		t.Fatal("verified transient verdict was rejected")
++	}
++	if transientWithoutTimeline(`{"is_transient":false}`, nil) {
++		t.Fatal("non-transient verdict was rejected")
++	}
++}
 diff --git a/workers/ai/main.go b/workers/ai/main.go
 index 47bc4ca..7de0ddd 100644
 --- a/workers/ai/main.go
