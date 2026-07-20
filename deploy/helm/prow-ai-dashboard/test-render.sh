@@ -121,12 +121,19 @@ grep -Fq '\"nodeSelector\":{\"agentpool\":\"cpu\"}' "$tmp/task-execution.yaml"
 grep -Fq '\"tolerations\":[{\"effect\":\"NoSchedule\",\"key\":\"dedicated\",\"operator\":\"Equal\",\"value\":\"orka\"}]' "$tmp/task-execution.yaml"
 grep -Fq '\"affinity\":{\"nodeAffinity\"' "$tmp/task-execution.yaml"
 
-if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
-  --set mode=cron --set analysis=orka \
-  --set orka.producer.maxConcurrentTasks=-1 > "$tmp/invalid-concurrency.yaml" 2>&1; then
-  echo 'negative producer concurrency was accepted' >&2
-  exit 1
-fi
+for invalid in negative nonnumeric; do
+  case $invalid in
+    negative) concurrency_args=(--set orka.producer.maxConcurrentTasks=-1) ;;
+    nonnumeric) concurrency_args=(--set-string orka.producer.maxConcurrentTasks=two) ;;
+  esac
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    --set mode=cron --set analysis=orka "${concurrency_args[@]}" \
+    > "$tmp/invalid-concurrency-$invalid.yaml" 2>&1; then
+    echo "$invalid producer concurrency was accepted" >&2
+    exit 1
+  fi
+  grep -Fq 'must be a non-negative integer' "$tmp/invalid-concurrency-$invalid.yaml"
+done
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/pvc.yaml > "$tmp/pvc-retained.yaml"
