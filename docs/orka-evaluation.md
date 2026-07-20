@@ -34,14 +34,17 @@ actions, so disable those separately on an evaluation release.
 
 | Run | Data PVC | `orka.version` | Reuses |
 | --- | --- | --- | --- |
-| Warm rerun | Existing | Unchanged | Dashboard cache and matching Orka Tasks |
-| Fresh dashboard data | New empty PVC | Unchanged | Matching Orka Tasks only |
-| Fully cold Orka evaluation | New empty PVC | New value | Neither dashboard cache nor prior Task results |
+| Warm rerun | Existing | Unchanged | Dashboard cache and matching per-test and pattern Tasks |
+| Fresh dashboard data | New empty PVC | Unchanged | Potentially matching pattern Tasks only |
+| Fully cold Orka evaluation | New empty PVC | New value | Neither dashboard cache nor prior per-test or pattern results |
 
-Orka Tasks are content-addressed Kubernetes resources. Creating a new PVC does
-not change their names. Set a new `orka.version` when the evaluation must create
-new per-test and pattern Tasks instead of accepting compatible stored results.
-The old Tasks remain available for rollback until they are removed separately.
+The producer stores a private result-validation key in `analysis-manifest.json`
+on the data PVC and includes its hash in every per-test Task identity. A new PVC
+generates a new key, so its per-test Tasks are cold even when `orka.version` is
+unchanged. Pattern Task names do not include that key directly, so an unchanged
+version can reuse an exact matching pattern prompt. Set a new `orka.version` to
+force new pattern Tasks as well. Old Tasks remain available until removed
+separately.
 
 ## Create a fresh claim
 
@@ -91,8 +94,9 @@ ConfigMap, and RBAC names. Do not point it at the primary release's claim.
 
 ## Trigger and inspect one run
 
-The trigger helper refuses to start while the CronJob reports an active Job and
-generates a unique Job name so repeated evaluations do not collide:
+The trigger helper requires the CronJob to be suspended, checks for active Jobs,
+and generates a unique Job name so repeated evaluations do not collide. The
+check is not a distributed lock, so do not invoke the helper concurrently:
 
 ```bash
 deploy/helm/prow-ai-dashboard/run-cronjob-now.sh --wait \

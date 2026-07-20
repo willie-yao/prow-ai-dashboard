@@ -179,9 +179,9 @@ kubectl -n dashboards create job \
   fetch-now-$(date -u +%Y%m%d%H%M%S)
 ```
 
-From a source checkout or unpacked chart, `run-cronjob-now.sh` additionally
-refuses to start alongside an active scheduled or manual Job and can wait for
-completion.
+For a suspended evaluation CronJob, `run-cronjob-now.sh` checks for active
+scheduled or manual Jobs and can wait for completion. The check is not a
+distributed lock, so do not invoke the helper concurrently.
 
 Then reach the server:
 

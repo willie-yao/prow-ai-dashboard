@@ -36,7 +36,7 @@ fi
 
 kubectl_bin=${KUBECTL:-kubectl}
 storage=$($kubectl_bin -n "$namespace" get pvc "$source_pvc" -o jsonpath='{.spec.resources.requests.storage}')
-storage_class=$($kubectl_bin -n "$namespace" get pvc "$source_pvc" -o jsonpath='{.spec.storageClassName}')
+storage_class_state=$($kubectl_bin -n "$namespace" get pvc "$source_pvc" -o go-template='{{if eq (index .spec "storageClassName") nil}}absent{{else}}present={{index .spec "storageClassName"}}{{end}}')
 volume_mode=$($kubectl_bin -n "$namespace" get pvc "$source_pvc" -o jsonpath='{.spec.volumeMode}')
 access_modes=$($kubectl_bin -n "$namespace" get pvc "$source_pvc" -o jsonpath='{range .spec.accessModes[*]}{.}{"\n"}{end}')
 
@@ -63,9 +63,11 @@ EOF_MANIFEST
     requests:
       storage: $storage
 EOF_MANIFEST
-  if [[ -n $storage_class ]]; then
-    printf '  storageClassName: %s\n' "$storage_class"
-  fi
+  case $storage_class_state in
+    absent) ;;
+    present=*) printf '  storageClassName: "%s"\n' "${storage_class_state#present=}" ;;
+    *) echo "could not determine source PVC storageClassName" >&2; return 1 ;;
+  esac
   if [[ -n $volume_mode ]]; then
     printf '  volumeMode: %s\n' "$volume_mode"
   fi

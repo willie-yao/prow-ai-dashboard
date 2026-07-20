@@ -5,9 +5,28 @@ usage() {
   cat <<'USAGE'
 Usage: run-cronjob-now.sh [--wait] [--timeout <duration>] <namespace> <cronjob>
 
-Create a uniquely named Job from a dashboard CronJob. The command refuses to
-start alongside an active scheduled Job or an earlier active manual Job.
+Create a uniquely named Job from a suspended dashboard CronJob. The command
+checks for active scheduled and manual Jobs before creating another one. This is
+a preflight check, not a distributed lock; do not invoke the helper concurrently.
+
+Timeout accepts one integer unit, for example 90m, 2h, or 300s.
 USAGE
+}
+
+parse_duration_seconds() {
+  local value=$1 number unit
+  if [[ $value =~ ^([0-9]+)([smh])$ ]]; then
+    number=${BASH_REMATCH[1]}
+    unit=${BASH_REMATCH[2]}
+  else
+    echo "invalid timeout $value: use one integer unit such as 90m, 2h, or 300s" >&2
+    return 1
+  fi
+  case $unit in
+    s) printf '%d\n' "$number" ;;
+    m) printf '%d\n' "$((number * 60))" ;;
+    h) printf '%d\n' "$((number * 60 * 60))" ;;
+  esac
 }
 
 wait_for_job=false
@@ -48,7 +67,16 @@ fi
 
 namespace=$1
 cronjob=$2
+timeout_seconds=0
+if [[ $wait_for_job == true ]]; then
+  timeout_seconds=$(parse_duration_seconds "$timeout")
+fi
 kubectl_bin=${KUBECTL:-kubectl}
+suspended=$($kubectl_bin -n "$namespace" get cronjob "$cronjob" -o jsonpath='{.spec.suspend}')
+if [[ $suspended != "true" ]]; then
+  echo "CronJob $namespace/$cronjob is not suspended; set fetcher.suspend=true before a manual evaluation" >&2
+  exit 1
+fi
 active=$($kubectl_bin -n "$namespace" get cronjob "$cronjob" -o jsonpath='{range .status.active[*]}{.name}{"\n"}{end}')
 if [[ -n $active ]]; then
   echo "CronJob $namespace/$cronjob already has an active Job: $active" >&2
@@ -83,9 +111,24 @@ echo "Follow: kubectl -n $namespace logs -f job/$job_name --all-containers=true 
 echo "Status: kubectl -n $namespace get job/$job_name"
 
 if [[ $wait_for_job == true ]]; then
-  if ! $kubectl_bin -n "$namespace" wait --for=condition=complete --timeout="$timeout" "job/$job_name"; then
-    $kubectl_bin -n "$namespace" describe "job/$job_name" >&2 || true
-    exit 1
-  fi
-  $kubectl_bin -n "$namespace" logs "job/$job_name" --all-containers=true --prefix=true
+  deadline=$((SECONDS + timeout_seconds))
+  while true; do
+    conditions=$($kubectl_bin -n "$namespace" get "job/$job_name" -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{"\n"}{end}')
+    if [[ $conditions == *"Complete=True"* ]]; then
+      $kubectl_bin -n "$namespace" logs "job/$job_name" --all-containers=true --prefix=true
+      break
+    fi
+    if [[ $conditions == *"Failed=True"* ]]; then
+      echo "Job $namespace/$job_name failed" >&2
+      $kubectl_bin -n "$namespace" describe "job/$job_name" >&2 || true
+      $kubectl_bin -n "$namespace" logs "job/$job_name" --all-containers=true --prefix=true >&2 || true
+      exit 1
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "Job $namespace/$job_name did not finish within $timeout" >&2
+      $kubectl_bin -n "$namespace" describe "job/$job_name" >&2 || true
+      exit 1
+    fi
+    sleep 5
+  done
 fi
