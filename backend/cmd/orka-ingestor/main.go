@@ -848,6 +848,7 @@ type patternTaskAnalyzer struct {
 }
 
 type patternKubeClient interface {
+	orka.TaskExecutionClient
 	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
 	TaskPhase(context.Context, string, string) (string, error)
 }
@@ -874,12 +875,18 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 		Labels:    map[string]string{orka.ManagedByLabel: orka.ManagedByValue},
 		Execution: a.execution,
 	})
-	if err := a.kube.Apply(ctx, orka.TasksGVR, a.namespace, task); err != nil {
-		return nil, fmt.Errorf("apply pattern Task %s: %w", name, err)
-	}
 	poll := a.poll
 	if poll <= 0 {
 		poll = 5 * time.Second
+	}
+	skipApply, err := orka.PrepareTaskExecution(ctx, a.kube, a.namespace, name, a.execution, poll)
+	if err != nil {
+		return nil, fmt.Errorf("prepare pattern Task %s: %w", name, err)
+	}
+	if !skipApply {
+		if err := a.kube.Apply(ctx, orka.TasksGVR, a.namespace, task); err != nil {
+			return nil, fmt.Errorf("apply pattern Task %s: %w", name, err)
+		}
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()

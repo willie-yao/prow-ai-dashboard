@@ -123,11 +123,22 @@ type fakeTaskApplyClient struct {
 	events     []string
 	phases     map[string][]string
 	phaseCalls map[string]int
+	states     map[string]orka.TaskState
 }
 
 func (f *fakeTaskApplyClient) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
 	name := obj["metadata"].(map[string]any)["name"].(string)
 	f.events = append(f.events, "apply:"+gvr.Resource+":"+name)
+	return nil
+}
+
+func (f *fakeTaskApplyClient) TaskState(_ context.Context, _, name string) (orka.TaskState, error) {
+	return f.states[name], nil
+}
+
+func (f *fakeTaskApplyClient) Delete(_ context.Context, _ schema.GroupVersionResource, _ string, name string) error {
+	f.events = append(f.events, "delete:tasks:"+name)
+	delete(f.states, name)
 	return nil
 }
 
@@ -169,7 +180,7 @@ func TestApplyObjectsUsesTaskWaves(t *testing.T) {
 func TestApplyObjectsUnlimitedDoesNotWait(t *testing.T) {
 	client := &fakeTaskApplyClient{phases: map[string][]string{"task-1": {"Running"}}}
 	tasks := []namedObj{testNamedObj("task-1"), testNamedObj("task-2")}
-	if err := applyObjects(context.Background(), client, "orka-system", nil, tasks, 0, 0, 0); err != nil {
+	if err := applyObjects(context.Background(), client, "orka-system", nil, tasks, 0, time.Millisecond, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.phaseCalls) != 0 {
@@ -186,6 +197,37 @@ func TestApplyObjectsStopsWhenWaveTimesOut(t *testing.T) {
 	}
 	if eventIndex(client.events, "apply:tasks:task-2") >= 0 {
 		t.Fatalf("events = %v, later wave was applied after timeout", client.events)
+	}
+}
+
+func TestApplyObjectsRecreatesNonSuccessfulTaskAfterPlacementChange(t *testing.T) {
+	oldExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}}
+	newExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}
+	client := &fakeTaskApplyClient{states: map[string]orka.TaskState{
+		"task-1": {Exists: true, Phase: "Failed", Execution: oldExecution},
+	}}
+	task := testNamedObj("task-1")
+	task.obj["spec"] = map[string]any{"execution": newExecution}
+	if err := applyObjects(context.Background(), client, "orka-system", nil, []namedObj{task}, 1, time.Millisecond, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	requireEventBefore(t, client.events, "delete:tasks:task-1", "apply:tasks:task-1")
+}
+
+func TestApplyObjectsReusesSuccessfulTaskAfterPlacementChange(t *testing.T) {
+	client := &fakeTaskApplyClient{states: map[string]orka.TaskState{
+		"task-1": {
+			Exists: true, Phase: "Succeeded",
+			Execution: map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}},
+		},
+	}}
+	task := testNamedObj("task-1")
+	task.obj["spec"] = map[string]any{"execution": map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}}
+	if err := applyObjects(context.Background(), client, "orka-system", nil, []namedObj{task}, 1, time.Millisecond, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if eventIndex(client.events, "delete:tasks:task-1") >= 0 || eventIndex(client.events, "apply:tasks:task-1") >= 0 {
+		t.Fatalf("events = %v, successful Task should be reused", client.events)
 	}
 }
 

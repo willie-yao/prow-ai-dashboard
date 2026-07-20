@@ -306,6 +306,7 @@ type namedObj struct {
 
 // taskApplyClient is the Orka API surface used by the producer apply path.
 type taskApplyClient interface {
+	orka.TaskExecutionClient
 	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
 	TaskPhase(context.Context, string, string) (string, error)
 }
@@ -327,11 +328,11 @@ func applyObjects(ctx context.Context, client taskApplyClient, namespace string,
 	if maxConcurrent < 0 {
 		return fmt.Errorf("max-concurrent-tasks must be non-negative")
 	}
-	if maxConcurrent > 0 && poll <= 0 {
-		return fmt.Errorf("task-poll must be positive when max-concurrent-tasks is set")
+	if poll <= 0 {
+		return fmt.Errorf("task-poll must be positive")
 	}
-	if maxConcurrent > 0 && waveTimeout <= 0 {
-		return fmt.Errorf("wave-timeout must be positive when max-concurrent-tasks is set")
+	if waveTimeout <= 0 {
+		return fmt.Errorf("wave-timeout must be positive")
 	}
 	for _, tool := range tools {
 		if err := client.Apply(ctx, orka.ToolsGVR, namespace, tool.obj); err != nil {
@@ -354,30 +355,46 @@ func applyObjects(ctx context.Context, client taskApplyClient, namespace string,
 		if waves > 1 {
 			log.Printf("applying Task wave %d/%d (%d Tasks)", start/waveSize+1, waves, len(wave))
 		}
+		waveCtx, cancel := context.WithTimeout(ctx, waveTimeout)
 		for _, task := range wave {
-			if err := client.Apply(ctx, orka.TasksGVR, namespace, task.obj); err != nil {
+			skipApply, err := orka.PrepareTaskExecution(waveCtx, client, namespace, task.name, taskExecution(task.obj), poll)
+			if err != nil {
+				cancel()
+				return err
+			}
+			if skipApply {
+				continue
+			}
+			if err := client.Apply(waveCtx, orka.TasksGVR, namespace, task.obj); err != nil {
+				cancel()
 				return err
 			}
 		}
 		if end < len(tasks) {
-			if err := waitForTaskWave(ctx, client, namespace, wave, poll, waveTimeout); err != nil {
+			if err := waitForTaskWave(waveCtx, client, namespace, wave, poll); err != nil {
+				cancel()
 				return err
 			}
 		}
+		cancel()
 	}
 	log.Printf("applied %d Tools and %d Tasks to %s", len(tools), len(tasks), namespace)
 	return nil
 }
 
-func waitForTaskWave(ctx context.Context, client taskApplyClient, namespace string, tasks []namedObj, poll, timeout time.Duration) error {
-	waveCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+func taskExecution(obj map[string]any) map[string]any {
+	spec, _ := obj["spec"].(map[string]any)
+	execution, _ := spec["execution"].(map[string]any)
+	return execution
+}
+
+func waitForTaskWave(ctx context.Context, client taskApplyClient, namespace string, tasks []namedObj, poll time.Duration) error {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
 		pending := make([]string, 0, len(tasks))
 		for _, task := range tasks {
-			phase, err := client.TaskPhase(waveCtx, namespace, task.name)
+			phase, err := client.TaskPhase(ctx, namespace, task.name)
 			if err != nil {
 				return fmt.Errorf("read Task %s phase: %w", task.name, err)
 			}
@@ -389,8 +406,8 @@ func waitForTaskWave(ctx context.Context, client taskApplyClient, namespace stri
 			return nil
 		}
 		select {
-		case <-waveCtx.Done():
-			return fmt.Errorf("wait for Task wave (%s): %w", strings.Join(pending, ", "), waveCtx.Err())
+		case <-ctx.Done():
+			return fmt.Errorf("wait for Task wave (%s): %w", strings.Join(pending, ", "), ctx.Err())
 		case <-ticker.C:
 		}
 	}

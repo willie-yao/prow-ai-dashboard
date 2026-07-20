@@ -205,6 +205,12 @@ namespace, and job-level pattern Tasks still start concurrently during
 finalization. Set it to `0` to restore immediate submission of every per-test
 Task.
 
+Placement is not part of semantic Task identity. A placement change keeps a
+successful Task and its cached result. If an existing per-test or pattern Task is
+pending, running, failed, or cancelled under different placement, the pipeline
+deletes it, waits for Orka's finalizer to clear the old worker, result, and event
+state, and recreates the same Task name with the new placement.
+
 Producer, ingestor, and artifact-tool tags inherit the engine `image.tag`, so one
 immutable SHA pins the complete dashboard pipeline. Set `orka.provider` to your
 Provider name and `orka.model` to your model id. See the chart values for

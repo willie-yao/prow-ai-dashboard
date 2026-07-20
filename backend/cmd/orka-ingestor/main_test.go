@@ -53,10 +53,22 @@ type staticPatternAnalyzer struct{}
 
 type fakePatternKube struct {
 	applied map[string]any
+	state   orkaapi.TaskState
+	deleted bool
 }
 
 func (f *fakePatternKube) Apply(_ context.Context, _ schema.GroupVersionResource, _ string, obj map[string]any) error {
 	f.applied = obj
+	return nil
+}
+
+func (f *fakePatternKube) TaskState(context.Context, string, string) (orkaapi.TaskState, error) {
+	return f.state, nil
+}
+
+func (f *fakePatternKube) Delete(context.Context, schema.GroupVersionResource, string, string) error {
+	f.deleted = true
+	f.state = orkaapi.TaskState{}
 	return nil
 }
 
@@ -268,16 +280,30 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 		})
 	}
 
-	placementKube := &fakePatternKube{}
-	placementAnalyzer := *analyzer
-	placementAnalyzer.kube = placementKube
-	placementAnalyzer.execution = map[string]any{"nodeSelector": map[string]any{"agentpool": "other"}}
-	if _, err := placementAnalyzer.AnalyzePattern(context.Background(), "periodic-controller", "periodic-controller", failures); err != nil {
+	oldExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}}
+	newExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}
+
+	failedKube := &fakePatternKube{state: orkaapi.TaskState{Exists: true, Phase: "Failed", Execution: oldExecution}}
+	failedAnalyzer := *analyzer
+	failedAnalyzer.kube = failedKube
+	failedAnalyzer.execution = newExecution
+	if _, err := failedAnalyzer.AnalyzePattern(context.Background(), "periodic-controller", "periodic-controller", failures); err != nil {
 		t.Fatal(err)
 	}
-	placementName := placementKube.applied["metadata"].(map[string]any)["name"].(string)
-	if placementName != baseName {
-		t.Fatalf("placement change produced pattern Task %q, want cached identity %q", placementName, baseName)
+	failedName := failedKube.applied["metadata"].(map[string]any)["name"].(string)
+	if failedName != baseName || !failedKube.deleted {
+		t.Fatalf("failed placement recovery name=%q deleted=%v, want name=%q deleted=true", failedName, failedKube.deleted, baseName)
+	}
+
+	succeededKube := &fakePatternKube{state: orkaapi.TaskState{Exists: true, Phase: "Succeeded", Execution: oldExecution}}
+	succeededAnalyzer := *analyzer
+	succeededAnalyzer.kube = succeededKube
+	succeededAnalyzer.execution = newExecution
+	if _, err := succeededAnalyzer.AnalyzePattern(context.Background(), "periodic-controller", "periodic-controller", failures); err != nil {
+		t.Fatal(err)
+	}
+	if succeededKube.applied != nil || succeededKube.deleted {
+		t.Fatalf("successful pattern Task applied=%v deleted=%v, want cached reuse", succeededKube.applied != nil, succeededKube.deleted)
 	}
 }
 

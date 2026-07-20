@@ -1,0 +1,63 @@
+package orka
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// TaskExecutionClient is the Task lifecycle surface used for placement recovery.
+type TaskExecutionClient interface {
+	TaskState(context.Context, string, string) (TaskState, error)
+	Delete(context.Context, schema.GroupVersionResource, string, string) error
+}
+
+// PrepareTaskExecution removes a non-successful Task when its worker placement
+// changed. A successful Task remains reusable and returns skipApply=true.
+func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, namespace, name string, desired map[string]any, poll time.Duration) (skipApply bool, err error) {
+	state, err := client.TaskState(ctx, namespace, name)
+	if err != nil {
+		return false, fmt.Errorf("read Task %s before apply: %w", name, err)
+	}
+	if !state.Exists || taskExecutionEqual(state.Execution, desired) {
+		return false, nil
+	}
+	if state.Phase == "Succeeded" {
+		return true, nil
+	}
+	if err := client.Delete(ctx, TasksGVR, namespace, name); err != nil {
+		return false, fmt.Errorf("delete Task %s after execution change: %w", name, err)
+	}
+	if poll <= 0 {
+		poll = time.Second
+	}
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		state, err := client.TaskState(ctx, namespace, name)
+		if err != nil {
+			return false, fmt.Errorf("wait for Task %s deletion: %w", name, err)
+		}
+		if !state.Exists {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, fmt.Errorf("wait for Task %s deletion: %w", name, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func taskExecutionEqual(a, b map[string]any) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	aJSON, aErr := json.Marshal(a)
+	bJSON, bErr := json.Marshal(b)
+	return aErr == nil && bErr == nil && bytes.Equal(aJSON, bJSON)
+}

@@ -37,8 +37,11 @@ Everything the producer emits is an unstructured `map[string]any` built in Go an
 server-side applied through a dynamic client, so the pipeline links no Orka Go
 types. The producer can apply per-test Tasks in bounded waves, waiting for each
 intermediate wave to become terminal before submitting the next. Task placement
-is emitted under `spec.execution` for both per-test and pattern Tasks. The two
-CRDs it creates:
+is emitted under `spec.execution` for both per-test and pattern Tasks. Placement
+is excluded from semantic identity so successful results remain cached. When
+placement changes, non-successful Tasks are deleted and recreated only after
+Orka's finalizer clears their worker, result, and event state. The two CRDs it
+creates:
 
 ### Task (one per failing test)
 
