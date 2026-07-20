@@ -886,7 +886,7 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		if issueToken := os.Getenv("ISSUE_TOKEN"); issueToken != "" {
 			issueClient = issues.NewClient(issueToken, issueConfig.Repo.Owner, issueConfig.Repo.Name)
 		}
-		reconciler.SetIssues(trackedIssues, issueClient)
+		reconciler.SetIssues(issueRepo, trackedIssues, issueClient)
 	}
 	state, err := reconciler.Reconcile(ctx, patterns, details, fixes, fixpr.KeyFor)
 	if err != nil {

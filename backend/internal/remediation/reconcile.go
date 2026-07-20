@@ -50,6 +50,7 @@ type Reconciler struct {
 	compare     CompareClient
 	issues      map[string]IssueRef
 	issueClient IssueLifecycleClient
+	issueRepo   string
 	targetRepo  string
 	search      PullRequestSearchClient
 }
@@ -65,8 +66,8 @@ func (r *Reconciler) SetVerification(backend storage.Backend, catalog *jobconfig
 }
 
 // SetIssues links pattern job IDs to tracked issues and enables lifecycle updates.
-func (r *Reconciler) SetIssues(issues map[string]IssueRef, client IssueLifecycleClient) {
-	r.issues, r.issueClient = issues, client
+func (r *Reconciler) SetIssues(repo string, issues map[string]IssueRef, client IssueLifecycleClient) {
+	r.issueRepo, r.issues, r.issueClient = repo, issues, client
 }
 
 // SetRecovery enables marker-based pull request adoption.
@@ -194,7 +195,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				errs = append(errs, fmt.Errorf("remediation %s periodic: %w", id, err))
 			}
 		}
-		if err := reconcileIssue(ctx, r.issueClient, entry, attempt); err != nil {
+		issueClient := r.issueClient
+		if entry.Issue != nil && entry.Issue.Repo != "" && entry.Issue.Repo != r.issueRepo {
+			issueClient = nil
+		}
+		if err := reconcileIssue(ctx, issueClient, entry, attempt); err != nil {
 			errs = append(errs, fmt.Errorf("remediation %s issue: %w", id, err))
 		}
 	}
