@@ -422,7 +422,11 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 
-	if err := processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir); err != nil {
+	fixPatterns := remediation.UntrackedPatterns(remediation.Load(opts.OutDir), flakinessReport.RecurringPatterns, details)
+	if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
+		log.Printf("Fix PRs: %d pattern(s) already have remediation history; follow-ups require confirmation", skipped)
+	}
+	if err := processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {

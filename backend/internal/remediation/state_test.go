@@ -69,3 +69,37 @@ func TestPublicProjectionUsesCurrentFindingID(t *testing.T) {
 		t.Fatalf("stale finding key published: %+v", public)
 	}
 }
+
+func TestUntrackedPatternsExcludesEvidenceMatchedAttempt(t *testing.T) {
+	pattern := models.PatternAnalysis{ID: "new", JobID: "job", Subject: "job", SharedBuilds: []string{"2"}}
+	details := []models.JobDetail{{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "2"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "same"}},
+	}}}}
+	evidence := EvidenceForPattern(pattern, details)
+	state := NewState()
+	state.Remediations["old"] = &Remediation{
+		ID: "old", FindingID: "old", JobID: "job", Evidence: evidence,
+		Attempts: []Attempt{{Number: 1, Status: StatusStillFailingSameCause}},
+	}
+	if got := UntrackedPatterns(state, []models.PatternAnalysis{pattern}, details); len(got) != 0 {
+		t.Fatalf("untracked = %+v", got)
+	}
+}
+
+func TestUntrackedPatternsKeepsDistinctCauseOnSameJob(t *testing.T) {
+	oldPattern := models.PatternAnalysis{ID: "old", JobID: "job", Subject: "job", SharedBuilds: []string{"1"}}
+	newPattern := models.PatternAnalysis{ID: "new", JobID: "job", Subject: "job", SharedBuilds: []string{"2"}}
+	details := []models.JobDetail{{JobID: "job", Runs: []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{{Name: "old-test", Status: "failed", FailureMessage: "old"}}},
+		{BuildInfo: models.BuildInfo{BuildID: "2"}, TestCases: []models.TestCase{{Name: "new-test", Status: "failed", FailureMessage: "new"}}},
+	}}}
+	state := NewState()
+	state.Remediations["old"] = &Remediation{
+		ID: "old", FindingID: "old", JobID: "job", Evidence: EvidenceForPattern(oldPattern, details),
+		Attempts: []Attempt{{Number: 1}},
+	}
+	if got := UntrackedPatterns(state, []models.PatternAnalysis{newPattern}, details); len(got) != 1 {
+		t.Fatalf("untracked = %+v", got)
+	}
+}

@@ -99,3 +99,33 @@ func classificationForPattern(pattern models.PatternAnalysis, details []models.J
 	}
 	return "pattern"
 }
+
+// UntrackedPatterns excludes findings already represented by a remediation attempt.
+func UntrackedPatterns(state *State, patterns []models.PatternAnalysis, details []models.JobDetail) []models.PatternAnalysis {
+	if state == nil || len(state.Remediations) == 0 {
+		return append([]models.PatternAnalysis(nil), patterns...)
+	}
+	out := make([]models.PatternAnalysis, 0, len(patterns))
+	for _, pattern := range patterns {
+		id := pattern.ID
+		if id == "" {
+			id = models.PatternID(pattern)
+		}
+		tracked := false
+		currentEvidence := EvidenceForPattern(pattern, details)
+		for _, entry := range state.Remediations {
+			if entry == nil || len(entry.Attempts) == 0 {
+				continue
+			}
+			if entry.ID == id || entry.FindingID == id ||
+				(entry.JobID == pattern.JobID && evidenceOverlaps(entry.Evidence, currentEvidence)) {
+				tracked = true
+				break
+			}
+		}
+		if !tracked {
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
