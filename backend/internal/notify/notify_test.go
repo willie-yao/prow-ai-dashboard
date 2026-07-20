@@ -648,6 +648,7 @@ func TestPatternsMateriallyDifferentPreservesNumericSignals(t *testing.T) {
 	}{
 		{name: "http status", previous: "identity endpoint returns HTTP 401", current: "identity endpoint returns HTTP 500"},
 		{name: "http status code", previous: "identity endpoint returns HTTP status code 401", current: "identity endpoint returns HTTP status code 500"},
+		{name: "bare status code", previous: "identity endpoint returns status code 401", current: "identity endpoint returns status code 500"},
 		{name: "tls version", previous: "server requires TLS 1.2", current: "server requires TLS 1.3"},
 		{name: "service port", previous: "controller cannot connect to port 443", current: "controller cannot connect to port 8443"},
 		{name: "endpoint port", previous: "controller cannot connect to api.example.com:443", current: "controller cannot connect to api.example.com:8443"},
@@ -671,5 +672,34 @@ func TestPatternsMateriallyDifferentWeightsSharedSymptoms(t *testing.T) {
 	endpoint := "webhook conversion calls fail because service endpoint unavailable"
 	if !patternsMateriallyDifferent(certificate, endpoint) {
 		t.Fatal("distinct mechanisms sharing symptom vocabulary were treated as the same pattern")
+	}
+}
+
+func TestPatternsMateriallyDifferentDetectsPolarityReversal(t *testing.T) {
+	if !patternsMateriallyDifferent("API accepts requests", "API does not accept requests") {
+		t.Fatal("negative polarity was treated as unchanged")
+	}
+	if !patternsMateriallyDifferent("API does not accept requests", "API accepts requests") {
+		t.Fatal("positive polarity was treated as unchanged")
+	}
+	if patternsMateriallyDifferent("webhook is not available", "webhook is unavailable") {
+		t.Fatal("equivalent negative phrasing was treated as changed")
+	}
+	if patternsMateriallyDifferent("upgrade removes pods before the webhook is ready", "upgrade finds the webhook is not ready after removing pods") {
+		t.Fatal("equivalent readiness phrasing was treated as changed")
+	}
+}
+
+func TestPatternStateWithEmptyJobIDSurvivesUnavailableAnalysis(t *testing.T) {
+	n := newTestNotifier(t, &fakeSender{}, filepath.Join(t.TempDir(), "state.json"))
+	n.state.Patterns["job-id"] = NotifiedPattern{
+		PatternID: "pattern-id", Subject: "periodic-job", SharedRootCause: "webhook unavailable",
+	}
+	unavailable := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3)}}
+	if _, err := n.ProcessFailures(context.Background(), makeReport(), unavailable); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := n.state.Patterns["job-id"]; !ok {
+		t.Fatalf("unavailable analysis cleared state with empty JobID: %+v", n.state.Patterns)
 	}
 }

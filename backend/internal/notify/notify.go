@@ -30,9 +30,25 @@ var patternNumericSignalRegexes = []struct {
 	re   *regexp.Regexp
 }{
 	{name: "http", re: regexp.MustCompile(`\bhttp(?:\s+status(?:\s+code)?)?\s+([1-5][0-9]{2})\b`)},
+	{name: "http", re: regexp.MustCompile(`\bstatus\s+code\s+([1-5][0-9]{2})\b`)},
 	{name: "port", re: regexp.MustCompile(`\bport\s+([0-9]{1,5})\b`)},
 	{name: "address-port", re: regexp.MustCompile(`(?:\]|[a-z][a-z0-9.-]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}):([0-9]{2,5})\b`)},
 	{name: "tls", re: regexp.MustCompile(`\btls(?:v|\s+version)?\s*([0-9]+(?:\.[0-9]+)?)\b`)},
+}
+
+var patternPolarityRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`\b(?:not|no|without|never)\s+([a-z0-9]+)\b`),
+	regexp.MustCompile(`\b(?:before|until)(?:\s+[a-z0-9-]+){0,8}\s+(?:is|was|becomes?)\s+([a-z0-9]+)\b`),
+}
+
+var patternNegativeTokens = map[string]string{
+	"disabled":     "enabled",
+	"unavailable":  "available",
+	"unauthorized": "authorized",
+	"unhealthy":    "healthy",
+	"unreachable":  "reachable",
+	"unready":      "ready",
+	"unsupported":  "supported",
 }
 
 var patternStopTokens = map[string]struct{}{
@@ -41,9 +57,10 @@ var patternStopTokens = map[string]struct{}{
 	"could": {}, "deadline": {}, "during": {}, "error": {}, "errors": {},
 	"exceeded": {}, "failed": {}, "fails": {}, "failure": {}, "for": {},
 	"from": {}, "has": {}, "have": {}, "into": {}, "its": {},
-	"occurred": {}, "only": {}, "retry": {}, "side": {}, "that": {}, "the": {},
+	"never": {}, "no": {}, "not": {}, "occurred": {}, "only": {}, "retry": {},
+	"side": {}, "that": {}, "the": {},
 	"their": {}, "then": {}, "this": {}, "through": {}, "was": {},
-	"were": {}, "when": {}, "which": {}, "while": {}, "will": {}, "with": {},
+	"were": {}, "when": {}, "which": {}, "while": {}, "will": {}, "with": {}, "without": {},
 }
 
 var patternLowWeightTokens = map[string]struct{}{
@@ -310,7 +327,7 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 		if currentJobs[jobID] {
 			continue
 		}
-		if !presentJobs[notified.JobID] || authoritativeJobs[notified.JobID] {
+		if !presentJobs[jobID] || authoritativeJobs[jobID] {
 			delete(n.state.Patterns, stateKey)
 		}
 	}
@@ -370,12 +387,58 @@ func (n *Notifier) replacePatternState(jobID string, oldKeys []string, pattern N
 }
 
 func patternsMateriallyDifferent(previous, current string) bool {
+	if patternPolarityReversed(previous, current) {
+		return true
+	}
 	previousSignals := patternNumericSignals(previous)
 	currentSignals := patternNumericSignals(current)
 	if !samePatternTokens(previousSignals, currentSignals) {
 		return true
 	}
 	return patternSimilarity(previous, current) < patternSimilarityFloor
+}
+
+func patternPolarityReversed(previous, current string) bool {
+	previousPolarity := patternPolarityTargets(previous)
+	currentPolarity := patternPolarityTargets(current)
+	previousTokens := patternTokens(previous)
+	currentTokens := patternTokens(current)
+	for target := range previousPolarity {
+		if _, stillNegative := currentPolarity[target]; stillNegative {
+			continue
+		}
+		if _, nowPositive := currentTokens[target]; nowPositive {
+			return true
+		}
+	}
+	for target := range currentPolarity {
+		if _, alreadyNegative := previousPolarity[target]; alreadyNegative {
+			continue
+		}
+		if _, wasPositive := previousTokens[target]; wasPositive {
+			return true
+		}
+	}
+	return false
+}
+
+func patternPolarityTargets(value string) map[string]struct{} {
+	targets := make(map[string]struct{})
+	lower := strings.ToLower(value)
+	for _, re := range patternPolarityRegexes {
+		for _, match := range re.FindAllStringSubmatch(lower, -1) {
+			target := singularPatternToken(match[1])
+			if target != "" {
+				targets[target] = struct{}{}
+			}
+		}
+	}
+	for _, token := range patternTokenRegex.FindAllString(lower, -1) {
+		if target := patternNegativeTokens[token]; target != "" {
+			targets[target] = struct{}{}
+		}
+	}
+	return targets
 }
 
 func patternSimilarity(previous, current string) float64 {
@@ -422,6 +485,9 @@ func patternTokens(value string) map[string]struct{} {
 		}
 		if len(token) < 3 {
 			continue
+		}
+		if target := patternNegativeTokens[token]; target != "" {
+			token = target
 		}
 		token = singularPatternToken(token)
 		if _, stop := patternStopTokens[token]; stop {
