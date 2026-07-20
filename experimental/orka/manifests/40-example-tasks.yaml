@@ -95,10 +95,8 @@ spec:
       flavor. Use discover_clusters to get its exact name, then read its
       artifacts/clusters/<cluster>/azure-activity-logs/<cluster>.log. Be decisive:
       once you have the activity-log evidence, STOP and write your JSON answer.
-      Keep evidence_token from each successful artifact content read and pass all
-      of them to validate_analysis as evidence_tokens before returning the result.
       Respond with ONLY:
-      {"summary":"...","root_cause":"...","severity":"<Low|Medium|High|Critical>","is_transient":<true|false>,"suggested_fix":"...","relevant_files":["..."],"gcs_bytes":<value from validate_analysis>,"validation_token":"<token from validate_analysis>"}
+      {"summary":"...","root_cause":"...","severity":"<Low|Medium|High|Critical>","is_transient":<true|false>,"suggested_fix":"...","relevant_files":["..."]}
     prompt: |
       This CAPZ E2E test FAILED. Determine the root cause and classify transient vs bug.
       Failed test: [It] Workload cluster creation Creating a highly available cluster
