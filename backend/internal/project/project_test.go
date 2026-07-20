@@ -936,7 +936,7 @@ func TestEffectiveFixPRsOrkaRuntimeDefaults(t *testing.T) {
 		}},
 	}
 	got := c.EffectiveFixPRs().AgentRuntime
-	if got.OrkaNamespace != "orka-system" || got.OrkaVersion != "v1" || got.OrkaRetries != 1 {
+	if got.OrkaNamespace != "orka-system" || got.OrkaVersion != "v1" || got.OrkaRetries == nil || *got.OrkaRetries != 1 {
 		t.Fatalf("Orka defaults = %+v", got)
 	}
 }
@@ -959,8 +959,18 @@ func TestValidateFixPRsOrkaRuntime(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid Orka runtime rejected: %v", err)
 	}
-	c.AI.FixPRs.AgentRuntime.OrkaRetries = -1
+	negativeRetries := -1
+	c.AI.FixPRs.AgentRuntime.OrkaRetries = &negativeRetries
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "retries") {
 		t.Fatalf("negative Orka retries error = %v", err)
+	}
+}
+
+func TestEffectiveFixPRsPreservesZeroOrkaRetries(t *testing.T) {
+	zero := 0
+	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "orka", OrkaRetries: &zero}}}}
+	got := c.EffectiveFixPRs().AgentRuntime
+	if got.OrkaRetries == nil || *got.OrkaRetries != 0 {
+		t.Fatalf("OrkaRetries = %v, want explicit zero", got.OrkaRetries)
 	}
 }

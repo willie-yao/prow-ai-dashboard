@@ -18,6 +18,10 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 	if cfg.Type != "orka" {
 		return nil, fmt.Errorf("unsupported fix runtime %q", cfg.Type)
 	}
+	maxRetries := 1
+	if cfg.OrkaRetries != nil {
+		maxRetries = *cfg.OrkaRetries
+	}
 	rt, err := orka.NewAgentRuntimeFromEnv(orka.FromEnvConfig{
 		Namespace:   cfg.OrkaNamespace,
 		AgentRef:    cfg.OrkaAgentRef,
@@ -25,7 +29,7 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 		APIToken:    os.Getenv("ORKA_API_TOKEN"),
 		GitSecret:   cfg.OrkaGitSecret,
 		Version:     cfg.OrkaVersion,
-		MaxRetries:  cfg.OrkaRetries,
+		MaxRetries:  maxRetries,
 		KubeContext: os.Getenv("ORKA_KUBE_CONTEXT"),
 	})
 	if err != nil {

@@ -4,10 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-const maxRemoteDiffBytes = 4 << 20
+const (
+	maxRemoteDiffBytes         = 4 << 20
+	maxRemoteFileContentBytes  = 2 << 20
+	maxRemoteTotalContentBytes = 8 << 20
+)
 
 // ApplyDiff applies a remote agent diff to the pinned repository snapshot and
 // reconstructs the changed-file map used by the normal fix-PR guardrails.
@@ -55,7 +60,36 @@ func ApplyDiff(ctx context.Context, repo RepoRef, diff string) (map[string]strin
 	if err := validateRemoteChange(ctx, work); err != nil {
 		return nil, "", err
 	}
+	if err := validateRemoteContentSizes(ctx, work); err != nil {
+		return nil, "", err
+	}
 	return gitChanges(ctx, work, repo.Token)
+}
+
+func validateRemoteContentSizes(ctx context.Context, work string) error {
+	names, err := gitOut(ctx, work, "diff", "--cached", "--name-only", "--diff-filter=AM")
+	if err != nil {
+		return err
+	}
+	var total int64
+	for _, file := range strings.Split(strings.TrimSpace(names), "\n") {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(work, file))
+		if err != nil {
+			return fmt.Errorf("runtime: stat changed %s: %w", file, err)
+		}
+		if info.Size() > maxRemoteFileContentBytes {
+			return fmt.Errorf("runtime: changed file %s is %d bytes, exceeds %d", file, info.Size(), maxRemoteFileContentBytes)
+		}
+		total += info.Size()
+		if total > maxRemoteTotalContentBytes {
+			return fmt.Errorf("runtime: changed file content is %d bytes, exceeds %d", total, maxRemoteTotalContentBytes)
+		}
+	}
+	return nil
 }
 
 func validateRemoteChange(ctx context.Context, work string) error {

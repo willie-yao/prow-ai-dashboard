@@ -442,7 +442,7 @@ type FixAgentRuntime struct {
 	OrkaNamespace string `yaml:"namespace,omitempty" json:"-"`
 	OrkaGitSecret string `yaml:"git_secret,omitempty" json:"-"`
 	OrkaVersion   string `yaml:"version,omitempty" json:"-"`
-	OrkaRetries   int    `yaml:"retries,omitempty" json:"-"`
+	OrkaRetries   *int   `yaml:"retries,omitempty" json:"-"`
 }
 
 // FixVerify configures pre-PR verification of a proposed fix.
@@ -554,8 +554,8 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		if out.AgentRuntime.OrkaVersion == "" {
 			out.AgentRuntime.OrkaVersion = "v1"
 		}
-		if out.AgentRuntime.OrkaRetries <= 0 {
-			out.AgentRuntime.OrkaRetries = 1
+		if out.AgentRuntime.OrkaRetries == nil {
+			out.AgentRuntime.OrkaRetries = intPtr(1)
 		}
 	}
 	return out
@@ -911,7 +911,7 @@ func (c *Config) Validate() error {
 			default:
 				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q or %q)", ar.Type, "opencode", "orka")
 			}
-			if ar.OrkaRetries < 0 {
+			if ar.OrkaRetries != nil && *ar.OrkaRetries < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be >= 0")
 			}
 			if ar.MaxTurns < 0 {

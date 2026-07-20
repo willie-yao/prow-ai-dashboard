@@ -146,9 +146,12 @@ ai:
       timeout: 10m
 ```
 
-The runner needs `opencode` and git. The standard distroless Kubernetes image does not contain them. The chart selects
-the published `fixer` image when `orka.fixRuntime.enabled=true`; custom local
-runtime deployments can still build [`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile).
+The runner needs `opencode` and git. The standard distroless Kubernetes image
+does not contain them. Local `opencode` deployments should build
+[`deploy/fixer.Dockerfile`](../deploy/fixer.Dockerfile), which installs both.
+The chart's `orka.fixRuntime.enabled` image contains git only because it
+reconstructs diffs returned by an Orka Agent; it does not support the local
+`opencode` backend.
 
 #### `orka` (in-cluster)
 
@@ -172,7 +175,7 @@ ai:
       namespace: orka-system
       git_secret: source-repo-readonly   # optional for private repos
       version: v1
-      retries: 1
+      retries: 1  # default; set 0 to disable Orka Task retries
       max_turns: 30
       allow_bash: true
       timeout: 15m

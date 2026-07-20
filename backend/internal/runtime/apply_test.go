@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,34 @@ func TestApplyDiffReconstructsChangedFiles(t *testing.T) {
 	}
 	if !strings.Contains(out, "patched") || !strings.Contains(out, "new.txt") {
 		t.Fatalf("diff = %q", out)
+	}
+}
+
+func TestApplyDiffRejectsLargeReconstructedFile(t *testing.T) {
+	repo := initRepo(t)
+	large := "first\n" + strings.Repeat("line\n", maxRemoteFileContentBytes/5+1)
+	if err := os.WriteFile(filepath.Join(repo, "large.txt"), []byte(large), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRun(context.Background(), repo, "add", "large.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRun(context.Background(), repo, "commit", "-m", "large fixture"); err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(large, "first\n", "changed\n", 1)
+	if err := os.WriteFile(filepath.Join(repo, "large.txt"), []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := gitOut(context.Background(), repo, "diff", "--", "large.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gitRun(context.Background(), repo, "checkout", "--", "large.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, diff); err == nil || !strings.Contains(err.Error(), "changed file large.txt") {
+		t.Fatalf("large file error = %v", err)
 	}
 }
 

@@ -219,7 +219,7 @@ ai:
   #     # namespace: orka-system
   #     # git_secret: source-repo-readonly
   #     # version: v1
-  #     # retries: 1
+  #     # retries: 1  # set 0 to disable Orka Task retries
 
 # Optional: auto-file GitHub issues for systemic recurring patterns and
 # persistent failures. Off by default. Active only when enabled AND an

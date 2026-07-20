@@ -23,9 +23,8 @@ type AnalysisValidation struct {
 // EvidenceText is the consumer-skill trigger input for this analysis.
 func (a AnalysisValidation) EvidenceText() string {
 	return strings.Join([]string{
-		a.Summary,
 		a.RootCause,
-		a.Severity,
+		a.Summary,
 		a.SuggestedFix,
 		strings.Join(a.RelevantFiles, "\n"),
 	}, "\n")
