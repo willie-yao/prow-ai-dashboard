@@ -163,8 +163,9 @@ the Kubernetes server.
 State tracks both persistent-test alerts and action-enabled systemic-pattern
 alerts. Systemic patterns are keyed by job ID, with the latest pattern ID and
 root cause retained for links and changed-pattern comparison. The state resets
-after an authoritative non-systemic verdict or recovery. State changes only
-after successful delivery:
+after an authoritative non-systemic verdict or recovery. Delivery-tracking
+transitions happen only after successful delivery; ordinary paraphrases may
+refresh the stored pattern metadata without sending a message:
 
 - A failed new or changed-failure email is retried on the next full pass.
 - A failed new or changed-pattern email is retried on the next full pass.

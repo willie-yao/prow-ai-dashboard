@@ -477,24 +477,63 @@ func TestFailedChangedPatternEmailRetries(t *testing.T) {
 	}
 }
 
-func TestPatternStateMigratesFromPatternIDToJobID(t *testing.T) {
+func TestPatternStateMigrationPrefersCurrentPatternID(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	state := NotificationState{
 		Channel:  notificationChannel,
 		Notified: map[string]NotifiedFailure{},
 		Patterns: map[string]NotifiedPattern{
-			"old-pattern-id": {PatternID: "old-pattern-id", JobID: "job-id", Subject: "periodic-job", SharedRootCause: "webhook connection refused"},
+			"000-old-pattern": {PatternID: "000-old-pattern", JobID: "job-id", Subject: "periodic-job", SharedRootCause: "required environment variables are missing"},
+			"zzz-current":     {PatternID: "zzz-current", JobID: "job-id", Subject: "periodic-job", SharedRootCause: "webhook connection refused"},
 		},
 	}
 	data, _ := json.Marshal(state)
 	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n := newTestNotifier(t, &fakeSender{}, stateFile)
-	if _, ok := n.state.Patterns["old-pattern-id"]; ok {
-		t.Fatalf("legacy key remained: %+v", n.state.Patterns)
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, stateFile)
+	pattern := systemicPattern("zzz-current", "job-id", "periodic-job")
+	pattern.SharedRootCause = "webhook connection refused"
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 0 {
+		t.Fatalf("stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
 	}
-	if got := n.state.Patterns["job-id"]; got.PatternID != "old-pattern-id" {
+	if len(n.state.Patterns) != 1 {
+		t.Fatalf("legacy candidates were not collapsed: %+v", n.state.Patterns)
+	}
+	if got := n.state.Patterns["job-id"]; got.PatternID != "zzz-current" {
+		t.Fatalf("migrated state = %+v", n.state.Patterns)
+	}
+}
+
+func TestPatternStateMigrationUsesClosestLegacyCause(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	state := NotificationState{
+		Channel:  notificationChannel,
+		Notified: map[string]NotifiedFailure{},
+		Patterns: map[string]NotifiedPattern{
+			"job-id":         {PatternID: "job-scoped-old", JobID: "job-id", Subject: "periodic-job", SharedRootCause: "required environment variables are missing"},
+			"old-webhook-id": {PatternID: "old-webhook-id", JobID: "job-id", Subject: "periodic-job", SharedRootCause: "replacement webhook is unavailable and conversion calls return connection refused"},
+		},
+	}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, stateFile)
+	pattern := systemicPattern("new-webhook-id", "job-id", "periodic-job")
+	pattern.SharedRootCause = "conversion calls fail with connection refused because the replacement webhook is unavailable"
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 0 {
+		t.Fatalf("stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+	if got := n.state.Patterns["job-id"]; got.PatternID != "new-webhook-id" {
 		t.Fatalf("migrated state = %+v", n.state.Patterns)
 	}
 }
@@ -567,5 +606,30 @@ func TestPatternsMateriallyDifferentToleratesObservedWordingDrift(t *testing.T) 
 	}
 	if !patternsMateriallyDifferent(webhookShort, rateLimit) {
 		t.Fatal("webhook outage and rate-limit causes were treated as the same pattern")
+	}
+}
+
+func TestPatternsMateriallyDifferentPreservesNumericSignals(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		previous string
+		current  string
+	}{
+		{name: "http status", previous: "identity endpoint returns HTTP 401", current: "identity endpoint returns HTTP 500"},
+		{name: "tls version", previous: "server requires TLS 1.2", current: "server requires TLS 1.3"},
+		{name: "service port", previous: "controller cannot connect to port 443", current: "controller cannot connect to port 8443"},
+		{name: "endpoint port", previous: "controller cannot connect to api.example.com:443", current: "controller cannot connect to api.example.com:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !patternsMateriallyDifferent(tc.previous, tc.current) {
+				t.Fatalf("numeric change was ignored: %q -> %q", tc.previous, tc.current)
+			}
+		})
+	}
+	if patternsMateriallyDifferent("build 2079080542820634624 returns HTTP 500", "build 2078331846319411200 returns HTTP 500") {
+		t.Fatal("volatile build IDs caused a material change")
+	}
+	if patternsMateriallyDifferent("failed at 2026-07-20 10:30:00", "failed at 2026-07-20 10:45:00") {
+		t.Fatal("timestamp values caused a material change")
 	}
 }

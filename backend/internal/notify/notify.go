@@ -25,6 +25,16 @@ const patternSimilarityFloor = 0.35
 
 var patternTokenRegex = regexp.MustCompile(`[a-z0-9]+`)
 
+var patternNumericSignalRegexes = []struct {
+	name string
+	re   *regexp.Regexp
+}{
+	{name: "http", re: regexp.MustCompile(`\bhttp(?:\s+status)?\s+([1-5][0-9]{2})\b`)},
+	{name: "port", re: regexp.MustCompile(`\bport\s+([0-9]{1,5})\b`)},
+	{name: "address-port", re: regexp.MustCompile(`(?:\]|[a-z][a-z0-9.-]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}):([0-9]{2,5})\b`)},
+	{name: "tls", re: regexp.MustCompile(`\btls(?:v|\s+version)?\s*([0-9]+(?:\.[0-9]+)?)\b`)},
+}
+
 var patternStopTokens = map[string]struct{}{
 	"all": {}, "and": {}, "any": {}, "are": {}, "because": {},
 	"been": {}, "being": {}, "but": {}, "can": {}, "context": {},
@@ -140,7 +150,6 @@ func (n *Notifier) loadState() {
 	if s.Patterns == nil {
 		s.Patterns = make(map[string]NotifiedPattern)
 	}
-	s.Patterns = normalizePatternState(s.Patterns)
 	n.state = &s
 }
 
@@ -239,10 +248,10 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 				pattern.ID = models.PatternID(pattern)
 			}
 			key := patternJobID(pattern)
-			existing, notified := n.state.Patterns[key]
+			existing, notified, stateKeys := n.patternStateFor(pattern)
 			changed := notified && patternsMateriallyDifferent(existing.SharedRootCause, pattern.SharedRootCause)
 			if notified && !changed {
-				n.state.Patterns[key] = notifiedPattern(pattern)
+				n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
 				continue
 			}
 			previousRootCause := ""
@@ -255,7 +264,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 				continue
 			}
 			stats.PatternAlerts++
-			n.state.Patterns[key] = notifiedPattern(pattern)
+			n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
 		}
 		n.reconcilePatternState(report.RecurringPatterns, jobDetails)
 	}
@@ -307,27 +316,67 @@ func notifiedPattern(pattern models.PatternAnalysis) NotifiedPattern {
 	}
 }
 
-func normalizePatternState(patterns map[string]NotifiedPattern) map[string]NotifiedPattern {
-	keys := sortedKeys(patterns)
-	normalized := make(map[string]NotifiedPattern, len(patterns))
-	for _, key := range keys {
-		pattern := patterns[key]
-		jobID := strings.TrimSpace(pattern.JobID)
-		if jobID == "" {
-			jobID = key
+func (n *Notifier) patternStateFor(pattern models.PatternAnalysis) (NotifiedPattern, bool, []string) {
+	jobID := patternJobID(pattern)
+	var exact *NotifiedPattern
+	var closest *NotifiedPattern
+	closestSimilarity := -1.0
+	closestIsJobScoped := false
+	var stateKeys []string
+	for _, key := range sortedKeys(n.state.Patterns) {
+		candidate := n.state.Patterns[key]
+		candidateJobID := strings.TrimSpace(candidate.JobID)
+		if candidateJobID == "" && key == jobID {
+			candidateJobID = key
 		}
-		if _, exists := normalized[jobID]; !exists || key == jobID {
-			normalized[jobID] = pattern
+		if candidateJobID != jobID {
+			continue
+		}
+		stateKeys = append(stateKeys, key)
+		copy := candidate
+		if candidate.PatternID == pattern.ID || key == pattern.ID {
+			exact = &copy
+		}
+		similarity := patternSimilarity(candidate.SharedRootCause, pattern.SharedRootCause)
+		if similarity > closestSimilarity || similarity == closestSimilarity && key == jobID && !closestIsJobScoped {
+			closest = &copy
+			closestSimilarity = similarity
+			closestIsJobScoped = key == jobID
 		}
 	}
-	return normalized
+	if exact != nil {
+		return *exact, true, stateKeys
+	}
+	if closest != nil {
+		return *closest, true, stateKeys
+	}
+	return NotifiedPattern{}, false, nil
+}
+
+func (n *Notifier) replacePatternState(jobID string, oldKeys []string, pattern NotifiedPattern) {
+	for _, key := range oldKeys {
+		delete(n.state.Patterns, key)
+	}
+	n.state.Patterns[jobID] = pattern
 }
 
 func patternsMateriallyDifferent(previous, current string) bool {
+	previousSignals := patternNumericSignals(previous)
+	currentSignals := patternNumericSignals(current)
+	if !samePatternTokens(previousSignals, currentSignals) {
+		return true
+	}
+	return patternSimilarity(previous, current) < patternSimilarityFloor
+}
+
+func patternSimilarity(previous, current string) float64 {
 	previousTokens := patternTokens(previous)
 	currentTokens := patternTokens(current)
 	if len(previousTokens) == 0 || len(currentTokens) == 0 {
-		return strings.TrimSpace(strings.ToLower(previous)) != strings.TrimSpace(strings.ToLower(current))
+		if strings.TrimSpace(strings.ToLower(previous)) == strings.TrimSpace(strings.ToLower(current)) {
+			return 1
+		}
+		return 0
 	}
 	intersection := 0
 	for token := range previousTokens {
@@ -336,13 +385,19 @@ func patternsMateriallyDifferent(previous, current string) bool {
 		}
 	}
 	union := len(previousTokens) + len(currentTokens) - intersection
-	return float64(intersection)/float64(union) < patternSimilarityFloor
+	return float64(intersection) / float64(union)
 }
 
 func patternTokens(value string) map[string]struct{} {
 	tokens := make(map[string]struct{})
 	for _, token := range patternTokenRegex.FindAllString(strings.ToLower(value), -1) {
-		if len(token) < 3 || isNumericToken(token) {
+		if isNumericToken(token) {
+			if len(token) <= 5 {
+				tokens[token] = struct{}{}
+			}
+			continue
+		}
+		if len(token) < 3 {
 			continue
 		}
 		token = singularPatternToken(token)
@@ -352,6 +407,33 @@ func patternTokens(value string) map[string]struct{} {
 		tokens[token] = struct{}{}
 	}
 	return tokens
+}
+
+func patternNumericSignals(value string) map[string]struct{} {
+	value = strings.ToLower(value)
+	signals := make(map[string]struct{})
+	for _, signal := range patternNumericSignalRegexes {
+		for _, match := range signal.re.FindAllStringSubmatch(value, -1) {
+			for _, number := range match[1:] {
+				if number != "" {
+					signals[signal.name+":"+number] = struct{}{}
+				}
+			}
+		}
+	}
+	return signals
+}
+
+func samePatternTokens(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for token := range a {
+		if _, ok := b[token]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func singularPatternToken(token string) string {
