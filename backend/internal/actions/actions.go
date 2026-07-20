@@ -436,8 +436,8 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		}
 		reservationID := ""
 		if entry.retry {
-			recoverPR := func(priorURL string) (string, bool, error) {
-				return mgr.FindFollowUpPR(ctx, entry.fix, priorURL)
+			recoverPR := func(priorURL string, createdAfter time.Time) (string, bool, error) {
+				return mgr.FindFollowUpPR(ctx, entry.fix, priorURL, createdAfter)
 			}
 			existingURL, id, err := s.reserveRetry(entry.failureID, fixpr.PatchHash(entry.fix.Preview.Diff), recoverPR)
 			if err != nil {
@@ -469,7 +469,7 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 	return "", ErrPreviewNotFound
 }
 
-func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(string) (string, bool, error)) (string, string, error) {
+func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(string, time.Time) (string, bool, error)) (string, string, error) {
 	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
 	entry := remediationForFinding(ledger, failureID)
 	if entry == nil || len(entry.Attempts) == 0 {
@@ -495,10 +495,10 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 		if err == nil && time.Since(createdAt) <= retryReservationTTL {
 			return "", "", fmt.Errorf("a remediation retry is already in progress")
 		}
-		if recoverPR != nil {
-			recoveredURL, found, err := recoverPR(existing.PriorURL)
-			if err != nil {
-				return "", "", err
+		if recoverPR != nil && err == nil {
+			recoveredURL, found, recoverErr := recoverPR(existing.PriorURL, createdAt)
+			if recoverErr != nil {
+				return "", "", recoverErr
 			}
 			if found {
 				existing.ResultURL = recoveredURL

@@ -543,7 +543,7 @@ type allStatePRSearcher interface {
 }
 
 // FindFollowUpPR recovers a marker-matched PR other than the prior attempt.
-func (m *Manager) FindFollowUpPR(ctx context.Context, fix *GeneratedFix, priorURL string) (string, bool, error) {
+func (m *Manager) FindFollowUpPR(ctx context.Context, fix *GeneratedFix, priorURL string, createdAfter time.Time) (string, bool, error) {
 	if fix == nil {
 		return "", false, nil
 	}
@@ -556,9 +556,10 @@ func (m *Manager) FindFollowUpPR(ctx context.Context, fix *GeneratedFix, priorUR
 		return "", false, err
 	}
 	for _, result := range results {
-		if result.HTMLURL != priorURL {
-			return result.HTMLURL, true, nil
+		if result.HTMLURL == priorURL || result.CreatedAt.IsZero() || result.CreatedAt.Before(createdAfter) {
+			continue
 		}
+		return result.HTMLURL, true, nil
 	}
 	return "", false, nil
 }

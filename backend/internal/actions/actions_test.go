@@ -342,7 +342,10 @@ func TestRetryReservationRecoversExternalPRBeforeExpiryRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	recovered := "https://github.com/o/r/pull/8"
-	url, id, err := service.reserveRetry("pattern", "patch", func(prior string) (string, bool, error) {
+	url, id, err := service.reserveRetry("pattern", "patch", func(prior string, createdAfter time.Time) (string, bool, error) {
+		if createdAfter.IsZero() {
+			t.Fatal("missing reservation creation time")
+		}
 		if prior != "https://github.com/o/r/pull/7" {
 			t.Fatalf("prior URL = %q", prior)
 		}
