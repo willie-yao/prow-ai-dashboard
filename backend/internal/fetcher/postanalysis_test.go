@@ -246,3 +246,24 @@ func TestSyncClosedRemediationIssuesRetiresTrackedIssue(t *testing.T) {
 		t.Fatalf("tracked issues = %+v", loaded.Tracked)
 	}
 }
+
+func TestSyncClosedRemediationIssuesKeepsNewerIssue(t *testing.T) {
+	dir := t.TempDir()
+	issueState := statefile.State[issues.TrackedIssue]{Repo: "o/r", Tracked: map[string]issues.TrackedIssue{
+		issues.KeyPrefixPattern + "job": {Number: 10, URL: "https://github.com/o/r/issues/10"},
+	}}
+	if err := issueState.Save(filepath.Join(dir, "issue_state.json")); err != nil {
+		t.Fatal(err)
+	}
+	remediationState := remediation.NewState()
+	remediationState.Remediations["old"] = &remediation.Remediation{
+		JobID: "job", Issue: &remediation.IssueRef{Number: 9, Repo: "o/r", State: "closed"},
+	}
+	if err := syncClosedRemediationIssues(dir, "o/r", remediationState); err != nil {
+		t.Fatal(err)
+	}
+	loaded := statefile.Load[issues.TrackedIssue](filepath.Join(dir, "issue_state.json"), "o/r", "issues")
+	if tracked := loaded.Tracked[issues.KeyPrefixPattern+"job"]; tracked.Number != 10 {
+		t.Fatalf("tracked issue = %+v", tracked)
+	}
+}

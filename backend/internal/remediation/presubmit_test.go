@@ -223,3 +223,11 @@ func TestClassifyObservationJobFailureCannotPass(t *testing.T) {
 		t.Fatalf("observation = %+v", observation)
 	}
 }
+
+func TestClassifyObservationEmptyEvidenceIsInconclusive(t *testing.T) {
+	var observation BuildObservation
+	classifyObservation(Evidence{}, nil, true, &observation)
+	if observation.Outcome != OutcomeInconclusive {
+		t.Fatalf("observation = %+v", observation)
+	}
+}

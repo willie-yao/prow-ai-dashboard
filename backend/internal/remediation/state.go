@@ -19,6 +19,7 @@ const currentVersion = 1
 // State is the versioned remediation ledger.
 type State struct {
 	Version      int                     `json:"version"`
+	Repo         string                  `json:"repo,omitempty"`
 	Remediations map[string]*Remediation `json:"remediations"`
 }
 
@@ -122,22 +123,38 @@ type BuildObservation struct {
 
 // NewState returns an initialized empty ledger.
 func NewState() *State {
-	return &State{Version: currentVersion, Remediations: map[string]*Remediation{}}
+	return NewStateForRepo("")
 }
 
-// Load reads the private ledger from dir.
+// NewStateForRepo returns an empty ledger scoped to one fix target.
+func NewStateForRepo(repo string) *State {
+	return &State{Version: currentVersion, Repo: repo, Remediations: map[string]*Remediation{}}
+}
+
+// Load reads the private ledger without applying a repository scope.
 func Load(dir string) *State {
+	return LoadForRepo(dir, "")
+}
+
+// LoadForRepo reads the private ledger and resets state from another target repo.
+func LoadForRepo(dir, repo string) *State {
 	path := filepath.Join(dir, FileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return NewState()
+		return NewStateForRepo(repo)
 	}
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil || state.Version != currentVersion {
 		if err != nil {
 			log.Printf("Warning: failed to parse remediation state: %v", err)
 		}
-		return NewState()
+		return NewStateForRepo(repo)
+	}
+	if repo != "" && state.Repo != "" && state.Repo != repo {
+		return NewStateForRepo(repo)
+	}
+	if repo != "" {
+		state.Repo = repo
 	}
 	if state.Remediations == nil {
 		state.Remediations = map[string]*Remediation{}

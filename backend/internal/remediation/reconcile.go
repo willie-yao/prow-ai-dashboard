@@ -81,7 +81,7 @@ func (r *Reconciler) SetRecovery(targetRepo string, search PullRequestSearchClie
 
 // Reconcile attaches tracked fixes to findings and refreshes every known pull request.
 func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAnalysis, details []models.JobDetail, fixes map[string]FixReference, keyFor func(models.PatternAnalysis) string) (*State, error) {
-	state := Load(r.dataDir)
+	state := LoadForRepo(r.dataDir, r.targetRepo)
 	var errs []error
 
 	combined := append([]models.PatternAnalysis(nil), patterns...)
@@ -117,6 +117,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			latest := &entry.Attempts[len(entry.Attempts)-1]
 			if latest.Status == StatusVerifiedFixed && evidenceAdvanced(entry.Evidence, currentEvidence) {
 				entry.Evidence = currentEvidence
+				mergeObservations(latest, recurrenceObservations(entry, currentEvidence, details))
 				transitionAttempt(entry, latest, StatusStillFailingSameCause, OutcomeSameCause,
 					"failure recurred in a newer Prow build after verification")
 			}
@@ -303,6 +304,54 @@ func finalizeMergedPresubmit(remediation *Remediation, attempt *Attempt) {
 		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
 			"pull request merged without successful current-head presubmit evidence")
 	}
+}
+
+func recurrenceObservations(entry *Remediation, evidence Evidence, details []models.JobDetail) []BuildObservation {
+	builds := map[string]bool{}
+	for _, buildID := range evidence.AffectedBuilds {
+		builds[buildID] = true
+	}
+	var observations []BuildObservation
+	detail := findJobDetail(entry, details)
+	if detail != nil {
+		for _, run := range detail.Runs {
+			if !builds[run.BuildID] {
+				continue
+			}
+			pullNumber, _ := strconv.Atoi(run.PullNumber)
+			observation := BuildObservation{
+				BuildID: run.BuildID, JobName: detail.Name, JobType: detail.JobType,
+				PullNumber: pullNumber, SourceRepo: entry.SourceRepo, SourceCommit: run.Commit,
+				HeadSHA: run.Revision, Result: run.Result, Outcome: OutcomeSameCause,
+				Reason: "failure recurred after verification", ProwURL: run.ProwURL,
+			}
+			if !run.Started.IsZero() {
+				observation.StartedAt = run.Started.UTC().Format(timeFormat)
+			}
+			if !run.Finished.IsZero() {
+				observation.CompletedAt = run.Finished.UTC().Format(timeFormat)
+			}
+			for _, test := range evidence.Tests {
+				for _, buildID := range test.BuildIDs {
+					if buildID == run.BuildID {
+						observation.MatchedTests = appendUnique(observation.MatchedTests, test.Identity)
+						observation.FailedMatches = appendUnique(observation.FailedMatches, test.Identity)
+						break
+					}
+				}
+			}
+			observations = append(observations, observation)
+			delete(builds, run.BuildID)
+		}
+	}
+	for buildID := range builds {
+		observations = append(observations, BuildObservation{
+			BuildID: buildID, JobName: entry.JobName, JobType: entry.JobType,
+			SourceRepo: entry.SourceRepo, Outcome: OutcomeSameCause,
+			Reason: "failure recurred after verification",
+		})
+	}
+	return observations
 }
 
 func evidenceAdvanced(previous, current Evidence) bool {

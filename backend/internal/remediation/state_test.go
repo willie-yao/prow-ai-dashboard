@@ -115,3 +115,28 @@ func TestEvidenceForPatternPrefersQualifiedJobID(t *testing.T) {
 		t.Fatalf("evidence = %+v", evidence)
 	}
 }
+
+func TestClassificationPrefersFlakyAcrossMultipleTests(t *testing.T) {
+	pattern := models.PatternAnalysis{JobID: "job", Subject: "job", SharedBuilds: []string{"3", "2", "1"}}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "3"}, TestCases: []models.TestCase{{Name: "persistent", Status: "failed"}, {Name: "flaky", Status: "failed"}}},
+		{BuildInfo: models.BuildInfo{BuildID: "2"}, TestCases: []models.TestCase{{Name: "persistent", Status: "failed"}, {Name: "flaky", Status: "passed"}}},
+		{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{{Name: "persistent", Status: "failed"}, {Name: "flaky", Status: "failed"}}},
+	}}}
+	if got := classificationForPattern(pattern, details); got != string(models.ClassificationFlaky) {
+		t.Fatalf("classification = %q", got)
+	}
+}
+
+func TestLoadForRepoResetsAnotherTarget(t *testing.T) {
+	dir := t.TempDir()
+	state := NewStateForRepo("old/repo")
+	state.Remediations["pattern"] = &Remediation{ID: "pattern"}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded := LoadForRepo(dir, "new/repo")
+	if loaded.Repo != "new/repo" || len(loaded.Remediations) != 0 {
+		t.Fatalf("loaded = %+v", loaded)
+	}
+}

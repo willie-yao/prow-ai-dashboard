@@ -201,11 +201,7 @@ func fetchBuildTests(ctx context.Context, b storage.Backend, loc prowbuild.Build
 
 func classifyObservation(evidence Evidence, cases []models.TestCase, jobPassed bool, observation *BuildObservation) {
 	if len(evidence.Tests) == 0 {
-		if jobPassed {
-			observation.Outcome = OutcomePassed
-		} else {
-			observation.Outcome, observation.Reason = OutcomeInconclusive, "job failed without test-level evidence"
-		}
+		observation.Outcome, observation.Reason = OutcomeInconclusive, "original finding has no test-level evidence"
 		return
 	}
 	byIdentity := make(map[string][]models.TestCase, len(cases))

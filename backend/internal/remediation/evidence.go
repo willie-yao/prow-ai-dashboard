@@ -90,19 +90,25 @@ func appendUnique(values []string, value string) []string {
 }
 
 func classificationForPattern(pattern models.PatternAnalysis, details []models.JobDetail) string {
+	evidence := EvidenceForPattern(pattern, details)
+	persistent := false
 	for _, detail := range details {
 		if !patternMatchesDetail(pattern, detail) {
 			continue
 		}
-		for _, test := range EvidenceForPattern(pattern, details).Tests {
+		for _, test := range evidence.Tests {
 			info := aggregator.ClassifyFailure(test.Name, detail.Runs, 3)
 			if info.Classification == models.ClassificationFlaky {
 				return string(models.ClassificationFlaky)
 			}
 			if info.Classification == models.ClassificationPersistent {
-				return string(models.ClassificationPersistent)
+				persistent = true
 			}
 		}
+		break
+	}
+	if persistent {
+		return string(models.ClassificationPersistent)
 	}
 	return "pattern"
 }

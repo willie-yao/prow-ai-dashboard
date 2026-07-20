@@ -230,6 +230,9 @@ func TestReconcileReopensVerifiedFindingOnNewerFailure(t *testing.T) {
 	if attempt.Status != StatusStillFailingSameCause || state.Remediations["pattern"].Evidence.BuildWatermark != "20" {
 		t.Fatalf("attempt=%+v evidence=%+v", attempt, state.Remediations["pattern"].Evidence)
 	}
+	if len(attempt.Observations) != 1 || attempt.Observations[0].BuildID != "20" || attempt.Observations[0].Outcome != OutcomeSameCause {
+		t.Fatalf("observations = %+v", attempt.Observations)
+	}
 }
 
 func TestReconcilePreservesLinkedIssueLifecycleFields(t *testing.T) {

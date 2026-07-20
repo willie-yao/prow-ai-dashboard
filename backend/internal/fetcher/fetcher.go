@@ -418,11 +418,7 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		log.Println("Notifications: skipped (email disabled)")
 	}
 
-	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
-		sideEffectErrs = append(sideEffectErrs, err)
-	}
-
-	fixPatterns := remediation.UntrackedPatterns(remediation.Load(opts.OutDir), flakinessReport.RecurringPatterns, details)
+	fixPatterns := remediation.UntrackedPatterns(remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg)), flakinessReport.RecurringPatterns, details)
 	if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
 		log.Printf("Fix PRs: %d pattern(s) already have remediation history; follow-ups require confirmation", skipped)
 	}
@@ -430,6 +426,9 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
+		sideEffectErrs = append(sideEffectErrs, err)
+	}
+	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
 	return errors.Join(sideEffectErrs...)
@@ -541,7 +540,7 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
 	keepOpen := map[string]bool{}
-	for _, remediationEntry := range remediation.Load(outDir).Remediations {
+	for _, remediationEntry := range remediation.LoadForRepo(outDir, configuredFixRepo(cfg)).Remediations {
 		if remediationEntry == nil || len(remediationEntry.Attempts) == 0 {
 			continue
 		}
@@ -833,7 +832,7 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		return nil
 	}
 	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
-	ledger := remediation.Load(p.opts.OutDir)
+	ledger := remediation.LoadForRepo(p.opts.OutDir, targetRepo)
 	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 && len(patterns) == 0 {
 		return nil
 	}
@@ -933,7 +932,7 @@ func syncClosedRemediationIssues(dataDir, issueRepo string, state *remediation.S
 			continue
 		}
 		key := issues.KeyPrefixPattern + entry.JobID
-		if _, ok := issueState.Tracked[key]; ok {
+		if tracked, ok := issueState.Tracked[key]; ok && tracked.Number == entry.Issue.Number {
 			delete(issueState.Tracked, key)
 			changed = true
 		}

@@ -336,8 +336,19 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 
 const gfKind = "fix"
 
+func (s *Service) remediationRepo() string {
+	if s.cfg == nil {
+		return ""
+	}
+	effective := s.cfg.EffectiveFixPRs()
+	if effective.Repo == nil || effective.Repo.Owner == "" || effective.Repo.Name == "" {
+		return ""
+	}
+	return effective.Repo.Owner + "/" + effective.Repo.Name
+}
+
 func (s *Service) retryContext(failureID string) (bool, string, string, error) {
-	state := remediation.Load(s.dataDir)
+	state := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
 	entry := state.Remediations[failureID]
 	if entry == nil {
 		for _, candidate := range state.Remediations {
@@ -459,7 +470,7 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 }
 
 func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(string) (string, bool, error)) (string, string, error) {
-	ledger := remediation.Load(s.dataDir)
+	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
 	entry := remediationForFinding(ledger, failureID)
 	if entry == nil || len(entry.Attempts) == 0 {
 		return "", "", fmt.Errorf("remediation retry is no longer available")
@@ -519,7 +530,7 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 }
 
 func (s *Service) completeRetryReservation(failureID, reservationID, resultURL string) error {
-	ledger := remediation.Load(s.dataDir)
+	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
 	entry := remediationForFinding(ledger, failureID)
 	if entry == nil {
 		return fmt.Errorf("remediation retry reservation was lost")
@@ -537,7 +548,7 @@ func (s *Service) completeRetryReservation(failureID, reservationID, resultURL s
 }
 
 func (s *Service) clearRetryReservation(failureID, reservationID string) {
-	ledger := remediation.Load(s.dataDir)
+	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
 	entry := remediationForFinding(ledger, failureID)
 	if entry == nil {
 		return
