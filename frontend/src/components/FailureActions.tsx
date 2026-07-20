@@ -48,6 +48,14 @@ function requestIsActive(request: ActionRequest): boolean {
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
+function requestStateError(request: ActionRequest): string | null {
+  if (request.status === "failed") {
+    return request.error || "Draft generation failed.";
+  }
+  if (request.status === "expired") return "This draft expired.";
+  return null;
+}
+
 const API_BASE = import.meta.env.BASE_URL;
 
 const dialogPaperSx = {
@@ -217,11 +225,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
         setAction((current) => (current === null ? null : latest.kind));
         setRequest(latest);
         setPreview(latest.preview ?? null);
-        setError(
-          latest.status === "failed"
-            ? latest.error || "Draft generation failed."
-            : null,
-        );
+        setError(requestStateError(latest));
         if (latest.status === "pending") timer = window.setTimeout(load, 2000);
       } catch (e) {
         if (cancelled) return;
@@ -283,6 +287,20 @@ export function FailureActions({ failureID }: { failureID: string }) {
     }
   }
 
+  function handleRecoveredReplacement(
+    recovered: ActionRequest | null,
+    previousID: string,
+  ): boolean {
+    if (!recovered || recovered.id === previousID) return false;
+    if (recovered.status === "confirmed" && recovered.result_url) {
+      setUrl(recovered.result_url);
+      close();
+      return true;
+    }
+    setError(requestStateError(recovered));
+    return true;
+  }
+
   async function startRequest(
     requested: Action,
     prompt = "",
@@ -325,7 +343,12 @@ export function FailureActions({ failureID }: { failureID: string }) {
         ? await refreshRequestState(previousRequestID, startedFailureID)
         : null;
       if (activeFailureID.current !== startedFailureID) return;
-      if (refreshed && refreshed.id !== previousRequestID) return;
+      if (
+        previousRequestID &&
+        handleRecoveredReplacement(refreshed, previousRequestID)
+      ) {
+        return;
+      }
       setError(message);
     } finally {
       if (activeFailureID.current === startedFailureID) setBusy(null);
@@ -373,6 +396,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id, startedFailureID);
       if (activeFailureID.current !== startedFailureID) return;
+      if (handleRecoveredReplacement(refreshed, request.id)) return;
       if (refreshed?.status === "confirmed" && refreshed.result_url) {
         setUrl(refreshed.result_url);
         close();
@@ -403,6 +427,7 @@ export function FailureActions({ failureID }: { failureID: string }) {
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id, startedFailureID);
       if (activeFailureID.current !== startedFailureID) return;
+      if (handleRecoveredReplacement(refreshed, request.id)) return;
       if (refreshed?.status === "cancelled") {
         close();
         return;
