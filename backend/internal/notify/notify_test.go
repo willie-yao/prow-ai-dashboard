@@ -649,6 +649,8 @@ func TestPatternsMateriallyDifferentPreservesNumericSignals(t *testing.T) {
 		{name: "http status", previous: "identity endpoint returns HTTP 401", current: "identity endpoint returns HTTP 500"},
 		{name: "http status code", previous: "identity endpoint returns HTTP status code 401", current: "identity endpoint returns HTTP status code 500"},
 		{name: "bare status code", previous: "identity endpoint returns status code 401", current: "identity endpoint returns status code 500"},
+		{name: "http protocol", previous: "identity endpoint returns HTTP/1.1 401", current: "identity endpoint returns HTTP/1.1 500"},
+		{name: "http colon", previous: "identity endpoint returns HTTP status: 401", current: "identity endpoint returns HTTP status: 500"},
 		{name: "tls version", previous: "server requires TLS 1.2", current: "server requires TLS 1.3"},
 		{name: "service port", previous: "controller cannot connect to port 443", current: "controller cannot connect to port 8443"},
 		{name: "endpoint port", previous: "controller cannot connect to api.example.com:443", current: "controller cannot connect to api.example.com:8443"},
@@ -664,6 +666,9 @@ func TestPatternsMateriallyDifferentPreservesNumericSignals(t *testing.T) {
 	}
 	if patternsMateriallyDifferent("failed at 2026-07-20 10:30:00", "failed at 2026-07-20 10:45:00") {
 		t.Fatal("timestamp values caused a material change")
+	}
+	if patternsMateriallyDifferent("the token is expired and the endpoint returns HTTP 401", "the endpoint rejects requests because the token is expired") {
+		t.Fatal("an omitted numeric detail caused a material change")
 	}
 }
 
@@ -696,6 +701,9 @@ func TestPatternsMateriallyDifferentDetectsPolarityReversal(t *testing.T) {
 	if !patternsMateriallyDifferent("API can accept requests", "API cannot accept requests") {
 		t.Fatal("uncontracted negative polarity was treated as unchanged")
 	}
+	if !patternsMateriallyDifferent("API accepts requests", "API fails to accept requests") {
+		t.Fatal("fail-to negative polarity was treated as unchanged")
+	}
 	if !patternsMateriallyDifferent("API is available", "API is no longer available") {
 		t.Fatal("no-longer polarity was treated as unchanged")
 	}
@@ -707,6 +715,9 @@ func TestPatternsMateriallyDifferentDetectsPolarityReversal(t *testing.T) {
 	}
 	if patternsMateriallyDifferent("API cannot accept requests", "API can't accept requests") {
 		t.Fatal("cannot and can't were treated as different patterns")
+	}
+	if patternsMateriallyDifferent("API does not accept requests", "API fails to accept requests") {
+		t.Fatal("equivalent fail-to negation was treated as changed")
 	}
 	if patternsMateriallyDifferent("upgrade removes pods before the webhook is ready", "upgrade finds the webhook is not ready after removing pods") {
 		t.Fatal("equivalent readiness phrasing was treated as changed")

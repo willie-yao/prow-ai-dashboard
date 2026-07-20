@@ -29,7 +29,7 @@ var patternNumericSignalRegexes = []struct {
 	name string
 	re   *regexp.Regexp
 }{
-	{name: "http", re: regexp.MustCompile(`\bhttp(?:\s+status(?:\s+code)?)?\s+([1-5][0-9]{2})\b`)},
+	{name: "http", re: regexp.MustCompile(`\bhttp(?:/[0-9.]+)?(?:\s+status(?:\s+code)?)?\s*[:=-]?\s*([1-5][0-9]{2})\b`)},
 	{name: "http", re: regexp.MustCompile(`\bstatus\s+code\s+([1-5][0-9]{2})\b`)},
 	{name: "port", re: regexp.MustCompile(`\bport\s+([0-9]{1,5})\b`)},
 	{name: "address-port", re: regexp.MustCompile(`(?:\]|[a-z][a-z0-9.-]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}):([0-9]{2,5})\b`)},
@@ -38,6 +38,7 @@ var patternNumericSignalRegexes = []struct {
 
 var patternPolarityRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`\b(?:not|no|without|never)\s+([a-z0-9]+)\b`),
+	regexp.MustCompile(`\b(?:fail|fails|failed)\s+to\s+([a-z0-9]+)\b`),
 	regexp.MustCompile(`\b(?:before|until)(?:\s+[a-z0-9-]+){0,8}\s+(?:is|was|becomes?)\s+([a-z0-9]+)\b`),
 }
 
@@ -415,7 +416,7 @@ func patternsMateriallyDifferent(previous, current string) bool {
 	}
 	previousSignals := patternNumericSignals(previous)
 	currentSignals := patternNumericSignals(current)
-	if !samePatternTokens(previousSignals, currentSignals) {
+	if patternNumericSignalsConflict(previousSignals, currentSignals) {
 		return true
 	}
 	return patternSimilarity(previous, current) < patternSimilarityFloor
@@ -541,16 +542,37 @@ func patternNumericSignals(value string) map[string]struct{} {
 	return signals
 }
 
-func samePatternTokens(a, b map[string]struct{}) bool {
-	if len(a) != len(b) {
-		return false
+func patternNumericSignalsConflict(a, b map[string]struct{}) bool {
+	byKind := func(signals map[string]struct{}) map[string]map[string]struct{} {
+		out := make(map[string]map[string]struct{})
+		for signal := range signals {
+			kind, value, ok := strings.Cut(signal, ":")
+			if !ok {
+				continue
+			}
+			if out[kind] == nil {
+				out[kind] = make(map[string]struct{})
+			}
+			out[kind][value] = struct{}{}
+		}
+		return out
 	}
-	for token := range a {
-		if _, ok := b[token]; !ok {
-			return false
+	aByKind, bByKind := byKind(a), byKind(b)
+	for kind, aValues := range aByKind {
+		bValues := bByKind[kind]
+		if bValues == nil {
+			continue
+		}
+		if len(aValues) != len(bValues) {
+			return true
+		}
+		for value := range aValues {
+			if _, ok := bValues[value]; !ok {
+				return true
+			}
 		}
 	}
-	return true
+	return false
 }
 
 func singularPatternToken(token string) string {
