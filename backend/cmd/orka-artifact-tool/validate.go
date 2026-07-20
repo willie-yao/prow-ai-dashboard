@@ -55,6 +55,11 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		writeToolError(w, http.StatusInternalServerError, "analysis validation key is unavailable")
 		return
 	}
+	taskName := strings.TrimSpace(r.Header.Get(orka.ValidationTaskHeader))
+	if taskName == "" {
+		writeToolError(w, http.StatusInternalServerError, "analysis Task identity is unavailable")
+		return
+	}
 	minGCSBytes, err := strconv.Atoi(strings.TrimSpace(r.Header.Get(orka.MinGCSBytesHeader)))
 	if err != nil || minGCSBytes < 0 {
 		http.Error(w, "invalid minimum GCS byte floor", http.StatusBadRequest)
@@ -136,7 +141,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
 		return
 	}
-	result["validation_token"] = orka.AnalysisValidationToken(validationKey, args.Analysis, gcsBytes)
+	result["validation_token"] = orka.AnalysisValidationToken(validationKey, taskName, args.Analysis, gcsBytes)
 	log.Printf("✔ validate_analysis paths=%d read=%d matched_skills=%d", len(args.Analysis.RelevantFiles), len(readPaths), len(matchedSkills))
 	writeJSON(w, result)
 }

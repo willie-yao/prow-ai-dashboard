@@ -104,3 +104,13 @@ func TestLoadOrCreateValidationKeyReusesManifestKey(t *testing.T) {
 		t.Fatalf("reused key = %q, want persisted-key", second)
 	}
 }
+
+func TestTaskToolNamesUseTaskSpecificValidator(t *testing.T) {
+	got := taskToolNames([]string{"read-artifact", "validate-analysis", "recurrence"}, "build-scope", "az-analysis-task")
+	if got[0] != buildToolName("read-artifact", "build-scope") || got[2] != buildToolName("recurrence", "build-scope") {
+		t.Fatalf("build-scoped tools = %v", got)
+	}
+	if got[1] != validationToolName("az-analysis-task") {
+		t.Fatalf("validation tool = %q, want task-specific name", got[1])
+	}
+}

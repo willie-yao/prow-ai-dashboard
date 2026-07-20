@@ -346,7 +346,7 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err != nil {
 		return false, "analysis Task telemetry unavailable: " + oneLine(err.Error())
 	}
-	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, taskName, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
 		return false, "analysis Task failed acceptance: " + oneLine(err.Error())
 	}
 	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
@@ -549,7 +549,7 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	if err != nil {
 		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
 	}
-	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
 		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
 		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error()), retry: retry}
 	}
@@ -720,11 +720,11 @@ func validateAnalysisShape(a analysis) error {
 	return nil
 }
 
-func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) error {
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, taskName string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) error {
 	if a.GCSBytes == nil || *a.GCSBytes < 0 {
 		return fmt.Errorf("gcs_bytes is required and must be non-negative")
 	}
-	if !orka.VerifyAnalysisValidationToken(validationKey, a.validationInput(), *a.GCSBytes, a.ValidationToken) {
+	if !orka.VerifyAnalysisValidationToken(validationKey, taskName, a.validationInput(), *a.GCSBytes, a.ValidationToken) {
 		return fmt.Errorf("validation_token does not match the final analysis")
 	}
 	if telemetry.EventCount == 0 {

@@ -79,6 +79,7 @@ func TestValidateAnalysisRequiresRelevantFilesArray(t *testing.T) {
 	env := &toolEnv{evidence: newEvidenceAttestor("secret")}
 	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"analysis":{"root_cause":"cause"},"evidence_tokens":[]}`))
 	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.ValidationTaskHeader, "task")
 	req.Header.Set(orka.MinGCSBytesHeader, "0")
 	recorder := httptest.NewRecorder()
 	validateAnalysis(env, recorder, req)
@@ -166,6 +167,7 @@ func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation,
 	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", bytes.NewReader(body))
 	req.Header.Set(orka.ToolScopeHeader, scope)
 	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.ValidationTaskHeader, "task")
 	req.Header.Set(orka.MinGCSBytesHeader, "0")
 	if skillHeader != "" {
 		req.Header.Set(skills.ContractHeader, skillHeader)
@@ -209,6 +211,7 @@ func TestValidateAnalysisEnforcesMinimumGCSBytes(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", bytes.NewReader(body))
 	req.Header.Set(orka.ToolScopeHeader, "scope")
 	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.ValidationTaskHeader, "task")
 	req.Header.Set(orka.MinGCSBytesHeader, "11")
 	recorder := httptest.NewRecorder()
 	validateAnalysis(env, recorder, req)

@@ -194,6 +194,7 @@ func main() {
 		prefix string
 	}
 	builds := map[string]buildPlan{}
+	validationTasks := map[string]buildPlan{}
 	var taskObjs []namedObj
 	for _, jf := range jobFiles {
 		var detail models.JobDetail
@@ -222,6 +223,7 @@ func main() {
 				if err != nil {
 					log.Fatalf("task identity: %v", err)
 				}
+				validationTasks[ref.Name] = buildPlan{scope: ref.ToolScope, prefix: buildPrefix}
 				task := orka.BuildAITask(orka.AITaskSpec{
 					Name:         ref.Name,
 					Namespace:    *namespace,
@@ -230,7 +232,7 @@ func main() {
 					Timeout:      *timeout,
 					MaxRetries:   *retries,
 					WebhookURL:   *webhookURL,
-					Tools:        buildToolNames(toolNames, ref.ToolScope),
+					Tools:        taskToolNames(toolNames, ref.ToolScope, ref.Name),
 					SystemPrompt: systemPrompt,
 					Prompt:       ref.Prompt,
 					Labels: map[string]string{
@@ -248,12 +250,27 @@ func main() {
 	var toolObjs []namedObj
 	for _, build := range builds {
 		for _, base := range toolNames {
+			if base == "validate-analysis" {
+				continue
+			}
 			doc := baseTools[base]
 			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
 			toolName := buildToolName(base, build.scope)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
 		}
+	}
+	for taskName, build := range validationTasks {
+		doc := baseTools["validate-analysis"]
+		clone := cloneToolForBuild(doc, "validate-analysis", build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
+		meta := clone["metadata"].(map[string]any)
+		toolName := validationToolName(taskName)
+		meta["name"] = toolName
+		httpCfg := clone["spec"].(map[string]any)["http"].(map[string]any)
+		headers := httpCfg["headers"].(map[string]any)
+		headers[orka.ValidationTaskHeader] = taskName
+		writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
+		toolObjs = append(toolObjs, namedObj{toolName, clone})
 	}
 
 	log.Printf("wrote %d Tasks (%s) and %d contract-scoped Tools across %d builds (%s) for %s [bucket=%s, k8s-tools=%v]",
@@ -510,6 +527,20 @@ func buildToolNames(base []string, buildScope string) []string {
 		out[i] = buildToolName(b, buildScope)
 	}
 	return out
+}
+
+func taskToolNames(base []string, buildScope, taskName string) []string {
+	out := buildToolNames(base, buildScope)
+	for i, name := range base {
+		if name == "validate-analysis" {
+			out[i] = validationToolName(taskName)
+		}
+	}
+	return out
+}
+
+func validationToolName(taskName string) string {
+	return orka.Sanitize("validate-analysis-" + taskName)
 }
 
 func buildToolName(base, buildScope string) string { return orka.Sanitize(base + "-b" + buildScope) }

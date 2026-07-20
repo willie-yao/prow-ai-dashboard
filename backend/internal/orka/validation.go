@@ -32,21 +32,23 @@ func (a AnalysisValidation) EvidenceText() string {
 }
 
 // AnalysisValidationToken authenticates the canonical validated result.
-func AnalysisValidationToken(key string, a AnalysisValidation, gcsBytes int) string {
-	if strings.TrimSpace(key) == "" {
+func AnalysisValidationToken(key, taskName string, a AnalysisValidation, gcsBytes int) string {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(taskName) == "" {
 		return ""
 	}
 	data := canonicalAnalysisValidation(a)
 	mac := hmac.New(sha256.New, []byte(key))
 	_, _ = mac.Write([]byte("orka-analysis-validation-v2\x00"))
+	_, _ = mac.Write([]byte(taskName))
+	_, _ = mac.Write([]byte{0})
 	_, _ = mac.Write(data)
 	_, _ = fmt.Fprintf(mac, "\x00%d", gcsBytes)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // VerifyAnalysisValidationToken reports whether token authenticates a.
-func VerifyAnalysisValidationToken(key string, a AnalysisValidation, gcsBytes int, token string) bool {
-	expected := AnalysisValidationToken(key, a, gcsBytes)
+func VerifyAnalysisValidationToken(key, taskName string, a AnalysisValidation, gcsBytes int, token string) bool {
+	expected := AnalysisValidationToken(key, taskName, a, gcsBytes)
 	return len(token) == len(expected) && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 

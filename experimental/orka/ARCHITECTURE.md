@@ -130,8 +130,7 @@ verdicts without a successful `verify_timeline` call. Quality-tool error paths
 return non-success HTTP statuses so Orka records failed calls rather than
 successful error payloads. The producer keeps a private validation key in the
 non-published analysis manifest, fingerprints its hash in Task identity, and
-injects the key only into the validate Tool's hidden HTTP headers. The ingestor
-uses that key to verify the final result's HMAC token. Accepted results carry Tool/model failures, retries,
+creates one validate Tool per analysis Task, injects the key and expected Task name only into its hidden HTTP headers, and has the ingestor verify both the Task identity and final result in the HMAC token. Accepted results carry Tool/model failures, retries,
 context truncations, elapsed time, tokens, stop reason, and quality-tool
 telemetry. Failing/absent results get the engine's `unavailable`
 placeholder via
@@ -179,7 +178,7 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Per-failure build isolation (fetcher scopes each analysis to one build) | Contract-versioned Tool clones with static `X-Build-Prefix` / `X-Bucket` headers; old and new Task contracts cannot share mutable Tool objects. | `ToolScopeID`, `cloneToolForBuild`, shim `toolenv.go` |
 | Prompt composition (BasePrompt + system.md + footer) | The producer calls the same `ai.ComposeSystemPrompt` and appends a tool-usage/self-critique addendum. | `toolUsageAddendum` |
 | Convergence (loop always yields a final verdict) | Worker patches: forced tools-free finalization near the budget + re-prompt on an empty final message. | `worker-patches/` (2,3) |
-| Critique gate: hallucinated-citation guard | Successful `read_artifact`, `tail_artifact`, and `grep_artifact` calls return scoped HMAC evidence tokens. `validate_analysis` requires those tokens for every cited path and matching recipe group, pruning groups absent from a complete 5,000-path build listing. Its final validation token is keyed so the model cannot recompute it for a changed answer. | `orka-artifact-tool/evidence.go`, `validate.go` |
+| Critique gate: hallucinated-citation guard | Successful `read_artifact`, `tail_artifact`, and `grep_artifact` calls return scoped HMAC evidence tokens. `validate_analysis` requires those tokens for every cited path and matching recipe group, pruning groups absent from a complete 5,000-path build listing. Its final validation token is keyed and bound to the current Task so the model cannot recompute it for a changed answer or replay it across failures. | `orka-artifact-tool/evidence.go`, `validate.go` |
 | Critique gate: transient discipline | The worker re-prompts an unsupported transient verdict, and the ingestor independently rejects any final transient result without a completed `verify_timeline` event. | `worker-patches/` (4), `timeline.go`, ingestor event acceptance |
 | Investigation floor | The producer fingerprints `ai.min_tool_calls`; the ingestor counts `ToolCallStarted` events and rejects shallower results. | `AnalysisManifest.MinToolCalls`, Task events API |
 | Per-test recurrence evidence | `check_recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |

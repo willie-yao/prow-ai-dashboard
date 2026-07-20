@@ -25,6 +25,9 @@ const ValidationKeyHeader = "X-Prow-AI-Validation-Key"
 // MinGCSBytesHeader carries the configured artifact-read floor to validate_analysis.
 const MinGCSBytesHeader = "X-Prow-AI-Min-GCS-Bytes"
 
+// ValidationTaskHeader binds validate_analysis to one analysis Task.
+const ValidationTaskHeader = "X-Prow-AI-Task"
+
 // AnalysisContract is the model and tool contract that determines whether a
 // prior Orka result can be reused.
 type AnalysisContract struct {

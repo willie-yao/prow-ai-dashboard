@@ -21,7 +21,9 @@ import (
 
 const testValidationKey = "test-validation-key"
 
-func withValidation(a analysis) analysis {
+func withValidation(a analysis) analysis { return withValidationForTask(a, "task") }
+
+func withValidationForTask(a analysis, taskName string) analysis {
 	if a.GCSBytes == nil {
 		zero := 0
 		a.GCSBytes = &zero
@@ -29,13 +31,17 @@ func withValidation(a analysis) analysis {
 	if a.RelevantFiles == nil {
 		a.RelevantFiles = []string{}
 	}
-	a.ValidationToken = orkaapi.AnalysisValidationToken(testValidationKey, a.validationInput(), *a.GCSBytes)
+	a.ValidationToken = orkaapi.AnalysisValidationToken(testValidationKey, taskName, a.validationInput(), *a.GCSBytes)
 	return a
 }
 
-func validatedAnalysisJSON(t *testing.T, a analysis) string {
+func validatedAnalysisJSON(t *testing.T, a analysis, taskNames ...string) string {
 	t.Helper()
-	a = withValidation(a)
+	taskName := "task"
+	if len(taskNames) > 0 {
+		taskName = taskNames[0]
+	}
+	a = withValidationForTask(a, taskName)
 	data, err := json.Marshal(a)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +111,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 			Summary: "stale controller configuration", RootCause: "the controller wrote stale configuration",
 			Severity: "High", IsTransient: &nonTransient, SuggestedFix: "serialize the update",
 			RelevantFiles: []string{"config/controller.yaml"},
-		})
+		}, ref.Name)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +333,7 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	nonTransient := false
-	newResult := validatedAnalysisJSON(t, analysis{Summary: "new root", RootCause: "new root", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix it"})
+	newResult := validatedAnalysisJSON(t, analysis{Summary: "new root", RootCause: "new root", Severity: "High", IsTransient: &nonTransient, SuggestedFix: "fix it"}, ref.Name)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, ref.Name) {
 			http.NotFound(w, r)
