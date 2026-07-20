@@ -477,6 +477,37 @@ func TestFailedChangedPatternEmailRetries(t *testing.T) {
 	}
 }
 
+func TestFailedChangedLegacyPatternEmailRetainsRetryState(t *testing.T) {
+	sender := &fakeSender{failNext: 1}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	n.state.Patterns["legacy-pattern-id"] = NotifiedPattern{
+		PatternID: "legacy-pattern-id", JobID: "job-id", Subject: "periodic-job",
+		SharedRootCause: "webhook connection refused while replacing controller pods",
+	}
+	changed := systemicPattern("new-pattern-id", "job-id", "periodic-job")
+	changed.SharedRootCause = "required cluster template environment variables are missing"
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{changed}
+	details := []models.JobDetail{{
+		JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3),
+		PatternAnalyses: []models.PatternAnalysis{changed},
+	}}
+	stats, err := n.ProcessFailures(context.Background(), report, details)
+	if err == nil || stats.Failed != 1 {
+		t.Fatalf("failed change stats=%+v err=%v", stats, err)
+	}
+	if _, ok := n.state.Patterns["legacy-pattern-id"]; !ok {
+		t.Fatalf("failed delivery lost legacy retry state: %+v", n.state.Patterns)
+	}
+	stats, err = n.ProcessFailures(context.Background(), report, details)
+	if err != nil || stats.PatternAlerts != 1 {
+		t.Fatalf("retry stats=%+v err=%v", stats, err)
+	}
+	if len(n.state.Patterns) != 1 || n.state.Patterns["job-id"].PatternID != "new-pattern-id" {
+		t.Fatalf("retry did not collapse state: %+v", n.state.Patterns)
+	}
+}
+
 func TestPatternStateMigrationPrefersCurrentPatternID(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	state := NotificationState{
@@ -616,6 +647,7 @@ func TestPatternsMateriallyDifferentPreservesNumericSignals(t *testing.T) {
 		current  string
 	}{
 		{name: "http status", previous: "identity endpoint returns HTTP 401", current: "identity endpoint returns HTTP 500"},
+		{name: "http status code", previous: "identity endpoint returns HTTP status code 401", current: "identity endpoint returns HTTP status code 500"},
 		{name: "tls version", previous: "server requires TLS 1.2", current: "server requires TLS 1.3"},
 		{name: "service port", previous: "controller cannot connect to port 443", current: "controller cannot connect to port 8443"},
 		{name: "endpoint port", previous: "controller cannot connect to api.example.com:443", current: "controller cannot connect to api.example.com:8443"},
@@ -631,5 +663,13 @@ func TestPatternsMateriallyDifferentPreservesNumericSignals(t *testing.T) {
 	}
 	if patternsMateriallyDifferent("failed at 2026-07-20 10:30:00", "failed at 2026-07-20 10:45:00") {
 		t.Fatal("timestamp values caused a material change")
+	}
+}
+
+func TestPatternsMateriallyDifferentWeightsSharedSymptoms(t *testing.T) {
+	certificate := "webhook conversion calls fail because certificate expired"
+	endpoint := "webhook conversion calls fail because service endpoint unavailable"
+	if !patternsMateriallyDifferent(certificate, endpoint) {
+		t.Fatal("distinct mechanisms sharing symptom vocabulary were treated as the same pattern")
 	}
 }

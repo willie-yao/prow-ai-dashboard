@@ -21,7 +21,7 @@ import (
 
 const notificationChannel = "email-v1"
 
-const patternSimilarityFloor = 0.35
+const patternSimilarityFloor = 0.30
 
 var patternTokenRegex = regexp.MustCompile(`[a-z0-9]+`)
 
@@ -29,7 +29,7 @@ var patternNumericSignalRegexes = []struct {
 	name string
 	re   *regexp.Regexp
 }{
-	{name: "http", re: regexp.MustCompile(`\bhttp(?:\s+status)?\s+([1-5][0-9]{2})\b`)},
+	{name: "http", re: regexp.MustCompile(`\bhttp(?:\s+status(?:\s+code)?)?\s+([1-5][0-9]{2})\b`)},
 	{name: "port", re: regexp.MustCompile(`\bport\s+([0-9]{1,5})\b`)},
 	{name: "address-port", re: regexp.MustCompile(`(?:\]|[a-z][a-z0-9.-]*|(?:[0-9]{1,3}\.){3}[0-9]{1,3}):([0-9]{2,5})\b`)},
 	{name: "tls", re: regexp.MustCompile(`\btls(?:v|\s+version)?\s*([0-9]+(?:\.[0-9]+)?)\b`)},
@@ -44,6 +44,11 @@ var patternStopTokens = map[string]struct{}{
 	"occurred": {}, "only": {}, "retry": {}, "side": {}, "that": {}, "the": {},
 	"their": {}, "then": {}, "this": {}, "through": {}, "was": {},
 	"were": {}, "when": {}, "which": {}, "while": {}, "will": {}, "with": {},
+}
+
+var patternLowWeightTokens = map[string]struct{}{
+	"call": {}, "conversion": {}, "error": {}, "fail": {}, "failure": {},
+	"timeout": {}, "webhook": {},
 }
 
 // NotificationState tracks which persistent failures have been notified.
@@ -297,12 +302,16 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 		}
 	}
 
-	for jobID, notified := range n.state.Patterns {
+	for stateKey, notified := range n.state.Patterns {
+		jobID := strings.TrimSpace(notified.JobID)
+		if jobID == "" {
+			jobID = stateKey
+		}
 		if currentJobs[jobID] {
 			continue
 		}
 		if !presentJobs[notified.JobID] || authoritativeJobs[notified.JobID] {
-			delete(n.state.Patterns, jobID)
+			delete(n.state.Patterns, stateKey)
 		}
 	}
 }
@@ -378,14 +387,28 @@ func patternSimilarity(previous, current string) float64 {
 		}
 		return 0
 	}
-	intersection := 0
+	unionTokens := make(map[string]struct{}, len(previousTokens)+len(currentTokens))
 	for token := range previousTokens {
-		if _, ok := currentTokens[token]; ok {
-			intersection++
+		unionTokens[token] = struct{}{}
+	}
+	for token := range currentTokens {
+		unionTokens[token] = struct{}{}
+	}
+	intersectionWeight := 0.0
+	unionWeight := 0.0
+	for token := range unionTokens {
+		weight := 1.0
+		if _, lowWeight := patternLowWeightTokens[token]; lowWeight {
+			weight = 0.2
+		}
+		unionWeight += weight
+		if _, previousHas := previousTokens[token]; previousHas {
+			if _, currentHas := currentTokens[token]; currentHas {
+				intersectionWeight += weight
+			}
 		}
 	}
-	union := len(previousTokens) + len(currentTokens) - intersection
-	return float64(intersection) / float64(union)
+	return intersectionWeight / unionWeight
 }
 
 func patternTokens(value string) map[string]struct{} {
