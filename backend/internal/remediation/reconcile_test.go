@@ -176,3 +176,22 @@ func TestFinalizeMergedPresubmitWithoutPassIsInconclusive(t *testing.T) {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }
+
+func TestApplyPullRequestClearsStaleEvidenceWhenMergedHeadChanges(t *testing.T) {
+	entry := &Remediation{JobType: models.JobTypePresubmit}
+	attempt := &Attempt{
+		Status: StatusPremergeVerified, HeadSHA: "old", Outcome: OutcomePassed,
+		Observations: []BuildObservation{{BuildID: "1", HeadSHA: "old", Outcome: OutcomePassed}},
+	}
+	applyPullRequest(entry, attempt, ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "closed", Merged: true,
+		Head: ghpr.PullRequestRef{SHA: "new"}, Base: ghpr.PullRequestRef{Repo: "o/r"}, MergeCommitSHA: "merge",
+	})
+	if len(attempt.Observations) != 0 || attempt.Outcome != "" || attempt.Status != StatusMerged {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	finalizeMergedPresubmit(entry, attempt)
+	if attempt.Status != StatusInconclusive {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}

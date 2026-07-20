@@ -213,3 +213,13 @@ func TestApplyPresubmitOutcomePendingPrecedesPass(t *testing.T) {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }
+
+func TestClassifyObservationJobFailureCannotPass(t *testing.T) {
+	test := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
+	evidence := Evidence{Tests: []TestEvidence{{Identity: junit.Identity(test)}}}
+	var observation BuildObservation
+	classifyObservation(evidence, []models.TestCase{test}, false, &observation)
+	if observation.Outcome != OutcomeDifferentCause {
+		t.Fatalf("observation = %+v", observation)
+	}
+}

@@ -252,6 +252,10 @@ func classifyObservation(evidence Evidence, cases []models.TestCase, jobPassed b
 		observation.Outcome, observation.Reason = OutcomeDifferentCause, "expected test failed with a different signature"
 		return
 	}
+	if !jobPassed {
+		observation.Outcome, observation.Reason = OutcomeDifferentCause, "target tests passed but the Prow job failed elsewhere"
+		return
+	}
 	observation.Outcome = OutcomePassed
 }
 

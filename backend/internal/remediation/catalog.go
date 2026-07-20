@@ -157,6 +157,7 @@ func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig
 		return nil, fmt.Errorf("coverage list %s: %w", jobID, err)
 	}
 	var fallback map[string][]VerificationJob
+	var scanErrs []error
 	for _, build := range builds {
 		loc := prowbuild.BuildLocation{
 			JobLocation: prowbuild.JobLocation{JobType: models.JobTypePresubmit, Repo: definition.Repo},
@@ -167,17 +168,23 @@ func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig
 			continue
 		}
 		paths, err := prowbuild.DiscoverJUnitPaths(ctx, b, loc)
-		if err != nil || len(paths) == 0 {
+		if err != nil {
+			scanErrs = append(scanErrs, fmt.Errorf("discover JUnit for %s/%s: %w", jobID, build.ID, err))
+			continue
+		}
+		if len(paths) == 0 {
 			continue
 		}
 		tests := map[string][]VerificationJob{}
 		for _, path := range paths {
 			data, err := storage.ReadAll(ctx, b, path)
 			if err != nil {
+				scanErrs = append(scanErrs, fmt.Errorf("read JUnit %s: %w", path, err))
 				continue
 			}
 			cases, err := junit.ParseFile(data, filepath.Base(path))
 			if err != nil {
+				scanErrs = append(scanErrs, fmt.Errorf("parse JUnit %s: %w", path, err))
 				continue
 			}
 			for _, test := range cases {
@@ -195,14 +202,14 @@ func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig
 		}
 		if len(tests) > 0 {
 			if info.Passed {
-				return tests, nil
+				return tests, errors.Join(scanErrs...)
 			}
 			if fallback == nil {
 				fallback = tests
 			}
 		}
 	}
-	return fallback, nil
+	return fallback, errors.Join(scanErrs...)
 }
 
 func appendVerificationJob(values []VerificationJob, value VerificationJob) []VerificationJob {

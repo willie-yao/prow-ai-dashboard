@@ -223,7 +223,9 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 	for i, jobs := range perFile {
 		all = append(all, jobs...)
 		for _, definition := range catalogPerFile[i] {
-			if targetRepo != "" && !definition.TestsRepo(targetRepo) && !definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard) {
+			matchesDashboard := definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard)
+			matchesTarget := targetRepo != "" && definition.TestsRepo(targetRepo)
+			if !matchesDashboard && !matchesTarget {
 				continue
 			}
 			id := definition.ID()

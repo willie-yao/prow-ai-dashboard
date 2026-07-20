@@ -201,13 +201,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				errs = append(errs, fmt.Errorf("remediation %s periodic: %w", id, err))
 			}
 		}
-		issueClient := r.issueClient
-		if entry.Issue != nil && entry.Issue.Repo != "" && entry.Issue.Repo != r.issueRepo {
-			issueClient = nil
-		}
-		if err := reconcileIssue(ctx, issueClient, entry, attempt); err != nil {
-			errs = append(errs, fmt.Errorf("remediation %s issue: %w", id, err))
-		}
+	}
+	if err := reconcileLinkedIssues(ctx, r.issueClient, r.issueRepo, state); err != nil {
+		errs = append(errs, fmt.Errorf("reconcile remediation issues: %w", err))
 	}
 	if err := state.Save(r.dataDir); err != nil {
 		errs = append(errs, err)
@@ -292,10 +288,10 @@ func applyPullRequest(remediation *Remediation, attempt *Attempt, pull ghpr.Pull
 	default:
 		attempt.PRState = StatusOpen
 	}
-	if previousHead != "" && previousHead != attempt.HeadSHA && attempt.PRState == StatusOpen {
+	if previousHead != "" && previousHead != attempt.HeadSHA {
 		attempt.Observations = nil
 		attempt.Outcome, attempt.OutcomeReason = "", ""
-		attempt.Status = StatusOpen
+		attempt.Status = attempt.PRState
 	} else {
 		switch attempt.PRState {
 		case StatusMerged:
