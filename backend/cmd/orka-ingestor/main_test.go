@@ -66,7 +66,7 @@ func (f *fakePatternKube) TaskState(context.Context, string, string) (orkaapi.Ta
 	return f.state, nil
 }
 
-func (f *fakePatternKube) Delete(context.Context, schema.GroupVersionResource, string, string) error {
+func (f *fakePatternKube) DeleteTask(context.Context, string, string, string) error {
 	f.deleted = true
 	f.state = orkaapi.TaskState{}
 	return nil
@@ -283,7 +283,7 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	oldExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}}
 	newExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}
 
-	failedKube := &fakePatternKube{state: orkaapi.TaskState{Exists: true, Phase: "Failed", Execution: oldExecution}}
+	failedKube := &fakePatternKube{state: orkaapi.TaskState{Exists: true, Phase: "Failed", Execution: oldExecution, ResourceVersion: "1"}}
 	failedAnalyzer := *analyzer
 	failedAnalyzer.kube = failedKube
 	failedAnalyzer.execution = newExecution

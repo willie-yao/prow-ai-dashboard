@@ -2,18 +2,23 @@ package orka
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type fakeTaskExecutionClient struct {
-	state          TaskState
-	deleted        bool
-	remainAfterDel bool
+	state                  TaskState
+	deleted                bool
+	remainAfterDel         bool
+	conflictState          *TaskState
+	deleteCalls            int
+	deletedResourceVersion string
 }
 
 func (f *fakeTaskExecutionClient) TaskState(context.Context, string, string) (TaskState, error) {
@@ -23,7 +28,14 @@ func (f *fakeTaskExecutionClient) TaskState(context.Context, string, string) (Ta
 	return f.state, nil
 }
 
-func (f *fakeTaskExecutionClient) Delete(context.Context, schema.GroupVersionResource, string, string) error {
+func (f *fakeTaskExecutionClient) DeleteTask(_ context.Context, _, name, resourceVersion string) error {
+	f.deleteCalls++
+	f.deletedResourceVersion = resourceVersion
+	if f.conflictState != nil {
+		f.state = *f.conflictState
+		f.conflictState = nil
+		return apierrors.NewConflict(schema.GroupResource{Group: "core.orka.ai", Resource: "tasks"}, name, errors.New("resourceVersion changed"))
+	}
 	f.deleted = true
 	return nil
 }
@@ -41,9 +53,9 @@ func TestPrepareTaskExecution(t *testing.T) {
 		{name: "missing", state: TaskState{}, desired: cpu},
 		{name: "same failed", state: TaskState{Exists: true, Phase: "Failed", Execution: cpu}, desired: cpu},
 		{name: "changed succeeded", state: TaskState{Exists: true, Phase: "Succeeded", Execution: gpu}, desired: cpu, wantSkip: true},
-		{name: "changed failed", state: TaskState{Exists: true, Phase: "Failed", Execution: gpu}, desired: cpu, wantDelete: true},
-		{name: "changed running", state: TaskState{Exists: true, Phase: "Running", Execution: gpu}, desired: cpu, wantDelete: true},
-		{name: "placement removed", state: TaskState{Exists: true, Phase: "Pending", Execution: gpu}, wantDelete: true},
+		{name: "changed failed", state: TaskState{Exists: true, Phase: "Failed", Execution: gpu, ResourceVersion: "1"}, desired: cpu, wantDelete: true},
+		{name: "changed running", state: TaskState{Exists: true, Phase: "Running", Execution: gpu, ResourceVersion: "1"}, desired: cpu, wantDelete: true},
+		{name: "placement removed", state: TaskState{Exists: true, Phase: "Pending", Execution: gpu, ResourceVersion: "1"}, wantDelete: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &fakeTaskExecutionClient{state: tc.state}
@@ -54,13 +66,33 @@ func TestPrepareTaskExecution(t *testing.T) {
 			if skip != tc.wantSkip || client.deleted != tc.wantDelete {
 				t.Fatalf("skip=%v deleted=%v, want skip=%v deleted=%v", skip, client.deleted, tc.wantSkip, tc.wantDelete)
 			}
+			if tc.wantDelete && client.deletedResourceVersion != "1" {
+				t.Fatalf("deleted resourceVersion = %q, want 1", client.deletedResourceVersion)
+			}
 		})
+	}
+}
+
+func TestPrepareTaskExecutionPreservesConcurrentSuccess(t *testing.T) {
+	oldExecution := map[string]any{"nodeSelector": map[string]any{"pool": "old"}}
+	newExecution := map[string]any{"nodeSelector": map[string]any{"pool": "new"}}
+	succeeded := TaskState{Exists: true, Phase: "Succeeded", Execution: oldExecution, ResourceVersion: "2"}
+	client := &fakeTaskExecutionClient{
+		state:         TaskState{Exists: true, Phase: "Running", Execution: oldExecution, ResourceVersion: "1"},
+		conflictState: &succeeded,
+	}
+	skip, err := PrepareTaskExecution(context.Background(), client, "orka-system", "task", newExecution, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !skip || client.deleted || client.deleteCalls != 1 || client.deletedResourceVersion != "1" {
+		t.Fatalf("skip=%v deleted=%v calls=%d resourceVersion=%q", skip, client.deleted, client.deleteCalls, client.deletedResourceVersion)
 	}
 }
 
 func TestPrepareTaskExecutionDeletionTimeout(t *testing.T) {
 	client := &fakeTaskExecutionClient{
-		state:          TaskState{Exists: true, Phase: "Running", Execution: map[string]any{"nodeSelector": map[string]any{"pool": "old"}}},
+		state:          TaskState{Exists: true, Phase: "Running", Execution: map[string]any{"nodeSelector": map[string]any{"pool": "old"}}, ResourceVersion: "1"},
 		remainAfterDel: true,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -81,14 +113,15 @@ func TestTaskExecutionEqualNormalizesJSONNumbers(t *testing.T) {
 
 func TestTaskStateFromObject(t *testing.T) {
 	u := &unstructured.Unstructured{Object: map[string]any{
-		"spec":   map[string]any{"execution": map[string]any{"nodeSelector": map[string]any{"agentpool": "cpu"}}},
-		"status": map[string]any{"phase": "Running"},
+		"metadata": map[string]any{"resourceVersion": "7"},
+		"spec":     map[string]any{"execution": map[string]any{"nodeSelector": map[string]any{"agentpool": "cpu"}}},
+		"status":   map[string]any{"phase": "Running"},
 	}}
 	state, err := taskStateFromObject(u)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.Exists || state.Phase != "Running" || state.Execution["nodeSelector"].(map[string]any)["agentpool"] != "cpu" {
+	if !state.Exists || state.Phase != "Running" || state.ResourceVersion != "7" || state.Execution["nodeSelector"].(map[string]any)["agentpool"] != "cpu" {
 		t.Fatalf("state = %+v", state)
 	}
 }

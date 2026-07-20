@@ -7,30 +7,39 @@ import (
 	"fmt"
 	"time"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // TaskExecutionClient is the Task lifecycle surface used for placement recovery.
 type TaskExecutionClient interface {
 	TaskState(context.Context, string, string) (TaskState, error)
-	Delete(context.Context, schema.GroupVersionResource, string, string) error
+	DeleteTask(context.Context, string, string, string) error
 }
 
 // PrepareTaskExecution removes a non-successful Task when its worker placement
 // changed. A successful Task remains reusable and returns skipApply=true.
 func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, namespace, name string, desired map[string]any, poll time.Duration) (skipApply bool, err error) {
-	state, err := client.TaskState(ctx, namespace, name)
-	if err != nil {
-		return false, fmt.Errorf("read Task %s before apply: %w", name, err)
-	}
-	if !state.Exists || taskExecutionEqual(state.Execution, desired) {
-		return false, nil
-	}
-	if state.Phase == "Succeeded" {
-		return true, nil
-	}
-	if err := client.Delete(ctx, TasksGVR, namespace, name); err != nil {
-		return false, fmt.Errorf("delete Task %s after execution change: %w", name, err)
+	for {
+		state, err := client.TaskState(ctx, namespace, name)
+		if err != nil {
+			return false, fmt.Errorf("read Task %s before apply: %w", name, err)
+		}
+		if !state.Exists || taskExecutionEqual(state.Execution, desired) {
+			return false, nil
+		}
+		if state.Phase == "Succeeded" {
+			return true, nil
+		}
+		if state.ResourceVersion == "" {
+			return false, fmt.Errorf("task %s has no resourceVersion", name)
+		}
+		if err := client.DeleteTask(ctx, namespace, name, state.ResourceVersion); err != nil {
+			if apierrors.IsConflict(err) {
+				continue
+			}
+			return false, fmt.Errorf("delete Task %s after execution change: %w", name, err)
+		}
+		break
 	}
 	if poll <= 0 {
 		poll = time.Second

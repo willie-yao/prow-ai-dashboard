@@ -136,8 +136,8 @@ func (f *fakeTaskApplyClient) TaskState(_ context.Context, _, name string) (orka
 	return f.states[name], nil
 }
 
-func (f *fakeTaskApplyClient) Delete(_ context.Context, _ schema.GroupVersionResource, _ string, name string) error {
-	f.events = append(f.events, "delete:tasks:"+name)
+func (f *fakeTaskApplyClient) DeleteTask(_ context.Context, _ string, name, resourceVersion string) error {
+	f.events = append(f.events, "delete:tasks:"+name+":"+resourceVersion)
 	delete(f.states, name)
 	return nil
 }
@@ -204,14 +204,14 @@ func TestApplyObjectsRecreatesNonSuccessfulTaskAfterPlacementChange(t *testing.T
 	oldExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}}
 	newExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}
 	client := &fakeTaskApplyClient{states: map[string]orka.TaskState{
-		"task-1": {Exists: true, Phase: "Failed", Execution: oldExecution},
+		"task-1": {Exists: true, Phase: "Failed", Execution: oldExecution, ResourceVersion: "1"},
 	}}
 	task := testNamedObj("task-1")
 	task.obj["spec"] = map[string]any{"execution": newExecution}
 	if err := applyObjects(context.Background(), client, "orka-system", nil, []namedObj{task}, 1, time.Millisecond, time.Second); err != nil {
 		t.Fatal(err)
 	}
-	requireEventBefore(t, client.events, "delete:tasks:task-1", "apply:tasks:task-1")
+	requireEventBefore(t, client.events, "delete:tasks:task-1:1", "apply:tasks:task-1")
 }
 
 func TestApplyObjectsReusesSuccessfulTaskAfterPlacementChange(t *testing.T) {
