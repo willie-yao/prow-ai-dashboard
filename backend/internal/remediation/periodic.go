@@ -32,6 +32,9 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 	if minCleanRuns <= 0 {
 		minCleanRuns = 2
 	}
+	if attempt.Status == StatusStillFailingSameCause {
+		return nil
+	}
 	if remediation.SourceRepo == "" || attempt.TargetRepo != remediation.SourceRepo {
 		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeTargetRepoNotTested,
 			fmt.Sprintf("pull request targets %s but Prow tests %s", attempt.TargetRepo, remediation.SourceRepo))
@@ -84,6 +87,8 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 	}
 	clean := 0
 	different := false
+	inconclusive := false
+	inconclusiveReason := ""
 	comparable := 0
 	for _, observation := range attempt.Observations {
 		if observation.JobType != models.JobTypePeriodic {
@@ -95,6 +100,11 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 			clean++
 		case OutcomeDifferentCause:
 			different = true
+		case OutcomeInconclusive:
+			inconclusive = true
+			if observation.Reason != "" {
+				inconclusiveReason = observation.Reason
+			}
 		}
 	}
 	if comparable == 0 && missingCommit {
@@ -113,6 +123,11 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 		transitionAttempt(remediation, attempt, StatusVerifiedFixed, OutcomePassed, fmt.Sprintf("%d clean post-merge runs", clean))
 	case different:
 		transitionAttempt(remediation, attempt, StatusFailingDifferentCause, OutcomeDifferentCause, "original test failed with a different signature")
+	case inconclusive:
+		if inconclusiveReason == "" {
+			inconclusiveReason = "post-merge Prow result lacked usable test evidence"
+		}
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive, inconclusiveReason)
 	default:
 		transitionAttempt(remediation, attempt, StatusObserving, OutcomePending, fmt.Sprintf("%d/%d clean post-merge runs", clean, minCleanRuns))
 	}

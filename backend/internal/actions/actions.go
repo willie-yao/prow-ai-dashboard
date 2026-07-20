@@ -357,6 +357,9 @@ func (s *Service) retryContext(failureID string) (bool, string, string, error) {
 	if len(entry.Attempts) >= 2 {
 		return false, "", "", fmt.Errorf("the remediation retry limit has been reached")
 	}
+	if latest.PatchHash == "" {
+		return false, "", "", fmt.Errorf("the prior patch fingerprint is unavailable; retry manually")
+	}
 	var builds []string
 	for _, observation := range latest.Observations {
 		if observation.Outcome == remediation.OutcomeSameCause {

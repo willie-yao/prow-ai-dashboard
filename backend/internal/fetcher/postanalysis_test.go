@@ -11,8 +11,10 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
@@ -221,5 +223,26 @@ ai:
 	err := RunFinalizedSideEffects(context.Background(), FinalizedSideEffectsOptions{ProjectDir: projectDir, DataDir: dataDir})
 	if err == nil || !strings.Contains(err.Error(), "generation failed") {
 		t.Fatalf("error = %v, want per-pattern generation failure", err)
+	}
+}
+
+func TestSyncClosedRemediationIssuesRetiresTrackedIssue(t *testing.T) {
+	dir := t.TempDir()
+	issueState := statefile.State[issues.TrackedIssue]{Repo: "o/r", Tracked: map[string]issues.TrackedIssue{
+		issues.KeyPrefixPattern + "job": {Number: 7, URL: "https://github.com/o/r/issues/7"},
+	}}
+	if err := issueState.Save(filepath.Join(dir, "issue_state.json")); err != nil {
+		t.Fatal(err)
+	}
+	remediationState := remediation.NewState()
+	remediationState.Remediations["pattern"] = &remediation.Remediation{
+		JobID: "job", Issue: &remediation.IssueRef{Number: 7, Repo: "o/r", State: "closed"},
+	}
+	if err := syncClosedRemediationIssues(dir, "o/r", remediationState); err != nil {
+		t.Fatal(err)
+	}
+	loaded := statefile.Load[issues.TrackedIssue](filepath.Join(dir, "issue_state.json"), "o/r", "issues")
+	if len(loaded.Tracked) != 0 {
+		t.Fatalf("tracked issues = %+v", loaded.Tracked)
 	}
 }

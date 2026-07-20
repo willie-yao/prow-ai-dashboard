@@ -15,6 +15,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
+const maxStoredObservations = 30
+
 const (
 	StatusAwaitingPresubmit             = "awaiting_presubmit"
 	StatusPresubmitRunning              = "presubmit_running"
@@ -262,6 +264,22 @@ func mergeObservations(attempt *Attempt, observations []BuildObservation) {
 		if !found {
 			attempt.Observations = append(attempt.Observations, observation)
 		}
+	}
+	sort.SliceStable(attempt.Observations, func(i, j int) bool {
+		left, right := attempt.Observations[i].BuildID, attempt.Observations[j].BuildID
+		if newerBuild(left, right) {
+			return false
+		}
+		if newerBuild(right, left) {
+			return true
+		}
+		if left == right {
+			return attempt.Observations[i].JobName < attempt.Observations[j].JobName
+		}
+		return left < right
+	})
+	if len(attempt.Observations) > maxStoredObservations {
+		attempt.Observations = append([]BuildObservation(nil), attempt.Observations[len(attempt.Observations)-maxStoredObservations:]...)
 	}
 }
 

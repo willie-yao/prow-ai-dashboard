@@ -881,8 +881,9 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	reconciler.SetVerification(p.backend, p.jobCatalog, coverage, client)
 	reconciler.SetRecovery(targetRepo, client)
 	issueConfig := p.cfg.EffectiveIssues()
+	issueRepo := ""
 	if issueConfig.Repo != nil && issueConfig.Repo.Owner != "" && issueConfig.Repo.Name != "" {
-		issueRepo := issueConfig.Repo.Owner + "/" + issueConfig.Repo.Name
+		issueRepo = issueConfig.Repo.Owner + "/" + issueConfig.Repo.Name
 		issueState := statefile.Load[issues.TrackedIssue](filepath.Join(p.opts.OutDir, "issue_state.json"), issueRepo, "issues")
 		trackedIssues := map[string]remediation.IssueRef{}
 		for _, pattern := range patterns {
@@ -900,11 +901,38 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	if err != nil {
 		log.Printf("Warning: remediation reconciliation failed: %v", err)
 	}
+	issueSyncErr := syncClosedRemediationIssues(p.opts.OutDir, issueRepo, state)
+	if issueSyncErr != nil {
+		log.Printf("Warning: failed to synchronize verified remediation issues: %v", issueSyncErr)
+	}
 	emailErr := p.sendRemediationEmails(ctx, state)
 	if emailErr != nil {
 		log.Printf("Warning: remediation email failed: %v", emailErr)
 	}
-	return errors.Join(wrapOptional("remediation reconciliation", err), wrapOptional("remediation email", emailErr))
+	return errors.Join(wrapOptional("remediation reconciliation", err),
+		wrapOptional("remediation issue state", issueSyncErr), wrapOptional("remediation email", emailErr))
+}
+
+func syncClosedRemediationIssues(dataDir, issueRepo string, state *remediation.State) error {
+	if issueRepo == "" || state == nil {
+		return nil
+	}
+	issueState := statefile.Load[issues.TrackedIssue](filepath.Join(dataDir, "issue_state.json"), issueRepo, "issues")
+	changed := false
+	for _, entry := range state.Remediations {
+		if entry == nil || entry.Issue == nil || entry.Issue.State != "closed" || entry.Issue.Repo != issueRepo {
+			continue
+		}
+		key := issues.KeyPrefixPattern + entry.JobID
+		if _, ok := issueState.Tracked[key]; ok {
+			delete(issueState.Tracked, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return issueState.Save(filepath.Join(dataDir, "issue_state.json"))
 }
 
 func remediationCoverageRepos(targetRepo string, patterns []models.PatternAnalysis, details []models.JobDetail, ledger *remediation.State) []string {

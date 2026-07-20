@@ -281,3 +281,18 @@ func TestRetryReservationReturnsCompletedResult(t *testing.T) {
 		t.Fatalf("existing=%q err=%v", existing, err)
 	}
 }
+
+func TestRetryContextRejectsMissingPriorPatchHash(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", FindingID: "pattern",
+		Attempts: []remediation.Attempt{{Number: 1, Status: remediation.StatusStillFailingSameCause}},
+	}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := service.retryContext("pattern"); err == nil {
+		t.Fatal("expected missing patch fingerprint error")
+	}
+}

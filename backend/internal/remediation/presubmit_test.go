@@ -2,6 +2,7 @@ package remediation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
@@ -185,5 +186,18 @@ func TestApplyPresubmitOutcomeRejectsPartialCoveragePass(t *testing.T) {
 	}}, false)
 	if attempt.Status != StatusInconclusive {
 		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestMergeObservationsCapsHistory(t *testing.T) {
+	attempt := &Attempt{}
+	for i := 1; i <= 40; i++ {
+		mergeObservations(attempt, []BuildObservation{{BuildID: fmt.Sprint(i), JobName: "job", JobType: models.JobTypePeriodic}})
+	}
+	if len(attempt.Observations) != maxStoredObservations {
+		t.Fatalf("observations = %d", len(attempt.Observations))
+	}
+	if attempt.Observations[0].BuildID != "11" || attempt.Observations[len(attempt.Observations)-1].BuildID != "40" {
+		t.Fatalf("observations = %+v", attempt.Observations)
 	}
 }
