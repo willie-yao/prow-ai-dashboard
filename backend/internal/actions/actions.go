@@ -352,7 +352,7 @@ func (s *Service) retryContext(failureID string) (bool, string, string, error) {
 	}
 	latest := entry.Attempts[len(entry.Attempts)-1]
 	if latest.Status != remediation.StatusStillFailingSameCause {
-		return false, "", "", nil
+		return false, "", "", fmt.Errorf("an existing remediation is %s; a new fix requires a confirmed same-cause recurrence", latest.Status)
 	}
 	if len(entry.Attempts) >= 2 {
 		return false, "", "", fmt.Errorf("the remediation retry limit has been reached")
@@ -466,16 +466,20 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 	}
 	latest := entry.Attempts[len(entry.Attempts)-1]
 	reservationKey := retryReservationKey(entry, latest, failureID)
+	state := s.loadRetryReservations()
+	pruneRetryReservations(state, time.Now().UTC())
+	if existing, ok := state.Reservations[reservationKey]; ok && existing.ResultURL != "" {
+		return existing.ResultURL, existing.ID, nil
+	}
+	if resultURL, reservationID, found := completedReservationForEntry(state, entry); found {
+		return resultURL, reservationID, nil
+	}
 	if latest.Status != remediation.StatusStillFailingSameCause || len(entry.Attempts) >= 2 {
 		return "", "", fmt.Errorf("remediation retry is no longer available")
 	}
 
-	state := s.loadRetryReservations()
-	pruneRetryReservations(state, time.Now().UTC())
 	if existing, ok := state.Reservations[reservationKey]; ok {
-		if existing.ResultURL != "" {
-			return existing.ResultURL, existing.ID, nil
-		}
+
 		createdAt, err := time.Parse(time.RFC3339, existing.CreatedAt)
 		if err == nil && time.Since(createdAt) <= retryReservationTTL {
 			return "", "", fmt.Errorf("a remediation retry is already in progress")
@@ -547,6 +551,25 @@ func (s *Service) clearRetryReservation(failureID, reservationID string) {
 	}
 	delete(state.Reservations, reservationKey)
 	_ = s.saveRetryReservations(state)
+}
+
+func completedReservationForEntry(state *retryReservationState, entry *remediation.Remediation) (string, string, bool) {
+	if state == nil || entry == nil {
+		return "", "", false
+	}
+	attemptURLs := map[string]bool{}
+	for _, attempt := range entry.Attempts {
+		if attempt.URL != "" {
+			attemptURLs[attempt.URL] = true
+		}
+	}
+	prefix := entry.ID + "::"
+	for key, reservation := range state.Reservations {
+		if strings.HasPrefix(key, prefix) && reservation.ResultURL != "" && attemptURLs[reservation.ResultURL] {
+			return reservation.ResultURL, reservation.ID, true
+		}
+	}
+	return "", "", false
 }
 
 func retryReservationKey(entry *remediation.Remediation, attempt remediation.Attempt, fallback string) string {

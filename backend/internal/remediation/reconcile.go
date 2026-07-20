@@ -155,7 +155,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				Evidence: currentEvidence, CreatedAt: now, UpdatedAt: now,
 			}
 			for _, detail := range details {
-				if detail.JobID == pattern.JobID || detail.Name == pattern.Subject {
+				if patternMatchesDetail(pattern, detail) {
 					entry.JobName, entry.JobType = detail.Name, detail.JobType
 					entry.SourceRepo = sourceRepoFromDetail(detail, "")
 					break
@@ -420,9 +420,14 @@ func commitRepoFor(remediation *Remediation, catalog *jobconfig.Catalog, details
 		return remediation.SourceRepo
 	}
 	if catalog != nil {
-		for _, definition := range catalog.Jobs {
-			if definition.Name == remediation.JobName && definition.JobType == remediation.JobType && len(definition.Refs) > 0 {
-				return definition.Refs[0].FullRepo()
+		if definition, ok := catalog.Jobs[remediation.JobID]; ok && len(definition.Refs) > 0 {
+			return definition.Refs[0].FullRepo()
+		}
+		if remediation.JobID == "" {
+			for _, definition := range catalog.Jobs {
+				if definition.Name == remediation.JobName && definition.JobType == remediation.JobType && len(definition.Refs) > 0 {
+					return definition.Refs[0].FullRepo()
+				}
 			}
 		}
 	}
@@ -470,7 +475,7 @@ func testedRepoFor(remediation *Remediation, targetRepo string, catalog *jobconf
 		return remediation.SourceRepo
 	}
 	definition, ok := catalog.Jobs[remediation.JobID]
-	if !ok {
+	if !ok && remediation.JobID == "" {
 		for _, candidate := range catalog.Jobs {
 			if candidate.Name == remediation.JobName && candidate.JobType == remediation.JobType {
 				definition, ok = candidate, true

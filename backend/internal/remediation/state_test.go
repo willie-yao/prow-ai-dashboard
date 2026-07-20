@@ -103,3 +103,15 @@ func TestUntrackedPatternsKeepsDistinctCauseOnSameJob(t *testing.T) {
 		t.Fatalf("untracked = %+v", got)
 	}
 }
+
+func TestEvidenceForPatternPrefersQualifiedJobID(t *testing.T) {
+	pattern := models.PatternAnalysis{JobID: "repo-b/job", Subject: "job", SharedBuilds: []string{"1"}}
+	details := []models.JobDetail{
+		{JobID: "repo-a/job", Name: "job", Runs: []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{{Name: "wrong", Status: "failed"}}}}},
+		{JobID: "repo-b/job", Name: "job", Runs: []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{{Name: "right", Status: "failed"}}}}},
+	}
+	evidence := EvidenceForPattern(pattern, details)
+	if len(evidence.Tests) != 1 || evidence.Tests[0].Name != "right" {
+		t.Fatalf("evidence = %+v", evidence)
+	}
+}

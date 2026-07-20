@@ -159,7 +159,13 @@ func hasObservation(attempt *Attempt, jobType, jobName, buildID, commit string) 
 
 func findJobDetail(remediation *Remediation, details []models.JobDetail) *models.JobDetail {
 	for i := range details {
-		if details[i].JobID == remediation.JobID || details[i].Name == remediation.JobName {
+		if remediation.JobID != "" {
+			if details[i].JobID == remediation.JobID {
+				return &details[i]
+			}
+			continue
+		}
+		if details[i].Name == remediation.JobName {
 			return &details[i]
 		}
 	}

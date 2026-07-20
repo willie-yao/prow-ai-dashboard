@@ -405,3 +405,46 @@ func TestRetryReservationGenerationDoesNotReuseOldCompletedResult(t *testing.T) 
 		t.Fatalf("url=%q id=%q err=%v", url, id, err)
 	}
 }
+
+func TestRetryContextRejectsExistingNonRetryableRemediation(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", FindingID: "pattern",
+		Attempts: []remediation.Attempt{{Number: 1, Status: remediation.StatusObserving}},
+	}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := service.retryContext("pattern"); err == nil {
+		t.Fatal("expected existing remediation to block a new initial fix")
+	}
+}
+
+func TestReserveRetryReturnsCompletedResultAfterAdoption(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["stable"] = &remediation.Remediation{
+		ID: "stable", FindingID: "current",
+		Attempts: []remediation.Attempt{
+			{Number: 1, Status: remediation.StatusStillFailingSameCause, URL: "https://github.com/o/r/pull/7"},
+			{Number: 2, ParentAttempt: 1, Status: remediation.StatusOpen, URL: "https://github.com/o/r/pull/8"},
+		},
+	}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	reservations := &retryReservationState{Version: 1, Reservations: map[string]retryReservation{
+		"stable::https://github.com/o/r/pull/7": {
+			ID: "reservation", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			ResultURL: "https://github.com/o/r/pull/8",
+		},
+	}}
+	if err := service.saveRetryReservations(reservations); err != nil {
+		t.Fatal(err)
+	}
+	url, id, err := service.reserveRetry("current", "patch", nil)
+	if err != nil || url != "https://github.com/o/r/pull/8" || id != "reservation" {
+		t.Fatalf("url=%q id=%q err=%v", url, id, err)
+	}
+}

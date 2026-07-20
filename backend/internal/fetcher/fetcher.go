@@ -889,7 +889,7 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	reconciler.SetRecovery(targetRepo, client)
 	issueConfig := p.cfg.EffectiveIssues()
 	issueRepo := ""
-	if issueConfig.Repo != nil && issueConfig.Repo.Owner != "" && issueConfig.Repo.Name != "" {
+	if p.cfg.Issues != nil && p.cfg.Issues.Enabled && issueConfig.Repo != nil && issueConfig.Repo.Owner != "" && issueConfig.Repo.Name != "" {
 		issueRepo = issueConfig.Repo.Owner + "/" + issueConfig.Repo.Name
 		issueState := statefile.Load[issues.TrackedIssue](filepath.Join(p.opts.OutDir, "issue_state.json"), issueRepo, "issues")
 		trackedIssues := map[string]remediation.IssueRef{}

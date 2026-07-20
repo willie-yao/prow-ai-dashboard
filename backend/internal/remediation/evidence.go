@@ -12,6 +12,13 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 )
 
+func patternMatchesDetail(pattern models.PatternAnalysis, detail models.JobDetail) bool {
+	if pattern.JobID != "" {
+		return detail.JobID == pattern.JobID
+	}
+	return detail.Name == pattern.Subject
+}
+
 // EvidenceForPattern captures deterministic failures from the pattern's builds.
 func EvidenceForPattern(pattern models.PatternAnalysis, details []models.JobDetail) Evidence {
 	buildSet := make(map[string]struct{}, len(pattern.SharedBuilds))
@@ -20,7 +27,7 @@ func EvidenceForPattern(pattern models.PatternAnalysis, details []models.JobDeta
 	}
 	tests := map[string]*TestEvidence{}
 	for _, detail := range details {
-		if detail.JobID != pattern.JobID && detail.Name != pattern.Subject {
+		if !patternMatchesDetail(pattern, detail) {
 			continue
 		}
 		for _, run := range detail.Runs {
@@ -84,7 +91,7 @@ func appendUnique(values []string, value string) []string {
 
 func classificationForPattern(pattern models.PatternAnalysis, details []models.JobDetail) string {
 	for _, detail := range details {
-		if detail.JobID != pattern.JobID && detail.Name != pattern.Subject {
+		if !patternMatchesDetail(pattern, detail) {
 			continue
 		}
 		for _, test := range EvidenceForPattern(pattern, details).Tests {
