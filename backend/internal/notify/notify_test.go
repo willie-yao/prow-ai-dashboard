@@ -685,6 +685,9 @@ func TestPatternsMateriallyDifferentDetectsPolarityReversal(t *testing.T) {
 	if !patternsMateriallyDifferent("API is available", "API isn't available") {
 		t.Fatal("contracted negative polarity was treated as unchanged")
 	}
+	if !patternsMateriallyDifferent("API can accept requests", "API cannot accept requests") {
+		t.Fatal("uncontracted negative polarity was treated as unchanged")
+	}
 	if !patternsMateriallyDifferent("API is available", "API is no longer available") {
 		t.Fatal("no-longer polarity was treated as unchanged")
 	}
@@ -693,6 +696,9 @@ func TestPatternsMateriallyDifferentDetectsPolarityReversal(t *testing.T) {
 	}
 	if patternsMateriallyDifferent("API does not accept requests", "API doesn't accept requests") {
 		t.Fatal("equivalent contracted negation was treated as changed")
+	}
+	if patternsMateriallyDifferent("API cannot accept requests", "API can't accept requests") {
+		t.Fatal("cannot and can't were treated as different patterns")
 	}
 	if patternsMateriallyDifferent("upgrade removes pods before the webhook is ready", "upgrade finds the webhook is not ready after removing pods") {
 		t.Fatal("equivalent readiness phrasing was treated as changed")

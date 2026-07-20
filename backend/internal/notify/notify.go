@@ -60,6 +60,7 @@ var patternPolarityReplacer = strings.NewReplacer(
 	"don't", "do not", "don’t", "do not",
 	"didn't", "did not", "didn’t", "did not",
 	"can't", "can not", "can’t", "can not",
+	"cannot", "can not",
 	"couldn't", "could not", "couldn’t", "could not",
 	"won't", "will not", "won’t", "will not",
 	"wouldn't", "would not", "wouldn’t", "would not",
