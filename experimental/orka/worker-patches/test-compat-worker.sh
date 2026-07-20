@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=09d1a609b2a45d359464ae17bd6a5c183ece235c7cac0fc27d046bda3b928350' <<< "$metadata"
+grep -Fq 'patch_sha256=f662d2190f3113c67d4955524657c6051e1f46f353a195731187ddfa3c5918fb' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}09d1a609b2a45d359464ae17bd6a5c183ece235c7cac0fc27d046bda3b928350${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}f662d2190f3113c67d4955524657c6051e1f46f353a195731187ddfa3c5918fb${backtick}" "$script_dir/COMPATIBILITY.md"
 workflow="$repo_root/.github/workflows/orka-compat-image.yml"
 grep -Fq 'experimental/orka/worker-patches/compat-worker.sh prepare _orka' "$workflow"
 grep -Fq 'push: false' "$workflow"

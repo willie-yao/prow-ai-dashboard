@@ -34,6 +34,9 @@ jobs:
       - name: Check out dashboard
         uses: actions/checkout@v4
 
+      - name: Validate compatibility scripts
+        run: make orka-compat-check
+
       - name: Read compatibility metadata
         id: compat
         run: |

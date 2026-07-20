@@ -121,8 +121,8 @@ test_source() {
   (
     cd "$source"
     test -z "$(gofmt -l workers/ai/main.go workers/ai/compatibility_test.go)"
-    go test ./workers/ai -run 'TestExecuteAgentLoopRepromptsEmptyFinal|TestTransientWithoutTimeline' -count=1
-    go test -race ./workers/ai -run 'TestExecuteAgentLoopRepromptsEmptyFinal|TestTransientWithoutTimeline' -count=1
+    go test ./workers/ai -run 'TestExecuteAgentLoopRepromptsEmptyFinal|TestExecuteAgentLoopRepromptsUnsupportedTransient|TestTransientWithoutTimeline' -count=1
+    go test -race ./workers/ai -run 'TestExecuteAgentLoopRepromptsEmptyFinal|TestExecuteAgentLoopRepromptsUnsupportedTransient|TestTransientWithoutTimeline' -count=1
     go test ./workers/ai -count=1
   )
 }
