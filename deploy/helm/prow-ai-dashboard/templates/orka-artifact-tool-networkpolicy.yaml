@@ -11,7 +11,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      {{- include "prow-ai-dashboard.selectorLabels" . | nindent 6 }}
+      {{- include "prow-ai-dashboard.orkaArtifactToolSelectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: orka-artifact-tool
   policyTypes: [Ingress]
   ingress:

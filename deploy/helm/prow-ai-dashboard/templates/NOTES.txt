@@ -15,8 +15,8 @@ capability descriptor at /api/capabilities.
 
 Analysis backend: orka. The fetcher CronJob writes the skeleton (-ai=false), the
 orka-producer applies one Orka Task per failing test, and the orka-ingestor patches
-the results and finalizes job-level recurring patterns. Orka + the tool shim + a
-Provider + the ai-worker patches must already be installed in namespace
+the results and finalizes job-level recurring patterns. The Orka control plane,
+a Provider, and the ai-worker patches must already be installed in namespace
 {{ .Values.orka.namespace }}. The chart owns the release-scoped artifact Tool
 service and {{ include "prow-ai-dashboard.orkaBaseToolsConfigMap" . }} ConfigMap
 unless existing resources were configured. See

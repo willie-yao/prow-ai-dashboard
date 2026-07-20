@@ -12,12 +12,14 @@ spec:
   replicas: {{ .Values.orka.artifactTool.replicas }}
   selector:
     matchLabels:
-      {{- include "prow-ai-dashboard.selectorLabels" . | nindent 6 }}
+      {{- include "prow-ai-dashboard.orkaArtifactToolSelectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: orka-artifact-tool
   template:
     metadata:
+      annotations:
+        checksum/artifact-tool-auth: {{ printf "%s:%s:%s" (include "prow-ai-dashboard.orkaArtifactToolSecret" .) .Values.orka.artifactTool.auth.tokenKey .Values.orka.artifactTool.auth.token | sha256sum }}
       labels:
-        {{- include "prow-ai-dashboard.selectorLabels" . | nindent 8 }}
+        {{- include "prow-ai-dashboard.orkaArtifactToolSelectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: orka-artifact-tool
     spec:
       automountServiceAccountToken: false

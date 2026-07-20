@@ -45,15 +45,55 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set orka.artifactTool.nodeSelector.agentpool=nodepool1 \
   > "$tmp/owned.yaml"
 
-grep -Fq 'name: test-prow-ai-dashboard-artifact-tool' "$tmp/owned.yaml"
+grep -Eq 'name: test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}' "$tmp/owned.yaml"
 grep -Fq 'namespace: orka-test' "$tmp/owned.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/orka-artifact-tool:sha-test' "$tmp/owned.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/orka-producer:sha-test' "$tmp/owned.yaml"
 grep -Fq 'image: ghcr.io/willie-yao/prow-ai-dashboard/orka-ingestor:sha-test' "$tmp/owned.yaml"
-grep -Fq 'http://test-prow-ai-dashboard-artifact-tool.orka-test.svc:8080/tool/read_artifact' "$tmp/owned.yaml"
-grep -Fq -- '-tool-auth-secret=test-prow-ai-dashboard-artifact-tool-auth' "$tmp/owned.yaml"
+grep -Eq 'http://test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}\.orka-test\.svc:8080/tool/read_artifact' "$tmp/owned.yaml"
+grep -Eq -- '-tool-auth-secret=test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}-auth' "$tmp/owned.yaml"
 grep -Fq 'name: test-prow-ai-dashboard-orka-tools' "$tmp/owned.yaml"
 grep -Fq 'agentpool: nodepool1' "$tmp/owned.yaml"
+
+artifact_name_a=$(helm template test "$chart" -n dashboard-a -f "$tmp/values.yaml" \
+  --set mode=cron --set analysis=orka \
+  --show-only templates/orka-artifact-tool-service.yaml |
+  awk '$1 == "name:" { print $2; exit }')
+artifact_name_b=$(helm template test "$chart" -n dashboard-b -f "$tmp/values.yaml" \
+  --set mode=cron --set analysis=orka \
+  --show-only templates/orka-artifact-tool-service.yaml |
+  awk '$1 == "name:" { print $2; exit }')
+if [[ -z "$artifact_name_a" || -z "$artifact_name_b" || "$artifact_name_a" == "$artifact_name_b" ]]; then
+  echo 'artifact Tool names are not isolated by source release namespace' >&2
+  exit 1
+fi
+
+for namespace in dashboard-a dashboard-b; do
+  helm template test "$chart" -n "$namespace" -f "$tmp/values.yaml" \
+    --set mode=cron --set analysis=orka \
+    --show-only templates/orka-pipeline-rbac.yaml \
+    > "$tmp/rbac-$namespace.yaml"
+done
+rbac_name_a=$(awk '$1 == "kind:" { kind=$2 } kind == "Role" && $1 == "name:" { print $2; exit }' "$tmp/rbac-dashboard-a.yaml")
+rbac_name_b=$(awk '$1 == "kind:" { kind=$2 } kind == "Role" && $1 == "name:" { print $2; exit }' "$tmp/rbac-dashboard-b.yaml")
+if [[ -z "$rbac_name_a" || -z "$rbac_name_b" || "$rbac_name_a" == "$rbac_name_b" ]]; then
+  echo 'Orka RBAC names are not isolated by source release namespace' >&2
+  exit 1
+fi
+
+for token in alpha beta; do
+  helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    --set mode=cron --set analysis=orka \
+    --set orka.artifactTool.auth.token="$token" \
+    --show-only templates/orka-artifact-tool-deployment.yaml \
+    > "$tmp/token-$token.yaml"
+done
+checksum_alpha=$(awk '/checksum\/artifact-tool-auth:/ { print $2; exit }' "$tmp/token-alpha.yaml")
+checksum_beta=$(awk '/checksum\/artifact-tool-auth:/ { print $2; exit }' "$tmp/token-beta.yaml")
+if [[ -z "$checksum_alpha" || -z "$checksum_beta" || "$checksum_alpha" == "$checksum_beta" ]]; then
+  echo 'artifact Tool token changes do not update the pod template checksum' >&2
+  exit 1
+fi
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \

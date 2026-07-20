@@ -78,8 +78,18 @@ Resolve an Orka component image tag through component, engine, and chart default
 {{/*
 Release-scoped Orka artifact Tool resources.
 */}}
+{{- define "prow-ai-dashboard.orkaReleaseScope" -}}
+{{- printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8 -}}
+{{- end -}}
+
 {{- define "prow-ai-dashboard.orkaArtifactToolName" -}}
-{{- printf "%s-artifact-tool" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 40 | trimSuffix "-" -}}
+{{- printf "%s-artifact-tool-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
+{{- end -}}
+
+{{- define "prow-ai-dashboard.orkaArtifactToolSelectorLabels" -}}
+{{ include "prow-ai-dashboard.selectorLabels" . }}
+prow-ai-dashboard.io/release-scope: {{ include "prow-ai-dashboard.orkaReleaseScope" . }}
 {{- end -}}
 
 {{- define "prow-ai-dashboard.orkaArtifactToolSecret" -}}
@@ -165,6 +175,15 @@ Name of the ServiceAccount the Orka analysis pipeline runs as.
 {{- else -}}
 {{- printf "%s-orka" (include "prow-ai-dashboard.fullname" .) -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Name of cross-namespace Orka RBAC resources. Include the source release scope
+because Helm release names are unique only within their own namespace.
+*/}}
+{{- define "prow-ai-dashboard.orkaRBACName" -}}
+{{- $base := include "prow-ai-dashboard.fullname" . | trunc 49 | trimSuffix "-" -}}
+{{- printf "%s-orka-%s" $base (include "prow-ai-dashboard.orkaReleaseScope" .) -}}
 {{- end -}}
 
 {{/*

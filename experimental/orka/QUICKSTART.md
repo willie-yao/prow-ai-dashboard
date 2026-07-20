@@ -168,10 +168,18 @@ helm install dash deploy/helm/prow-ai-dashboard \
   --namespace dashboards --create-namespace \
   --set mode=cron --set analysis=orka \
   --set orka.provider=copilot --set orka.model=claude-sonnet-4.5 \
-  --set orka.artifactTool.nodeSelector.agentpool=nodepool1 \
   --set-file project.config=<consumer>/project.yaml \
   --set-file project.systemPrompt=<consumer>/prompts/system.md
 ```
+
+On heterogeneous clusters, place the artifact Tool on an appropriate CPU node
+pool with a cluster-specific selector, for example:
+
+```bash
+--set orka.artifactTool.nodeSelector.agentpool=nodepool1
+```
+
+Do not copy this selector onto clusters that do not define that label.
 
 Producer, ingestor, and artifact-tool tags inherit the engine `image.tag`, so one
 immutable SHA pins the complete dashboard pipeline. Set `orka.provider` to your
