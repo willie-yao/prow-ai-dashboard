@@ -299,6 +299,27 @@ func mergeObservations(attempt *Attempt, observations []BuildObservation) {
 	}
 }
 
+func everyEvidenceTestPassed(evidence Evidence, observations []BuildObservation) bool {
+	if len(evidence.Tests) == 0 {
+		return false
+	}
+	passed := map[string]bool{}
+	for _, observation := range observations {
+		if observation.Outcome != OutcomePassed {
+			continue
+		}
+		for _, identity := range observation.MatchedTests {
+			passed[identity] = true
+		}
+	}
+	for _, test := range evidence.Tests {
+		if !passed[test.Identity] {
+			return false
+		}
+	}
+	return true
+}
+
 func currentPresubmitObservations(attempt *Attempt, jobs []VerificationJob) []BuildObservation {
 	selected := map[string]bool{}
 	for _, job := range jobs {
@@ -359,6 +380,7 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 				inconclusive = true
 			}
 		}
+		allEvidencePassed := everyEvidenceTestPassed(remediation.Evidence, observations)
 		if attempt.Outcome == OutcomeSameCause {
 			attempt.Status = StatusPresubmitFailedSameCause
 		} else if attempt.Outcome == OutcomeDifferentCause {
@@ -370,13 +392,17 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 			}
 		} else if pending {
 			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPresubmitRunning, OutcomePending, "matching Prow presubmit is still running"
-		} else if passed && coverageComplete {
+		} else if allEvidencePassed && coverageComplete {
 			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPremergeVerified, OutcomePassed, "matching Prow presubmit passed"
-		} else if passed {
+		} else if allEvidencePassed {
 			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusInconclusive, OutcomeInconclusive, "Prow coverage discovery was incomplete"
 		} else if attempt.Status != StatusPresubmitRunning {
 			attempt.Status = StatusAwaitingPresubmit
-			attempt.OutcomeReason = "waiting for a matching Prow presubmit"
+			if passed {
+				attempt.OutcomeReason = "waiting for presubmits covering every affected test"
+			} else {
+				attempt.OutcomeReason = "waiting for a matching Prow presubmit"
+			}
 		}
 	}
 	if previous != attempt.Status {

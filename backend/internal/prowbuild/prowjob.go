@@ -154,6 +154,13 @@ func FetchProwJobMetadata(ctx context.Context, b storage.Backend, loc BuildLocat
 	if out.Type == "presubmit" && (out.Refs == nil || len(out.Refs.Pulls) == 0) {
 		return nil, fmt.Errorf("prowjob: %s presubmit is missing pull refs", path)
 	}
+	if loc.Repo != "" && (out.Refs == nil || out.Refs.FullRepo() != loc.Repo) {
+		got := ""
+		if out.Refs != nil {
+			got = out.Refs.FullRepo()
+		}
+		return nil, fmt.Errorf("prowjob: %s repo is %q, want %q", path, got, loc.Repo)
+	}
 	if loc.PullNumber != "" && out.Refs != nil && len(out.Refs.Pulls) > 0 {
 		if got := fmt.Sprint(out.Refs.Pulls[0].Number); got != loc.PullNumber {
 			return nil, fmt.Errorf("prowjob: %s pull is %s, want %s", path, got, loc.PullNumber)

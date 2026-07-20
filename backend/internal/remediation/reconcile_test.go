@@ -212,7 +212,7 @@ func TestReconcileReopensVerifiedFindingOnNewerFailure(t *testing.T) {
 	previous := current
 	previous.BuildWatermark = "10"
 	state.Remediations["pattern"] = &Remediation{
-		ID: "pattern", FindingID: "pattern", JobID: "job", Evidence: previous,
+		ID: "pattern", FindingID: "pattern", JobID: "job", JobType: models.JobTypePresubmit, Evidence: previous,
 		Attempts: []Attempt{{Status: StatusVerifiedFixed, PRState: StatusMerged, URL: "https://github.com/o/r/pull/7"}},
 	}
 	if err := state.Save(dir); err != nil {

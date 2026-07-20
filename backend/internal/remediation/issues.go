@@ -10,6 +10,7 @@ import (
 type IssueLifecycleClient interface {
 	CommentIssue(ctx context.Context, number int, body string) error
 	CloseIssue(ctx context.Context, number int) error
+	ReopenIssue(ctx context.Context, number int) error
 }
 
 func reconcileIssue(ctx context.Context, client IssueLifecycleClient, remediation *Remediation, attempt *Attempt) error {
@@ -17,8 +18,17 @@ func reconcileIssue(ctx context.Context, client IssueLifecycleClient, remediatio
 		return nil
 	}
 	issue := remediation.Issue
-	if issue.State == "closed" || attempt.LastTransition == "" {
+	if attempt.LastTransition == "" {
 		return nil
+	}
+	if issue.State == "closed" {
+		if attempt.Status != StatusStillFailingSameCause {
+			return nil
+		}
+		if err := client.ReopenIssue(ctx, issue.Number); err != nil {
+			return err
+		}
+		issue.State = "open"
 	}
 	alreadyCommented := issue.LastTransition == attempt.LastTransition
 	if alreadyCommented && attempt.Status != StatusVerifiedFixed {

@@ -140,3 +140,24 @@ func TestObservePeriodicRejectsNonPrimaryRepoCommit(t *testing.T) {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }
+
+func TestObservePeriodicReclassifiesInconclusiveBuild(t *testing.T) {
+	remediation := &Remediation{JobID: "job", JobName: "job", JobType: models.JobTypePeriodic, SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom")}
+	attempt := &Attempt{
+		Status: StatusObserving, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r",
+		Observations: []BuildObservation{{
+			BuildID: "11", JobName: "job", JobType: models.JobTypePeriodic,
+			SourceCommit: "new", Outcome: OutcomeInconclusive,
+		}},
+	}
+	pass := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "11", Commit: "new", Result: "SUCCESS", Passed: true}, TestCases: []models.TestCase{pass},
+	}}}}
+	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 1); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusVerifiedFixed || attempt.Observations[0].Outcome != OutcomePassed {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}

@@ -97,11 +97,11 @@ func TestObservePresubmitsSplitsEvidenceAcrossJobs(t *testing.T) {
 	b := memoryBackend{objects: map[string]string{
 		"pr-logs/pull/example_project/42/pull-a/10/started.json":        `{"timestamp":1}`,
 		"pr-logs/pull/example_project/42/pull-a/10/finished.json":       `{"timestamp":2,"passed":true,"result":"SUCCESS","revision":"head"}`,
-		"pr-logs/pull/example_project/42/pull-a/10/prowjob.json":        `{"spec":{"type":"presubmit","job":"pull-a","refs":{"pulls":[{"number":42,"sha":"head"}]}},"status":{"state":"success"}}`,
+		"pr-logs/pull/example_project/42/pull-a/10/prowjob.json":        `{"spec":{"type":"presubmit","job":"pull-a","refs":{"org":"example","repo":"project","pulls":[{"number":42,"sha":"head"}]}},"status":{"state":"success"}}`,
 		"pr-logs/pull/example_project/42/pull-a/10/artifacts/junit.xml": `<testsuite name="suite"><testcase name="first" classname="class"/></testsuite>`,
 		"pr-logs/pull/example_project/42/pull-b/11/started.json":        `{"timestamp":1}`,
 		"pr-logs/pull/example_project/42/pull-b/11/finished.json":       `{"timestamp":2,"passed":true,"result":"SUCCESS","revision":"head"}`,
-		"pr-logs/pull/example_project/42/pull-b/11/prowjob.json":        `{"spec":{"type":"presubmit","job":"pull-b","refs":{"pulls":[{"number":42,"sha":"head"}]}},"status":{"state":"success"}}`,
+		"pr-logs/pull/example_project/42/pull-b/11/prowjob.json":        `{"spec":{"type":"presubmit","job":"pull-b","refs":{"org":"example","repo":"project","pulls":[{"number":42,"sha":"head"}]}},"status":{"state":"success"}}`,
 		"pr-logs/pull/example_project/42/pull-b/11/artifacts/junit.xml": `<testsuite name="suite"><testcase name="second" classname="class"/></testsuite>`,
 	}}
 	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: firstID}, {Identity: secondID}}}}
@@ -118,11 +118,11 @@ func TestObservePresubmitsSplitsEvidenceAcrossJobs(t *testing.T) {
 	}
 }
 
-func TestApplyPresubmitOutcomeAcceptsOneApplicablePassingJob(t *testing.T) {
-	remediation := &Remediation{}
+func TestApplyPresubmitOutcomeAcceptsOneJobCoveringAllEvidence(t *testing.T) {
+	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: "a"}}}}
 	attempt := &Attempt{Status: StatusOpen}
 	jobs := []VerificationJob{{JobName: "pull-a"}, {JobName: "pull-b"}}
-	observations := []BuildObservation{{JobName: "pull-a", Outcome: OutcomePassed}}
+	observations := []BuildObservation{{JobName: "pull-a", Outcome: OutcomePassed, MatchedTests: []string{"a"}}}
 	applyPresubmitOutcome(remediation, attempt, jobs, observations, true)
 	if attempt.Status != StatusPremergeVerified {
 		t.Fatalf("attempt = %+v", attempt)
@@ -149,7 +149,8 @@ func TestCurrentPresubmitObservationsUsesNewestRerun(t *testing.T) {
 	if len(got) != 1 || got[0].BuildID != "11" || got[0].Outcome != OutcomePassed {
 		t.Fatalf("observations = %+v", got)
 	}
-	remediation := &Remediation{}
+	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: "a"}}}}
+	got[0].MatchedTests = []string{"a"}
 	attempt.Status, attempt.Outcome = StatusPresubmitFailedSameCause, OutcomeSameCause
 	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "pull-a"}}, got, true)
 	if attempt.Status != StatusPremergeVerified || attempt.Outcome != OutcomePassed {
@@ -180,10 +181,10 @@ func TestApplyPresubmitOutcomePreservesCompletedInconclusive(t *testing.T) {
 }
 
 func TestApplyPresubmitOutcomeRejectsPartialCoveragePass(t *testing.T) {
-	remediation := &Remediation{}
+	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: "a"}}}}
 	attempt := &Attempt{Status: StatusOpen}
 	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "pull-a"}}, []BuildObservation{{
-		JobName: "pull-a", Outcome: OutcomePassed,
+		JobName: "pull-a", Outcome: OutcomePassed, MatchedTests: []string{"a"},
 	}}, false)
 	if attempt.Status != StatusInconclusive {
 		t.Fatalf("attempt = %+v", attempt)
@@ -238,7 +239,7 @@ func TestObservePresubmitsDoesNotFallbackOnInvalidProwJob(t *testing.T) {
 	b := memoryBackend{objects: map[string]string{
 		"pr-logs/pull/example_project/42/pull-e2e/10/started.json":        `{"timestamp":1}`,
 		"pr-logs/pull/example_project/42/pull-e2e/10/finished.json":       `{"timestamp":2,"passed":true,"result":"SUCCESS","revision":"head"}`,
-		"pr-logs/pull/example_project/42/pull-e2e/10/prowjob.json":        `{"spec":{"type":"presubmit","job":"other","refs":{"pulls":[{"number":42,"sha":"head"}]}}}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/prowjob.json":        `{"spec":{"type":"presubmit","job":"other","refs":{"org":"example","repo":"project","pulls":[{"number":42,"sha":"head"}]}}}`,
 		"pr-logs/pull/example_project/42/pull-e2e/10/artifacts/junit.xml": `<testsuite><testcase name="test"/></testsuite>`,
 	}}
 	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}}}
@@ -248,6 +249,25 @@ func TestObservePresubmitsDoesNotFallbackOnInvalidProwJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	if attempt.Status != StatusInconclusive || !strings.Contains(attempt.OutcomeReason, "job is") {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestApplyPresubmitOutcomeRequiresCoverageForEveryEvidenceTest(t *testing.T) {
+	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: "a"}, {Identity: "b"}}}}
+	attempt := &Attempt{Status: StatusOpen}
+	jobs := []VerificationJob{{JobName: "pull-a"}, {JobName: "pull-b"}}
+	applyPresubmitOutcome(remediation, attempt, jobs, []BuildObservation{{
+		JobName: "pull-a", Outcome: OutcomePassed, MatchedTests: []string{"a"},
+	}}, true)
+	if attempt.Status != StatusAwaitingPresubmit {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	applyPresubmitOutcome(remediation, attempt, jobs, []BuildObservation{
+		{JobName: "pull-a", Outcome: OutcomePassed, MatchedTests: []string{"a"}},
+		{JobName: "pull-b", Outcome: OutcomePassed, MatchedTests: []string{"b"}},
+	}, true)
+	if attempt.Status != StatusPremergeVerified {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }

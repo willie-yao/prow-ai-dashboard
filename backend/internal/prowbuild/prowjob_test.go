@@ -2,6 +2,7 @@ package prowbuild
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -30,9 +31,18 @@ func TestFetchProwJobMetadata_Presubmit(t *testing.T) {
 
 func TestFetchProwJobMetadata_RejectsWrongPull(t *testing.T) {
 	path := "pr-logs/pull/example_project/42/pull-e2e/100/prowjob.json"
-	b := &fakeBackend{objects: map[string]string{path: `{"spec":{"type":"presubmit","job":"pull-e2e","refs":{"pulls":[{"number":7}]}}}`}}
+	b := &fakeBackend{objects: map[string]string{path: `{"spec":{"type":"presubmit","job":"pull-e2e","refs":{"org":"example","repo":"project","pulls":[{"number":7}]}}}`}}
 	loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePresubmit, Repo: "example/project"}, JobName: "pull-e2e", BuildID: "100", PullNumber: "42"}
 	if _, err := FetchProwJobMetadata(context.Background(), b, loc); err == nil {
 		t.Fatal("expected pull mismatch error")
+	}
+}
+
+func TestFetchProwJobMetadataRejectsWrongRepo(t *testing.T) {
+	path := "pr-logs/pull/example_project/42/pull-e2e/100/prowjob.json"
+	b := &fakeBackend{objects: map[string]string{path: `{"spec":{"type":"presubmit","job":"pull-e2e","refs":{"org":"other","repo":"project","pulls":[{"number":42,"sha":"head"}]}}}`}}
+	loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePresubmit, Repo: "example/project"}, JobName: "pull-e2e", BuildID: "100", PullNumber: "42"}
+	if _, err := FetchProwJobMetadata(context.Background(), b, loc); err == nil || !strings.Contains(err.Error(), "repo is") {
+		t.Fatalf("error = %v", err)
 	}
 }

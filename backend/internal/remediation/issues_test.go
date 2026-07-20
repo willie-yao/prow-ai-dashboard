@@ -8,6 +8,7 @@ import (
 type fakeIssueLifecycle struct {
 	comments []string
 	closed   []int
+	reopened []int
 }
 
 func (f *fakeIssueLifecycle) CommentIssue(_ context.Context, _ int, body string) error {
@@ -16,6 +17,10 @@ func (f *fakeIssueLifecycle) CommentIssue(_ context.Context, _ int, body string)
 }
 func (f *fakeIssueLifecycle) CloseIssue(_ context.Context, number int) error {
 	f.closed = append(f.closed, number)
+	return nil
+}
+func (f *fakeIssueLifecycle) ReopenIssue(_ context.Context, number int) error {
+	f.reopened = append(f.reopened, number)
 	return nil
 }
 
@@ -61,5 +66,22 @@ func TestReconcileLinkedIssuesWaitsForEveryFinding(t *testing.T) {
 	}
 	if len(client.closed) != 1 {
 		t.Fatalf("issue close calls = %v", client.closed)
+	}
+}
+
+func TestReconcileIssueReopensOnSameCauseRecurrence(t *testing.T) {
+	client := &fakeIssueLifecycle{}
+	remediation := &Remediation{Issue: &IssueRef{
+		Number: 9, State: "closed", LastTransition: "observing->verified_fixed",
+	}}
+	attempt := &Attempt{
+		Status: StatusStillFailingSameCause, URL: "https://github.com/o/r/pull/7",
+		LastTransition: "verified_fixed->still_failing_same_cause",
+	}
+	if err := reconcileIssue(context.Background(), client, remediation, attempt); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.reopened) != 1 || len(client.comments) != 1 || remediation.Issue.State != "open" {
+		t.Fatalf("reopened=%v comments=%v issue=%+v", client.reopened, client.comments, remediation.Issue)
 	}
 }

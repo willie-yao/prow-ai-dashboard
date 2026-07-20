@@ -151,7 +151,7 @@ func hasObservation(attempt *Attempt, jobType, jobName, buildID, commit string) 
 	for _, observation := range attempt.Observations {
 		if observation.JobType == jobType && observation.JobName == jobName &&
 			observation.BuildID == buildID && observation.SourceCommit == commit {
-			return true
+			return observation.Outcome != OutcomeInconclusive
 		}
 	}
 	return false

@@ -111,7 +111,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 		}
 		if entry != nil && len(entry.Attempts) > 0 {
 			latest := &entry.Attempts[len(entry.Attempts)-1]
-			if latest.Status == StatusVerifiedFixed && evidenceAdvanced(entry.Evidence, currentEvidence) {
+			if entry.JobType == models.JobTypePresubmit && latest.Status == StatusVerifiedFixed && evidenceAdvanced(entry.Evidence, currentEvidence) {
 				entry.Evidence = currentEvidence
 				mergeObservations(latest, recurrenceObservations(entry, currentEvidence, details))
 				transitionAttempt(entry, latest, StatusStillFailingSameCause, OutcomeSameCause,
@@ -185,7 +185,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			continue
 		}
 		attempt := &entry.Attempts[len(entry.Attempts)-1]
-		if attempt.Status == StatusVerifiedFixed || attempt.Status == StatusClosedUnmerged {
+		if attempt.Status == StatusClosedUnmerged {
 			continue
 		}
 		owner, repo, number, err := ParsePullRequestURL(attempt.URL)
