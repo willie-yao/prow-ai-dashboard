@@ -22,6 +22,9 @@ import (
 const testValidationKey = "test-validation-key"
 
 func withValidation(a analysis) analysis {
+	if a.RelevantFiles == nil {
+		a.RelevantFiles = []string{}
+	}
 	a.ValidationToken = orkaapi.AnalysisValidationToken(testValidationKey, a.validationInput())
 	return a
 }
@@ -452,5 +455,14 @@ func TestFinalizeBatchStopsBeforeSideEffectsOnFinalizationFailure(t *testing.T) 
 	}
 	if called {
 		t.Fatal("side effects ran after finalization failed")
+	}
+}
+
+func TestParseAnalysisRequiresRelevantFilesArray(t *testing.T) {
+	for _, value := range []string{"", `,"relevant_files":null`} {
+		input := `{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix"` + value + `,"validation_token":"token"}`
+		if _, err := parseAnalysis(input); err == nil || !strings.Contains(err.Error(), "relevant_files") {
+			t.Fatalf("parse error = %v, want relevant_files rejection for %s", err, input)
+		}
 	}
 }

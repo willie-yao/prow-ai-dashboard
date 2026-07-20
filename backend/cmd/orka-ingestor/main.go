@@ -702,6 +702,9 @@ func validateAnalysisShape(a analysis) error {
 	if strings.TrimSpace(a.SuggestedFix) == "" {
 		return fmt.Errorf("suggested_fix is required")
 	}
+	if a.RelevantFiles == nil {
+		return fmt.Errorf("relevant_files array is required")
+	}
 	if strings.TrimSpace(a.ValidationToken) == "" {
 		return fmt.Errorf("validation_token is required")
 	}

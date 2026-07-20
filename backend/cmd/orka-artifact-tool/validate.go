@@ -39,6 +39,10 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "analysis.root_cause is required", http.StatusBadRequest)
 		return
 	}
+	if args.Analysis.RelevantFiles == nil {
+		http.Error(w, "analysis.relevant_files array is required", http.StatusBadRequest)
+		return
+	}
 	if env.evidence == nil {
 		writeToolError(w, http.StatusInternalServerError, "artifact evidence validation is unavailable")
 		return

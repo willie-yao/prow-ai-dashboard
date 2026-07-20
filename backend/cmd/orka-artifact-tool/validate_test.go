@@ -75,6 +75,17 @@ func TestValidateAnalysisRequiresReadEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisRequiresRelevantFilesArray(t *testing.T) {
+	env := &toolEnv{evidence: newEvidenceAttestor("secret")}
+	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"analysis":{"root_cause":"cause"},"evidence_tokens":[]}`))
+	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	recorder := httptest.NewRecorder()
+	validateAnalysis(env, recorder, req)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "relevant_files") {
+		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestValidateAnalysisEnforcesMatchedSkillReadEvidence(t *testing.T) {
 	set, err := skills.ParseContract([]byte(`{
 		"skills":[{
