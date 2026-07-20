@@ -172,3 +172,26 @@ func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation,
 	validateAnalysis(env, recorder, req)
 	return recorder
 }
+
+func TestValidateAnalysisChecksArtifactCitationsAcrossProse(t *testing.T) {
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "controller bug", Severity: "High",
+		SuggestedFix: "update source", RelevantFiles: []string{"kustomize/cluster-template.yaml"},
+	}
+	response := runValidation(t, env, analysis, nil, "scope", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("source citation response = %d %s", response.Code, response.Body.String())
+	}
+
+	analysis.RootCause = "artifacts/manager.log shows the controller failure"
+	response = runValidation(t, env, analysis, nil, "scope", "")
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "artifacts/manager.log") {
+		t.Fatalf("unread prose citation response = %d %s", response.Code, response.Body.String())
+	}
+	response = runValidation(t, env, analysis, []string{attestor.issue("scope", "artifacts/manager.log")}, "scope", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("read prose citation response = %d %s", response.Code, response.Body.String())
+	}
+}

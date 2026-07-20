@@ -4,9 +4,11 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"path"
 	"slices"
 	"strings"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
@@ -64,15 +66,23 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		readPaths[path] = true
 	}
 
+	readBases := map[string]bool{}
+	for readPath := range readPaths {
+		readBases[path.Base(readPath)] = true
+	}
+	fields := []string{args.Analysis.RootCause, args.Analysis.Summary, args.Analysis.SuggestedFix}
+	fields = append(fields, args.Analysis.RelevantFiles...)
+	citations := ai.ArtifactCitations(strings.Join(fields, "\n"))
 	present, missing := []string{}, []string{}
-	for _, p := range args.Analysis.RelevantFiles {
-		if strings.TrimSpace(p) == "" {
-			continue
+	for _, citation := range citations {
+		read := readPaths[citation]
+		if !strings.Contains(citation, "/") {
+			read = readBases[path.Base(citation)]
 		}
-		if readPaths[normalizeEvidencePath(p)] {
-			present = append(present, p)
+		if read {
+			present = append(present, citation)
 		} else {
-			missing = append(missing, p)
+			missing = append(missing, citation)
 		}
 	}
 	missingEvidence := []string{}
@@ -96,7 +106,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	}
 	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0
 	result := map[string]any{
-		"checked":                 len(present) + len(missing),
+		"checked":                 len(citations),
 		"present":                 present,
 		"missing":                 missing,
 		"read_paths":              sortedEvidencePaths(readPaths),

@@ -43,23 +43,14 @@ func TestApplyDiffRejectsLargeReconstructedFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "large.txt"), []byte(large), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := gitRun(context.Background(), repo, "add", "large.txt"); err != nil {
-		t.Fatal(err)
-	}
-	if err := gitRun(context.Background(), repo, "commit", "-m", "large fixture"); err != nil {
-		t.Fatal(err)
-	}
+	runTestGit(t, repo, "add", "large.txt")
+	runTestGit(t, repo, "commit", "--no-gpg-sign", "-m", "large fixture")
 	changed := strings.Replace(large, "first\n", "changed\n", 1)
 	if err := os.WriteFile(filepath.Join(repo, "large.txt"), []byte(changed), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	diff, err := gitOut(context.Background(), repo, "diff", "--", "large.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := gitRun(context.Background(), repo, "checkout", "--", "large.txt"); err != nil {
-		t.Fatal(err)
-	}
+	diff := runTestGit(t, repo, "diff", "--", "large.txt")
+	runTestGit(t, repo, "checkout", "--", "large.txt")
 	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, diff); err == nil || !strings.Contains(err.Error(), "changed file large.txt") {
 		t.Fatalf("large file error = %v", err)
 	}
