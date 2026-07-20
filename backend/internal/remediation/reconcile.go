@@ -31,6 +31,7 @@ type FixReference struct {
 	URL       string
 	OpenedAt  string
 	PatchHash string
+	Pattern   *models.PatternAnalysis
 }
 
 // PullRequestClient is the GitHub lifecycle subset used by reconciliation.
@@ -40,7 +41,7 @@ type PullRequestClient interface {
 
 // PullRequestSearchClient recovers dashboard-created pull requests by marker.
 type PullRequestSearchClient interface {
-	SearchPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
+	SearchPullRequests(ctx context.Context, owner, repo, queryToken, confirmMarker string) ([]ghpr.PullRequestSearchResult, error)
 }
 
 // Reconciler updates the remediation ledger from GitHub state.
@@ -83,7 +84,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 	state := Load(r.dataDir)
 	var errs []error
 
-	for _, pattern := range patterns {
+	combined := append([]models.PatternAnalysis(nil), patterns...)
+	seenKeys := map[string]bool{}
+	for _, pattern := range combined {
+		seenKeys[keyFor(pattern)] = true
+	}
+	for key, fix := range fixes {
+		if fix.Pattern != nil && !seenKeys[key] {
+			combined = append(combined, *fix.Pattern)
+			seenKeys[key] = true
+		}
+	}
+
+	for _, pattern := range combined {
 		currentID := pattern.ID
 		if currentID == "" {
 			currentID = models.PatternID(pattern)
@@ -116,11 +129,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 		if (!ok || strings.TrimSpace(fix.URL) == "") && r.search != nil && r.targetRepo != "" {
 			owner, repo, valid := strings.Cut(r.targetRepo, "/")
 			if valid {
-				_, pullURL, found, err := r.search.SearchPR(ctx, owner, repo, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+				results, err := r.search.SearchPullRequests(ctx, owner, repo, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 				if err != nil {
 					errs = append(errs, fmt.Errorf("recover remediation pull request: %w", err))
-				} else if found {
-					fix, ok = FixReference{URL: pullURL, OpenedAt: nowString()}, true
+				} else {
+					for _, result := range results {
+						if entry == nil || findAttempt(entry, result.HTMLURL) == nil {
+							copy := pattern
+							fix, ok = FixReference{URL: result.HTMLURL, OpenedAt: nowString(), Pattern: &copy}, true
+							break
+						}
+					}
 				}
 			}
 		}

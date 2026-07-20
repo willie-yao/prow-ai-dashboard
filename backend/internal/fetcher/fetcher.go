@@ -839,7 +839,7 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	}
 	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
 	for key, fix := range fixState.Tracked {
-		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash}
+		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash, Pattern: fix.Pattern}
 	}
 	if p.jobCatalog == nil && p.cfg.TestGrid.Dashboard != "" {
 		_, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, p.cfg, targetRepo)
@@ -893,10 +893,12 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		issueRepo = issueConfig.Repo.Owner + "/" + issueConfig.Repo.Name
 		issueState := statefile.Load[issues.TrackedIssue](filepath.Join(p.opts.OutDir, "issue_state.json"), issueRepo, "issues")
 		trackedIssues := map[string]remediation.IssueRef{}
-		for _, pattern := range patterns {
-			if tracked, ok := issueState.Tracked[issues.KeyPrefixPattern+pattern.JobID]; ok {
-				trackedIssues[pattern.JobID] = remediation.IssueRef{Number: tracked.Number, URL: tracked.URL, Repo: issueRepo}
+		for key, tracked := range issueState.Tracked {
+			if !strings.HasPrefix(key, issues.KeyPrefixPattern) {
+				continue
 			}
+			jobID := strings.TrimPrefix(key, issues.KeyPrefixPattern)
+			trackedIssues[jobID] = remediation.IssueRef{Number: tracked.Number, URL: tracked.URL, Repo: issueRepo}
 		}
 		var issueClient remediation.IssueLifecycleClient
 		if issueToken := os.Getenv("ISSUE_TOKEN"); issueToken != "" {

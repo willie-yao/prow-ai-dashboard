@@ -464,16 +464,14 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 	if entry == nil || len(entry.Attempts) == 0 {
 		return "", "", fmt.Errorf("remediation retry is no longer available")
 	}
-	reservationKey := entry.ID
-	if reservationKey == "" {
-		reservationKey = failureID
-	}
 	latest := entry.Attempts[len(entry.Attempts)-1]
+	reservationKey := retryReservationKey(entry, latest, failureID)
 	if latest.Status != remediation.StatusStillFailingSameCause || len(entry.Attempts) >= 2 {
 		return "", "", fmt.Errorf("remediation retry is no longer available")
 	}
 
 	state := s.loadRetryReservations()
+	pruneRetryReservations(state, time.Now().UTC())
 	if existing, ok := state.Reservations[reservationKey]; ok {
 		if existing.ResultURL != "" {
 			return existing.ResultURL, existing.ID, nil
@@ -522,10 +520,8 @@ func (s *Service) completeRetryReservation(failureID, reservationID, resultURL s
 	if entry == nil {
 		return fmt.Errorf("remediation retry reservation was lost")
 	}
-	reservationKey := entry.ID
-	if reservationKey == "" {
-		reservationKey = failureID
-	}
+	latest := entry.Attempts[len(entry.Attempts)-1]
+	reservationKey := retryReservationKey(entry, latest, failureID)
 	state := s.loadRetryReservations()
 	reservation, ok := state.Reservations[reservationKey]
 	if !ok || reservation.ID != reservationID {
@@ -542,10 +538,8 @@ func (s *Service) clearRetryReservation(failureID, reservationID string) {
 	if entry == nil {
 		return
 	}
-	reservationKey := entry.ID
-	if reservationKey == "" {
-		reservationKey = failureID
-	}
+	latest := entry.Attempts[len(entry.Attempts)-1]
+	reservationKey := retryReservationKey(entry, latest, failureID)
 	state := s.loadRetryReservations()
 	reservation, ok := state.Reservations[reservationKey]
 	if !ok || reservation.ID != reservationID || reservation.ResultURL != "" {
@@ -553,6 +547,28 @@ func (s *Service) clearRetryReservation(failureID, reservationID string) {
 	}
 	delete(state.Reservations, reservationKey)
 	_ = s.saveRetryReservations(state)
+}
+
+func retryReservationKey(entry *remediation.Remediation, attempt remediation.Attempt, fallback string) string {
+	stable := entry.ID
+	if stable == "" {
+		stable = fallback
+	}
+	identity := attempt.URL
+	if identity == "" {
+		identity = fmt.Sprintf("attempt-%d", attempt.Number)
+	}
+	return stable + "::" + identity
+}
+
+func pruneRetryReservations(state *retryReservationState, now time.Time) {
+	const retention = 180 * 24 * time.Hour
+	for key, reservation := range state.Reservations {
+		created, err := time.Parse(time.RFC3339, reservation.CreatedAt)
+		if err != nil || now.Sub(created) > retention {
+			delete(state.Reservations, key)
+		}
+	}
 }
 
 func remediationForFinding(state *remediation.State, failureID string) *remediation.Remediation {

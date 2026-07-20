@@ -108,8 +108,8 @@ type recoveringPRClient struct {
 	url string
 }
 
-func (c recoveringPRClient) SearchPR(context.Context, string, string, string, string) (int, string, bool, error) {
-	return 7, c.url, true, nil
+func (c recoveringPRClient) SearchPullRequests(context.Context, string, string, string, string) ([]ghpr.PullRequestSearchResult, error) {
+	return []ghpr.PullRequestSearchResult{{Number: 7, HTMLURL: c.url}}, nil
 }
 
 func TestReconcileRecoversPullRequestFromMarker(t *testing.T) {
@@ -277,5 +277,64 @@ func TestPruneTerminalRemediations(t *testing.T) {
 	}
 	if state.Remediations["active"] == nil || state.Remediations["pending-issue"] == nil {
 		t.Fatalf("retained state = %+v", state.Remediations)
+	}
+}
+
+func TestReconcileUsesPatternSnapshotFromTrackedFix(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause"}
+	client := fakePRClient{pull: ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "open",
+		Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"},
+	}}
+	state, err := NewReconciler(client, dir).Reconcile(context.Background(), nil, nil,
+		map[string]FixReference{"key": {URL: "https://github.com/o/r/pull/7", Pattern: &pattern}},
+		func(models.PatternAnalysis) string { return "key" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry := state.Remediations["pattern"]; entry == nil || len(entry.Attempts) != 1 {
+		t.Fatalf("state = %+v", state)
+	}
+}
+
+type multiRecoveringPRClient struct {
+	fakePRClient
+	results []ghpr.PullRequestSearchResult
+}
+
+func (c multiRecoveringPRClient) SearchPullRequests(context.Context, string, string, string, string) ([]ghpr.PullRequestSearchResult, error) {
+	return c.results, nil
+}
+
+func TestReconcileRecoverySkipsAlreadyTrackedMarkerMatch(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause"}
+	state := NewState()
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job",
+		Attempts: []Attempt{{Number: 1, URL: "https://github.com/o/r/pull/1"}},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	client := multiRecoveringPRClient{
+		fakePRClient: fakePRClient{pull: ghpr.PullRequest{
+			Number: 2, HTMLURL: "https://github.com/o/r/pull/2", State: "open",
+			Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"},
+		}},
+		results: []ghpr.PullRequestSearchResult{
+			{Number: 1, HTMLURL: "https://github.com/o/r/pull/1"},
+			{Number: 2, HTMLURL: "https://github.com/o/r/pull/2"},
+		},
+	}
+	reconciler := NewReconciler(client, dir)
+	reconciler.SetRecovery("o/r", client)
+	state, err := reconciler.Reconcile(context.Background(), []models.PatternAnalysis{pattern}, nil, nil, func(models.PatternAnalysis) string { return "key" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Remediations["pattern"].Attempts) != 2 || state.Remediations["pattern"].Attempts[1].URL != "https://github.com/o/r/pull/2" {
+		t.Fatalf("attempts = %+v", state.Remediations["pattern"].Attempts)
 	}
 }
