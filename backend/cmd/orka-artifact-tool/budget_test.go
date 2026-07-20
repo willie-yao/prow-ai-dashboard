@@ -2,11 +2,16 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
 type budgetTestBrowser struct {
@@ -42,10 +47,9 @@ func TestRequestBudgetRejectsIncompleteReadsAndCountsResponses(t *testing.T) {
 		t.Fatal("read after budget exhaustion succeeded")
 	}
 	recorder := httptest.NewRecorder()
-	writer := &budgetResponseWriter{ResponseWriter: recorder, budget: budget}
-	if _, err := writer.Write([]byte("1234")); err != nil {
-		t.Fatal(err)
-	}
+	writeBudgetedResponse(recorder, budget, func(w http.ResponseWriter) {
+		_, _ = w.Write([]byte("1234"))
+	})
 	model, gcs := budget.remaining()
 	if model != 6 || gcs != 0 {
 		t.Fatalf("remaining model=%d gcs=%d, want 6/0", model, gcs)
@@ -65,5 +69,55 @@ func TestRequestBudgetPassesRemainingLimitIntoGrep(t *testing.T) {
 	_, remaining := budget.remaining()
 	if remaining != 0 {
 		t.Fatalf("remaining GCS bytes = %d, want 0", remaining)
+	}
+}
+
+func TestBudgetedResponseRejectsOversizedPayloadBeforeWrite(t *testing.T) {
+	budget := newScopeBudget(3, 10)
+	recorder := httptest.NewRecorder()
+	writeBudgetedResponse(recorder, budget, func(w http.ResponseWriter) {
+		w.Header().Set("X-Tool", "value")
+		_, _ = w.Write([]byte("four"))
+	})
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+	if recorder.Header().Get("X-Tool") != "" {
+		t.Fatal("oversized response committed tool headers")
+	}
+}
+
+func TestBudgetBackendBoundsReadAll(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inner, err := storage.NewLocalBackend(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &budgetBackend{Backend: inner, budget: newScopeBudget(100, 3)}
+	if _, err := storage.ReadAll(context.Background(), backend, "file.txt"); err == nil || !strings.Contains(err.Error(), "budget exhausted") {
+		t.Fatalf("ReadAll error = %v", err)
+	}
+	_, remaining := backend.budget.remaining()
+	if remaining != 3 {
+		t.Fatalf("remaining = %d, want unchanged budget 3", remaining)
+	}
+}
+
+func TestBudgetBackendAllowsObjectExactlyAtLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("hey"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inner, err := storage.NewLocalBackend(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &budgetBackend{Backend: inner, budget: newScopeBudget(100, 3)}
+	data, err := storage.ReadAll(context.Background(), backend, "file.txt")
+	if err != nil || string(data) != "hey" {
+		t.Fatalf("data=%q err=%v", data, err)
 	}
 }

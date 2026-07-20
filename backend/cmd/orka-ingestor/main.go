@@ -130,8 +130,8 @@ func main() {
 				projectScope: manifest.ProjectScope,
 				timeout:      *patternTimeout, retries: *patternRetries, poll: *patternPoll,
 			}
-			stats, err := orka.FinalizePatternsAndRun(ctx, *dataDir, analyzer, func(context.Context) error {
-				return fetcher.RunFinalizedSideEffects(context.Background(), fetcher.FinalizedSideEffectsOptions{
+			stats, err := orka.FinalizePatternsAndRun(ctx, *dataDir, analyzer, func(sideEffectCtx context.Context) error {
+				return fetcher.RunFinalizedSideEffects(sideEffectCtx, fetcher.FinalizedSideEffectsOptions{
 					ProjectDir: *projectDir,
 					DataDir:    *dataDir,
 				})

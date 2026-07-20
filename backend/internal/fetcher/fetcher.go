@@ -50,6 +50,8 @@ type Options struct {
 	// enable presubmits.
 	IncludePresubmits bool
 	EnableAI          bool
+	// SkipSideEffects writes dashboard data without notifications or GitHub writes.
+	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
 	Version string
 }
@@ -184,7 +186,9 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.runSideEffects(ctx, res)
+	if !p.opts.SkipSideEffects {
+		p.runSideEffects(ctx, res)
+	}
 	return jobs, nil
 }
 

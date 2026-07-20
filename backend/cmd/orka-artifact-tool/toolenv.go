@@ -239,7 +239,7 @@ func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storag
 		return &budgetBrowser{Browser: browser, budget: budget}
 	}
 	return &toolEnv{
-		backend:     bb.backend,
+		backend:     &budgetBackend{Backend: bb.backend, budget: budget},
 		bucket:      bb.bucket,
 		buildPrefix: p,
 		webURLBase:  web,
@@ -330,6 +330,10 @@ func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeToolError(w http.ResponseWriter, status int, message string) {
+	writeJSONStatus(w, status, map[string]any{"error": message})
 }
 
 // requirePOST writes 405 and returns false if the method is not POST.

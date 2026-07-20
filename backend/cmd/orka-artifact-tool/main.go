@@ -64,7 +64,9 @@ func main() {
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(body))
-			qt.h(tenv, &budgetResponseWriter{ResponseWriter: w, budget: budget}, r)
+			writeBudgetedResponse(w, budget, func(buffer http.ResponseWriter) {
+				qt.h(tenv, buffer, r)
+			})
 		}))
 	}
 
@@ -90,9 +92,10 @@ func main() {
 		defer cancel()
 		res := reg.Dispatch(ctx, env, name, json.RawMessage(raw))
 		log.Printf("🛠 %s args=%s bytes=%d", name, truncate(raw, 200), res.BytesFetched)
-		bw := &budgetResponseWriter{ResponseWriter: w, budget: budget}
-		bw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(bw).Encode(res.Payload)
+		writeBudgetedResponse(w, budget, func(buffer http.ResponseWriter) {
+			buffer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(buffer).Encode(res.Payload)
+		})
 	}))
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

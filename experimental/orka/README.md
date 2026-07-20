@@ -52,8 +52,8 @@ also carries the configured Orka retry policy.
   to enforce the tool-call floor, terminal outcome, successful quality tools,
   consumer recipe lookup, a `validate_analysis` token bound to the exact final
   JSON, and transient timeline evidence before publishing a result.
-- **Scheduled side effects run in batch mode.** After job-level pattern
-  finalization succeeds, the ingestor runs the same notifications, issue
+- **Scheduled side effects run in batch mode.** The skeleton fetch disables
+  side effects. After job-level pattern finalization succeeds, the ingestor runs the same notifications, issue
   reconciliation, and fix-PR reconciliation as the in-process fetcher. Mount the
   consumer project config and provide the same side-effect credentials to the
   ingestor. Webhook mode patches per-test results only.

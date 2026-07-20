@@ -80,6 +80,9 @@ identical either way.
 
 Orka mode requires `mode: cron` and assumes Orka, the artifact tool shim, a
 Provider, and the patched ai-worker image are already installed in the cluster.
+The Orka skeleton fetch uses `-skip-side-effects`; notifications and GitHub
+reconciliation run once, after final analysis and pattern output exist.
+
 The chart deploys the analysis pipeline, not Orka itself, so the default stays
 `inprocess` and a fresh install always works. Opt into Orka only after those
 prerequisites are in place. See
