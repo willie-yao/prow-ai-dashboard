@@ -675,6 +675,14 @@ func TestPatternsMateriallyDifferentWeightsSharedSymptoms(t *testing.T) {
 	}
 }
 
+func TestPatternsMateriallyDifferentDiscountsSharedComponents(t *testing.T) {
+	certificate := "Azure Service Operator webhook certificate expired"
+	endpoint := "Azure Service Operator webhook endpoint unavailable"
+	if !patternsMateriallyDifferent(certificate, endpoint) {
+		t.Fatal("component vocabulary hid a material mechanism change")
+	}
+}
+
 func TestPatternsMateriallyDifferentDetectsPolarityReversal(t *testing.T) {
 	if !patternsMateriallyDifferent("API accepts requests", "API does not accept requests") {
 		t.Fatal("negative polarity was treated as unchanged")

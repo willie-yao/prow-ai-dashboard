@@ -84,8 +84,11 @@ var patternStopTokens = map[string]struct{}{
 }
 
 var patternLowWeightTokens = map[string]struct{}{
-	"call": {}, "conversion": {}, "error": {}, "fail": {}, "failure": {},
-	"timeout": {}, "webhook": {},
+	"api": {}, "azure": {}, "call": {}, "client": {}, "cluster": {},
+	"component": {}, "controller": {}, "conversion": {}, "error": {}, "fail": {},
+	"failure": {}, "job": {}, "node": {}, "operator": {}, "pod": {},
+	"provider": {}, "resource": {}, "server": {}, "service": {}, "timeout": {},
+	"webhook": {},
 }
 
 // NotificationState tracks which persistent failures have been notified.
