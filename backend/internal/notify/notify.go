@@ -51,6 +51,25 @@ var patternNegativeTokens = map[string]string{
 	"unsupported":  "supported",
 }
 
+var patternPolarityReplacer = strings.NewReplacer(
+	"isn't", "is not", "isn’t", "is not",
+	"aren't", "are not", "aren’t", "are not",
+	"wasn't", "was not", "wasn’t", "was not",
+	"weren't", "were not", "weren’t", "were not",
+	"doesn't", "does not", "doesn’t", "does not",
+	"don't", "do not", "don’t", "do not",
+	"didn't", "did not", "didn’t", "did not",
+	"can't", "can not", "can’t", "can not",
+	"couldn't", "could not", "couldn’t", "could not",
+	"won't", "will not", "won’t", "will not",
+	"wouldn't", "would not", "wouldn’t", "would not",
+	"shouldn't", "should not", "shouldn’t", "should not",
+	"hasn't", "has not", "hasn’t", "has not",
+	"haven't", "have not", "haven’t", "have not",
+	"hadn't", "had not", "hadn’t", "had not",
+	"no longer", "not",
+)
+
 var patternStopTokens = map[string]struct{}{
 	"all": {}, "and": {}, "any": {}, "are": {}, "because": {},
 	"been": {}, "being": {}, "but": {}, "can": {}, "context": {},
@@ -424,7 +443,7 @@ func patternPolarityReversed(previous, current string) bool {
 
 func patternPolarityTargets(value string) map[string]struct{} {
 	targets := make(map[string]struct{})
-	lower := strings.ToLower(value)
+	lower := normalizePatternPolarityText(value)
 	for _, re := range patternPolarityRegexes {
 		for _, match := range re.FindAllStringSubmatch(lower, -1) {
 			target := singularPatternToken(match[1])
@@ -476,7 +495,8 @@ func patternSimilarity(previous, current string) float64 {
 
 func patternTokens(value string) map[string]struct{} {
 	tokens := make(map[string]struct{})
-	for _, token := range patternTokenRegex.FindAllString(strings.ToLower(value), -1) {
+	value = normalizePatternPolarityText(value)
+	for _, token := range patternTokenRegex.FindAllString(value, -1) {
 		if isNumericToken(token) {
 			if len(token) <= 5 {
 				tokens[token] = struct{}{}
@@ -496,6 +516,10 @@ func patternTokens(value string) map[string]struct{} {
 		tokens[token] = struct{}{}
 	}
 	return tokens
+}
+
+func normalizePatternPolarityText(value string) string {
+	return patternPolarityReplacer.Replace(strings.ToLower(value))
 }
 
 func patternNumericSignals(value string) map[string]struct{} {
