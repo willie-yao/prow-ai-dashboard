@@ -87,6 +87,7 @@ jobs:
           context: _orka
           file: _orka/workers/ai/Dockerfile
           platforms: linux/amd64
+          load: true
           push: false
           tags: ghcr.io/${{ github.repository }}/orka-ai-worker:${{ steps.compat.outputs.image_tag }}
           labels: |
@@ -97,6 +98,18 @@ jobs:
           provenance: false
           sbom: false
           cache-from: type=gha,scope=orka-compat-worker
+
+      - name: Inspect compatibility image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/orka-ai-worker:${{ steps.compat.outputs.image_tag }}
+        run: |
+          docker image inspect "$IMAGE" --format '{{json .}}' > image-inspect.json
+          jq -e '
+            .Os == "linux" and
+            .Architecture == "amd64" and
+            .Config.User == "65532:65532" and
+            .Config.Entrypoint == ["/worker"]
+          ' image-inspect.json > /dev/null
 
       - name: Record validation coordinates
         env:
@@ -132,7 +145,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -167,11 +180,7 @@ jobs:
       - name: Refuse an existing immutable tag
         env:
           IMAGE: ghcr.io/${{ github.repository }}/orka-ai-worker:${{ needs.validate.outputs.image_tag }}
-        run: |
-          if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1; then
-            echo "Refusing to overwrite existing compatibility image: $IMAGE" >&2
-            exit 1
-          fi
+        run: experimental/orka/worker-patches/compat-worker.sh assert-tag-absent "$IMAGE"
 
       - name: Build and push compatibility image
         id: build

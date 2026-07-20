@@ -61,10 +61,12 @@ ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:
   v1-orka-<full-orka-commit>-dashboard-<full-dashboard-commit>
 ```
 
-Use the exact tag or digest from the
-[compatibility matrix](worker-patches/COMPATIBILITY.md). New GHCR packages may
-need to be made public before Orka can pull the dynamic worker. To build locally
-instead, see [Local build](#local-build-for-kind).
+Use the exact tag or digest from the latest [successful main-branch
+compatibility run](https://github.com/willie-yao/prow-ai-dashboard/actions/workflows/orka-compat-image.yml?query=branch%3Amain+is%3Asuccess); the
+[compatibility matrix](worker-patches/COMPATIBILITY.md) explains the artifact and
+deployment formats. New GHCR packages may need to be made public before Orka can
+pull the dynamic worker. To build locally instead, see
+[Local build](#local-build-for-kind).
 
 ## Step 1: install Orka and pin the compatibility worker
 

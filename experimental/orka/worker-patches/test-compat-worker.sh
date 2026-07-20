@@ -4,6 +4,8 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/../../.." && pwd)
 script="$script_dir/compat-worker.sh"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
 bash -n "$script"
 "$script" verify
@@ -26,6 +28,32 @@ tag=$(awk -F= '$1 == "image_tag" { print $2 }' <<< "$metadata")
 (( ${#tag} <= 128 ))
 if "$script" metadata short > /dev/null 2>&1; then
   echo 'short dashboard commit was accepted' >&2
+  exit 1
+fi
+
+
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/docker" <<'EOF_DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == "buildx imagetools inspect "* ]] || { echo "unexpected docker invocation: $*" >&2; exit 3; }
+case ${FAKE_REGISTRY_RESULT:-} in
+  exists) echo '{"manifest":"present"}'; exit 0 ;;
+  missing) echo 'ERROR: ghcr.io/example/worker:test: not found' >&2; exit 1 ;;
+  missing404) echo 'ERROR: unexpected status from HEAD request: 404 Not Found' >&2; exit 1 ;;
+  error) echo 'ERROR: unexpected status from HEAD request: 401 Unauthorized' >&2; exit 1 ;;
+  *) echo 'missing FAKE_REGISTRY_RESULT' >&2; exit 3 ;;
+esac
+EOF_DOCKER
+chmod +x "$tmp/bin/docker"
+FAKE_REGISTRY_RESULT=missing PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test
+FAKE_REGISTRY_RESULT=missing404 PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test
+if FAKE_REGISTRY_RESULT=exists PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test > /dev/null 2>&1; then
+  echo 'existing compatibility tag was accepted' >&2
+  exit 1
+fi
+if FAKE_REGISTRY_RESULT=error PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test > /dev/null 2>&1; then
+  echo 'registry inspection error was treated as tag absence' >&2
   exit 1
 fi
 

@@ -23,6 +23,7 @@ Usage:
   compat-worker.sh check-source <orka-source>
   compat-worker.sh prepare <orka-source>
   compat-worker.sh test <patched-orka-source>
+  compat-worker.sh assert-tag-absent <image>
   compat-worker.sh build <image> [orka-source]
 
 build clones the pinned Orka commit when orka-source is omitted, applies the
@@ -134,6 +135,25 @@ clone_source() {
   git -C "$destination" checkout -q --detach FETCH_HEAD
 }
 
+
+assert_tag_absent() {
+  local image=$1 output status
+  set +e
+  output=$(docker buildx imagetools inspect "$image" 2>&1)
+  status=$?
+  set -e
+  if [[ $status -eq 0 ]]; then
+    echo "refusing to overwrite existing compatibility image: $image" >&2
+    return 1
+  fi
+  if grep -Eqi '404 Not Found|manifest unknown|MANIFEST_UNKNOWN|: not found$' <<< "$output"; then
+    return 0
+  fi
+  echo "registry inspection failed for $image:" >&2
+  echo "$output" >&2
+  return 2
+}
+
 build_image() {
   local image=$1
   local source=${2:-}
@@ -168,6 +188,10 @@ case $command in
   test)
     [[ $# -eq 2 ]] || { usage >&2; exit 2; }
     test_source "$2"
+    ;;
+  assert-tag-absent)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    assert_tag_absent "$2"
     ;;
   build)
     [[ $# -ge 2 && $# -le 3 ]] || { usage >&2; exit 2; }

@@ -39,6 +39,14 @@ workflow summary and `orka-compat-image-<dashboard-commit>` artifact record the
 registry digest, Orka commit, dashboard commit, and patch checksum. Deploy by
 digest when the surrounding Orka installation supports a full image reference.
 
+## Find the current deployable coordinate
+
+Open the [successful main-branch compatibility runs](https://github.com/willie-yao/prow-ai-dashboard/actions/workflows/orka-compat-image.yml?query=branch%3Amain+is%3Asuccess) and select the
+newest run whose `publish` job completed. Its workflow summary shows the exact
+image tag and digest. The `orka-compat-image-<dashboard-commit>` artifact contains
+the same values as JSON. Pull-request validation artifacts are marked
+`published: false` and are not deployment coordinates.
+
 ## Validation
 
 Every pull request that changes the compatibility files:
