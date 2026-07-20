@@ -17,7 +17,6 @@ type RemediationUpdate struct {
 	Reason       string
 	PullURL      string
 	DashboardURL string
-	ActionURL    string
 }
 
 // RemediationUpdateMessage renders one remediation lifecycle transition.
@@ -35,9 +34,6 @@ func RemediationUpdateMessage(input RemediationUpdate) Message {
 	if input.DashboardURL != "" {
 		fmt.Fprintf(&text, "Dashboard: %s\n", input.DashboardURL)
 	}
-	if input.ActionURL != "" {
-		fmt.Fprintf(&text, "Review follow-up fix: %s\n", input.ActionURL)
-	}
 	htmlBody := fmt.Sprintf("<!doctype html><html><body><h2>%s</h2><p><strong>Project:</strong> %s</p><p><strong>Job:</strong> %s</p><p><strong>Status:</strong> %s</p>",
 		html.EscapeString(label), html.EscapeString(input.ProjectName), html.EscapeString(input.JobName), html.EscapeString(input.Status))
 	if input.Reason != "" {
@@ -48,9 +44,6 @@ func RemediationUpdateMessage(input RemediationUpdate) Message {
 	}
 	if input.DashboardURL != "" {
 		htmlBody += `<p><a href="` + html.EscapeString(input.DashboardURL) + `">View dashboard</a></p>`
-	}
-	if input.ActionURL != "" {
-		htmlBody += `<p><a href="` + html.EscapeString(input.ActionURL) + `">Review follow-up fix</a></p>`
 	}
 	htmlBody += "</body></html>"
 	return Message{From: input.From, To: append([]mail.Address(nil), input.To...), Subject: subject, TextBody: text.String(), HTMLBody: htmlBody}

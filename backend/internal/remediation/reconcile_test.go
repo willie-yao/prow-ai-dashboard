@@ -213,7 +213,7 @@ func TestReconcileReopensVerifiedFindingOnNewerFailure(t *testing.T) {
 	previous.BuildWatermark = "10"
 	state.Remediations["pattern"] = &Remediation{
 		ID: "pattern", FindingID: "pattern", JobID: "job", Evidence: previous,
-		Attempts: []Attempt{{Status: StatusVerifiedFixed, PRState: StatusMerged, PatchHash: "hash", URL: "https://github.com/o/r/pull/7"}},
+		Attempts: []Attempt{{Status: StatusVerifiedFixed, PRState: StatusMerged, URL: "https://github.com/o/r/pull/7"}},
 	}
 	if err := state.Save(dir); err != nil {
 		t.Fatal(err)
@@ -258,31 +258,6 @@ func TestReconcilePreservesLinkedIssueLifecycleFields(t *testing.T) {
 	}
 }
 
-func TestPruneTerminalRemediations(t *testing.T) {
-	now := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
-	old := now.Add(-terminalRetention - time.Hour).Format(time.RFC3339)
-	state := NewState()
-	state.Remediations["remove"] = &Remediation{
-		ID: "remove", FindingID: "remove", UpdatedAt: old,
-		Attempts: []Attempt{{Status: StatusVerifiedFixed}},
-	}
-	state.Remediations["active"] = &Remediation{
-		ID: "active", FindingID: "active", UpdatedAt: old,
-		Attempts: []Attempt{{Status: StatusVerifiedFixed}},
-	}
-	state.Remediations["pending-issue"] = &Remediation{
-		ID: "pending-issue", FindingID: "pending-issue", UpdatedAt: old,
-		Issue: &IssueRef{Number: 1, State: "open"}, Attempts: []Attempt{{Status: StatusVerifiedFixed}},
-	}
-	pruneTerminalRemediations(state, []models.PatternAnalysis{{ID: "active"}}, now)
-	if state.Remediations["remove"] != nil {
-		t.Fatal("old terminal remediation was not pruned")
-	}
-	if state.Remediations["active"] == nil || state.Remediations["pending-issue"] == nil {
-		t.Fatalf("retained state = %+v", state.Remediations)
-	}
-}
-
 func TestReconcileUsesPatternSnapshotFromTrackedFix(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause"}
@@ -313,7 +288,7 @@ func (c multiRecoveringPRClient) SearchPullRequests(context.Context, string, str
 func TestReconcileRecoverySkipsAlreadyTrackedMarkerMatch(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause"}
-	state := NewState()
+	state := NewStateForRepo("o/r")
 	state.Remediations["pattern"] = &Remediation{
 		ID: "pattern", FindingID: "pattern", JobID: "job",
 		Attempts: []Attempt{{Number: 1, URL: "https://github.com/o/r/pull/1"}},

@@ -3,6 +3,7 @@ package prowbuild
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,6 +13,9 @@ import (
 )
 
 const maxProwJobBytes = 2 * 1024 * 1024
+
+// ErrProwJobNotFound means the build did not publish prowjob.json.
+var ErrProwJobNotFound = errors.New("prowjob metadata not found")
 
 // ProwJobMetadata is the verification metadata published with a decorated build.
 type ProwJobMetadata struct {
@@ -103,6 +107,9 @@ func FetchProwJobMetadata(ctx context.Context, b storage.Backend, loc BuildLocat
 	path := loc.BuildPath() + "prowjob.json"
 	rc, size, err := b.Open(ctx, path)
 	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, fmt.Errorf("%w: %s", ErrProwJobNotFound, path)
+		}
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer rc.Close()
@@ -134,12 +141,18 @@ func FetchProwJobMetadata(ctx context.Context, b storage.Backend, loc BuildLocat
 		URL: raw.Status.URL, BuildID: raw.Status.BuildID,
 		StartTime: parseProwTime(raw.Status.StartTime), Completion: parseProwTime(raw.Status.CompletionTime),
 	}
+	if loc.JobType != "" && out.Type != loc.JobType {
+		return nil, fmt.Errorf("prowjob: %s type is %q, want %q", path, out.Type, loc.JobType)
+	}
 	if raw.Spec.Refs != nil {
 		ref := convertProwRef(*raw.Spec.Refs)
 		out.Refs = &ref
 	}
 	for _, ref := range raw.Spec.ExtraRefs {
 		out.ExtraRefs = append(out.ExtraRefs, convertProwRef(ref))
+	}
+	if out.Type == "presubmit" && (out.Refs == nil || len(out.Refs.Pulls) == 0) {
+		return nil, fmt.Errorf("prowjob: %s presubmit is missing pull refs", path)
 	}
 	if loc.PullNumber != "" && out.Refs != nil && len(out.Refs.Pulls) > 0 {
 		if got := fmt.Sprint(out.Refs.Pulls[0].Number); got != loc.PullNumber {

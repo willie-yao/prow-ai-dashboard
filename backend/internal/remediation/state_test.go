@@ -43,9 +43,10 @@ func TestEvidenceForPattern(t *testing.T) {
 func TestStateSaveWritesRedactedPublicProjection(t *testing.T) {
 	dir := t.TempDir()
 	state := NewState()
-	state.Remediations["x"] = &Remediation{ID: "x", JobID: "job", Attempts: []Attempt{{
-		Number: 1, URL: "https://github.com/o/r/pull/7", Status: StatusOpen, PatchHash: "secret-hash",
-	}}}
+	state.Remediations["x"] = &Remediation{
+		ID: "x", JobID: "job", Evidence: Evidence{RootCause: "private root cause"},
+		Attempts: []Attempt{{Number: 1, URL: "https://github.com/o/r/pull/7", Status: StatusOpen}},
+	}
 	if err := state.Save(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestStateSaveWritesRedactedPublicProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "secret-hash") || !strings.Contains(string(data), "pull/7") {
+	if strings.Contains(string(data), "private root cause") || !strings.Contains(string(data), "pull/7") {
 		t.Fatalf("public state = %s", data)
 	}
 }

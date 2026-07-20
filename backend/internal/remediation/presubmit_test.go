@@ -3,6 +3,7 @@ package remediation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
@@ -229,5 +230,24 @@ func TestClassifyObservationEmptyEvidenceIsInconclusive(t *testing.T) {
 	classifyObservation(Evidence{}, nil, true, &observation)
 	if observation.Outcome != OutcomeInconclusive {
 		t.Fatalf("observation = %+v", observation)
+	}
+}
+
+func TestObservePresubmitsDoesNotFallbackOnInvalidProwJob(t *testing.T) {
+	identity := "name\x00test"
+	b := memoryBackend{objects: map[string]string{
+		"pr-logs/pull/example_project/42/pull-e2e/10/started.json":        `{"timestamp":1}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/finished.json":       `{"timestamp":2,"passed":true,"result":"SUCCESS","revision":"head"}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/prowjob.json":        `{"spec":{"type":"presubmit","job":"other","refs":{"pulls":[{"number":42,"sha":"head"}]}}}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/artifacts/junit.xml": `<testsuite><testcase name="test"/></testsuite>`,
+	}}
+	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}}}
+	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "example/project", Status: StatusOpen}
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}}}}
+	if err := ObservePresubmits(context.Background(), b, remediation, attempt, coverage); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusInconclusive || !strings.Contains(attempt.OutcomeReason, "job is") {
+		t.Fatalf("attempt = %+v", attempt)
 	}
 }

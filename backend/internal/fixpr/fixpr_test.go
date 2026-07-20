@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -33,13 +32,11 @@ func (f *fakeCompleter) Complete(_ context.Context, _, _ string) (string, error)
 
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
 type fakePR struct {
-	opened        []ghpr.Request
-	openErr       error
-	openURL       string
-	searchURL     string
-	searchFound   bool
-	searchResults []ghpr.PullRequestSearchResult
-	searchErr     error
+	opened      []ghpr.Request
+	openErr     error
+	openURL     string
+	searchURL   string
+	searchFound bool
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -55,10 +52,6 @@ func (f *fakePR) SearchOpenPR(_ context.Context, _, _, _, _ string) (int, string
 		return 5, f.searchURL, true, nil
 	}
 	return 0, "", false, nil
-}
-
-func (f *fakePR) SearchPullRequests(_ context.Context, _, _, _, _ string) ([]ghpr.PullRequestSearchResult, error) {
-	return f.searchResults, f.searchErr
 }
 
 func (f *fakePR) ResolveBase(_ context.Context, _, _ string) (ghpr.Base, error) {
@@ -310,20 +303,10 @@ func TestGeneratedFixSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFindFollowUpPRRequiresReservationCreationTime(t *testing.T) {
-	createdAfter := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	pr := &fakePR{searchResults: []ghpr.PullRequestSearchResult{
-		{HTMLURL: "https://github.com/up/stream/pull/5", CreatedAt: createdAfter.Add(-time.Hour)},
-		{HTMLURL: "https://github.com/up/stream/pull/6", CreatedAt: createdAfter.Add(time.Minute)},
-	}}
-	manager := newManager(t, pr, &fakeAgentRuntime{}, Options{})
+func TestTrackedFixStoresPatternSnapshot(t *testing.T) {
 	pattern := systemicPattern("etcd")
-	fix := &GeneratedFix{pattern: pattern, key: KeyFor(pattern)}
-	url, found, err := manager.FindFollowUpPR(context.Background(), fix, "https://github.com/up/stream/pull/4", createdAfter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found || url != "https://github.com/up/stream/pull/6" {
-		t.Fatalf("url=%q found=%v", url, found)
+	fix := trackedFix("https://github.com/up/stream/pull/5", pattern)
+	if fix.Pattern.JobID != pattern.JobID || fix.Pattern.SharedRootCause != pattern.SharedRootCause {
+		t.Fatalf("tracked fix = %+v", fix)
 	}
 }

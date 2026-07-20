@@ -177,7 +177,7 @@ Remediation lifecycle emails are deduplicated separately in
 `remediation_state.json`. They are sent only when a tracked pull request changes
 state, such as waiting for a presubmit, passing pre-merge verification, entering
 post-merge observation, being verified fixed, or reproducing the same failure.
-A same-cause recurrence includes a direct link to review a follow-up fix draft.
+A same-cause recurrence links to the remediation status and prior pull request.
 Failed delivery does not advance the emailed transition, so the next finalized
 pass retries it.
 

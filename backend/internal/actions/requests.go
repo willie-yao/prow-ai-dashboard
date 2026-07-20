@@ -62,7 +62,6 @@ type actionRequest struct {
 	Instruction string                      `json:"instruction,omitempty"`
 	Issue       *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix         *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
-	Retry       bool                        `json:"retry,omitempty"`
 }
 
 type actionRequestState struct {
@@ -292,7 +291,6 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 			request.Issue = &spec
 		} else {
 			request.Fix = entry.fix.Snapshot()
-			request.Retry = entry.retry
 		}
 	}
 	saveErr := s.saveRequestsLocked()
@@ -405,7 +403,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{kind: request.Preview.Kind, failureID: request.FailureID}
+	entry := &previewEntry{kind: request.Preview.Kind}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {
@@ -419,7 +417,6 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 			return "", fmt.Errorf("action request has no persisted fix draft")
 		}
 		entry.fix = fixpr.RestoreGeneratedFix(request.Fix)
-		entry.retry = request.Retry
 	default:
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has invalid preview kind %q", entry.kind)
@@ -491,13 +488,12 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 				request.UpdatedAt = now.Format(time.RFC3339)
 				changed = true
 			}
-			if request.Error != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.Fix != nil || request.Retry || request.EmailError != "" {
+			if request.Error != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.Fix != nil || request.EmailError != "" {
 				request.Error = ""
 				request.Preview = nil
 				request.Instruction = ""
 				request.Issue = nil
 				request.Fix = nil
-				request.Retry = false
 				request.EmailError = ""
 				changed = true
 			}

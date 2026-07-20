@@ -24,7 +24,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -73,8 +72,6 @@ type previewEntry struct {
 	kind      string
 	spec      issues.IssueSpec    // issue drafts
 	fix       *fixpr.GeneratedFix // fix drafts
-	retry     bool
-	failureID string
 	createdAt time.Time
 }
 
@@ -309,13 +306,6 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
-	retry, priorPatchHash, retryInstruction, err := s.retryContext(failureID)
-	if err != nil {
-		return PreviewResult{}, nil, err
-	}
-	if retryInstruction != "" {
-		instruction = strings.TrimSpace(retryInstruction + "\n\n" + instruction)
-	}
 	mgr, err := s.buildFixManager(userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -324,63 +314,14 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, fmt.Errorf("%s", safeReason(err.Error()))
 	}
-	if retry && priorPatchHash != "" && fixpr.PatchHash(gf.Preview.Diff) == priorPatchHash {
-		return PreviewResult{}, nil, fmt.Errorf("the follow-up produced the same patch as the failed attempt")
-	}
 	return PreviewResult{
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output,
-	}, &previewEntry{kind: gfKind, fix: gf, retry: retry, failureID: failureID}, nil
+	}, &previewEntry{kind: gfKind, fix: gf}, nil
 }
 
 const gfKind = "fix"
-
-func (s *Service) remediationRepo() string {
-	if s.cfg == nil {
-		return ""
-	}
-	effective := s.cfg.EffectiveFixPRs()
-	if effective.Repo == nil || effective.Repo.Owner == "" || effective.Repo.Name == "" {
-		return ""
-	}
-	return effective.Repo.Owner + "/" + effective.Repo.Name
-}
-
-func (s *Service) retryContext(failureID string) (bool, string, string, error) {
-	state := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
-	entry := state.Remediations[failureID]
-	if entry == nil {
-		for _, candidate := range state.Remediations {
-			if candidate != nil && candidate.FindingID == failureID {
-				entry = candidate
-				break
-			}
-		}
-	}
-	if entry == nil || len(entry.Attempts) == 0 {
-		return false, "", "", nil
-	}
-	latest := entry.Attempts[len(entry.Attempts)-1]
-	if latest.Status != remediation.StatusStillFailingSameCause {
-		return false, "", "", fmt.Errorf("an existing remediation is %s; a new fix requires a confirmed same-cause recurrence", latest.Status)
-	}
-	if len(entry.Attempts) >= 2 {
-		return false, "", "", fmt.Errorf("the remediation retry limit has been reached")
-	}
-	if latest.PatchHash == "" {
-		return false, "", "", fmt.Errorf("the prior patch fingerprint is unavailable; retry manually")
-	}
-	var builds []string
-	for _, observation := range latest.Observations {
-		if observation.Outcome == remediation.OutcomeSameCause {
-			builds = append(builds, observation.BuildID)
-		}
-	}
-	instruction := fmt.Sprintf("This is follow-up attempt %d. Pull request %s merged, but post-merge Prow evidence showed the same failure still exists. Previous patch hash: %s. Failed post-merge builds: %s. Previous outcome: %s. Do not repeat the previous approach; account for why it failed.",
-		len(entry.Attempts)+1, latest.URL, latest.PatchHash, strings.Join(builds, ", "), latest.OutcomeReason)
-	return true, latest.PatchHash, instruction, nil
-}
 
 // PreviewFix generates the exact fix PR preview and caches it for confirmation.
 func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
@@ -434,32 +375,9 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		if err != nil {
 			return "", err
 		}
-		reservationID := ""
-		if entry.retry {
-			recoverPR := func(priorURL string, createdAfter time.Time) (string, bool, error) {
-				return mgr.FindFollowUpPR(ctx, entry.fix, priorURL, createdAfter)
-			}
-			existingURL, id, err := s.reserveRetry(entry.failureID, fixpr.PatchHash(entry.fix.Preview.Diff), recoverPR)
-			if err != nil {
-				return "", err
-			}
-			if existingURL != "" {
-				return existingURL, nil
-			}
-			reservationID = id
-			mgr.ForgetGenerated(entry.fix)
-		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
-			if reservationID != "" {
-				s.clearRetryReservation(entry.failureID, reservationID)
-			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
-		}
-		if reservationID != "" {
-			if err := s.completeRetryReservation(entry.failureID, reservationID, url); err != nil {
-				return "", err
-			}
 		}
 		if err := mgr.SaveState(); err != nil {
 			return "", fmt.Errorf("saving fix-PR state: %w", err)
@@ -467,157 +385,6 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		return url, nil
 	}
 	return "", ErrPreviewNotFound
-}
-
-func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(string, time.Time) (string, bool, error)) (string, string, error) {
-	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
-	entry := remediationForFinding(ledger, failureID)
-	if entry == nil || len(entry.Attempts) == 0 {
-		return "", "", fmt.Errorf("remediation retry is no longer available")
-	}
-	latest := entry.Attempts[len(entry.Attempts)-1]
-	reservationKey := retryReservationKey(entry, latest, failureID)
-	state := s.loadRetryReservations()
-	pruneRetryReservations(state, time.Now().UTC())
-	if existing, ok := state.Reservations[reservationKey]; ok && existing.ResultURL != "" {
-		return existing.ResultURL, existing.ID, nil
-	}
-	if resultURL, reservationID, found := completedReservationForEntry(state, entry); found {
-		return resultURL, reservationID, nil
-	}
-	if latest.Status != remediation.StatusStillFailingSameCause || len(entry.Attempts) >= 2 {
-		return "", "", fmt.Errorf("remediation retry is no longer available")
-	}
-
-	if existing, ok := state.Reservations[reservationKey]; ok {
-
-		createdAt, err := time.Parse(time.RFC3339, existing.CreatedAt)
-		if err == nil && time.Since(createdAt) <= retryReservationTTL {
-			return "", "", fmt.Errorf("a remediation retry is already in progress")
-		}
-		if recoverPR != nil && err == nil {
-			recoveredURL, found, recoverErr := recoverPR(existing.PriorURL, createdAt)
-			if recoverErr != nil {
-				return "", "", recoverErr
-			}
-			if found {
-				existing.ResultURL = recoveredURL
-				state.Reservations[reservationKey] = existing
-				if err := s.saveRetryReservations(state); err != nil {
-					return "", "", err
-				}
-				return recoveredURL, existing.ID, nil
-			}
-		}
-		delete(state.Reservations, reservationKey)
-		if err := s.saveRetryReservations(state); err != nil {
-			return "", "", err
-		}
-	}
-
-	id, err := newToken()
-	if err != nil {
-		return "", "", err
-	}
-	state.Reservations[reservationKey] = retryReservation{
-		ID: id, PatchHash: patchHash, PriorURL: latest.URL,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-	if err := s.saveRetryReservations(state); err != nil {
-		return "", "", err
-	}
-	return "", id, nil
-}
-
-func (s *Service) completeRetryReservation(failureID, reservationID, resultURL string) error {
-	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
-	entry := remediationForFinding(ledger, failureID)
-	if entry == nil {
-		return fmt.Errorf("remediation retry reservation was lost")
-	}
-	latest := entry.Attempts[len(entry.Attempts)-1]
-	reservationKey := retryReservationKey(entry, latest, failureID)
-	state := s.loadRetryReservations()
-	reservation, ok := state.Reservations[reservationKey]
-	if !ok || reservation.ID != reservationID {
-		return fmt.Errorf("remediation retry reservation was lost")
-	}
-	reservation.ResultURL = resultURL
-	state.Reservations[reservationKey] = reservation
-	return s.saveRetryReservations(state)
-}
-
-func (s *Service) clearRetryReservation(failureID, reservationID string) {
-	ledger := remediation.LoadForRepo(s.dataDir, s.remediationRepo())
-	entry := remediationForFinding(ledger, failureID)
-	if entry == nil {
-		return
-	}
-	latest := entry.Attempts[len(entry.Attempts)-1]
-	reservationKey := retryReservationKey(entry, latest, failureID)
-	state := s.loadRetryReservations()
-	reservation, ok := state.Reservations[reservationKey]
-	if !ok || reservation.ID != reservationID || reservation.ResultURL != "" {
-		return
-	}
-	delete(state.Reservations, reservationKey)
-	_ = s.saveRetryReservations(state)
-}
-
-func completedReservationForEntry(state *retryReservationState, entry *remediation.Remediation) (string, string, bool) {
-	if state == nil || entry == nil {
-		return "", "", false
-	}
-	attemptURLs := map[string]bool{}
-	for _, attempt := range entry.Attempts {
-		if attempt.URL != "" {
-			attemptURLs[attempt.URL] = true
-		}
-	}
-	prefix := entry.ID + "::"
-	for key, reservation := range state.Reservations {
-		if strings.HasPrefix(key, prefix) && reservation.ResultURL != "" && attemptURLs[reservation.ResultURL] {
-			return reservation.ResultURL, reservation.ID, true
-		}
-	}
-	return "", "", false
-}
-
-func retryReservationKey(entry *remediation.Remediation, attempt remediation.Attempt, fallback string) string {
-	stable := entry.ID
-	if stable == "" {
-		stable = fallback
-	}
-	identity := attempt.URL
-	if identity == "" {
-		identity = fmt.Sprintf("attempt-%d", attempt.Number)
-	}
-	return stable + "::" + identity
-}
-
-func pruneRetryReservations(state *retryReservationState, now time.Time) {
-	const retention = 180 * 24 * time.Hour
-	for key, reservation := range state.Reservations {
-		created, err := time.Parse(time.RFC3339, reservation.CreatedAt)
-		if err != nil || now.Sub(created) > retention {
-			delete(state.Reservations, key)
-		}
-	}
-}
-
-func remediationForFinding(state *remediation.State, failureID string) *remediation.Remediation {
-	if state == nil {
-		return nil
-	}
-	if entry := state.Remediations[failureID]; entry != nil {
-		return entry
-	}
-	for _, entry := range state.Remediations {
-		if entry != nil && entry.FindingID == failureID {
-			return entry
-		}
-	}
-	return nil
 }
 
 // Resolve marks a systemic pattern as resolved: it is hidden from the active

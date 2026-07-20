@@ -158,15 +158,13 @@ type State = statefile.State[TrackedFix]
 
 // TrackedFix records the fix PR opened for a pattern key.
 type TrackedFix struct {
-	URL       string                  `json:"url"`
-	OpenedAt  string                  `json:"opened_at"`
-	PatchHash string                  `json:"patch_hash,omitempty"`
-	Pattern   *models.PatternAnalysis `json:"pattern,omitempty"`
+	URL      string                 `json:"url"`
+	OpenedAt string                 `json:"opened_at"`
+	Pattern  models.PatternAnalysis `json:"pattern"`
 }
 
-func trackedFix(url, patchHash string, pattern models.PatternAnalysis) TrackedFix {
-	copy := pattern
-	return TrackedFix{URL: url, OpenedAt: now(), PatchHash: patchHash, Pattern: &copy}
+func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
+	return TrackedFix{URL: url, OpenedAt: now(), Pattern: pattern}
 }
 
 // Preview is a dry-run proposed fix (no PR opened).
@@ -268,7 +266,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			reconcileErrs = append(reconcileErrs, fmt.Errorf("search fix PR for %q: %w", p.Subject, err))
 			continue
 		} else if found {
-			m.state.Tracked[key] = trackedFix(url, "", p)
+			m.state.Tracked[key] = trackedFix(url, p)
 			stats.Adopted++
 			log.Printf("  🔗 adopted existing fix PR for %q", p.Subject)
 			continue
@@ -306,7 +304,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
 			reconcileErrs = append(reconcileErrs, fmt.Errorf("finish fix PR for %q: %w", p.Subject, err))
 		}
-		m.state.Tracked[key] = trackedFix(url, PatchHash(fix.diff), p)
+		m.state.Tracked[key] = trackedFix(url, p)
 		stats.Proposed++
 		log.Printf("  🛠️ opened draft fix PR for %q: %s", p.Subject, url)
 	}
@@ -523,7 +521,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
 		return "", fmt.Errorf("fix-PR search failed: %w", err)
 	} else if found {
-		m.state.Tracked[key] = trackedFix(url, "", gf.pattern)
+		m.state.Tracked[key] = trackedFix(url, gf.pattern)
 		return url, nil
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
@@ -534,52 +532,8 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		// PR opened but a follow-up (e.g. labeling) failed; still track it.
 		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.pattern.Subject, err)
 	}
-	m.state.Tracked[key] = trackedFix(url, PatchHash(gf.Preview.Diff), gf.pattern)
+	m.state.Tracked[key] = trackedFix(url, gf.pattern)
 	return url, nil
-}
-
-type allStatePRSearcher interface {
-	SearchPullRequests(ctx context.Context, owner, repo, queryToken, confirmMarker string) ([]ghpr.PullRequestSearchResult, error)
-}
-
-// FindFollowUpPR recovers a marker-matched PR other than the prior attempt.
-func (m *Manager) FindFollowUpPR(ctx context.Context, fix *GeneratedFix, priorURL string, createdAfter time.Time) (string, bool, error) {
-	if fix == nil {
-		return "", false, nil
-	}
-	searcher, ok := m.pr.(allStatePRSearcher)
-	if !ok {
-		return "", false, nil
-	}
-	results, err := searcher.SearchPullRequests(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(fix.key), markerFor(fix.key))
-	if err != nil {
-		return "", false, err
-	}
-	for _, result := range results {
-		if result.HTMLURL == priorURL || result.CreatedAt.IsZero() || result.CreatedAt.Before(createdAfter) {
-			continue
-		}
-		return result.HTMLURL, true, nil
-	}
-	return "", false, nil
-}
-
-// ForgetTracked removes the current dedup record before a confirmed follow-up attempt.
-func (m *Manager) ForgetTracked(pattern models.PatternAnalysis) {
-	delete(m.state.Tracked, KeyFor(pattern))
-}
-
-// ForgetGenerated removes the dedup record associated with a generated fix.
-func (m *Manager) ForgetGenerated(fix *GeneratedFix) {
-	if fix != nil {
-		delete(m.state.Tracked, fix.key)
-	}
-}
-
-// PatchHash fingerprints a generated diff for retry equivalence checks.
-func PatchHash(diff string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(diff)))
-	return hex.EncodeToString(sum[:8])
 }
 
 // eligible filters to systemic patterns at or above minConfidence that carry a

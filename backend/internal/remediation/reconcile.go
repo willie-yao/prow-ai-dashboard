@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -16,8 +15,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
-
-const terminalRetention = 180 * 24 * time.Hour
 
 const (
 	StatusOpen           = "open"
@@ -28,10 +25,9 @@ const (
 
 // FixReference is a dashboard-created fix recorded by the fix-PR manager.
 type FixReference struct {
-	URL       string
-	OpenedAt  string
-	PatchHash string
-	Pattern   *models.PatternAnalysis
+	URL      string
+	OpenedAt string
+	Pattern  *models.PatternAnalysis
 }
 
 // PullRequestClient is the GitHub lifecycle subset used by reconciliation.
@@ -171,13 +167,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				errs = append(errs, fmt.Errorf("remediation %s: %w", id, err))
 				continue
 			}
-			parent := 0
-			if len(entry.Attempts) > 0 {
-				parent = entry.Attempts[len(entry.Attempts)-1].Number
-			}
 			entry.Attempts = append(entry.Attempts, Attempt{
-				Number: len(entry.Attempts) + 1, ParentAttempt: parent, PRNumber: number, URL: fix.URL,
-				TargetRepo: owner + "/" + repo, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash, Status: StatusOpen,
+				Number: len(entry.Attempts) + 1, PRNumber: number, URL: fix.URL,
+				TargetRepo: owner + "/" + repo, OpenedAt: fix.OpenedAt, Status: StatusOpen,
 			})
 		}
 	}
@@ -193,6 +185,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			continue
 		}
 		attempt := &entry.Attempts[len(entry.Attempts)-1]
+		if attempt.Status == StatusVerifiedFixed || attempt.Status == StatusClosedUnmerged {
+			continue
+		}
 		owner, repo, number, err := ParsePullRequestURL(attempt.URL)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("remediation %s: %w", id, err))
@@ -236,42 +231,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 	if err := reconcileLinkedIssues(ctx, r.issueClient, r.issueRepo, state); err != nil {
 		errs = append(errs, fmt.Errorf("reconcile remediation issues: %w", err))
 	}
-	pruneTerminalRemediations(state, patterns, time.Now().UTC())
 	if err := state.Save(r.dataDir); err != nil {
 		errs = append(errs, err)
 	}
 	return state, errors.Join(errs...)
-}
-
-func pruneTerminalRemediations(state *State, patterns []models.PatternAnalysis, now time.Time) {
-	if state == nil {
-		return
-	}
-	active := map[string]bool{}
-	for _, pattern := range patterns {
-		id := pattern.ID
-		if id == "" {
-			id = models.PatternID(pattern)
-		}
-		active[id] = true
-	}
-	for key, entry := range state.Remediations {
-		if entry == nil || active[entry.FindingID] || active[entry.ID] || len(entry.Attempts) == 0 {
-			continue
-		}
-		latest := entry.Attempts[len(entry.Attempts)-1]
-		if latest.Status != StatusVerifiedFixed && latest.Status != StatusClosedUnmerged {
-			continue
-		}
-		if entry.Issue != nil && entry.Issue.State != "closed" {
-			continue
-		}
-		updated, err := time.Parse(time.RFC3339, entry.UpdatedAt)
-		if err != nil || now.Sub(updated) <= terminalRetention {
-			continue
-		}
-		delete(state.Remediations, key)
-	}
 }
 
 func syncLinkedIssue(entry *Remediation, issue IssueRef) {

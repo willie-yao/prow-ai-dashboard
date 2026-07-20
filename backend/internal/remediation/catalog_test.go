@@ -16,7 +16,7 @@ type memoryBackend struct{ objects map[string]string }
 func (m memoryBackend) Open(_ context.Context, path string) (io.ReadCloser, int64, error) {
 	value, ok := m.objects[path]
 	if !ok {
-		return nil, 0, io.EOF
+		return nil, 0, storage.ErrNotFound
 	}
 	return io.NopCloser(strings.NewReader(value)), int64(len(value)), nil
 }

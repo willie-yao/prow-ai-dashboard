@@ -21,7 +21,7 @@ type fakeBackend struct {
 func (f *fakeBackend) Open(_ context.Context, path string) (io.ReadCloser, int64, error) {
 	body, ok := f.objects[path]
 	if !ok {
-		return nil, 0, io.EOF
+		return nil, 0, storage.ErrNotFound
 	}
 	return io.NopCloser(strings.NewReader(body)), int64(len(body)), nil
 }

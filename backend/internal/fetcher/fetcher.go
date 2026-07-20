@@ -418,13 +418,18 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		log.Println("Notifications: skipped (email disabled)")
 	}
 
+	// Recover existing fix state before issue recovery or new automatic writes.
+	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
+		sideEffectErrs = append(sideEffectErrs, err)
+	}
 	fixPatterns := remediation.UntrackedPatterns(remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg)), flakinessReport.RecurringPatterns, details)
 	if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
-		log.Printf("Fix PRs: %d pattern(s) already have remediation history; follow-ups require confirmation", skipped)
+		log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
 	}
 	if err := processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
+	// Adopt a PR created in this pass before issues evaluate recovery.
 	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
@@ -838,7 +843,8 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	}
 	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
 	for key, fix := range fixState.Tracked {
-		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash, Pattern: fix.Pattern}
+		pattern := fix.Pattern
+		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, Pattern: &pattern}
 	}
 	if p.jobCatalog == nil && p.cfg.TestGrid.Dashboard != "" {
 		_, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, p.cfg, targetRepo)
@@ -1019,17 +1025,10 @@ func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation
 			continue
 		}
 		dashboardURL := strings.TrimRight(p.cfg.Branding.SiteURL, "/") + "/job/" + url.PathEscape(entry.JobID)
-		actionURL := ""
-		if email.ActionLinks && attempt.Status == remediation.StatusStillFailingSameCause {
-			values := url.Values{}
-			values.Set("action", "fix")
-			values.Set("failure", entry.FindingID)
-			actionURL = dashboardURL + "?" + values.Encode() + "#pattern-" + url.PathEscape(entry.FindingID)
-		}
 		message := notify.RemediationUpdateMessage(notify.RemediationUpdate{
 			From: from, To: recipients, ProjectName: p.cfg.Name, JobName: entry.JobName,
 			Status: attempt.Status, Reason: attempt.OutcomeReason, PullURL: attempt.URL,
-			DashboardURL: dashboardURL, ActionURL: actionURL,
+			DashboardURL: dashboardURL,
 		})
 		if err := sender.Send(ctx, message); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", id, err))

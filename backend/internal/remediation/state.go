@@ -14,7 +14,7 @@ import (
 // FileName is the private remediation ledger filename.
 const FileName = "remediation_state.json"
 
-const currentVersion = 1
+const currentVersion = 2
 
 // State is the versioned remediation ledger.
 type State struct {
@@ -76,7 +76,6 @@ type IssueRef struct {
 // Attempt records one draft pull request and its observations.
 type Attempt struct {
 	Number                     int                `json:"number"`
-	ParentAttempt              int                `json:"parent_attempt,omitempty"`
 	PRNumber                   int                `json:"pr_number"`
 	URL                        string             `json:"url"`
 	TargetRepo                 string             `json:"target_repo"`
@@ -92,8 +91,6 @@ type Attempt struct {
 	PRState                    string             `json:"pr_state,omitempty"`
 	Outcome                    string             `json:"outcome,omitempty"`
 	OutcomeReason              string             `json:"outcome_reason,omitempty"`
-	PatchHash                  string             `json:"patch_hash,omitempty"`
-	CooldownUntil              string             `json:"cooldown_until,omitempty"`
 	Observations               []BuildObservation `json:"observations,omitempty"`
 	LastObservedAt             string             `json:"last_observed_at,omitempty"`
 	LastTransition             string             `json:"last_transition,omitempty"`
@@ -150,7 +147,7 @@ func LoadForRepo(dir, repo string) *State {
 		}
 		return NewStateForRepo(repo)
 	}
-	if repo != "" && state.Repo != "" && state.Repo != repo {
+	if repo != "" && state.Repo != repo {
 		return NewStateForRepo(repo)
 	}
 	if repo != "" {

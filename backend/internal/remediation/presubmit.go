@@ -2,6 +2,7 @@ package remediation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -67,6 +68,14 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 				JobName:     job.JobName, BuildID: build.ID, PullNumber: build.PullNumber,
 			}
 			metadata, metadataErr := prowbuild.FetchProwJobMetadata(ctx, b, loc)
+			if metadataErr != nil && !errors.Is(metadataErr, prowbuild.ErrProwJobNotFound) {
+				observations = append(observations, BuildObservation{
+					BuildID: build.ID, JobName: job.JobName, JobType: models.JobTypePresubmit,
+					PullNumber: attempt.PRNumber, SourceRepo: job.Repo, HeadSHA: attempt.HeadSHA,
+					Outcome: OutcomeInconclusive, Reason: metadataErr.Error(),
+				})
+				break
+			}
 			if metadataErr == nil && metadata.Refs != nil && len(metadata.Refs.Pulls) > 0 {
 				headSHA := metadata.Refs.Pulls[0].SHA
 				if headSHA != attempt.HeadSHA {
