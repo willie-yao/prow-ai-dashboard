@@ -19,6 +19,9 @@ type TaskExecutionClient interface {
 // PrepareTaskExecution removes a non-successful Task when its worker placement
 // changed. A successful Task remains reusable and returns skipApply=true.
 func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, namespace, name string, desired map[string]any, poll time.Duration) (skipApply bool, err error) {
+	if poll <= 0 {
+		poll = time.Second
+	}
 	for {
 		state, err := client.TaskState(ctx, namespace, name)
 		if err != nil {
@@ -30,8 +33,8 @@ func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, names
 		if state.Phase == "Succeeded" {
 			return true, nil
 		}
-		if state.ResourceVersion == "" {
-			return false, fmt.Errorf("task %s has no resourceVersion", name)
+		if state.ResourceVersion == "" || state.UID == "" {
+			return false, fmt.Errorf("task %s has incomplete object identity", name)
 		}
 		if err := client.DeleteTask(ctx, namespace, name, state.ResourceVersion); err != nil {
 			if apierrors.IsConflict(err) {
@@ -39,25 +42,28 @@ func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, names
 			}
 			return false, fmt.Errorf("delete Task %s after execution change: %w", name, err)
 		}
-		break
-	}
-	if poll <= 0 {
-		poll = time.Second
-	}
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		state, err := client.TaskState(ctx, namespace, name)
-		if err != nil {
-			return false, fmt.Errorf("wait for Task %s deletion: %w", name, err)
-		}
-		if !state.Exists {
-			return false, nil
-		}
-		select {
-		case <-ctx.Done():
-			return false, fmt.Errorf("wait for Task %s deletion: %w", name, ctx.Err())
-		case <-ticker.C:
+
+		ticker := time.NewTicker(poll)
+		for {
+			current, err := client.TaskState(ctx, namespace, name)
+			if err != nil {
+				ticker.Stop()
+				return false, fmt.Errorf("wait for Task %s deletion: %w", name, err)
+			}
+			if !current.Exists {
+				ticker.Stop()
+				return false, nil
+			}
+			if current.UID != state.UID {
+				ticker.Stop()
+				break
+			}
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return false, fmt.Errorf("wait for Task %s deletion: %w", name, ctx.Err())
+			case <-ticker.C:
+			}
 		}
 	}
 }

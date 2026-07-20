@@ -198,7 +198,8 @@ Do not copy these selectors or tolerations onto clusters that do not define the
 matching labels and taints. `fetcher.nodeSelector` separately places the
 producer and ingestor CronJob pod.
 
-`maxConcurrentTasks` limits per-test submissions from one producer invocation.
+`maxConcurrentTasks` accepts `0` through `1000` and limits per-test submissions
+from one producer invocation.
 The producer applies a wave, waits for its Tasks to become terminal, and then
 applies the next wave. It does not cap unrelated Tasks already running in the
 namespace, and job-level pattern Tasks still start concurrently during
@@ -348,7 +349,7 @@ The equivalent Orka knobs are producer flags, surfaced as Helm `orka.*` values:
 | retries | `orka.retries` | `-retries` | `1` |
 | per-test wave size | `orka.producer.maxConcurrentTasks` | `-max-concurrent-tasks` | `2` |
 | wave poll interval | `orka.producer.taskPoll` | `-task-poll` | `5s` |
-| per-wave deadline | `orka.producer.waveTimeout` | `-wave-timeout` | `30m` |
+| placement recovery and intermediate-wave deadline | `orka.producer.waveTimeout` | `-wave-timeout` | `30m` |
 | worker placement | `orka.taskExecution` | `-task-execution` | empty |
 | manual cache-bust version | `orka.version` | `-version` | `v1` |
 | job-pattern finalization wait | `orka.patternWait` | ingestor `-pattern-wait` | `25m` |

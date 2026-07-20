@@ -204,7 +204,7 @@ func TestApplyObjectsRecreatesNonSuccessfulTaskAfterPlacementChange(t *testing.T
 	oldExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}}
 	newExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}
 	client := &fakeTaskApplyClient{states: map[string]orka.TaskState{
-		"task-1": {Exists: true, Phase: "Failed", Execution: oldExecution, ResourceVersion: "1"},
+		"task-1": {Exists: true, Phase: "Failed", Execution: oldExecution, ResourceVersion: "1", UID: "uid-1"},
 	}}
 	task := testNamedObj("task-1")
 	task.obj["spec"] = map[string]any{"execution": newExecution}
@@ -239,7 +239,8 @@ func TestApplyObjectsValidatesWaveSettings(t *testing.T) {
 		wave       time.Duration
 		wantSubstr string
 	}{
-		{name: "negative max", max: -1, wantSubstr: "non-negative"},
+		{name: "negative max", max: -1, poll: time.Second, wave: time.Second, wantSubstr: "between 0 and 1000"},
+		{name: "oversized max", max: 1001, poll: time.Second, wave: time.Second, wantSubstr: "between 0 and 1000"},
 		{name: "zero poll", max: 1, wave: time.Second, wantSubstr: "task-poll"},
 		{name: "zero timeout", max: 1, poll: time.Second, wantSubstr: "wave-timeout"},
 	} {

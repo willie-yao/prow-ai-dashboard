@@ -283,7 +283,7 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	oldExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "old"}}
 	newExecution := map[string]any{"nodeSelector": map[string]any{"agentpool": "new"}}
 
-	failedKube := &fakePatternKube{state: orkaapi.TaskState{Exists: true, Phase: "Failed", Execution: oldExecution, ResourceVersion: "1"}}
+	failedKube := &fakePatternKube{state: orkaapi.TaskState{Exists: true, Phase: "Failed", Execution: oldExecution, ResourceVersion: "1", UID: "uid-1"}}
 	failedAnalyzer := *analyzer
 	failedAnalyzer.kube = failedKube
 	failedAnalyzer.execution = newExecution

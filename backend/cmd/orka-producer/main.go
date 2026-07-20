@@ -55,6 +55,8 @@ var engineToolGroups = map[string][]string{
 // do not apply), so they are safe to always include.
 var qualityTools = []string{"validate-analysis", "verify-timeline", "check-transient-signatures", "recurrence", "required-evidence", "diff-last-passing"}
 
+const maxTaskWaveSize = 1000
+
 // resolveTools maps a consumer's ai.tools group selection to the Orka Tool CRD
 // names, always appending the quality tools. Group names expand; anything else
 // passes through so an individual tool name still works. k8sEnabled reports
@@ -325,8 +327,8 @@ func applyAll(namespace, kubeContext string, tools, tasks []namedObj, maxConcurr
 }
 
 func applyObjects(ctx context.Context, client taskApplyClient, namespace string, tools, tasks []namedObj, maxConcurrent int, poll, waveTimeout time.Duration) error {
-	if maxConcurrent < 0 {
-		return fmt.Errorf("max-concurrent-tasks must be non-negative")
+	if maxConcurrent < 0 || maxConcurrent > maxTaskWaveSize {
+		return fmt.Errorf("max-concurrent-tasks must be between 0 and %d", maxTaskWaveSize)
 	}
 	if poll <= 0 {
 		return fmt.Errorf("task-poll must be positive")
@@ -355,6 +357,8 @@ func applyObjects(ctx context.Context, client taskApplyClient, namespace string,
 		if waves > 1 {
 			log.Printf("applying Task wave %d/%d (%d Tasks)", start/waveSize+1, waves, len(wave))
 		}
+		// Placement recovery is bounded for every wave. Intermediate waves also
+		// use this context while waiting for Task completion.
 		waveCtx, cancel := context.WithTimeout(ctx, waveTimeout)
 		for _, task := range wave {
 			skipApply, err := orka.PrepareTaskExecution(waveCtx, client, namespace, task.name, taskExecution(task.obj), poll)

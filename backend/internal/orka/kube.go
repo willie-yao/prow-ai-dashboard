@@ -81,6 +81,7 @@ type TaskState struct {
 	Phase           string
 	Execution       map[string]any
 	ResourceVersion string
+	UID             string
 }
 
 // TaskState returns a Task's phase and execution placement. A missing Task has
@@ -109,7 +110,7 @@ func taskStateFromObject(u *unstructured.Unstructured) (TaskState, error) {
 	if !found {
 		execution = nil
 	}
-	return TaskState{Exists: true, Phase: phase, Execution: execution, ResourceVersion: u.GetResourceVersion()}, nil
+	return TaskState{Exists: true, Phase: phase, Execution: execution, ResourceVersion: u.GetResourceVersion(), UID: string(u.GetUID())}, nil
 }
 
 // DeleteTask deletes one Task only if its resourceVersion still matches.
