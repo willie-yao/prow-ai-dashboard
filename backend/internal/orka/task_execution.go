@@ -27,7 +27,19 @@ func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, names
 		if err != nil {
 			return false, fmt.Errorf("read Task %s before apply: %w", name, err)
 		}
-		if !state.Exists || taskExecutionEqual(state.Execution, desired) {
+		if !state.Exists {
+			return false, nil
+		}
+		if state.Deleting {
+			if state.UID == "" {
+				return false, fmt.Errorf("terminating task %s has no UID", name)
+			}
+			if err := waitForTaskUIDChange(ctx, client, namespace, name, state.UID, poll); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if taskExecutionEqual(state.Execution, desired) {
 			return false, nil
 		}
 		if state.Phase == "Succeeded" {
@@ -42,28 +54,27 @@ func PrepareTaskExecution(ctx context.Context, client TaskExecutionClient, names
 			}
 			return false, fmt.Errorf("delete Task %s after execution change: %w", name, err)
 		}
+		if err := waitForTaskUIDChange(ctx, client, namespace, name, state.UID, poll); err != nil {
+			return false, err
+		}
+	}
+}
 
-		ticker := time.NewTicker(poll)
-		for {
-			current, err := client.TaskState(ctx, namespace, name)
-			if err != nil {
-				ticker.Stop()
-				return false, fmt.Errorf("wait for Task %s deletion: %w", name, err)
-			}
-			if !current.Exists {
-				ticker.Stop()
-				return false, nil
-			}
-			if current.UID != state.UID {
-				ticker.Stop()
-				break
-			}
-			select {
-			case <-ctx.Done():
-				ticker.Stop()
-				return false, fmt.Errorf("wait for Task %s deletion: %w", name, ctx.Err())
-			case <-ticker.C:
-			}
+func waitForTaskUIDChange(ctx context.Context, client TaskExecutionClient, namespace, name, uid string, poll time.Duration) error {
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		current, err := client.TaskState(ctx, namespace, name)
+		if err != nil {
+			return fmt.Errorf("wait for Task %s deletion: %w", name, err)
+		}
+		if !current.Exists || current.UID != uid {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for Task %s deletion: %w", name, ctx.Err())
+		case <-ticker.C:
 		}
 	}
 }

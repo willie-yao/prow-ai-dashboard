@@ -14,6 +14,7 @@ import (
 
 type fakeTaskExecutionClient struct {
 	state                  TaskState
+	stateSequence          []TaskState
 	deleted                bool
 	remainAfterDel         bool
 	conflictState          *TaskState
@@ -23,6 +24,11 @@ type fakeTaskExecutionClient struct {
 }
 
 func (f *fakeTaskExecutionClient) TaskState(context.Context, string, string) (TaskState, error) {
+	if len(f.stateSequence) > 0 {
+		state := f.stateSequence[0]
+		f.stateSequence = f.stateSequence[1:]
+		return state, nil
+	}
 	if f.deleted {
 		if f.replacementState != nil {
 			return *f.replacementState, nil
@@ -113,6 +119,22 @@ func TestPrepareTaskExecutionRecognizesReplacementUID(t *testing.T) {
 	}
 }
 
+func TestPrepareTaskExecutionWaitsForTerminatingSuccess(t *testing.T) {
+	oldExecution := map[string]any{"nodeSelector": map[string]any{"pool": "old"}}
+	newExecution := map[string]any{"nodeSelector": map[string]any{"pool": "new"}}
+	client := &fakeTaskExecutionClient{stateSequence: []TaskState{
+		{Exists: true, Phase: "Succeeded", Execution: oldExecution, ResourceVersion: "2", UID: "uid-1", Deleting: true},
+		{},
+	}}
+	skip, err := PrepareTaskExecution(context.Background(), client, "orka-system", "task", newExecution, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skip || client.deleteCalls != 0 {
+		t.Fatalf("skip=%v deleteCalls=%d, want replacement after terminating success", skip, client.deleteCalls)
+	}
+}
+
 func TestPrepareTaskExecutionDeletionTimeout(t *testing.T) {
 	client := &fakeTaskExecutionClient{
 		state:          TaskState{Exists: true, Phase: "Running", Execution: map[string]any{"nodeSelector": map[string]any{"pool": "old"}}, ResourceVersion: "1", UID: "uid-1"},
@@ -136,15 +158,17 @@ func TestTaskExecutionEqualNormalizesJSONNumbers(t *testing.T) {
 
 func TestTaskStateFromObject(t *testing.T) {
 	u := &unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"resourceVersion": "7", "uid": "uid-7"},
-		"spec":     map[string]any{"execution": map[string]any{"nodeSelector": map[string]any{"agentpool": "cpu"}}},
-		"status":   map[string]any{"phase": "Running"},
+		"metadata": map[string]any{
+			"resourceVersion": "7", "uid": "uid-7", "deletionTimestamp": "2026-07-20T22:00:00Z",
+		},
+		"spec":   map[string]any{"execution": map[string]any{"nodeSelector": map[string]any{"agentpool": "cpu"}}},
+		"status": map[string]any{"phase": "Running"},
 	}}
 	state, err := taskStateFromObject(u)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.Exists || state.Phase != "Running" || state.ResourceVersion != "7" || state.UID != "uid-7" || state.Execution["nodeSelector"].(map[string]any)["agentpool"] != "cpu" {
+	if !state.Exists || state.Phase != "Running" || state.ResourceVersion != "7" || state.UID != "uid-7" || !state.Deleting || state.Execution["nodeSelector"].(map[string]any)["agentpool"] != "cpu" {
 		t.Fatalf("state = %+v", state)
 	}
 }
