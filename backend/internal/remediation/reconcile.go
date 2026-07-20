@@ -112,10 +112,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 		if entry != nil && len(entry.Attempts) > 0 {
 			latest := &entry.Attempts[len(entry.Attempts)-1]
 			if entry.JobType == models.JobTypePresubmit && latest.Status == StatusVerifiedFixed && evidenceAdvanced(entry.Evidence, currentEvidence) {
-				entry.Evidence = currentEvidence
-				mergeObservations(latest, recurrenceObservations(entry, currentEvidence, details))
-				transitionAttempt(entry, latest, StatusStillFailingSameCause, OutcomeSameCause,
-					"failure recurred in a newer Prow build after verification")
+				if evidenceOverlaps(entry.Evidence, currentEvidence) {
+					entry.Evidence = currentEvidence
+					mergeObservations(latest, recurrenceObservations(entry, currentEvidence, details))
+					transitionAttempt(entry, latest, StatusStillFailingSameCause, OutcomeSameCause,
+						"failure recurred in a newer Prow build after verification")
+				} else {
+					entry.Evidence = currentEvidence
+					transitionAttempt(entry, latest, StatusInconclusive, OutcomeInconclusive,
+						"newer failure does not match the previously verified test evidence")
+				}
 			}
 		}
 		if entry != nil {

@@ -200,12 +200,14 @@ func NewClients(token string) *ghpr.Client {
 // NewManager builds a Manager and loads prior state from stateFile if present.
 func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
-	return &Manager{
-		pr:        pr,
-		stateFile: stateFile,
-		opts:      opts,
-		state:     statefile.Load[TrackedFix](stateFile, repo, "fix PRs"),
+	state := statefile.Load[TrackedFix](stateFile, repo, "fix PRs")
+	for key, tracked := range state.Tracked {
+		if tracked.Pattern.JobID == "" && tracked.Pattern.Subject == "" {
+			delete(state.Tracked, key)
+			log.Printf("Fix PRs: discarded unsupported state entry %s without a pattern snapshot", key)
+		}
 	}
+	return &Manager{pr: pr, stateFile: stateFile, opts: opts, state: state}
 }
 
 // SaveState writes the tracking state to disk.

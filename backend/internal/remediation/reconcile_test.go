@@ -316,3 +316,33 @@ func TestReconcileRecoverySkipsAlreadyTrackedMarkerMatch(t *testing.T) {
 		t.Fatalf("attempts = %+v", state.Remediations["pattern"].Attempts)
 	}
 }
+
+func TestReconcileDoesNotTreatDifferentEvidenceAsSameCause(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedBuilds: []string{"20"}}
+	details := []models.JobDetail{{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "20"},
+		TestCases: []models.TestCase{{Name: "different", Status: "failed", FailureMessage: "different"}},
+	}}}}
+	state := NewState()
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job", JobType: models.JobTypePresubmit,
+		Evidence: Evidence{BuildWatermark: "10", Tests: []TestEvidence{{Identity: "name\x00old", ErrorHash: "old"}}},
+		Attempts: []Attempt{{Status: StatusVerifiedFixed, PRState: StatusMerged, URL: "https://github.com/o/r/pull/7"}},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	client := fakePRClient{pull: ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "closed", Merged: true,
+		Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"}, MergeCommitSHA: "merge",
+	}}
+	state, err := NewReconciler(client, dir).Reconcile(context.Background(), []models.PatternAnalysis{pattern}, details, nil, func(models.PatternAnalysis) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := state.Remediations["pattern"].Attempts[0]
+	if attempt.Status != StatusInconclusive || attempt.Outcome == OutcomeSameCause {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // fakeCompleter is the reviewer (critique) stand-in. Only the critique step
@@ -308,5 +309,20 @@ func TestTrackedFixStoresPatternSnapshot(t *testing.T) {
 	fix := trackedFix("https://github.com/up/stream/pull/5", pattern)
 	if fix.Pattern.JobID != pattern.JobID || fix.Pattern.SharedRootCause != pattern.SharedRootCause {
 		t.Fatalf("tracked fix = %+v", fix)
+	}
+}
+
+func TestNewManagerDiscardsStateWithoutPatternSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	legacy := statefile.State[TrackedFix]{
+		Repo:    "up/stream",
+		Tracked: map[string]TrackedFix{"legacy": {URL: "https://github.com/up/stream/pull/1"}},
+	}
+	if err := legacy.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(&fakePR{}, path, Options{SourceOwner: "up", SourceName: "stream"})
+	if len(manager.state.Tracked) != 0 {
+		t.Fatalf("tracked = %+v", manager.state.Tracked)
 	}
 }
