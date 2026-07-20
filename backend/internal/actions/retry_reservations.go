@@ -23,6 +23,7 @@ type retryReservation struct {
 	ID        string `json:"id"`
 	PatchHash string `json:"patch_hash"`
 	CreatedAt string `json:"created_at"`
+	PriorURL  string `json:"prior_url,omitempty"`
 	ResultURL string `json:"result_url,omitempty"`
 }
 

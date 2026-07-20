@@ -74,30 +74,31 @@ type IssueRef struct {
 
 // Attempt records one draft pull request and its observations.
 type Attempt struct {
-	Number                int                `json:"number"`
-	ParentAttempt         int                `json:"parent_attempt,omitempty"`
-	PRNumber              int                `json:"pr_number"`
-	URL                   string             `json:"url"`
-	TargetRepo            string             `json:"target_repo"`
-	HeadRepo              string             `json:"head_repo,omitempty"`
-	HeadRef               string             `json:"head_ref,omitempty"`
-	HeadSHA               string             `json:"head_sha,omitempty"`
-	BaseRef               string             `json:"base_ref,omitempty"`
-	BaseSHA               string             `json:"base_sha,omitempty"`
-	MergeSHA              string             `json:"merge_sha,omitempty"`
-	OpenedAt              string             `json:"opened_at"`
-	MergedAt              string             `json:"merged_at,omitempty"`
-	Status                string             `json:"status"`
-	PRState               string             `json:"pr_state,omitempty"`
-	Outcome               string             `json:"outcome,omitempty"`
-	OutcomeReason         string             `json:"outcome_reason,omitempty"`
-	PatchHash             string             `json:"patch_hash,omitempty"`
-	CooldownUntil         string             `json:"cooldown_until,omitempty"`
-	Observations          []BuildObservation `json:"observations,omitempty"`
-	LastObservedAt        string             `json:"last_observed_at,omitempty"`
-	LastTransition        string             `json:"last_transition,omitempty"`
-	LastEmailedTransition string             `json:"last_emailed_transition,omitempty"`
-	TransitionIndex       int                `json:"transition_index,omitempty"`
+	Number                     int                `json:"number"`
+	ParentAttempt              int                `json:"parent_attempt,omitempty"`
+	PRNumber                   int                `json:"pr_number"`
+	URL                        string             `json:"url"`
+	TargetRepo                 string             `json:"target_repo"`
+	HeadRepo                   string             `json:"head_repo,omitempty"`
+	HeadRef                    string             `json:"head_ref,omitempty"`
+	HeadSHA                    string             `json:"head_sha,omitempty"`
+	BaseRef                    string             `json:"base_ref,omitempty"`
+	BaseSHA                    string             `json:"base_sha,omitempty"`
+	MergeSHA                   string             `json:"merge_sha,omitempty"`
+	OpenedAt                   string             `json:"opened_at"`
+	MergedAt                   string             `json:"merged_at,omitempty"`
+	Status                     string             `json:"status"`
+	PRState                    string             `json:"pr_state,omitempty"`
+	Outcome                    string             `json:"outcome,omitempty"`
+	OutcomeReason              string             `json:"outcome_reason,omitempty"`
+	PatchHash                  string             `json:"patch_hash,omitempty"`
+	CooldownUntil              string             `json:"cooldown_until,omitempty"`
+	Observations               []BuildObservation `json:"observations,omitempty"`
+	LastObservedAt             string             `json:"last_observed_at,omitempty"`
+	LastTransition             string             `json:"last_transition,omitempty"`
+	LastEmailedTransition      string             `json:"last_emailed_transition,omitempty"`
+	LastEmailedTransitionIndex int                `json:"last_emailed_transition_index,omitempty"`
+	TransitionIndex            int                `json:"transition_index,omitempty"`
 }
 
 // BuildObservation records one Prow result used for verification.

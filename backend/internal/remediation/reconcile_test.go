@@ -81,7 +81,11 @@ func TestReconcileRefreshesFindingIDFromMatchingEvidence(t *testing.T) {
 	if err := existing.Save(dir); err != nil {
 		t.Fatal(err)
 	}
-	state, err := NewReconciler(fakePRClient{}, dir).Reconcile(context.Background(), []models.PatternAnalysis{pattern}, details, nil, func(models.PatternAnalysis) string { return "" })
+	client := fakePRClient{pull: ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "closed", Merged: true,
+		Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"}, MergeCommitSHA: "merge",
+	}}
+	state, err := NewReconciler(client, dir).Reconcile(context.Background(), []models.PatternAnalysis{pattern}, details, nil, func(models.PatternAnalysis) string { return "" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,5 +197,37 @@ func TestApplyPullRequestClearsStaleEvidenceWhenMergedHeadChanges(t *testing.T) 
 	finalizeMergedPresubmit(entry, attempt)
 	if attempt.Status != StatusInconclusive {
 		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestReconcileReopensVerifiedFindingOnNewerFailure(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedBuilds: []string{"20"}}
+	details := []models.JobDetail{{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "20"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "same"}},
+	}}}}
+	current := EvidenceForPattern(pattern, details)
+	state := NewState()
+	previous := current
+	previous.BuildWatermark = "10"
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job", Evidence: previous,
+		Attempts: []Attempt{{Status: StatusVerifiedFixed, PRState: StatusMerged, PatchHash: "hash", URL: "https://github.com/o/r/pull/7"}},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	client := fakePRClient{pull: ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "closed", Merged: true,
+		Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"}, MergeCommitSHA: "merge",
+	}}
+	state, err := NewReconciler(client, dir).Reconcile(context.Background(), []models.PatternAnalysis{pattern}, details, nil, func(models.PatternAnalysis) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := state.Remediations["pattern"].Attempts[0]
+	if attempt.Status != StatusStillFailingSameCause || state.Remediations["pattern"].Evidence.BuildWatermark != "20" {
+		t.Fatalf("attempt=%+v evidence=%+v", attempt, state.Remediations["pattern"].Evidence)
 	}
 }

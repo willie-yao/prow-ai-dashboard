@@ -88,26 +88,55 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, base, head str
 	return status == "ahead" || status == "identical", status, nil
 }
 
-// SearchPR finds a pull request in any state whose body contains confirmMarker.
-func (c *Client) SearchPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
+// PullRequestSearchResult is one marker-matched pull request.
+type PullRequestSearchResult struct {
+	Number    int
+	HTMLURL   string
+	State     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// SearchPullRequests returns marker-matched pull requests in update order.
+func (c *Client) SearchPullRequests(ctx context.Context, owner, repo, queryToken, confirmMarker string) ([]PullRequestSearchResult, error) {
 	q := fmt.Sprintf("repo:%s/%s is:pr %s in:body", owner, repo, queryToken)
 	searchURL := c.base + "/search/issues?per_page=10&sort=updated&order=desc&q=" + url.QueryEscape(q)
 	var out struct {
 		Items []struct {
-			Number  int    `json:"number"`
-			HTMLURL string `json:"html_url"`
-			Body    string `json:"body"`
+			Number    int    `json:"number"`
+			HTMLURL   string `json:"html_url"`
+			Body      string `json:"body"`
+			State     string `json:"state"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
 		} `json:"items"`
 	}
 	if err := c.get(ctx, searchURL, &out); err != nil {
+		return nil, err
+	}
+	var results []PullRequestSearchResult
+	for _, item := range out.Items {
+		if !strings.Contains(item.Body, confirmMarker) {
+			continue
+		}
+		results = append(results, PullRequestSearchResult{
+			Number: item.Number, HTMLURL: item.HTMLURL, State: item.State,
+			CreatedAt: parseGitHubTime(item.CreatedAt), UpdatedAt: parseGitHubTime(item.UpdatedAt),
+		})
+	}
+	return results, nil
+}
+
+// SearchPR finds a pull request in any state whose body contains confirmMarker.
+func (c *Client) SearchPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (number int, htmlURL string, found bool, err error) {
+	results, err := c.SearchPullRequests(ctx, owner, repo, queryToken, confirmMarker)
+	if err != nil {
 		return 0, "", false, err
 	}
-	for _, item := range out.Items {
-		if strings.Contains(item.Body, confirmMarker) {
-			return item.Number, item.HTMLURL, true, nil
-		}
+	if len(results) == 0 {
+		return 0, "", false, nil
 	}
-	return 0, "", false, nil
+	return results[0].Number, results[0].HTMLURL, true, nil
 }
 
 // CommentPullRequest posts a timeline comment through the issues API.

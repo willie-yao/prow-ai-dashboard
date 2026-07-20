@@ -425,7 +425,10 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		}
 		reservationID := ""
 		if entry.retry {
-			existingURL, id, err := s.reserveRetry(entry.failureID, fixpr.PatchHash(entry.fix.Preview.Diff))
+			recoverPR := func(priorURL string) (string, bool, error) {
+				return mgr.FindFollowUpPR(ctx, entry.fix, priorURL)
+			}
+			existingURL, id, err := s.reserveRetry(entry.failureID, fixpr.PatchHash(entry.fix.Preview.Diff), recoverPR)
 			if err != nil {
 				return "", err
 			}
@@ -455,7 +458,7 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 	return "", ErrPreviewNotFound
 }
 
-func (s *Service) reserveRetry(failureID, patchHash string) (string, string, error) {
+func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(string) (string, bool, error)) (string, string, error) {
 	ledger := remediation.Load(s.dataDir)
 	entry := remediationForFinding(ledger, failureID)
 	if entry == nil || len(entry.Attempts) == 0 {
@@ -475,6 +478,20 @@ func (s *Service) reserveRetry(failureID, patchHash string) (string, string, err
 		if err == nil && time.Since(createdAt) <= retryReservationTTL {
 			return "", "", fmt.Errorf("a remediation retry is already in progress")
 		}
+		if recoverPR != nil {
+			recoveredURL, found, err := recoverPR(existing.PriorURL)
+			if err != nil {
+				return "", "", err
+			}
+			if found {
+				existing.ResultURL = recoveredURL
+				state.Reservations[failureID] = existing
+				if err := s.saveRetryReservations(state); err != nil {
+					return "", "", err
+				}
+				return recoveredURL, existing.ID, nil
+			}
+		}
 		delete(state.Reservations, failureID)
 		if err := s.saveRetryReservations(state); err != nil {
 			return "", "", err
@@ -486,7 +503,8 @@ func (s *Service) reserveRetry(failureID, patchHash string) (string, string, err
 		return "", "", err
 	}
 	state.Reservations[failureID] = retryReservation{
-		ID: id, PatchHash: patchHash, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		ID: id, PatchHash: patchHash, PriorURL: latest.URL,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := s.saveRetryReservations(state); err != nil {
 		return "", "", err

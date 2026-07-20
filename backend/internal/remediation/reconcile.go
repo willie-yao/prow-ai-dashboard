@@ -97,6 +97,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				}
 			}
 		}
+		if entry != nil && len(entry.Attempts) > 0 {
+			latest := &entry.Attempts[len(entry.Attempts)-1]
+			if latest.Status == StatusVerifiedFixed && evidenceAdvanced(entry.Evidence, currentEvidence) {
+				entry.Evidence = currentEvidence
+				transitionAttempt(entry, latest, StatusStillFailingSameCause, OutcomeSameCause,
+					"failure recurred in a newer Prow build after verification")
+			}
+		}
 		key := keyFor(pattern)
 		fix, ok := fixes[key]
 		if (!ok || strings.TrimSpace(fix.URL) == "") && r.search != nil && r.targetRepo != "" {
@@ -229,6 +237,13 @@ func finalizeMergedPresubmit(remediation *Remediation, attempt *Attempt) {
 		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
 			"pull request merged without successful current-head presubmit evidence")
 	}
+}
+
+func evidenceAdvanced(previous, current Evidence) bool {
+	if previous.BuildWatermark == "" || current.BuildWatermark == "" {
+		return false
+	}
+	return newerBuild(current.BuildWatermark, previous.BuildWatermark)
 }
 
 func evidenceOverlaps(left, right Evidence) bool {

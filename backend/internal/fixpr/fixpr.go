@@ -532,6 +532,31 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	return url, nil
 }
 
+type allStatePRSearcher interface {
+	SearchPullRequests(ctx context.Context, owner, repo, queryToken, confirmMarker string) ([]ghpr.PullRequestSearchResult, error)
+}
+
+// FindFollowUpPR recovers a marker-matched PR other than the prior attempt.
+func (m *Manager) FindFollowUpPR(ctx context.Context, fix *GeneratedFix, priorURL string) (string, bool, error) {
+	if fix == nil {
+		return "", false, nil
+	}
+	searcher, ok := m.pr.(allStatePRSearcher)
+	if !ok {
+		return "", false, nil
+	}
+	results, err := searcher.SearchPullRequests(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(fix.key), markerFor(fix.key))
+	if err != nil {
+		return "", false, err
+	}
+	for _, result := range results {
+		if result.HTMLURL != priorURL {
+			return result.HTMLURL, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // ForgetTracked removes the current dedup record before a confirmed follow-up attempt.
 func (m *Manager) ForgetTracked(pattern models.PatternAnalysis) {
 	delete(m.state.Tracked, KeyFor(pattern))

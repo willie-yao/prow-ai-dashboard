@@ -266,17 +266,17 @@ func TestRetryReservationReturnsCompletedResult(t *testing.T) {
 	if err := state.Save(service.dataDir); err != nil {
 		t.Fatal(err)
 	}
-	existing, reservationID, err := service.reserveRetry("pattern", "patch")
+	existing, reservationID, err := service.reserveRetry("pattern", "patch", nil)
 	if err != nil || existing != "" || reservationID == "" {
 		t.Fatalf("existing=%q reservation=%q err=%v", existing, reservationID, err)
 	}
-	if _, _, err := service.reserveRetry("pattern", "patch"); err == nil {
+	if _, _, err := service.reserveRetry("pattern", "patch", nil); err == nil {
 		t.Fatal("expected in-progress reservation error")
 	}
 	if err := service.completeRetryReservation("pattern", reservationID, "https://github.com/o/r/pull/8"); err != nil {
 		t.Fatal(err)
 	}
-	existing, _, err = service.reserveRetry("pattern", "patch")
+	existing, _, err = service.reserveRetry("pattern", "patch", nil)
 	if err != nil || existing != "https://github.com/o/r/pull/8" {
 		t.Fatalf("existing=%q err=%v", existing, err)
 	}
@@ -313,11 +313,42 @@ func TestRetryReservationExpires(t *testing.T) {
 	if err := service.saveRetryReservations(reservations); err != nil {
 		t.Fatal(err)
 	}
-	_, id, err := service.reserveRetry("pattern", "new")
+	_, id, err := service.reserveRetry("pattern", "new", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id == "" || id == "stale" {
 		t.Fatalf("reservation id = %q", id)
+	}
+}
+
+func TestRetryReservationRecoversExternalPRBeforeExpiryRelease(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	ledger := remediation.NewState()
+	ledger.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", FindingID: "pattern",
+		Attempts: []remediation.Attempt{{Number: 1, Status: remediation.StatusStillFailingSameCause, URL: "https://github.com/o/r/pull/7"}},
+	}
+	if err := ledger.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	reservations := &retryReservationState{Version: 1, Reservations: map[string]retryReservation{
+		"pattern": {
+			ID: "stale", PatchHash: "patch", PriorURL: "https://github.com/o/r/pull/7",
+			CreatedAt: time.Now().Add(-retryReservationTTL - time.Minute).UTC().Format(time.RFC3339),
+		},
+	}}
+	if err := service.saveRetryReservations(reservations); err != nil {
+		t.Fatal(err)
+	}
+	recovered := "https://github.com/o/r/pull/8"
+	url, id, err := service.reserveRetry("pattern", "patch", func(prior string) (string, bool, error) {
+		if prior != "https://github.com/o/r/pull/7" {
+			t.Fatalf("prior URL = %q", prior)
+		}
+		return recovered, true, nil
+	})
+	if err != nil || url != recovered || id != "stale" {
+		t.Fatalf("url=%q id=%q err=%v", url, id, err)
 	}
 }

@@ -825,9 +825,12 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	if targetRepo == "" {
 		return nil
 	}
+	if p.cfg.EffectiveFixPRs().DryRun {
+		return nil
+	}
 	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
 	ledger := remediation.Load(p.opts.OutDir)
-	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 {
+	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 && len(patterns) == 0 {
 		return nil
 	}
 	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
@@ -1007,7 +1010,7 @@ func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation
 			continue
 		}
 		attempt := &entry.Attempts[len(entry.Attempts)-1]
-		if attempt.LastTransition == "" || attempt.LastTransition == attempt.LastEmailedTransition || !remediationEmailStatus(attempt.Status) {
+		if attempt.LastTransition == "" || attempt.TransitionIndex == attempt.LastEmailedTransitionIndex || !remediationEmailStatus(attempt.Status) {
 			continue
 		}
 		dashboardURL := strings.TrimRight(p.cfg.Branding.SiteURL, "/") + "/job/" + url.PathEscape(entry.JobID)
@@ -1028,6 +1031,7 @@ func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation
 			continue
 		}
 		attempt.LastEmailedTransition = attempt.LastTransition
+		attempt.LastEmailedTransitionIndex = attempt.TransitionIndex
 		changed = true
 	}
 	if changed {
