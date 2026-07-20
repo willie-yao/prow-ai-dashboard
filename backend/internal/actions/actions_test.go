@@ -12,6 +12,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 )
 
@@ -196,5 +197,42 @@ func TestSafeReason_Truncates(t *testing.T) {
 	got := safeReason(long)
 	if len([]rune(got)) > 302 { // 300 + ellipsis
 		t.Errorf("safeReason did not truncate: len=%d", len([]rune(got)))
+	}
+}
+
+func TestRetryContextUsesFailedAttemptEvidence(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", JobID: "job",
+		Attempts: []remediation.Attempt{{
+			Number: 1, URL: "https://github.com/o/r/pull/7", PatchHash: "patch",
+			Status: remediation.StatusStillFailingSameCause, OutcomeReason: "same signature",
+			Observations: []remediation.BuildObservation{{BuildID: "12", Outcome: remediation.OutcomeSameCause}},
+		}},
+	}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	retry, patchHash, instruction, err := service.retryContext("pattern", "job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retry || patchHash != "patch" || !strings.Contains(instruction, "pull/7") || !strings.Contains(instruction, "12") {
+		t.Fatalf("retry=%v hash=%q instruction=%q", retry, patchHash, instruction)
+	}
+}
+
+func TestRetryContextEnforcesAttemptCap(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	state := remediation.NewState()
+	state.Remediations["pattern"] = &remediation.Remediation{ID: "pattern", JobID: "job", Attempts: []remediation.Attempt{
+		{Number: 1}, {Number: 2, Status: remediation.StatusStillFailingSameCause},
+	}}
+	if err := state.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := service.retryContext("pattern", "job"); err == nil {
+		t.Fatal("expected retry limit error")
 	}
 }

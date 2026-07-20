@@ -158,8 +158,9 @@ type State = statefile.State[TrackedFix]
 
 // TrackedFix records the fix PR opened for a pattern key.
 type TrackedFix struct {
-	URL      string `json:"url"`
-	OpenedAt string `json:"opened_at"`
+	URL       string `json:"url"`
+	OpenedAt  string `json:"opened_at"`
+	PatchHash string `json:"patch_hash,omitempty"`
 }
 
 // Preview is a dry-run proposed fix (no PR opened).
@@ -230,7 +231,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 	}
 
 	for _, p := range work {
-		key := keyFor(p)
+		key := KeyFor(p)
 
 		// Dry-run: propose without GitHub writes or state, capped per run.
 		if m.opts.DryRun {
@@ -299,7 +300,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
 			reconcileErrs = append(reconcileErrs, fmt.Errorf("finish fix PR for %q: %w", p.Subject, err))
 		}
-		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+		m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now(), PatchHash: PatchHash(fix.diff)}
 		stats.Proposed++
 		log.Printf("  🛠️ opened draft fix PR for %q: %s", p.Subject, url)
 	}
@@ -487,7 +488,7 @@ func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis,
 	if err != nil {
 		return nil, err
 	}
-	key := keyFor(p)
+	key := KeyFor(p)
 	v := m.verify(ctx, base, fix.files)
 	description, body := m.renderBody(ctx, p, fix, v, key)
 	return &GeneratedFix{
@@ -527,8 +528,26 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		// PR opened but a follow-up (e.g. labeling) failed; still track it.
 		log.Printf("  ⚠ fix PR opened with a warning for %q: %v", gf.pattern.Subject, err)
 	}
-	m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now()}
+	m.state.Tracked[key] = TrackedFix{URL: url, OpenedAt: now(), PatchHash: PatchHash(gf.Preview.Diff)}
 	return url, nil
+}
+
+// ForgetTracked removes the current dedup record before a confirmed follow-up attempt.
+func (m *Manager) ForgetTracked(pattern models.PatternAnalysis) {
+	delete(m.state.Tracked, KeyFor(pattern))
+}
+
+// ForgetGenerated removes the dedup record associated with a generated fix.
+func (m *Manager) ForgetGenerated(fix *GeneratedFix) {
+	if fix != nil {
+		delete(m.state.Tracked, fix.key)
+	}
+}
+
+// PatchHash fingerprints a generated diff for retry equivalence checks.
+func PatchHash(diff string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(diff)))
+	return hex.EncodeToString(sum[:8])
 }
 
 // eligible filters to systemic patterns at or above minConfidence that carry a
@@ -551,9 +570,13 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
-// keyFor is the dedup identity of a pattern: the job plus a fingerprint of the
+// KeyFor is the dedup identity of a pattern: the job plus a fingerprint of the
 // shared root cause, so distinct causes on one job dedupe separately.
 func keyFor(p models.PatternAnalysis) string {
+	return KeyFor(p)
+}
+
+func KeyFor(p models.PatternAnalysis) string {
 	job := p.JobID
 	if strings.TrimSpace(job) == "" {
 		job = p.Subject
@@ -566,6 +589,12 @@ func keyFor(p models.PatternAnalysis) string {
 func markerFor(key string) string {
 	return fmt.Sprintf("<!-- %s:%s -->", markerPrefix, markerToken(key))
 }
+
+// MarkerFor returns the hidden GitHub marker for a fix key.
+func MarkerFor(key string) string { return markerFor(key) }
+
+// MarkerToken returns the search token for a fix key.
+func MarkerToken(key string) string { return markerToken(key) }
 
 func markerToken(key string) string {
 	sum := sha256.Sum256([]byte(key))

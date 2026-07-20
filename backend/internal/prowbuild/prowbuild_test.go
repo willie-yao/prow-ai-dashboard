@@ -101,8 +101,8 @@ var _ storage.Backend = (*fakeBackend)(nil)
 
 func TestFetchBuildInfo_RunningAndFinished(t *testing.T) {
 	b := &fakeBackend{objects: map[string]string{
-		"logs/job/100/started.json":  `{"timestamp":1000,"repo-commit":"abc"}`,
-		"logs/job/100/finished.json": `{"timestamp":1060,"passed":true,"result":"SUCCESS"}`,
+		"logs/job/100/started.json":  `{"timestamp":1000,"repos":{"example/project":"main"},"repo-commit":"abc"}`,
+		"logs/job/100/finished.json": `{"timestamp":1060,"passed":true,"result":"SUCCESS","revision":"main"}`,
 		"logs/job/200/started.json":  `{"timestamp":2000}`,
 	}}
 	ctx := context.Background()
@@ -112,8 +112,11 @@ func TestFetchBuildInfo_RunningAndFinished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Result != "SUCCESS" || !info.Passed || info.DurationSeconds != 60 || info.Commit != "abc" {
+	if info.Result != "SUCCESS" || !info.Passed || info.DurationSeconds != 60 || info.Commit != "abc" || info.Revision != "main" {
 		t.Errorf("finished build: %+v", info)
+	}
+	if info.RepoRefs["example/project"] != "main" {
+		t.Errorf("repo refs = %+v", info.RepoRefs)
 	}
 	if info.WebURL != "https://web/logs/job/100/" || info.BuildLogURL != "https://web/logs/job/100/build-log.txt" {
 		t.Errorf("urls: web=%q log=%q", info.WebURL, info.BuildLogURL)
@@ -142,7 +145,7 @@ func TestDiscoverJUnitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"logs/job/1/artifacts/junit.xml", "logs/job/1/artifacts/junit_runner.xml"}
+	want := []string{"logs/job/1/artifacts/junit.xml", "logs/job/1/artifacts/junit_runner.xml", "logs/job/1/artifacts/sub/junit.deep.xml"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("junit paths = %v, want %v", got, want)
 	}
@@ -229,6 +232,26 @@ func TestDiscoverJobs_BucketDriven(t *testing.T) {
 		}
 		if j.JobType == models.JobTypePresubmit && j.Repo != "istio/istio" {
 			t.Errorf("presubmit repo = %q, want istio/istio", j.Repo)
+		}
+	}
+}
+
+func TestListPullBuilds(t *testing.T) {
+	b := &fakeBackend{objects: map[string]string{
+		"pr-logs/pull/example_project/42/pull-e2e/100/started.json": "x",
+		"pr-logs/pull/example_project/42/pull-e2e/105/started.json": "x",
+		"pr-logs/pull/example_project/7/pull-e2e/110/started.json":  "x",
+	}}
+	builds, err := ListPullBuilds(context.Background(), b, "example/project", "42", "pull-e2e", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(builds) != 2 || builds[0].ID != "105" || builds[1].ID != "100" {
+		t.Fatalf("builds = %+v", builds)
+	}
+	for _, build := range builds {
+		if build.PullNumber != "42" {
+			t.Errorf("pull number = %q", build.PullNumber)
 		}
 	}
 }

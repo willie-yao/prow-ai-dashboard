@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -72,6 +73,7 @@ type previewEntry struct {
 	kind      string
 	spec      issues.IssueSpec    // issue drafts
 	fix       *fixpr.GeneratedFix // fix drafts
+	retry     bool
 	createdAt time.Time
 }
 
@@ -306,6 +308,13 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
+	retry, priorPatchHash, retryInstruction, err := s.retryContext(failureID, pa.JobID)
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
+	if retryInstruction != "" {
+		instruction = strings.TrimSpace(retryInstruction + "\n\n" + instruction)
+	}
 	mgr, err := s.buildFixManager(userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -314,14 +323,52 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, fmt.Errorf("%s", safeReason(err.Error()))
 	}
+	if retry && priorPatchHash != "" && fixpr.PatchHash(gf.Preview.Diff) == priorPatchHash {
+		return PreviewResult{}, nil, fmt.Errorf("the follow-up produced the same patch as the failed attempt")
+	}
 	return PreviewResult{
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output,
-	}, &previewEntry{kind: gfKind, fix: gf}, nil
+	}, &previewEntry{kind: gfKind, fix: gf, retry: retry}, nil
 }
 
 const gfKind = "fix"
+
+func (s *Service) retryContext(failureID, jobID string) (bool, string, string, error) {
+	state := remediation.Load(s.dataDir)
+	entry := state.Remediations[failureID]
+	if entry == nil {
+		for _, candidate := range state.Remediations {
+			if candidate == nil || candidate.JobID != jobID || len(candidate.Attempts) == 0 {
+				continue
+			}
+			latest := candidate.Attempts[len(candidate.Attempts)-1]
+			if latest.Status == remediation.StatusStillFailingSameCause && (entry == nil || candidate.UpdatedAt > entry.UpdatedAt) {
+				entry = candidate
+			}
+		}
+	}
+	if entry == nil || len(entry.Attempts) == 0 {
+		return false, "", "", nil
+	}
+	latest := entry.Attempts[len(entry.Attempts)-1]
+	if latest.Status != remediation.StatusStillFailingSameCause {
+		return false, "", "", nil
+	}
+	if len(entry.Attempts) >= 2 {
+		return false, "", "", fmt.Errorf("the remediation retry limit has been reached")
+	}
+	var builds []string
+	for _, observation := range latest.Observations {
+		if observation.Outcome == remediation.OutcomeSameCause {
+			builds = append(builds, observation.BuildID)
+		}
+	}
+	instruction := fmt.Sprintf("This is follow-up attempt %d. Pull request %s merged, but post-merge Prow evidence showed the same failure still exists. Previous patch hash: %s. Failed post-merge builds: %s. Previous outcome: %s. Do not repeat the previous approach; account for why it failed.",
+		len(entry.Attempts)+1, latest.URL, latest.PatchHash, strings.Join(builds, ", "), latest.OutcomeReason)
+	return true, latest.PatchHash, instruction, nil
+}
 
 // PreviewFix generates the exact fix PR preview and caches it for confirmation.
 func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
@@ -374,6 +421,9 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 		mgr, err := s.buildFixManager(userToken)
 		if err != nil {
 			return "", err
+		}
+		if entry.retry {
+			mgr.ForgetGenerated(entry.fix)
 		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {

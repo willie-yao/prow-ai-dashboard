@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -32,9 +35,11 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -70,6 +75,7 @@ type pipeline struct {
 	aiSystemPrompt    string
 	aiSkillSet        *skills.Set
 	includePresubmits bool
+	jobCatalog        *jobconfig.Catalog
 	aiRuntime         *analysisRuntime
 }
 
@@ -213,7 +219,8 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 		}
 	default:
 		log.Println("Fetching job configs from test-infra...")
-		jobs, err = jobconfig.FetchJobConfigs(ctx, p.client, cfg)
+		targetRepo := configuredFixRepo(cfg)
+		jobs, p.jobCatalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, cfg, targetRepo)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job configs: %w", err)
 		}
@@ -418,6 +425,9 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 	if err := processFixPRs(ctx, cfg, flakinessReport.RecurringPatterns, p.aiToken, opts.OutDir); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
 	}
+	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
+		sideEffectErrs = append(sideEffectErrs, err)
+	}
 	return errors.Join(sideEffectErrs...)
 }
 
@@ -526,11 +536,22 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
+	keepOpen := map[string]bool{}
+	for _, remediationEntry := range remediation.Load(outDir).Remediations {
+		if remediationEntry == nil || len(remediationEntry.Attempts) == 0 {
+			continue
+		}
+		latest := remediationEntry.Attempts[len(remediationEntry.Attempts)-1]
+		if latest.Status != remediation.StatusVerifiedFixed && latest.Status != remediation.StatusClosedUnmerged {
+			keepOpen[issues.KeyPrefixPattern+remediationEntry.JobID] = true
+		}
+	}
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
 		CloseOnRecovery:   eff.CloseOnRecovery,
 		MaxNewPerRun:      eff.MaxNewPerRun,
 		RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
+		KeepOpenKeys:      keepOpen,
 		TemplateFiller:    filler,
 	})
 	stats, err := mgr.Reconcile(ctx, specs)
@@ -786,4 +807,210 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 	}
 
 	return result, nil
+}
+
+func configuredFixRepo(cfg *project.Config) string {
+	if cfg == nil || cfg.AI == nil || cfg.AI.FixPRs == nil {
+		return ""
+	}
+	eff := cfg.EffectiveFixPRs()
+	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+		return ""
+	}
+	return eff.Repo.Owner + "/" + eff.Repo.Name
+}
+
+func (p *pipeline) processRemediations(ctx context.Context, patterns []models.PatternAnalysis, details []models.JobDetail) error {
+	targetRepo := configuredFixRepo(p.cfg)
+	if targetRepo == "" {
+		return nil
+	}
+	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
+	ledger := remediation.Load(p.opts.OutDir)
+	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 {
+		return nil
+	}
+	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
+	for key, fix := range fixState.Tracked {
+		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, PatchHash: fix.PatchHash}
+	}
+	if p.jobCatalog == nil && p.cfg.EffectiveDiscoverySource() == project.DiscoveryTestGrid {
+		_, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, p.cfg, targetRepo)
+		if err != nil {
+			log.Printf("Warning: Prow verification metadata unavailable: %v", err)
+		} else {
+			p.jobCatalog = catalog
+		}
+	}
+	var coverage *remediation.CoverageCatalog
+	if p.jobCatalog != nil {
+		coverageRepos := remediationCoverageRepos(targetRepo, patterns, details, ledger)
+		coverage = remediation.LoadCoverageCatalog(p.opts.OutDir, p.jobCatalog.Revision, coverageRepos, time.Now().UTC())
+		if coverage == nil {
+			built, err := remediation.BuildCoverageCatalog(ctx, p.backend, p.jobCatalog, coverageRepos)
+			coverage = built
+			if err != nil {
+				log.Printf("Warning: Prow verification catalog is partial: %v", err)
+			} else if coverage != nil {
+				if err := coverage.Save(p.opts.OutDir); err != nil {
+					log.Printf("Warning: failed to save Prow verification catalog: %v", err)
+				}
+			}
+		}
+	}
+	token := os.Getenv("FIX_TOKEN")
+	if token == "" {
+		token = os.Getenv("BOT_TOKEN")
+	}
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		token = os.Getenv("ISSUE_TOKEN")
+	}
+	client := ghpr.NewClient(p.client, token)
+	reconciler := remediation.NewReconciler(client, p.opts.OutDir)
+	reconciler.SetVerification(p.backend, p.jobCatalog, coverage, client)
+	reconciler.SetRecovery(targetRepo, client)
+	issueConfig := p.cfg.EffectiveIssues()
+	if issueConfig.Repo != nil && issueConfig.Repo.Owner != "" && issueConfig.Repo.Name != "" {
+		issueRepo := issueConfig.Repo.Owner + "/" + issueConfig.Repo.Name
+		issueState := statefile.Load[issues.TrackedIssue](filepath.Join(p.opts.OutDir, "issue_state.json"), issueRepo, "issues")
+		trackedIssues := map[string]remediation.IssueRef{}
+		for _, pattern := range patterns {
+			if tracked, ok := issueState.Tracked[issues.KeyPrefixPattern+pattern.JobID]; ok {
+				trackedIssues[pattern.JobID] = remediation.IssueRef{Number: tracked.Number, URL: tracked.URL, Repo: issueRepo}
+			}
+		}
+		var issueClient remediation.IssueLifecycleClient
+		if issueToken := os.Getenv("ISSUE_TOKEN"); issueToken != "" {
+			issueClient = issues.NewClient(issueToken, issueConfig.Repo.Owner, issueConfig.Repo.Name)
+		}
+		reconciler.SetIssues(trackedIssues, issueClient)
+	}
+	state, err := reconciler.Reconcile(ctx, patterns, details, fixes, fixpr.KeyFor)
+	if err != nil {
+		log.Printf("Warning: remediation reconciliation failed: %v", err)
+	}
+	emailErr := p.sendRemediationEmails(ctx, state)
+	if emailErr != nil {
+		log.Printf("Warning: remediation email failed: %v", emailErr)
+	}
+	return errors.Join(wrapOptional("remediation reconciliation", err), wrapOptional("remediation email", emailErr))
+}
+
+func remediationCoverageRepos(targetRepo string, patterns []models.PatternAnalysis, details []models.JobDetail, ledger *remediation.State) []string {
+	repos := map[string]bool{targetRepo: targetRepo != ""}
+	jobs := map[string]bool{}
+	for _, pattern := range patterns {
+		jobs[pattern.JobID] = true
+	}
+	if ledger != nil {
+		for _, entry := range ledger.Remediations {
+			if entry != nil {
+				jobs[entry.JobID] = true
+				if entry.SourceRepo != "" {
+					repos[entry.SourceRepo] = true
+				}
+			}
+		}
+	}
+	for _, detail := range details {
+		if !jobs[detail.JobID] {
+			continue
+		}
+		if detail.Repo != "" {
+			repos[detail.Repo] = true
+		}
+		for _, run := range detail.Runs {
+			for repo := range run.RepoRefs {
+				repos[repo] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(repos))
+	for repo, include := range repos {
+		if include && strings.Contains(repo, "/") {
+			out = append(out, repo)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation.State) error {
+	email, enabled := p.cfg.EffectiveEmailNotifications()
+	if !enabled || state == nil {
+		return nil
+	}
+	password := os.Getenv("EMAIL_SMTP_PASSWORD")
+	if email.SMTP.Username != "" && password == "" {
+		return fmt.Errorf("EMAIL_SMTP_PASSWORD is unset")
+	}
+	from, recipients, err := notify.ParseAddresses(email.From, email.To)
+	if err != nil {
+		return err
+	}
+	sender, err := notify.NewSMTPSender(notify.SMTPConfig{
+		Host: email.SMTP.Host, Port: email.SMTP.Port, Username: email.SMTP.Username,
+		Password: password, TLSMode: email.SMTP.TLS,
+	})
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(state.Remediations))
+	for id := range state.Remediations {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var errs []error
+	changed := false
+	for _, id := range ids {
+		entry := state.Remediations[id]
+		if entry == nil || len(entry.Attempts) == 0 {
+			continue
+		}
+		attempt := &entry.Attempts[len(entry.Attempts)-1]
+		if attempt.LastTransition == "" || attempt.LastTransition == attempt.LastEmailedTransition || !remediationEmailStatus(attempt.Status) {
+			continue
+		}
+		dashboardURL := strings.TrimRight(p.cfg.Branding.SiteURL, "/") + "/job/" + url.PathEscape(entry.JobID)
+		actionURL := ""
+		if email.ActionLinks && attempt.Status == remediation.StatusStillFailingSameCause {
+			values := url.Values{}
+			values.Set("action", "fix")
+			values.Set("failure", entry.FindingID)
+			actionURL = dashboardURL + "?" + values.Encode() + "#pattern-" + url.PathEscape(entry.FindingID)
+		}
+		message := notify.RemediationUpdateMessage(notify.RemediationUpdate{
+			From: from, To: recipients, ProjectName: p.cfg.Name, JobName: entry.JobName,
+			Status: attempt.Status, Reason: attempt.OutcomeReason, PullURL: attempt.URL,
+			DashboardURL: dashboardURL, ActionURL: actionURL,
+		})
+		if err := sender.Send(ctx, message); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+			continue
+		}
+		attempt.LastEmailedTransition = attempt.LastTransition
+		changed = true
+	}
+	if changed {
+		if err := state.Save(p.opts.OutDir); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func remediationEmailStatus(status string) bool {
+	switch status {
+	case remediation.StatusAwaitingPresubmit, remediation.StatusPresubmitRunning,
+		remediation.StatusPremergeVerified, remediation.StatusPresubmitFailedSameCause,
+		remediation.StatusPresubmitFailedDifferentCause, remediation.StatusObserving,
+		remediation.StatusVerifiedFixed, remediation.StatusStillFailingSameCause,
+		remediation.StatusFailingDifferentCause, remediation.StatusInconclusive:
+		return true
+	default:
+		return false
+	}
 }
