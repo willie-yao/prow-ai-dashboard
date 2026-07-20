@@ -2,6 +2,7 @@ package prowbuild
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -253,5 +254,26 @@ func TestListPullBuilds(t *testing.T) {
 		if build.PullNumber != "42" {
 			t.Errorf("pull number = %q", build.PullNumber)
 		}
+	}
+}
+
+func TestDiscoverJUnitPathsPreservesPartialResults(t *testing.T) {
+	objects := map[string]string{"logs/job/1/artifacts/junit.xml": "x"}
+	for i := 0; i < 2001; i++ {
+		objects[fmt.Sprintf("logs/job/1/artifacts/z-%04d.txt", i)] = "x"
+	}
+	b := &fakeBackend{objects: objects}
+	paths, complete, err := DiscoverJUnitPathsWithCompleteness(context.Background(), b,
+		BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || len(paths) != 1 || !strings.HasSuffix(paths[0], "junit.xml") {
+		t.Fatalf("paths=%v complete=%v", paths, complete)
+	}
+	usable, err := DiscoverJUnitPaths(context.Background(), b,
+		BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"})
+	if err != nil || len(usable) != 1 {
+		t.Fatalf("usable=%v err=%v", usable, err)
 	}
 }

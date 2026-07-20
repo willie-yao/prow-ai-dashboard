@@ -167,10 +167,13 @@ func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig
 		if err != nil || info.Result == "PENDING" {
 			continue
 		}
-		paths, err := prowbuild.DiscoverJUnitPaths(ctx, b, loc)
+		paths, complete, err := prowbuild.DiscoverJUnitPathsWithCompleteness(ctx, b, loc)
 		if err != nil {
 			scanErrs = append(scanErrs, fmt.Errorf("discover JUnit for %s/%s: %w", jobID, build.ID, err))
 			continue
+		}
+		if !complete {
+			scanErrs = append(scanErrs, fmt.Errorf("JUnit artifact listing for %s/%s was incomplete", jobID, build.ID))
 		}
 		if len(paths) == 0 {
 			continue

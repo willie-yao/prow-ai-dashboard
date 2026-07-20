@@ -352,3 +352,28 @@ func TestRetryReservationRecoversExternalPRBeforeExpiryRelease(t *testing.T) {
 		t.Fatalf("url=%q id=%q err=%v", url, id, err)
 	}
 }
+
+func TestRetryReservationUsesStableRemediationID(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	ledger := remediation.NewState()
+	ledger.Remediations["stable"] = &remediation.Remediation{
+		ID: "stable", FindingID: "current",
+		Attempts: []remediation.Attempt{{Number: 1, Status: remediation.StatusStillFailingSameCause, PatchHash: "old"}},
+	}
+	if err := ledger.Save(service.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.reserveRetry("current", "new", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.reserveRetry("stable", "new", nil); err == nil {
+		t.Fatal("stable and current finding IDs created separate reservations")
+	}
+	state := service.loadRetryReservations()
+	if len(state.Reservations) != 1 {
+		t.Fatalf("reservations = %+v", state.Reservations)
+	}
+	if _, ok := state.Reservations["stable"]; !ok {
+		t.Fatalf("canonical reservation missing: %+v", state.Reservations)
+	}
+}

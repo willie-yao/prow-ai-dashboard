@@ -464,13 +464,17 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 	if entry == nil || len(entry.Attempts) == 0 {
 		return "", "", fmt.Errorf("remediation retry is no longer available")
 	}
+	reservationKey := entry.ID
+	if reservationKey == "" {
+		reservationKey = failureID
+	}
 	latest := entry.Attempts[len(entry.Attempts)-1]
 	if latest.Status != remediation.StatusStillFailingSameCause || len(entry.Attempts) >= 2 {
 		return "", "", fmt.Errorf("remediation retry is no longer available")
 	}
 
 	state := s.loadRetryReservations()
-	if existing, ok := state.Reservations[failureID]; ok {
+	if existing, ok := state.Reservations[reservationKey]; ok {
 		if existing.ResultURL != "" {
 			return existing.ResultURL, existing.ID, nil
 		}
@@ -485,14 +489,14 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 			}
 			if found {
 				existing.ResultURL = recoveredURL
-				state.Reservations[failureID] = existing
+				state.Reservations[reservationKey] = existing
 				if err := s.saveRetryReservations(state); err != nil {
 					return "", "", err
 				}
 				return recoveredURL, existing.ID, nil
 			}
 		}
-		delete(state.Reservations, failureID)
+		delete(state.Reservations, reservationKey)
 		if err := s.saveRetryReservations(state); err != nil {
 			return "", "", err
 		}
@@ -502,7 +506,7 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 	if err != nil {
 		return "", "", err
 	}
-	state.Reservations[failureID] = retryReservation{
+	state.Reservations[reservationKey] = retryReservation{
 		ID: id, PatchHash: patchHash, PriorURL: latest.URL,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -513,23 +517,41 @@ func (s *Service) reserveRetry(failureID, patchHash string, recoverPR func(strin
 }
 
 func (s *Service) completeRetryReservation(failureID, reservationID, resultURL string) error {
+	ledger := remediation.Load(s.dataDir)
+	entry := remediationForFinding(ledger, failureID)
+	if entry == nil {
+		return fmt.Errorf("remediation retry reservation was lost")
+	}
+	reservationKey := entry.ID
+	if reservationKey == "" {
+		reservationKey = failureID
+	}
 	state := s.loadRetryReservations()
-	reservation, ok := state.Reservations[failureID]
+	reservation, ok := state.Reservations[reservationKey]
 	if !ok || reservation.ID != reservationID {
 		return fmt.Errorf("remediation retry reservation was lost")
 	}
 	reservation.ResultURL = resultURL
-	state.Reservations[failureID] = reservation
+	state.Reservations[reservationKey] = reservation
 	return s.saveRetryReservations(state)
 }
 
 func (s *Service) clearRetryReservation(failureID, reservationID string) {
+	ledger := remediation.Load(s.dataDir)
+	entry := remediationForFinding(ledger, failureID)
+	if entry == nil {
+		return
+	}
+	reservationKey := entry.ID
+	if reservationKey == "" {
+		reservationKey = failureID
+	}
 	state := s.loadRetryReservations()
-	reservation, ok := state.Reservations[failureID]
+	reservation, ok := state.Reservations[reservationKey]
 	if !ok || reservation.ID != reservationID || reservation.ResultURL != "" {
 		return
 	}
-	delete(state.Reservations, failureID)
+	delete(state.Reservations, reservationKey)
 	_ = s.saveRetryReservations(state)
 }
 

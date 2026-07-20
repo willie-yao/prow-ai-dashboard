@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -15,6 +16,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
+
+const terminalRetention = 180 * 24 * time.Hour
 
 const (
 	StatusOpen           = "open"
@@ -105,6 +108,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 					"failure recurred in a newer Prow build after verification")
 			}
 		}
+		if entry != nil {
+			syncLinkedIssue(entry, r.issues[pattern.JobID])
+		}
 		key := keyFor(pattern)
 		fix, ok := fixes[key]
 		if (!ok || strings.TrimSpace(fix.URL) == "") && r.search != nil && r.targetRepo != "" {
@@ -138,10 +144,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			}
 			state.Remediations[id] = entry
 		}
-		if issue, ok := r.issues[pattern.JobID]; ok {
-			copy := issue
-			entry.Issue = &copy
-		}
+		syncLinkedIssue(entry, r.issues[pattern.JobID])
 		if findAttempt(entry, fix.URL) == nil {
 			owner, repo, number, err := ParsePullRequestURL(fix.URL)
 			if err != nil {
@@ -213,10 +216,54 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 	if err := reconcileLinkedIssues(ctx, r.issueClient, r.issueRepo, state); err != nil {
 		errs = append(errs, fmt.Errorf("reconcile remediation issues: %w", err))
 	}
+	pruneTerminalRemediations(state, patterns, time.Now().UTC())
 	if err := state.Save(r.dataDir); err != nil {
 		errs = append(errs, err)
 	}
 	return state, errors.Join(errs...)
+}
+
+func pruneTerminalRemediations(state *State, patterns []models.PatternAnalysis, now time.Time) {
+	if state == nil {
+		return
+	}
+	active := map[string]bool{}
+	for _, pattern := range patterns {
+		id := pattern.ID
+		if id == "" {
+			id = models.PatternID(pattern)
+		}
+		active[id] = true
+	}
+	for key, entry := range state.Remediations {
+		if entry == nil || active[entry.FindingID] || active[entry.ID] || len(entry.Attempts) == 0 {
+			continue
+		}
+		latest := entry.Attempts[len(entry.Attempts)-1]
+		if latest.Status != StatusVerifiedFixed && latest.Status != StatusClosedUnmerged {
+			continue
+		}
+		if entry.Issue != nil && entry.Issue.State != "closed" {
+			continue
+		}
+		updated, err := time.Parse(time.RFC3339, entry.UpdatedAt)
+		if err != nil || now.Sub(updated) <= terminalRetention {
+			continue
+		}
+		delete(state.Remediations, key)
+	}
+}
+
+func syncLinkedIssue(entry *Remediation, issue IssueRef) {
+	if entry == nil || issue.Number == 0 {
+		return
+	}
+	if entry.Issue != nil && entry.Issue.Number == issue.Number && entry.Issue.Repo == issue.Repo {
+		entry.Issue.URL = issue.URL
+		return
+	}
+	copy := issue
+	entry.Issue = &copy
 }
 
 func finalizeMergedPresubmit(remediation *Remediation, attempt *Attempt) {

@@ -231,3 +231,51 @@ func TestReconcileReopensVerifiedFindingOnNewerFailure(t *testing.T) {
 		t.Fatalf("attempt=%+v evidence=%+v", attempt, state.Remediations["pattern"].Evidence)
 	}
 }
+
+func TestReconcilePreservesLinkedIssueLifecycleFields(t *testing.T) {
+	dir := t.TempDir()
+	state := NewState()
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job",
+		Issue: &IssueRef{Number: 9, URL: "old", Repo: "o/r", State: "closed", LastTransition: "observing->verified_fixed"},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	reconciler := NewReconciler(fakePRClient{}, dir)
+	reconciler.SetIssues("o/r", map[string]IssueRef{"job": {Number: 9, URL: "new", Repo: "o/r"}}, nil)
+	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job"}
+	state, err := reconciler.Reconcile(context.Background(), []models.PatternAnalysis{pattern}, nil, nil, func(models.PatternAnalysis) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue := state.Remediations["pattern"].Issue
+	if issue.URL != "new" || issue.State != "closed" || issue.LastTransition != "observing->verified_fixed" {
+		t.Fatalf("issue = %+v", issue)
+	}
+}
+
+func TestPruneTerminalRemediations(t *testing.T) {
+	now := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-terminalRetention - time.Hour).Format(time.RFC3339)
+	state := NewState()
+	state.Remediations["remove"] = &Remediation{
+		ID: "remove", FindingID: "remove", UpdatedAt: old,
+		Attempts: []Attempt{{Status: StatusVerifiedFixed}},
+	}
+	state.Remediations["active"] = &Remediation{
+		ID: "active", FindingID: "active", UpdatedAt: old,
+		Attempts: []Attempt{{Status: StatusVerifiedFixed}},
+	}
+	state.Remediations["pending-issue"] = &Remediation{
+		ID: "pending-issue", FindingID: "pending-issue", UpdatedAt: old,
+		Issue: &IssueRef{Number: 1, State: "open"}, Attempts: []Attempt{{Status: StatusVerifiedFixed}},
+	}
+	pruneTerminalRemediations(state, []models.PatternAnalysis{{ID: "active"}}, now)
+	if state.Remediations["remove"] != nil {
+		t.Fatal("old terminal remediation was not pruned")
+	}
+	if state.Remediations["active"] == nil || state.Remediations["pending-issue"] == nil {
+		t.Fatalf("retained state = %+v", state.Remediations)
+	}
+}

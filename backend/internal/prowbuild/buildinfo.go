@@ -77,15 +77,25 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 // junitFileRe matches JUnit XML basenames from common Prow test frameworks.
 var junitFileRe = regexp.MustCompile(`^junit[._-].*\.xml$|^junit\.xml$`)
 
-// DiscoverJUnitPaths returns JUnit XML paths below a build's artifacts tree.
+// DiscoverJUnitPaths returns usable JUnit paths for normal ingestion.
 func DiscoverJUnitPaths(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, error) {
+	paths, _, err := DiscoverJUnitPathsWithCompleteness(ctx, b, loc)
+	return paths, err
+}
+
+// DiscoverJUnitPathsWithCompleteness also reports whether the full tree was scanned.
+func DiscoverJUnitPathsWithCompleteness(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, bool, error) {
 	artifactsDir := loc.BuildPath() + "artifacts/"
 	objects, truncated, err := b.ListTree(ctx, artifactsDir, 2000)
 	if err != nil {
-		return nil, err
-	}
-	if truncated {
-		return nil, fmt.Errorf("prowbuild: artifacts listing for %s exceeded 2000 objects", loc.BuildPath())
+		listing, listErr := b.List(ctx, artifactsDir)
+		if listErr != nil {
+			return nil, false, err
+		}
+		for _, object := range listing.Files {
+			objects = append(objects, object.Name)
+		}
+		truncated = true
 	}
 	var paths []string
 	for _, object := range objects {
@@ -94,5 +104,5 @@ func DiscoverJUnitPaths(ctx context.Context, b storage.Backend, loc BuildLocatio
 		}
 	}
 	sort.Strings(paths)
-	return paths, nil
+	return paths, !truncated, nil
 }

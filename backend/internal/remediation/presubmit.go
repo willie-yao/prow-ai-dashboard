@@ -174,7 +174,7 @@ func fetchBuildTests(ctx context.Context, b storage.Backend, loc prowbuild.Build
 	if err != nil {
 		return nil, nil, err
 	}
-	paths, err := prowbuild.DiscoverJUnitPaths(ctx, b, loc)
+	paths, complete, err := prowbuild.DiscoverJUnitPathsWithCompleteness(ctx, b, loc)
 	if err != nil {
 		return info, nil, err
 	}
@@ -192,6 +192,9 @@ func fetchBuildTests(ctx context.Context, b storage.Backend, loc prowbuild.Build
 	}
 	if len(cases) == 0 {
 		return info, nil, fmt.Errorf("no JUnit tests found")
+	}
+	if !complete {
+		return info, cases, fmt.Errorf("JUnit artifact listing was incomplete")
 	}
 	return info, cases, nil
 }
