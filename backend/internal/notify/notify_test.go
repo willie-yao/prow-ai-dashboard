@@ -317,7 +317,7 @@ func TestSystemicPatternSendsActionableEmailOnce(t *testing.T) {
 			t.Errorf("message missing %q: subject=%q body=%s", want, message.Subject, message.TextBody)
 		}
 	}
-	if _, ok := n.state.Patterns["pattern-1"]; !ok {
+	if _, ok := n.state.Patterns["job-id"]; !ok {
 		t.Fatal("pattern notification state was not recorded")
 	}
 
@@ -392,10 +392,110 @@ func TestPatternNotificationComputesMissingIDAndSkipsNonSystemic(t *testing.T) {
 	if stats.PatternAlerts != 1 || len(n.state.Patterns) != 1 || len(sender.messages) != 1 {
 		t.Fatalf("stats=%+v state=%+v messages=%d", stats, n.state.Patterns, len(sender.messages))
 	}
-	for id := range n.state.Patterns {
-		if id == "" {
+	for jobID, state := range n.state.Patterns {
+		if jobID != "job-id" || state.PatternID == "" {
 			t.Fatal("computed pattern id is empty")
 		}
+	}
+}
+
+func TestPatternWordingDriftDoesNotResend(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	pattern.SharedRootCause = "clusterctl upgrade removes the Azure Service Operator pods before the replacement webhook service is ready, causing conversion webhook calls to fail with connection refused"
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	if _, err := n.ProcessFailures(context.Background(), report, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	paraphrased := pattern
+	paraphrased.ID = "pattern-2"
+	paraphrased.SharedRootCause = "the Azure Service Operator replacement webhook is not ready when clusterctl upgrade removes the old pods, so conversion calls return connection refused"
+	report.RecurringPatterns = []models.PatternAnalysis{paraphrased}
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 1 {
+		t.Fatalf("stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+	state := n.state.Patterns["job-id"]
+	if state.PatternID != "pattern-2" || state.SharedRootCause != paraphrased.SharedRootCause {
+		t.Fatalf("state was not refreshed: %+v", state)
+	}
+}
+
+func TestMateriallyChangedPatternSendsAgain(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	pattern.SharedRootCause = "the Azure Service Operator replacement webhook is unavailable during clusterctl upgrade and conversion calls fail with connection refused"
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	if _, err := n.ProcessFailures(context.Background(), report, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := pattern
+	changed.ID = "pattern-2"
+	changed.SharedRootCause = "the job omits required environment variables for the cluster template, so clusterctl exits before creating a workload cluster"
+	report.RecurringPatterns = []models.PatternAnalysis{changed}
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 1 || len(sender.messages) != 2 {
+		t.Fatalf("stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
+	}
+	message := sender.messages[1]
+	for _, want := range []string{"Recurring failure changed", "Previous shared root cause", "Current shared root cause", pattern.SharedRootCause, changed.SharedRootCause} {
+		if !strings.Contains(message.Subject+message.TextBody+message.HTMLBody, want) {
+			t.Fatalf("changed message missing %q: subject=%q body=%s", want, message.Subject, message.TextBody)
+		}
+	}
+}
+
+func TestFailedChangedPatternEmailRetries(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	pattern.SharedRootCause = "webhook connection refused while replacing Azure Service Operator pods"
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+	if _, err := n.ProcessFailures(context.Background(), report, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := pattern
+	changed.ID = "pattern-2"
+	changed.SharedRootCause = "required cluster template environment variables are missing"
+	report.RecurringPatterns = []models.PatternAnalysis{changed}
+	sender.failNext = 1
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err == nil || stats.Failed != 1 || n.state.Patterns["job-id"].PatternID != "pattern-1" {
+		t.Fatalf("failed change stats=%+v err=%v state=%+v", stats, err, n.state.Patterns)
+	}
+	stats, err = n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 1 || n.state.Patterns["job-id"].PatternID != "pattern-2" {
+		t.Fatalf("retry stats=%+v err=%v state=%+v", stats, err, n.state.Patterns)
+	}
+}
+
+func TestPatternStateMigratesFromPatternIDToJobID(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	state := NotificationState{
+		Channel:  notificationChannel,
+		Notified: map[string]NotifiedFailure{},
+		Patterns: map[string]NotifiedPattern{
+			"old-pattern-id": {PatternID: "old-pattern-id", JobID: "job-id", Subject: "periodic-job", SharedRootCause: "webhook connection refused"},
+		},
+	}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n := newTestNotifier(t, &fakeSender{}, stateFile)
+	if _, ok := n.state.Patterns["old-pattern-id"]; ok {
+		t.Fatalf("legacy key remained: %+v", n.state.Patterns)
+	}
+	if got := n.state.Patterns["job-id"]; got.PatternID != "old-pattern-id" {
+		t.Fatalf("migrated state = %+v", n.state.Patterns)
 	}
 }
 
@@ -455,5 +555,17 @@ func TestPatternStateSurvivesUnavailableAnalysis(t *testing.T) {
 	}
 	if len(n.state.Patterns) != 1 {
 		t.Fatalf("unavailable analysis cleared pattern state: %+v", n.state.Patterns)
+	}
+}
+
+func TestPatternsMateriallyDifferentToleratesObservedWordingDrift(t *testing.T) {
+	webhookLong := "clusterctl upgrade list-CRD validation cannot reach the Azure Service Operator webhook because the ASO service is unavailable during upgrade sequencing, yielding conversion webhook connection refused while the client rate limiter retries"
+	webhookShort := "clusterctl upgrade removes Azure Service Operator pods before the replacement webhook service is ready, causing conversion webhook calls to fail with connection refused while the rate limiter retries"
+	rateLimit := "clusterctl upgrade uses too-low client-side rate limits while listing ASO-managed Azure resource types during provider validation"
+	if patternsMateriallyDifferent(webhookLong, webhookShort) {
+		t.Fatal("webhook paraphrases were treated as different patterns")
+	}
+	if !patternsMateriallyDifferent(webhookShort, rateLimit) {
+		t.Fatal("webhook outage and rate-limit causes were treated as the same pattern")
 	}
 }

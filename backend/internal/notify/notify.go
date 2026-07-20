@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/mail"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,21 @@ import (
 )
 
 const notificationChannel = "email-v1"
+
+const patternSimilarityFloor = 0.35
+
+var patternTokenRegex = regexp.MustCompile(`[a-z0-9]+`)
+
+var patternStopTokens = map[string]struct{}{
+	"all": {}, "and": {}, "any": {}, "are": {}, "because": {},
+	"been": {}, "being": {}, "but": {}, "can": {}, "context": {},
+	"could": {}, "deadline": {}, "during": {}, "error": {}, "errors": {},
+	"exceeded": {}, "failed": {}, "fails": {}, "failure": {}, "for": {},
+	"from": {}, "has": {}, "have": {}, "into": {}, "its": {},
+	"occurred": {}, "only": {}, "retry": {}, "side": {}, "that": {}, "the": {},
+	"their": {}, "then": {}, "this": {}, "through": {}, "was": {},
+	"were": {}, "when": {}, "which": {}, "while": {}, "will": {}, "with": {},
+}
 
 // NotificationState tracks which persistent failures have been notified.
 type NotificationState struct {
@@ -36,7 +52,7 @@ type NotifiedFailure struct {
 	TestName         string `json:"test_name"`
 }
 
-// NotifiedPattern tracks one systemic recurring pattern email.
+// NotifiedPattern tracks the latest systemic pattern emailed for one job.
 type NotifiedPattern struct {
 	PatternID       string `json:"pattern_id"`
 	JobID           string `json:"job_id"`
@@ -124,6 +140,7 @@ func (n *Notifier) loadState() {
 	if s.Patterns == nil {
 		s.Patterns = make(map[string]NotifiedPattern)
 	}
+	s.Patterns = normalizePatternState(s.Patterns)
 	n.state = &s
 }
 
@@ -221,21 +238,24 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 			if pattern.ID == "" {
 				pattern.ID = models.PatternID(pattern)
 			}
-			if _, notified := n.state.Patterns[pattern.ID]; notified {
+			key := patternJobID(pattern)
+			existing, notified := n.state.Patterns[key]
+			changed := notified && patternsMateriallyDifferent(existing.SharedRootCause, pattern.SharedRootCause)
+			if notified && !changed {
+				n.state.Patterns[key] = notifiedPattern(pattern)
 				continue
 			}
-			if err := n.sender.Send(ctx, n.patternMessage(pattern)); err != nil {
+			previousRootCause := ""
+			if changed {
+				previousRootCause = existing.SharedRootCause
+			}
+			if err := n.sender.Send(ctx, n.patternMessage(pattern, previousRootCause)); err != nil {
 				stats.Failed++
-				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", pattern.ID, err))
+				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", key, err))
 				continue
 			}
 			stats.PatternAlerts++
-			n.state.Patterns[pattern.ID] = NotifiedPattern{
-				PatternID:       pattern.ID,
-				JobID:           patternJobID(pattern),
-				Subject:         pattern.Subject,
-				SharedRootCause: pattern.SharedRootCause,
-			}
+			n.state.Patterns[key] = notifiedPattern(pattern)
 		}
 		n.reconcilePatternState(report.RecurringPatterns, jobDetails)
 	}
@@ -247,16 +267,12 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 	if len(jobDetails) == 0 || len(n.state.Patterns) == 0 {
 		return
 	}
-	currentIDs := make(map[string]bool, len(current))
+	currentJobs := make(map[string]bool, len(current))
 	for _, pattern := range current {
 		if !pattern.Systemic {
 			continue
 		}
-		id := pattern.ID
-		if id == "" {
-			id = models.PatternID(pattern)
-		}
-		currentIDs[id] = true
+		currentJobs[patternJobID(pattern)] = true
 	}
 
 	presentJobs := make(map[string]bool, len(jobDetails))
@@ -272,14 +288,89 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 		}
 	}
 
-	for id, notified := range n.state.Patterns {
-		if currentIDs[id] {
+	for jobID, notified := range n.state.Patterns {
+		if currentJobs[jobID] {
 			continue
 		}
 		if !presentJobs[notified.JobID] || authoritativeJobs[notified.JobID] {
-			delete(n.state.Patterns, id)
+			delete(n.state.Patterns, jobID)
 		}
 	}
+}
+
+func notifiedPattern(pattern models.PatternAnalysis) NotifiedPattern {
+	return NotifiedPattern{
+		PatternID:       pattern.ID,
+		JobID:           patternJobID(pattern),
+		Subject:         pattern.Subject,
+		SharedRootCause: pattern.SharedRootCause,
+	}
+}
+
+func normalizePatternState(patterns map[string]NotifiedPattern) map[string]NotifiedPattern {
+	keys := sortedKeys(patterns)
+	normalized := make(map[string]NotifiedPattern, len(patterns))
+	for _, key := range keys {
+		pattern := patterns[key]
+		jobID := strings.TrimSpace(pattern.JobID)
+		if jobID == "" {
+			jobID = key
+		}
+		if _, exists := normalized[jobID]; !exists || key == jobID {
+			normalized[jobID] = pattern
+		}
+	}
+	return normalized
+}
+
+func patternsMateriallyDifferent(previous, current string) bool {
+	previousTokens := patternTokens(previous)
+	currentTokens := patternTokens(current)
+	if len(previousTokens) == 0 || len(currentTokens) == 0 {
+		return strings.TrimSpace(strings.ToLower(previous)) != strings.TrimSpace(strings.ToLower(current))
+	}
+	intersection := 0
+	for token := range previousTokens {
+		if _, ok := currentTokens[token]; ok {
+			intersection++
+		}
+	}
+	union := len(previousTokens) + len(currentTokens) - intersection
+	return float64(intersection)/float64(union) < patternSimilarityFloor
+}
+
+func patternTokens(value string) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	for _, token := range patternTokenRegex.FindAllString(strings.ToLower(value), -1) {
+		if len(token) < 3 || isNumericToken(token) {
+			continue
+		}
+		token = singularPatternToken(token)
+		if _, stop := patternStopTokens[token]; stop {
+			continue
+		}
+		tokens[token] = struct{}{}
+	}
+	return tokens
+}
+
+func singularPatternToken(token string) string {
+	if len(token) > 5 && strings.HasSuffix(token, "ies") {
+		return token[:len(token)-3] + "y"
+	}
+	if len(token) > 4 && strings.HasSuffix(token, "s") && !strings.HasSuffix(token, "ss") {
+		return token[:len(token)-1]
+	}
+	return token
+}
+
+func isNumericToken(token string) bool {
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func completedFailedBuilds(detail models.JobDetail) int {
