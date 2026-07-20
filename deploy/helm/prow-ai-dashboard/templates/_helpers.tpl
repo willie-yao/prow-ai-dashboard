@@ -197,6 +197,9 @@ Validate the analysis backend selection and its constraints.
 {{- fail "analysis: orka requires mode: cron (the produce->ingest flow is batch-oriented)" -}}
 {{- end -}}
 {{- if eq .Values.analysis "orka" -}}
+{{- if lt (int .Values.orka.producer.maxConcurrentTasks) 0 -}}
+{{- fail "orka.producer.maxConcurrentTasks must be non-negative" -}}
+{{- end -}}
 {{- if and .Values.orka.baseTools.create .Values.orka.baseTools.existingConfigMap -}}
 {{- fail "orka.baseTools.create and orka.baseTools.existingConfigMap are mutually exclusive" -}}
 {{- end -}}

@@ -55,6 +55,13 @@ grep -Eq -- '-tool-auth-secret=test-prow-ai-dashboard-artifact-tool-[0-9a-f]{8}-
 grep -Fq 'name: test-prow-ai-dashboard-orka-tools' "$tmp/owned.yaml"
 grep -Fq 'agentpool: nodepool1' "$tmp/owned.yaml"
 grep -Fq 'suspend: false' "$tmp/owned.yaml"
+grep -Fq -- '- -max-concurrent-tasks=2' "$tmp/owned.yaml"
+grep -Fq -- '- -task-poll=5s' "$tmp/owned.yaml"
+grep -Fq -- '- -wave-timeout=30m' "$tmp/owned.yaml"
+if grep -Fq -- '-task-execution=' "$tmp/owned.yaml"; then
+  echo 'default Orka render unexpectedly added Task placement' >&2
+  exit 1
+fi
 skip_count=$(grep -Fc -- '- -skip-side-effects' "$tmp/owned.yaml")
 if [[ $skip_count -ne 1 ]]; then
   echo "default Orka render has $skip_count skip-side-effects flags, want skeleton fetch only" >&2
@@ -72,6 +79,52 @@ grep -Fq 'suspend: true' "$tmp/evaluation.yaml"
 skip_count=$(grep -Fc -- '- -skip-side-effects' "$tmp/evaluation.yaml")
 if [[ $skip_count -ne 2 ]]; then
   echo "evaluation render has $skip_count skip-side-effects flags, want fetch and ingest" >&2
+  exit 1
+fi
+
+cat > "$tmp/task-execution-values.yaml" <<'VALUES'
+orka:
+  producer:
+    maxConcurrentTasks: 3
+    taskPoll: 2s
+    waveTimeout: 20m
+  taskExecution:
+    nodeSelector:
+      agentpool: cpu
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: orka
+        effect: NoSchedule
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: agentpool
+                  operator: In
+                  values: [cpu]
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  -f "$tmp/task-execution-values.yaml" \
+  --set mode=cron --set analysis=orka \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/task-execution.yaml"
+grep -Fq -- '- -max-concurrent-tasks=3' "$tmp/task-execution.yaml"
+grep -Fq -- '- -task-poll=2s' "$tmp/task-execution.yaml"
+grep -Fq -- '- -wave-timeout=20m' "$tmp/task-execution.yaml"
+if [[ $(grep -Fc -- '-task-execution=' "$tmp/task-execution.yaml") -ne 2 ]]; then
+  echo 'Task placement was not passed to both producer and ingestor' >&2
+  exit 1
+fi
+grep -Fq '\"nodeSelector\":{\"agentpool\":\"cpu\"}' "$tmp/task-execution.yaml"
+grep -Fq '\"tolerations\":[{\"effect\":\"NoSchedule\",\"key\":\"dedicated\",\"operator\":\"Equal\",\"value\":\"orka\"}]' "$tmp/task-execution.yaml"
+grep -Fq '\"affinity\":{\"nodeAffinity\"' "$tmp/task-execution.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron --set analysis=orka \
+  --set orka.producer.maxConcurrentTasks=-1 > "$tmp/invalid-concurrency.yaml" 2>&1; then
+  echo 'negative producer concurrency was accepted' >&2
   exit 1
 fi
 

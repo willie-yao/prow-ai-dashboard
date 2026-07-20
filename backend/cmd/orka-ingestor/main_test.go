@@ -216,6 +216,7 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 		timeout:      "5m",
 		retries:      1,
 		poll:         time.Millisecond,
+		execution:    map[string]any{"nodeSelector": map[string]any{"agentpool": "cpu"}},
 	}
 	failures := []ai.PatternFailure{
 		{BuildID: "103", RootCause: "stale controller write", Severity: "High"},
@@ -236,6 +237,10 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	aiSpec := spec["ai"].(map[string]any)
 	if aiSpec["providerRef"].(map[string]any)["name"] != "models" || aiSpec["model"] != "strong-model" {
 		t.Fatalf("applied AI spec = %+v", aiSpec)
+	}
+	execution := spec["execution"].(map[string]any)
+	if execution["nodeSelector"].(map[string]any)["agentpool"] != "cpu" {
+		t.Fatalf("applied execution = %+v", execution)
 	}
 	baseName := kube.applied["metadata"].(map[string]any)["name"].(string)
 	variants := []struct {
@@ -261,6 +266,18 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 				t.Fatalf("%s change reused pattern Task name %q", variant.name, name)
 			}
 		})
+	}
+
+	placementKube := &fakePatternKube{}
+	placementAnalyzer := *analyzer
+	placementAnalyzer.kube = placementKube
+	placementAnalyzer.execution = map[string]any{"nodeSelector": map[string]any{"agentpool": "other"}}
+	if _, err := placementAnalyzer.AnalyzePattern(context.Background(), "periodic-controller", "periodic-controller", failures); err != nil {
+		t.Fatal(err)
+	}
+	placementName := placementKube.applied["metadata"].(map[string]any)["name"].(string)
+	if placementName != baseName {
+		t.Fatalf("placement change produced pattern Task %q, want cached identity %q", placementName, baseName)
 	}
 }
 

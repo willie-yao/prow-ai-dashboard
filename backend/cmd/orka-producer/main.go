@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -39,6 +40,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // engineToolGroups maps the engine's tool GROUP names (as selected in a
@@ -103,10 +105,19 @@ func main() {
 	toolAuthKey := flag.String("tool-auth-key", "token", "key in -tool-auth-secret containing the bearer token")
 	bucketFlag := flag.String("bucket", "", "GCS bucket routed to the shim via the X-Bucket header (default: the consumer's storage.bucket)")
 	retries := flag.Int("retries", 1, "Task retryPolicy maxRetries for transient model/tool errors")
+	taskExecutionJSON := flag.String("task-execution", "", "JSON Task.spec.execution placement with nodeSelector, tolerations, and affinity")
+	maxConcurrentTasks := flag.Int("max-concurrent-tasks", 2, "maximum Tasks applied per wave (0 applies every Task immediately)")
+	taskPoll := flag.Duration("task-poll", 5*time.Second, "poll interval while waiting for an intermediate Task wave")
+	waveTimeout := flag.Duration("wave-timeout", 30*time.Minute, "deadline for each intermediate Task wave")
 	webhookURL := flag.String("webhook-url", "", "Task webhookURL for event-driven ingestion (must be a same-namespace ClusterIP service, e.g. http://orka-ingestor.orka-system.svc:8080/webhook)")
 	apply := flag.Bool("apply", false, "apply Tools+Tasks to the cluster via client-go (in-cluster or -context) instead of only writing YAML")
 	kubeContext := flag.String("context", "", "kubeconfig context to use when -apply runs outside the cluster")
 	flag.Parse()
+
+	taskExecution, err := orka.ParseTaskExecution(*taskExecutionJSON)
+	if err != nil {
+		log.Fatalf("task execution: %v", err)
+	}
 
 	cfg, addendum, err := project.LoadDir(*projectDir)
 	if err != nil {
@@ -239,6 +250,7 @@ func main() {
 						orka.ManagedByLabel: orka.ManagedByValue,
 						orka.BuildLabel:     ref.ToolScope,
 					},
+					Execution: taskExecution,
 				})
 				writeYAML(filepath.Join(*tasksOut, ref.Name+".yaml"), task)
 				taskObjs = append(taskObjs, namedObj{ref.Name, task})
@@ -280,7 +292,7 @@ func main() {
 	}
 
 	if *apply {
-		if err := applyAll(*namespace, *kubeContext, toolObjs, taskObjs); err != nil {
+		if err := applyAll(*namespace, *kubeContext, toolObjs, taskObjs, *maxConcurrentTasks, *taskPoll, *waveTimeout); err != nil {
 			log.Fatalf("apply: %v", err)
 		}
 	}
@@ -292,8 +304,14 @@ type namedObj struct {
 	obj  map[string]any
 }
 
+// taskApplyClient is the Orka API surface used by the producer apply path.
+type taskApplyClient interface {
+	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
+	TaskPhase(context.Context, string, string) (string, error)
+}
+
 // applyAll server-side applies the Tools before the Tasks that reference them.
-func applyAll(namespace, kubeContext string, tools, tasks []namedObj) error {
+func applyAll(namespace, kubeContext string, tools, tasks []namedObj, maxConcurrent int, poll, waveTimeout time.Duration) error {
 	cfg, err := orka.RESTConfig(kubeContext)
 	if err != nil {
 		return fmt.Errorf("kube config: %w", err)
@@ -302,19 +320,80 @@ func applyAll(namespace, kubeContext string, tools, tasks []namedObj) error {
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
-	for _, t := range tools {
-		if err := kc.Apply(ctx, orka.ToolsGVR, namespace, t.obj); err != nil {
+	return applyObjects(context.Background(), kc, namespace, tools, tasks, maxConcurrent, poll, waveTimeout)
+}
+
+func applyObjects(ctx context.Context, client taskApplyClient, namespace string, tools, tasks []namedObj, maxConcurrent int, poll, waveTimeout time.Duration) error {
+	if maxConcurrent < 0 {
+		return fmt.Errorf("max-concurrent-tasks must be non-negative")
+	}
+	if maxConcurrent > 0 && poll <= 0 {
+		return fmt.Errorf("task-poll must be positive when max-concurrent-tasks is set")
+	}
+	if maxConcurrent > 0 && waveTimeout <= 0 {
+		return fmt.Errorf("wave-timeout must be positive when max-concurrent-tasks is set")
+	}
+	for _, tool := range tools {
+		if err := client.Apply(ctx, orka.ToolsGVR, namespace, tool.obj); err != nil {
 			return err
 		}
 	}
-	for _, t := range tasks {
-		if err := kc.Apply(ctx, orka.TasksGVR, namespace, t.obj); err != nil {
-			return err
+
+	waveSize := len(tasks)
+	if maxConcurrent > 0 && maxConcurrent < waveSize {
+		waveSize = maxConcurrent
+	}
+	if waveSize == 0 {
+		log.Printf("applied %d Tools and 0 Tasks to %s", len(tools), namespace)
+		return nil
+	}
+	waves := (len(tasks) + waveSize - 1) / waveSize
+	for start := 0; start < len(tasks); start += waveSize {
+		end := min(start+waveSize, len(tasks))
+		wave := tasks[start:end]
+		if waves > 1 {
+			log.Printf("applying Task wave %d/%d (%d Tasks)", start/waveSize+1, waves, len(wave))
+		}
+		for _, task := range wave {
+			if err := client.Apply(ctx, orka.TasksGVR, namespace, task.obj); err != nil {
+				return err
+			}
+		}
+		if end < len(tasks) {
+			if err := waitForTaskWave(ctx, client, namespace, wave, poll, waveTimeout); err != nil {
+				return err
+			}
 		}
 	}
 	log.Printf("applied %d Tools and %d Tasks to %s", len(tools), len(tasks), namespace)
 	return nil
+}
+
+func waitForTaskWave(ctx context.Context, client taskApplyClient, namespace string, tasks []namedObj, poll, timeout time.Duration) error {
+	waveCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		pending := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			phase, err := client.TaskPhase(waveCtx, namespace, task.name)
+			if err != nil {
+				return fmt.Errorf("read Task %s phase: %w", task.name, err)
+			}
+			if !orka.TerminalPhase(phase) {
+				pending = append(pending, task.name)
+			}
+		}
+		if len(pending) == 0 {
+			return nil
+		}
+		select {
+		case <-waveCtx.Done():
+			return fmt.Errorf("wait for Task wave (%s): %w", strings.Join(pending, ", "), waveCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // toolUsageAddendum returns the engine-owned tool-usage guidance appended to the

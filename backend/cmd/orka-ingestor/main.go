@@ -51,6 +51,7 @@ func main() {
 	patternPoll := flag.Duration("pattern-poll", 5*time.Second, "poll interval for job-level pattern Tasks")
 	patternTimeout := flag.String("pattern-timeout", "10m", "per-Task timeout for job-level pattern analysis")
 	patternRetries := flag.Int("pattern-retries", 1, "pattern Task retryPolicy maxRetries")
+	taskExecutionJSON := flag.String("task-execution", "", "JSON Task.spec.execution placement with nodeSelector, tolerations, and affinity")
 	namespace := flag.String("namespace", "orka-system", "namespace holding the Tasks and Tools")
 	kubeContext := flag.String("context", "", "kubeconfig context for Task-status checks and GC (in-cluster config is used when empty)")
 	gc := flag.Bool("gc", false, "after ingesting, delete per-build Tools whose Tasks are all terminal")
@@ -58,6 +59,11 @@ func main() {
 	serve := flag.Bool("serve", false, "run as a webhook receiver: patch each result as its Task completes (Task.webhookURL)")
 	addr := flag.String("addr", ":8080", "listen address in -serve mode")
 	flag.Parse()
+
+	taskExecution, err := orka.ParseTaskExecution(*taskExecutionJSON)
+	if err != nil {
+		log.Fatalf("task execution: %v", err)
+	}
 
 	tok := strings.TrimSpace(*token)
 	if tok == "" && *tokenFile != "" {
@@ -135,6 +141,7 @@ func main() {
 				provider: *provider, model: *model, version: *version,
 				projectScope: manifest.ProjectScope,
 				timeout:      *patternTimeout, retries: *patternRetries, poll: *patternPoll,
+				execution: taskExecution,
 			}
 			stats, err := finalizeBatch(ctx, *dataDir, analyzer, runSideEffects)
 			cancel()
@@ -837,6 +844,7 @@ type patternTaskAnalyzer struct {
 	timeout      string
 	retries      int
 	poll         time.Duration
+	execution    map[string]any
 }
 
 type patternKubeClient interface {
@@ -863,7 +871,8 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 		Name: name, Namespace: a.namespace, Provider: a.provider, Model: a.model,
 		Timeout: a.timeout, MaxRetries: a.retries,
 		SystemPrompt: input.SystemPrompt, Prompt: input.UserPrompt,
-		Labels: map[string]string{orka.ManagedByLabel: orka.ManagedByValue},
+		Labels:    map[string]string{orka.ManagedByLabel: orka.ManagedByValue},
+		Execution: a.execution,
 	})
 	if err := a.kube.Apply(ctx, orka.TasksGVR, a.namespace, task); err != nil {
 		return nil, fmt.Errorf("apply pattern Task %s: %w", name, err)
