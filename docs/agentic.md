@@ -624,7 +624,7 @@ contract hash, so cached job JSON is refreshed whenever the current contract
 changes. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Before publishing a
 result, the ingestor reads Orka's durable execution events, enforces the JSON
-schema and `min_tool_calls`, requires a successful terminal Task event, rejects
+schema, `min_tool_calls`, and `min_gcs_bytes`, requires a successful terminal Task event, rejects
 quality tools whose last attempt failed, requires a successful
 `validate_analysis` call whose token matches the exact final JSON and whose
 scoped evidence tokens prove every cited artifact was returned by a successful
@@ -632,7 +632,7 @@ content read. The final token is keyed by a producer-generated secret carried
 only in the private manifest and hidden Tool headers, so it cannot be recomputed
 for a different final object. Recipe groups absent from a complete bounded
 artifact-tree listing are treated as inapplicable, matching the in-process
-critique path. Acceptance also requires a completed `verify_timeline` call for
+critique path. Signed evidence tokens carry the successful artifact-read byte count, which is enforced and published as `AIAnalysis.GCSBytes`. Acceptance also requires a completed `verify_timeline` call for
 every transient verdict. Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
 quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are

@@ -29,6 +29,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -164,7 +165,7 @@ func main() {
 	}
 	contractHash, err := orka.AnalysisContractHash(orka.AnalysisContract{
 		Provider: *provider, Model: *model, Version: *version,
-		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls,
+		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls, MinGCSBytes: agentic.MinGCSBytes,
 		AcceptanceVersion: orka.AcceptanceVersion, SkillSetHash: skillSet.Hash(),
 		ToolAuthSecret: *toolAuthSecret, ToolAuthKey: *toolAuthKey,
 		ValidationKeyHash: orka.ValidationKeyHash(validationKey),
@@ -178,6 +179,7 @@ func main() {
 	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version, agentic.MinToolCalls)
 	manifest.SkillSetHash = skillSet.Hash()
 	manifest.ValidationKey = validationKey
+	manifest.MinGCSBytes = agentic.MinGCSBytes
 	activeJobs, err := orka.ActiveJobIDs(*dataDir)
 	if err != nil {
 		log.Fatalf("load active jobs: %v", err)
@@ -247,7 +249,7 @@ func main() {
 	for _, build := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, *toolAuthSecret, *toolAuthKey)
+			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, agentic.MinGCSBytes, *toolAuthSecret, *toolAuthKey)
 			toolName := buildToolName(base, build.scope)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
@@ -325,7 +327,8 @@ read_artifact, tail_artifact, and grep_artifact call returns an evidence_token.
 Keep those tokens. Before finalizing, call validate_analysis with the exact JSON
 fields you will return, including every relevant_file, plus all evidence_tokens
 from the artifact reads that support the analysis. Copy its validation_token into
-the final JSON and do not change any analysis field afterward.
+the final JSON, copy its gcs_bytes value into the final JSON, and do not change
+any analysis field afterward.
 
 ## Tool budget: converge, do not exhaust it
 You have a limited tool-call budget (aim for ~20 calls) and you WILL be forced to
@@ -353,7 +356,8 @@ revise if any applies:
 3. Grounding: is every claim tied to evidence you actually read (validate_analysis
    passed), not plausible-sounding speculation?
 4. Fix validity: would suggested_fix actually resolve the stated root_cause?
-The final JSON must also include "validation_token":"<token from validate_analysis>".
+The final JSON must also include "gcs_bytes":<value from validate_analysis> and
+"validation_token":"<token from validate_analysis>".
 Respond with ONLY the required JSON object.`
 }
 
@@ -391,7 +395,7 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
 // build/bucket/storage headers so the shim serves this build from the right
 // bucket and provider.
-func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, validationKey, authSecret, authKey string) map[string]any {
+func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, validationKey string, minGCSBytes int, authSecret, authKey string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -433,6 +437,7 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 	}
 	if baseName == "validate-analysis" {
 		headers[orka.ValidationKeyHeader] = validationKey
+		headers[orka.MinGCSBytesHeader] = strconv.Itoa(minGCSBytes)
 	}
 	if authSecret != "" && authKey != "" {
 		httpCfg["authSecretRef"] = map[string]any{"name": authSecret, "key": authKey}

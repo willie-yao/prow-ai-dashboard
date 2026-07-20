@@ -296,7 +296,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls, manifest.SkillSetHash, manifest.ValidationKey)
+				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey)
 				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
@@ -333,7 +333,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls int, skillSetHash, validationKey string) (bool, string) {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) (bool, string) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false, ""
@@ -346,7 +346,7 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err != nil {
 		return false, "analysis Task telemetry unavailable: " + oneLine(err.Error())
 	}
-	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls, skillSetHash, validationKey); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
 		return false, "analysis Task failed acceptance: " + oneLine(err.Error())
 	}
 	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
@@ -355,6 +355,10 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 
 func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash string) {
 	now := time.Now().UTC().Format(time.RFC3339)
+	gcsBytes := 0
+	if a.GCSBytes != nil {
+		gcsBytes = *a.GCSBytes
+	}
 	if telemetry.Model != "" {
 		model = telemetry.Model
 	}
@@ -373,6 +377,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		ModelRequests:          telemetry.ModelRequests,
 		ModelFailures:          telemetry.ModelFailures,
 		ContextBytes:           telemetry.ContextBytes,
+		GCSBytes:               gcsBytes,
 		ContextTruncations:     telemetry.ContextTruncations,
 		TaskRetries:            telemetry.TaskRetries,
 		TaskOutcome:            telemetry.TaskOutcome,
@@ -544,7 +549,7 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	if err != nil {
 		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
 	}
-	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
+	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
 		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
 		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error()), retry: retry}
 	}
@@ -649,6 +654,7 @@ type analysis struct {
 	SuggestedFix    string   `json:"suggested_fix"`
 	RelevantFiles   []string `json:"relevant_files"`
 	ValidationToken string   `json:"validation_token"`
+	GCSBytes        *int     `json:"gcs_bytes"`
 }
 
 // parseAnalysis extracts and validates the last analysis-shaped JSON object.
@@ -705,14 +711,20 @@ func validateAnalysisShape(a analysis) error {
 	if a.RelevantFiles == nil {
 		return fmt.Errorf("relevant_files array is required")
 	}
+	if a.GCSBytes == nil || *a.GCSBytes < 0 {
+		return fmt.Errorf("gcs_bytes is required and must be non-negative")
+	}
 	if strings.TrimSpace(a.ValidationToken) == "" {
 		return fmt.Errorf("validation_token is required")
 	}
 	return nil
 }
 
-func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int, skillSetHash, validationKey string) error {
-	if !orka.VerifyAnalysisValidationToken(validationKey, a.validationInput(), a.ValidationToken) {
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls, minGCSBytes int, skillSetHash, validationKey string) error {
+	if a.GCSBytes == nil || *a.GCSBytes < 0 {
+		return fmt.Errorf("gcs_bytes is required and must be non-negative")
+	}
+	if !orka.VerifyAnalysisValidationToken(validationKey, a.validationInput(), *a.GCSBytes, a.ValidationToken) {
 		return fmt.Errorf("validation_token does not match the final analysis")
 	}
 	if telemetry.EventCount == 0 {
@@ -726,6 +738,9 @@ func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minTool
 	}
 	if telemetry.ToolCalls < minToolCalls {
 		return fmt.Errorf("only %d tool call(s), need at least %d", telemetry.ToolCalls, minToolCalls)
+	}
+	if *a.GCSBytes < minGCSBytes {
+		return fmt.Errorf("only %d GCS byte(s), need at least %d", *a.GCSBytes, minGCSBytes)
 	}
 	for name, outcome := range telemetry.qualityToolOutcomes {
 		if outcome == "failed" {

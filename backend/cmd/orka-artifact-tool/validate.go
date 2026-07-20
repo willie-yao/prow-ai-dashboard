@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
@@ -54,16 +55,29 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		writeToolError(w, http.StatusInternalServerError, "analysis validation key is unavailable")
 		return
 	}
+	minGCSBytes, err := strconv.Atoi(strings.TrimSpace(r.Header.Get(orka.MinGCSBytesHeader)))
+	if err != nil || minGCSBytes < 0 {
+		http.Error(w, "invalid minimum GCS byte floor", http.StatusBadRequest)
+		return
+	}
 
 	readPaths := map[string]bool{}
+	seenTokens := map[string]bool{}
+	gcsBytes := 0
 	invalidTokens := 0
 	for _, token := range args.EvidenceTokens {
-		path, ok := env.evidence.verify(requestScope(r), strings.TrimSpace(token))
+		token = strings.TrimSpace(token)
+		if seenTokens[token] {
+			continue
+		}
+		seenTokens[token] = true
+		path, bytesFetched, ok := env.evidence.verifyBytes(requestScope(r), token)
 		if !ok {
 			invalidTokens++
 			continue
 		}
 		readPaths[path] = true
+		gcsBytes += bytesFetched
 	}
 
 	readBases := map[string]bool{}
@@ -104,13 +118,15 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 			missingEvidence = append(missingEvidence, skill.ID+":"+group.ID)
 		}
 	}
-	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0
+	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0 && gcsBytes >= minGCSBytes
 	result := map[string]any{
 		"checked":                 len(citations),
 		"present":                 present,
 		"missing":                 missing,
 		"read_paths":              sortedEvidencePaths(readPaths),
 		"invalid_evidence_tokens": invalidTokens,
+		"gcs_bytes":               gcsBytes,
+		"min_gcs_bytes":           minGCSBytes,
 		"matched_skills":          skillIDs(matchedSkills),
 		"missing_evidence":        missingEvidence,
 		"all_present":             valid,
@@ -120,7 +136,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
 		return
 	}
-	result["validation_token"] = orka.AnalysisValidationToken(validationKey, args.Analysis)
+	result["validation_token"] = orka.AnalysisValidationToken(validationKey, args.Analysis, gcsBytes)
 	log.Printf("✔ validate_analysis paths=%d read=%d matched_skills=%d", len(args.Analysis.RelevantFiles), len(readPaths), len(matchedSkills))
 	writeJSON(w, result)
 }

@@ -4,11 +4,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
 const (
-	evidenceTokenVersion = "v1"
+	evidenceTokenVersion = "v2"
 	maxEvidencePathBytes = 4096
 )
 
@@ -22,49 +24,63 @@ func newEvidenceAttestor(secret string) *evidenceAttestor {
 }
 
 func (a *evidenceAttestor) issue(scope, path string) string {
+	return a.issueBytes(scope, path, 1)
+}
+
+func (a *evidenceAttestor) issueBytes(scope, path string, bytesFetched int) string {
 	path = normalizeEvidencePath(path)
-	if a == nil || len(a.key) == 0 || path == "" || len(path) > maxEvidencePathBytes {
+	if a == nil || len(a.key) == 0 || path == "" || len(path) > maxEvidencePathBytes || bytesFetched < 0 {
 		return ""
 	}
 	encodedPath := base64.RawURLEncoding.EncodeToString([]byte(path))
-	mac := a.mac(scope, path)
-	return strings.Join([]string{evidenceTokenVersion, encodedPath, base64.RawURLEncoding.EncodeToString(mac)}, ".")
+	mac := a.mac(scope, path, bytesFetched)
+	return strings.Join([]string{evidenceTokenVersion, encodedPath, strconv.Itoa(bytesFetched), base64.RawURLEncoding.EncodeToString(mac)}, ".")
 }
 
 func (a *evidenceAttestor) verify(scope, token string) (string, bool) {
+	path, _, ok := a.verifyBytes(scope, token)
+	return path, ok
+}
+
+func (a *evidenceAttestor) verifyBytes(scope, token string) (string, int, bool) {
 	if a == nil || len(a.key) == 0 {
-		return "", false
+		return "", 0, false
 	}
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 || parts[0] != evidenceTokenVersion {
-		return "", false
+	if len(parts) != 4 || parts[0] != evidenceTokenVersion {
+		return "", 0, false
 	}
 	pathBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || len(pathBytes) == 0 || len(pathBytes) > maxEvidencePathBytes {
-		return "", false
+		return "", 0, false
 	}
 	path := string(pathBytes)
 	if normalizeEvidencePath(path) != path {
-		return "", false
+		return "", 0, false
 	}
-	provided, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || !hmac.Equal(provided, a.mac(scope, path)) {
-		return "", false
+	bytesFetched, err := strconv.Atoi(parts[2])
+	if err != nil || bytesFetched < 0 {
+		return "", 0, false
 	}
-	return path, true
+	provided, err := base64.RawURLEncoding.DecodeString(parts[3])
+	if err != nil || !hmac.Equal(provided, a.mac(scope, path, bytesFetched)) {
+		return "", 0, false
+	}
+	return path, bytesFetched, true
 }
 
-func (a *evidenceAttestor) mac(scope, path string) []byte {
+func (a *evidenceAttestor) mac(scope, path string, bytesFetched int) []byte {
 	mac := hmac.New(sha256.New, a.key)
 	_, _ = mac.Write([]byte(evidenceTokenVersion))
 	_, _ = mac.Write([]byte{0})
 	_, _ = mac.Write([]byte(scope))
 	_, _ = mac.Write([]byte{0})
 	_, _ = mac.Write([]byte(path))
+	_, _ = fmt.Fprintf(mac, "\x00%d", bytesFetched)
 	return mac.Sum(nil)
 }
 
-func attachEvidenceToken(attestor *evidenceAttestor, scope, toolName string, payload map[string]interface{}) {
+func attachEvidenceToken(attestor *evidenceAttestor, scope, toolName string, bytesFetched int, payload map[string]interface{}) {
 	if payload == nil || !isEvidenceTool(toolName) {
 		return
 	}
@@ -72,7 +88,7 @@ func attachEvidenceToken(attestor *evidenceAttestor, scope, toolName string, pay
 		return
 	}
 	path, _ := payload["path"].(string)
-	if token := attestor.issue(scope, path); token != "" {
+	if token := attestor.issueBytes(scope, path, bytesFetched); token != "" {
 		payload["evidence_token"] = token
 	}
 }

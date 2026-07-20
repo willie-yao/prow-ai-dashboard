@@ -79,6 +79,7 @@ func TestValidateAnalysisRequiresRelevantFilesArray(t *testing.T) {
 	env := &toolEnv{evidence: newEvidenceAttestor("secret")}
 	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"analysis":{"root_cause":"cause"},"evidence_tokens":[]}`))
 	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.MinGCSBytesHeader, "0")
 	recorder := httptest.NewRecorder()
 	validateAnalysis(env, recorder, req)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "relevant_files") {
@@ -165,6 +166,7 @@ func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation,
 	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", bytes.NewReader(body))
 	req.Header.Set(orka.ToolScopeHeader, scope)
 	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.MinGCSBytesHeader, "0")
 	if skillHeader != "" {
 		req.Header.Set(skills.ContractHeader, skillHeader)
 	}
@@ -193,5 +195,24 @@ func TestValidateAnalysisChecksArtifactCitationsAcrossProse(t *testing.T) {
 	response = runValidation(t, env, analysis, []string{attestor.issue("scope", "artifacts/manager.log")}, "scope", "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("read prose citation response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestValidateAnalysisEnforcesMinimumGCSBytes(t *testing.T) {
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	analysis := orka.AnalysisValidation{Summary: "summary", RootCause: "cause", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"build-log.txt"}}
+	body, err := json.Marshal(map[string]any{"analysis": analysis, "evidence_tokens": []string{attestor.issueBytes("scope", "build-log.txt", 10)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", bytes.NewReader(body))
+	req.Header.Set(orka.ToolScopeHeader, "scope")
+	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.MinGCSBytesHeader, "11")
+	recorder := httptest.NewRecorder()
+	validateAnalysis(env, recorder, req)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), `"gcs_bytes":10`) {
+		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
 	}
 }

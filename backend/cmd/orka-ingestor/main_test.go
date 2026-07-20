@@ -22,10 +22,14 @@ import (
 const testValidationKey = "test-validation-key"
 
 func withValidation(a analysis) analysis {
+	if a.GCSBytes == nil {
+		zero := 0
+		a.GCSBytes = &zero
+	}
 	if a.RelevantFiles == nil {
 		a.RelevantFiles = []string{}
 	}
-	a.ValidationToken = orkaapi.AnalysisValidationToken(testValidationKey, a.validationInput())
+	a.ValidationToken = orkaapi.AnalysisValidationToken(testValidationKey, a.validationInput(), *a.GCSBytes)
 	return a
 }
 

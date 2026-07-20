@@ -54,7 +54,7 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 				"metadata": map[string]any{"name": tool},
 				"spec":     map[string]any{"http": map[string]any{"url": "http://artifact-tool/tool/" + tool}},
 			}
-			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "validation-key", "artifact-tool-auth", "token")
+			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "validation-key", 123, "artifact-tool-auth", "token")
 			spec := got["spec"].(map[string]any)
 			headers := spec["http"].(map[string]any)["headers"].(map[string]any)
 			if headers[orka.ToolScopeHeader] != "scope" {
@@ -65,6 +65,9 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 			}
 			if tool == "validate-analysis" && headers[orka.ValidationKeyHeader] != "validation-key" {
 				t.Fatalf("validation key header = %+v", headers)
+			}
+			if tool == "validate-analysis" && headers[orka.MinGCSBytesHeader] != "123" {
+				t.Fatalf("minimum GCS byte header = %+v", headers)
 			}
 			auth := spec["http"].(map[string]any)["authSecretRef"].(map[string]any)
 			if auth["name"] != "artifact-tool-auth" || auth["key"] != "token" {

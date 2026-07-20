@@ -122,7 +122,7 @@ Task's result, parses the analysis JSON, and writes `tc.AISummary` +
 produces. Each analysis stores the contract hash, so a cached result is reused
 only while it matches the current producer manifest. The ingestor also reads the
 Task's durable execution-event stream. It rejects incomplete response schemas,
-analyses below `ai.min_tool_calls`, results without a successful terminal Task
+analyses below `ai.min_tool_calls` or `ai.min_gcs_bytes`, results without a successful terminal Task
 event, quality tools whose last attempt failed, results without a completed
 `validate_analysis` call whose token binds the exact final result and verifies
 scoped evidence tokens from successful artifact content reads, and transient

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -31,7 +32,7 @@ func (a AnalysisValidation) EvidenceText() string {
 }
 
 // AnalysisValidationToken authenticates the canonical validated result.
-func AnalysisValidationToken(key string, a AnalysisValidation) string {
+func AnalysisValidationToken(key string, a AnalysisValidation, gcsBytes int) string {
 	if strings.TrimSpace(key) == "" {
 		return ""
 	}
@@ -39,12 +40,13 @@ func AnalysisValidationToken(key string, a AnalysisValidation) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	_, _ = mac.Write([]byte("orka-analysis-validation-v2\x00"))
 	_, _ = mac.Write(data)
+	_, _ = fmt.Fprintf(mac, "\x00%d", gcsBytes)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // VerifyAnalysisValidationToken reports whether token authenticates a.
-func VerifyAnalysisValidationToken(key string, a AnalysisValidation, token string) bool {
-	expected := AnalysisValidationToken(key, a)
+func VerifyAnalysisValidationToken(key string, a AnalysisValidation, gcsBytes int, token string) bool {
+	expected := AnalysisValidationToken(key, a, gcsBytes)
 	return len(token) == len(expected) && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }
 

@@ -32,14 +32,14 @@ func TestEvidenceAttestorBindsScopeAndPath(t *testing.T) {
 func TestAttachEvidenceTokenRequiresSuccessfulContentRead(t *testing.T) {
 	attestor := newEvidenceAttestor("secret")
 	payload := map[string]interface{}{"path": "build-log.txt", "content": "failure"}
-	attachEvidenceToken(attestor, "scope", "read_artifact", payload)
+	attachEvidenceToken(attestor, "scope", "read_artifact", 1, payload)
 	token, _ := payload["evidence_token"].(string)
 	if _, ok := attestor.verify("scope", token); !ok {
 		t.Fatal("successful read did not receive evidence token")
 	}
 
 	failed := map[string]interface{}{"path": "build-log.txt", "error": "not found"}
-	attachEvidenceToken(attestor, "scope", "read_artifact", failed)
+	attachEvidenceToken(attestor, "scope", "read_artifact", 1, failed)
 	if _, ok := failed["evidence_token"]; ok {
 		t.Fatal("failed read received evidence token")
 	}
@@ -66,7 +66,7 @@ func TestArtifactReadTokenValidatesExactAnalysis(t *testing.T) {
 	filesystem.Register(registry)
 	result := registry.Dispatch(context.Background(), env, "read_artifact", json.RawMessage(`{"path":"build-log.txt"}`))
 	attestor := newEvidenceAttestor("secret")
-	attachEvidenceToken(attestor, "scope", "read_artifact", result.Payload)
+	attachEvidenceToken(attestor, "scope", "read_artifact", 1, result.Payload)
 	token, _ := result.Payload["evidence_token"].(string)
 	if token == "" {
 		t.Fatal("read result has no evidence token")
