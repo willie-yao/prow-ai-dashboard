@@ -43,6 +43,11 @@ func NewBackendFactory(backend storage.Backend, bucketLabel string) *BackendFact
 	}
 }
 
+// NewBackendBrowser returns an uncached Browser bound to one Prow build.
+func NewBackendBrowser(backend storage.Backend, bucketLabel, buildPrefix, displayName string) Browser {
+	return newBackendBrowser(backend, bucketLabel, buildPrefix, displayName)
+}
+
 // ForBuild returns a Browser bound to one Prow build. buildPrefix is the
 // bucket-relative, trailing-slashed directory of the build.
 func (f *BackendFactory) ForBuild(buildPrefix, displayName string) Browser {
@@ -54,14 +59,21 @@ func (f *BackendFactory) ForBuild(buildPrefix, displayName string) Browser {
 	if b, ok := f.browsers[buildPrefix]; ok {
 		return b
 	}
-	b := &backendBrowser{
-		backend: f.backend,
-		prefix:  buildPrefix,
-		root:    f.bucketLabel + "/" + displayName,
-		cache:   map[string][]byte{},
-	}
+	b := newBackendBrowser(f.backend, f.bucketLabel, buildPrefix, displayName)
 	f.browsers[buildPrefix] = b
 	return b
+}
+
+func newBackendBrowser(backend storage.Backend, bucketLabel, buildPrefix, displayName string) *backendBrowser {
+	if !strings.HasSuffix(buildPrefix, "/") {
+		buildPrefix += "/"
+	}
+	return &backendBrowser{
+		backend: backend,
+		prefix:  buildPrefix,
+		root:    bucketLabel + "/" + displayName,
+		cache:   map[string][]byte{},
+	}
 }
 
 // backendBrowser implements Browser over a storage.Backend for one build.

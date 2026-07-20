@@ -119,3 +119,19 @@ func TestResolverBoundsBuildScopes(t *testing.T) {
 		t.Fatalf("build scopes = %d, want %d", len(resolver.builds), maxResolverBuilds)
 	}
 }
+
+func TestResolverDoesNotRetainCrossBuildBrowsers(t *testing.T) {
+	resolver, err := newBuildResolver(storage.Config{Provider: storage.ProviderLocal, Base: t.TempDir()}, "", "logs/job/1/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _, err := resolver.toolEnvFor("", "logs/job/1/", "scope", storage.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := env.browserForBuild("logs/job/2/", "job/2")
+	second := env.browserForBuild("logs/job/2/", "job/2")
+	if first.(*budgetBrowser).Browser == second.(*budgetBrowser).Browser {
+		t.Fatal("cross-build browser was retained across lookups")
+	}
+}

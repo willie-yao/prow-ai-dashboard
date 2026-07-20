@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestNewBackendBrowserIsUncached(t *testing.T) {
+	factory := NewBackendFactory(nil, "bucket")
+	cached := factory.ForBuild("logs/job/1", "job/1")
+	if got := factory.ForBuild("logs/job/1/", "other"); got != cached {
+		t.Fatal("ForBuild did not reuse the memoized browser")
+	}
+
+	first := NewBackendBrowser(nil, "bucket", "logs/job/1", "job/1")
+	second := NewBackendBrowser(nil, "bucket", "logs/job/1/", "job/1")
+	if first == second || first == cached || second == cached {
+		t.Fatal("NewBackendBrowser reused a memoized browser")
+	}
+}
+
 func TestGrepStreamCountsBytes(t *testing.T) {
 	data := []byte("first\nmatch here\nlast\n")
 	got, err := grepStream(bytes.NewReader(data), int64(len(data)), int64(len(data)), regexp.MustCompile("match"), 1, 10, 1000)

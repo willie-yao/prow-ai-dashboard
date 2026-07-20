@@ -42,7 +42,6 @@ type bucketBackend struct {
 	key     string
 	bucket  string
 	backend storage.Backend
-	factory *artifacts.BackendFactory
 }
 
 type buildEntry struct {
@@ -121,7 +120,7 @@ func (r *buildResolver) backendLocked(bucket string, override storage.Config) (*
 	if err != nil {
 		return nil, fmt.Errorf("storage route provider=%s bucket=%s: %w", cfg.Provider, cfg.Bucket, err)
 	}
-	bb := &bucketBackend{key: key, bucket: cfg.Bucket, backend: backend, factory: artifacts.NewBackendFactory(backend, cfg.Bucket)}
+	bb := &bucketBackend{key: key, bucket: cfg.Bucket, backend: backend}
 	r.backends[key] = bb
 	r.touchBackendLocked(key)
 	r.evictBackendsLocked(key)
@@ -185,7 +184,7 @@ func (r *buildResolver) resolve(bucket, prefix, scope string, override storage.C
 	entry, ok := r.builds[key]
 	if !ok {
 		entry = &buildEntry{
-			browser: bb.factory.ForBuild(prefix, prefix),
+			browser: artifacts.NewBackendBrowser(bb.backend, bb.bucket, prefix, prefix),
 			cache:   tools.NewCache(),
 		}
 		r.builds[key] = entry
@@ -245,7 +244,7 @@ func (r *buildResolver) toolEnvFor(bucket, prefix, scope string, override storag
 		webURLBase:  web,
 		browser:     wrap(entry.browser),
 		browserForBuild: func(prefix, display string) artifacts.Browser {
-			return wrap(bb.factory.ForBuild(prefix, display))
+			return wrap(artifacts.NewBackendBrowser(bb.backend, bb.bucket, prefix, display))
 		},
 	}, budget, nil
 }
