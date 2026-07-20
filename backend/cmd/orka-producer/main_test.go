@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
@@ -52,7 +54,7 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 				"metadata": map[string]any{"name": tool},
 				"spec":     map[string]any{"http": map[string]any{"url": "http://artifact-tool/tool/" + tool}},
 			}
-			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "artifact-tool-auth", "token")
+			got := cloneToolForBuild(base, tool, "scope", "logs/job/1/", "bucket", "orka-system", nil, "encoded-skills", "validation-key", "artifact-tool-auth", "token")
 			spec := got["spec"].(map[string]any)
 			headers := spec["http"].(map[string]any)["headers"].(map[string]any)
 			if headers[orka.ToolScopeHeader] != "scope" {
@@ -60,6 +62,9 @@ func TestCloneSkillAwareToolsCarrySkillContract(t *testing.T) {
 			}
 			if headers["X-Prow-AI-Skills"] != "encoded-skills" {
 				t.Fatalf("headers = %+v", headers)
+			}
+			if tool == "validate-analysis" && headers[orka.ValidationKeyHeader] != "validation-key" {
+				t.Fatalf("validation key header = %+v", headers)
 			}
 			auth := spec["http"].(map[string]any)["authSecretRef"].(map[string]any)
 			if auth["name"] != "artifact-tool-auth" || auth["key"] != "token" {
@@ -77,4 +82,22 @@ func TestQualityToolsIncludeDiffLastPassing(t *testing.T) {
 		}
 	}
 	t.Fatalf("resolved tools = %v, want diff-last-passing", names)
+}
+
+func TestLoadOrCreateValidationKeyReusesManifestKey(t *testing.T) {
+	dir := t.TempDir()
+	first, err := loadOrCreateValidationKey(dir)
+	if err != nil || first == "" {
+		t.Fatalf("first key = %q, err = %v", first, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, orka.AnalysisManifestFile), []byte(`{"validation_key":"persisted-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := loadOrCreateValidationKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != "persisted-key" {
+		t.Fatalf("reused key = %q, want persisted-key", second)
+	}
 }

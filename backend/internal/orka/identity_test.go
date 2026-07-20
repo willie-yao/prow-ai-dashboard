@@ -24,7 +24,7 @@ func TestAnalysisContractHashTracksSemanticInputs(t *testing.T) {
 	if first != second {
 		t.Fatalf("contract hashes differ: %q != %q", first, second)
 	}
-	changes := []AnalysisContract{base, base, base, base, base, base, base, base, base, base}
+	changes := []AnalysisContract{base, base, base, base, base, base, base, base, base, base, base}
 	changes[0].Model = "model-b"
 	changes[1].Version = "v2"
 	changes[2].Timeout = "20m"
@@ -35,6 +35,7 @@ func TestAnalysisContractHashTracksSemanticInputs(t *testing.T) {
 	changes[7].SkillSetHash = "changed"
 	changes[8].ToolAuthSecret = "changed"
 	changes[9].ToolAuthKey = "changed"
+	changes[10].ValidationKeyHash = "changed"
 	for i, changed := range changes {
 		got, err := AnalysisContractHash(changed)
 		if err != nil {

@@ -14,10 +14,13 @@ import (
 const identityDigestBytes = 16
 
 // AcceptanceVersion identifies the Orka result acceptance contract.
-const AcceptanceVersion = 4
+const AcceptanceVersion = 5
 
 // ToolScopeHeader binds artifact-tool caches and budgets to one Tool contract.
 const ToolScopeHeader = "X-Prow-AI-Scope"
+
+// ValidationKeyHeader carries the private result-attestation key to validate_analysis.
+const ValidationKeyHeader = "X-Prow-AI-Validation-Key"
 
 // AnalysisContract is the model and tool contract that determines whether a
 // prior Orka result can be reused.
@@ -32,6 +35,7 @@ type AnalysisContract struct {
 	SkillSetHash      string         `json:"skill_set_hash,omitempty"`
 	ToolAuthSecret    string         `json:"tool_auth_secret,omitempty"`
 	ToolAuthKey       string         `json:"tool_auth_key,omitempty"`
+	ValidationKeyHash string         `json:"validation_key_hash"`
 	SystemPrompt      string         `json:"system_prompt"`
 	Tools             []ToolContract `json:"tools"`
 }

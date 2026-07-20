@@ -1,7 +1,9 @@
 package orka
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"sort"
@@ -29,8 +31,31 @@ func (a AnalysisValidation) EvidenceText() string {
 	}, "\n")
 }
 
-// AnalysisValidationToken fingerprints the canonical validated result.
-func AnalysisValidationToken(a AnalysisValidation) string {
+// AnalysisValidationToken authenticates the canonical validated result.
+func AnalysisValidationToken(key string, a AnalysisValidation) string {
+	if strings.TrimSpace(key) == "" {
+		return ""
+	}
+	data := canonicalAnalysisValidation(a)
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("orka-analysis-validation-v2\x00"))
+	_, _ = mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyAnalysisValidationToken reports whether token authenticates a.
+func VerifyAnalysisValidationToken(key string, a AnalysisValidation, token string) bool {
+	expected := AnalysisValidationToken(key, a)
+	return len(token) == len(expected) && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
+}
+
+// ValidationKeyHash fingerprints the private validation key in Task identity.
+func ValidationKeyHash(key string) string {
+	sum := sha256.Sum256([]byte("orka-analysis-validation-key-v1\x00" + key))
+	return hex.EncodeToString(sum[:])
+}
+
+func canonicalAnalysisValidation(a AnalysisValidation) []byte {
 	a.Summary = strings.TrimSpace(a.Summary)
 	a.RootCause = strings.TrimSpace(a.RootCause)
 	a.Severity = strings.TrimSpace(a.Severity)
@@ -42,6 +67,5 @@ func AnalysisValidationToken(a AnalysisValidation) string {
 	sort.Strings(files)
 	a.RelevantFiles = files
 	data, _ := json.Marshal(a)
-	sum := sha256.Sum256(append([]byte("orka-analysis-validation-v1\x00"), data...))
-	return hex.EncodeToString(sum[:])
+	return data
 }

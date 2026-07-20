@@ -148,7 +148,7 @@ procedure: Inspect the controller configuration and its update ordering.
 		result := map[string]any{
 			"summary": validated.Summary, "root_cause": validated.RootCause, "severity": validated.Severity,
 			"is_transient": false, "suggested_fix": validated.SuggestedFix, "relevant_files": validated.RelevantFiles,
-			"validation_token": orka.AnalysisValidationToken(validated),
+			"validation_token": orka.AnalysisValidationToken(manifest.ValidationKey, validated),
 		}
 		data, err := json.Marshal(result)
 		if err != nil {

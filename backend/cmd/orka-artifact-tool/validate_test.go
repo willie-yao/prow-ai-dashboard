@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +10,21 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
+
+const testArtifactValidationKey = "test-validation-key"
+
+type validationTreeBrowser struct {
+	artifacts.Browser
+	paths     []string
+	truncated bool
+}
+
+func (b validationTreeBrowser) ListTree(context.Context, int) ([]string, bool, error) {
+	return b.paths, b.truncated, nil
+}
 
 func TestValidateAnalysisRequiresReadEvidence(t *testing.T) {
 	attestor := newEvidenceAttestor("secret")
@@ -96,6 +110,41 @@ func TestValidateAnalysisEnforcesMatchedSkillReadEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisPrunesRecipeEvidenceAbsentFromBuild(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["(?i)quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{
+		evidence: attestor,
+		browser:  validationTreeBrowser{paths: []string{"build-log.txt"}},
+	}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "resource quota exceeded", Severity: "High",
+		SuggestedFix: "increase quota", RelevantFiles: []string{"build-log.txt"},
+	}
+	response := runValidation(t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", header)
+	if response.Code != http.StatusOK {
+		t.Fatalf("absent recipe evidence response = %d %s", response.Code, response.Body.String())
+	}
+	env.browser = validationTreeBrowser{paths: []string{"build-log.txt"}, truncated: true}
+	response = runValidation(t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", header)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("truncated tree response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation, tokens []string, scope, skillHeader string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{"analysis": analysis, "evidence_tokens": tokens})
@@ -104,6 +153,7 @@ func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation,
 	}
 	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", bytes.NewReader(body))
 	req.Header.Set(orka.ToolScopeHeader, scope)
+	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
 	if skillHeader != "" {
 		req.Header.Set(skills.ContractHeader, skillHeader)
 	}

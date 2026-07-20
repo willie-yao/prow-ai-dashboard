@@ -2,17 +2,20 @@ package orka
 
 import "testing"
 
-func TestAnalysisValidationTokenTracksFinalFields(t *testing.T) {
+func TestAnalysisValidationTokenTracksKeyAndFinalFields(t *testing.T) {
 	base := AnalysisValidation{Summary: "summary", RootCause: "cause", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{"b", "a"}}
-	first := AnalysisValidationToken(base)
+	first := AnalysisValidationToken("key-a", base)
 	reordered := base
 	reordered.RelevantFiles = []string{"a", "b"}
-	if AnalysisValidationToken(reordered) != first {
-		t.Fatal("file ordering changed validation token")
+	if AnalysisValidationToken("key-a", reordered) != first {
+		t.Fatal("reordering relevant files changed token")
 	}
 	changed := base
-	changed.RootCause = "other"
-	if AnalysisValidationToken(changed) == first {
-		t.Fatal("root cause change did not change validation token")
+	changed.RootCause = "different"
+	if AnalysisValidationToken("key-a", changed) == first {
+		t.Fatal("changed final field did not change token")
+	}
+	if AnalysisValidationToken("key-b", base) == first {
+		t.Fatal("different validation key produced the same token")
 	}
 }

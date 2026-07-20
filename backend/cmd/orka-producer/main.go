@@ -21,6 +21,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -147,6 +149,10 @@ func main() {
 		storageMeta["X-Prow-Base"] = v
 	}
 	projectLabel := cfg.DisplayShortName()
+	validationKey, err := loadOrCreateValidationKey(*dataDir)
+	if err != nil {
+		log.Fatalf("validation key: %v", err)
+	}
 
 	baseTools, err := loadBaseTools(*toolManifests, toolNames)
 	if err != nil {
@@ -161,7 +167,8 @@ func main() {
 		Timeout: *timeout, Retries: *retries, MinToolCalls: agentic.MinToolCalls,
 		AcceptanceVersion: orka.AcceptanceVersion, SkillSetHash: skillSet.Hash(),
 		ToolAuthSecret: *toolAuthSecret, ToolAuthKey: *toolAuthKey,
-		SystemPrompt: systemPrompt, Tools: toolContracts,
+		ValidationKeyHash: orka.ValidationKeyHash(validationKey),
+		SystemPrompt:      systemPrompt, Tools: toolContracts,
 	})
 	if err != nil {
 		log.Fatalf("analysis contract: %v", err)
@@ -170,6 +177,7 @@ func main() {
 	projectScope := orka.ProjectScopeID(cfg.ID, string(storageCfg.Provider), bucket, storageCfg.Base, storageCfg.WebBase, storageCfg.ProwBase)
 	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version, agentic.MinToolCalls)
 	manifest.SkillSetHash = skillSet.Hash()
+	manifest.ValidationKey = validationKey
 	activeJobs, err := orka.ActiveJobIDs(*dataDir)
 	if err != nil {
 		log.Fatalf("load active jobs: %v", err)
@@ -239,7 +247,7 @@ func main() {
 	for _, build := range builds {
 		for _, base := range toolNames {
 			doc := baseTools[base]
-			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, *toolAuthSecret, *toolAuthKey)
+			clone := cloneToolForBuild(doc, base, build.scope, build.prefix, bucket, *namespace, storageMeta, skillHeader, validationKey, *toolAuthSecret, *toolAuthKey)
 			toolName := buildToolName(base, build.scope)
 			writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 			toolObjs = append(toolObjs, namedObj{toolName, clone})
@@ -383,7 +391,7 @@ func loadBaseTools(dir string, want []string) (map[string]map[string]any, error)
 // cloneToolForBuild copies a base Tool CRD, renames it per build, and injects the
 // build/bucket/storage headers so the shim serves this build from the right
 // bucket and provider.
-func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, authSecret, authKey string) map[string]any {
+func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket, namespace string, storageMeta map[string]string, skillContract, validationKey, authSecret, authKey string) map[string]any {
 	doc := deepCopy(base).(map[string]any)
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -423,11 +431,33 @@ func cloneToolForBuild(base map[string]any, baseName, buildScope, prefix, bucket
 	if (baseName == "required-evidence" || baseName == "validate-analysis") && skillContract != "" {
 		headers[skills.ContractHeader] = skillContract
 	}
+	if baseName == "validate-analysis" {
+		headers[orka.ValidationKeyHeader] = validationKey
+	}
 	if authSecret != "" && authKey != "" {
 		httpCfg["authSecretRef"] = map[string]any{"name": authSecret, "key": authKey}
 		httpCfg["authInject"] = "header"
 	}
 	return doc
+}
+
+func loadOrCreateValidationKey(dataDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, orka.AnalysisManifestFile))
+	if err == nil {
+		var existing struct {
+			ValidationKey string `json:"validation_key"`
+		}
+		if json.Unmarshal(data, &existing) == nil && strings.TrimSpace(existing.ValidationKey) != "" {
+			return strings.TrimSpace(existing.ValidationKey), nil
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read existing manifest: %w", err)
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generate: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // buildPrefixFor returns the bucket-relative build directory. It prefers deriving

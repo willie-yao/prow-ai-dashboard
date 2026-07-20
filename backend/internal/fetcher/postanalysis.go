@@ -47,8 +47,7 @@ func RunFinalizedSideEffects(ctx context.Context, opts FinalizedSideEffectsOptio
 		enableAI: enableAI,
 		aiToken:  aiToken,
 	}
-	p.runSideEffects(ctx, &refreshResult{details: details, flakiness: flakiness})
-	return nil
+	return p.runSideEffects(ctx, &refreshResult{details: details, flakiness: flakiness})
 }
 
 func loadFinalizedData(dataDir string) ([]models.JobDetail, models.FlakinessReport, error) {

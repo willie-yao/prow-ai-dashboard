@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
+
+const skillAbsenceTreeCap = 5000
 
 func init() {
 	registerQTool("/tool/validate_analysis", validateAnalysis)
@@ -39,6 +43,11 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		writeToolError(w, http.StatusInternalServerError, "artifact evidence validation is unavailable")
 		return
 	}
+	validationKey := strings.TrimSpace(r.Header.Get(orka.ValidationKeyHeader))
+	if validationKey == "" {
+		writeToolError(w, http.StatusInternalServerError, "analysis validation key is unavailable")
+		return
+	}
 
 	readPaths := map[string]bool{}
 	invalidTokens := 0
@@ -64,11 +73,21 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	}
 	missingEvidence := []string{}
 	matchedSkills := set.Match(args.Analysis.EvidenceText())
+	var treePaths map[string]bool
+	treeChecked := false
 	for _, skill := range matchedSkills {
 		for _, group := range skill.RequiredEvidence {
-			if !group.Satisfied(readPaths) {
-				missingEvidence = append(missingEvidence, skill.ID+":"+group.ID)
+			if group.Satisfied(readPaths) {
+				continue
 			}
+			if !treeChecked {
+				treePaths = artifactTreeEvidenceSet(r.Context(), env.browser)
+				treeChecked = true
+			}
+			if treePaths != nil && !group.Satisfied(treePaths) {
+				continue
+			}
+			missingEvidence = append(missingEvidence, skill.ID+":"+group.ID)
 		}
 	}
 	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0
@@ -87,9 +106,26 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
 		return
 	}
-	result["validation_token"] = orka.AnalysisValidationToken(args.Analysis)
+	result["validation_token"] = orka.AnalysisValidationToken(validationKey, args.Analysis)
 	log.Printf("✔ validate_analysis paths=%d read=%d matched_skills=%d", len(args.Analysis.RelevantFiles), len(readPaths), len(matchedSkills))
 	writeJSON(w, result)
+}
+
+func artifactTreeEvidenceSet(ctx context.Context, browser artifacts.Browser) map[string]bool {
+	if browser == nil {
+		return nil
+	}
+	paths, truncated, err := browser.ListTree(ctx, skillAbsenceTreeCap)
+	if err != nil || truncated {
+		return nil
+	}
+	set := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if normalized := normalizeEvidencePath(path); normalized != "" {
+			set[normalized] = true
+		}
+	}
+	return set
 }
 
 func normalizeEvidencePath(p string) string {

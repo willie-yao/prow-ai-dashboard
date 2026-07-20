@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,5 +157,69 @@ ai:
 	}
 	if len(previews) != 1 || !strings.Contains(previews[0].Diff, "fixed: true") {
 		t.Fatalf("previews = %+v", previews)
+	}
+}
+
+type failingFinalizedAgent struct{}
+
+func (failingFinalizedAgent) Generate(context.Context, runtime.GenerateSpec) (runtime.GenerateResult, error) {
+	return runtime.GenerateResult{}, errors.New("generation failed")
+}
+
+func TestProcessFixPRsPropagatesPatternFailure(t *testing.T) {
+	projectDir := t.TempDir()
+	config := `
+id: test
+name: Test Project
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: ` + t.TempDir() + `
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.test
+  source_repo: {owner: example, name: repo}
+ai:
+  fix_prs:
+    enabled: true
+    author_name: Test
+    author_email: test@example.com
+    dry_run: true
+    critique_retries: 0
+    agent_runtime:
+      type: orka
+      agent_ref: test-fixer
+      api: http://orka.test
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FIX_TOKEN", "test-token")
+	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
+	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return failingFinalizedAgent{}, nil }
+	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
+		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
+	}
+	t.Cleanup(func() {
+		newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager
+	})
+
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, "jobs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := statefile.WriteJSON(filepath.Join(dataDir, "flakiness.json"), models.FlakinessReport{
+		RecurringPatterns: []models.PatternAnalysis{{
+			ID: "pattern", Subject: "job", Systemic: true, Confidence: "high",
+			SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := RunFinalizedSideEffects(context.Background(), FinalizedSideEffectsOptions{ProjectDir: projectDir, DataDir: dataDir})
+	if err == nil || !strings.Contains(err.Error(), "generation failed") {
+		t.Fatalf("error = %v, want per-pattern generation failure", err)
 	}
 }

@@ -296,7 +296,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls, manifest.SkillSetHash)
+				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.MinToolCalls, manifest.SkillSetHash, manifest.ValidationKey)
 				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
@@ -333,7 +333,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
 // onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls int, skillSetHash string) (bool, string) {
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash string, minToolCalls int, skillSetHash, validationKey string) (bool, string) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
 		return false, ""
@@ -346,7 +346,7 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err != nil {
 		return false, "analysis Task telemetry unavailable: " + oneLine(err.Error())
 	}
-	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls, skillSetHash); err != nil {
+	if err := validateAnalysisAcceptance(a, telemetry, minToolCalls, skillSetHash, validationKey); err != nil {
 		return false, "analysis Task failed acceptance: " + oneLine(err.Error())
 	}
 	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
@@ -544,7 +544,7 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	if err != nil {
 		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
 	}
-	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.SkillSetHash); err != nil {
+	if err := validateAnalysisAcceptance(parsed, telemetry, manifest.MinToolCalls, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
 		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
 		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error()), retry: retry}
 	}
@@ -708,8 +708,8 @@ func validateAnalysisShape(a analysis) error {
 	return nil
 }
 
-func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int, skillSetHash string) error {
-	if a.ValidationToken != orka.AnalysisValidationToken(a.validationInput()) {
+func validateAnalysisAcceptance(a analysis, telemetry analysisTelemetry, minToolCalls int, skillSetHash, validationKey string) error {
+	if !orka.VerifyAnalysisValidationToken(validationKey, a.validationInput(), a.ValidationToken) {
 		return fmt.Errorf("validation_token does not match the final analysis")
 	}
 	if telemetry.EventCount == 0 {

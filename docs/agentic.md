@@ -628,7 +628,11 @@ schema and `min_tool_calls`, requires a successful terminal Task event, rejects
 quality tools whose last attempt failed, requires a successful
 `validate_analysis` call whose token matches the exact final JSON and whose
 scoped evidence tokens prove every cited artifact was returned by a successful
-content read, and requires a completed `verify_timeline` call for
+content read. The final token is keyed by a producer-generated secret carried
+only in the private manifest and hidden Tool headers, so it cannot be recomputed
+for a different final object. Recipe groups absent from a complete bounded
+artifact-tree listing are treated as inapplicable, matching the in-process
+critique path. Acceptance also requires a completed `verify_timeline` call for
 every transient verdict. Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
 quality-tool evidence alongside the result. Consumer `skills/*.yaml` recipes are
