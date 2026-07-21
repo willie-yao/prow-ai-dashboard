@@ -101,7 +101,11 @@ if [[ $args == *' delete task.core.orka.ai '* ]]; then
   exit 0
 fi
 if [[ $args == *' logs job/'* ]]; then
-  printf 'Model request completed iteration=1 api_mode=%s response_id=%s\n' "${FAKE_SMOKE_API_MODE:-responses}" "${FAKE_SMOKE_RESPONSE_ID:-resp-smoke}"
+  if [[ -n ${FAKE_SMOKE_LOGS:-} ]]; then
+    printf '%s\n' "$FAKE_SMOKE_LOGS"
+  else
+    printf 'Model request completed iteration=1 api_mode=%s response_id=%s\n' "${FAKE_SMOKE_API_MODE:-responses}" "${FAKE_SMOKE_RESPONSE_ID:-resp-smoke}"
+  fi
   exit 0
 fi
 if [[ $args == *' describe task.core.orka.ai '* ]]; then
@@ -172,6 +176,27 @@ if FAKE_SMOKE_API_MODE=chat_completions "$script" --namespace orka-system smoke 
   exit 1
 fi
 grep -Fq 'Smoke Task used chat_completions, expected responses' "$tmp/smoke-api-mismatch.txt"
+grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+if FAKE_SMOKE_LOGS=$'Model request completed iteration=1 api_mode=responses response_id=resp-1\nModel request completed iteration=2 api_mode=chat_completions response_id=chat-2' \
+  "$script" --namespace orka-system smoke --provider copilot --timeout 5s \
+  > "$tmp/smoke-api-mixed.txt" 2>&1; then
+  echo 'smoke accepted mixed API modes' >&2
+  exit 1
+fi
+grep -Fq 'Smoke Task used multiple API modes: chat_completions,responses' "$tmp/smoke-api-mixed.txt"
+grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+if FAKE_SMOKE_API_MODE=responses_v2 "$script" --namespace orka-system smoke \
+  --provider copilot --timeout 5s > "$tmp/smoke-api-unsupported.txt" 2>&1; then
+  echo 'smoke accepted an unsupported API mode' >&2
+  exit 1
+fi
+grep -Fq 'Smoke Task reported unsupported API mode telemetry: responses_v2' "$tmp/smoke-api-unsupported.txt"
 grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
 
 : > "$CALLS"

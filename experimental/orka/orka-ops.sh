@@ -429,14 +429,28 @@ EOF_TASK
           return 1
         fi
         printf 'Smoke Task succeeded with an available result.\n'
-        local model_log detected_api response_id
-        model_log=$(kube -n "$namespace" logs "job/$job_name" 2>/dev/null | grep 'Model request completed .*api_mode=' | tail -n 1 || true)
-        detected_api=$(sed -n 's/.*api_mode=\([^ ]*\).*/\1/p' <<< "$model_log")
-        response_id=$(sed -n 's/.*response_id=\([^ ]*\).*/\1/p' <<< "$model_log")
-        if [[ -z $detected_api ]]; then
+        local model_logs detected_modes invalid_modes mode_count mode_list model_log detected_api response_id
+        model_logs=$(kube -n "$namespace" logs "job/$job_name" 2>/dev/null | grep 'Model request completed .*api_mode=' || true)
+        detected_modes=$(sed -n 's/.*api_mode=\([^ ]*\).*/\1/p' <<< "$model_logs" | sort -u)
+        if [[ -z $detected_modes ]]; then
           echo "Smoke Task completed without API mode telemetry" >&2
           return 1
         fi
+        invalid_modes=$(grep -Ev '^(responses|chat_completions)$' <<< "$detected_modes" || true)
+        if [[ -n $invalid_modes ]]; then
+          mode_list=$(paste -sd, - <<< "$invalid_modes")
+          echo "Smoke Task reported unsupported API mode telemetry: $mode_list" >&2
+          return 1
+        fi
+        mode_count=$(wc -l <<< "$detected_modes" | tr -d ' ')
+        if [[ $mode_count -ne 1 ]]; then
+          mode_list=$(paste -sd, - <<< "$detected_modes")
+          echo "Smoke Task used multiple API modes: $mode_list" >&2
+          return 1
+        fi
+        detected_api=$detected_modes
+        model_log=$(grep "api_mode=$detected_api" <<< "$model_logs" | tail -n 1)
+        response_id=$(sed -n 's/.*response_id=\([^ ]*\).*/\1/p' <<< "$model_log")
         printf 'Smoke Task API mode: %s' "$detected_api"
         [[ -n $response_id ]] && printf ' (response %s)' "$response_id"
         printf '\n'

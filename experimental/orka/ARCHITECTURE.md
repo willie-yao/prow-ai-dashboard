@@ -224,11 +224,14 @@ requires the worker to report a mode and rejects a mismatch when the value is
 `responses` or `chat_completions`; `auto` accepts either. This makes protocol
 changes observable and cache-safe without changing Orka's Provider CRD.
 
-In-cluster Kimi via Ray Serve, vLLM, Dynamo/NIM, and Ollama typically use the
-Chat Completions fallback. Copilot also uses Chat Completions; its non-streaming
-endpoint returns null tool calls for Claude, so
-`manifests/50-copilot-proxy.yaml` de-streams and injects the
-`Copilot-Integration-Id` header the Provider cannot set itself.
+Responses support for Ray Serve, vLLM, Dynamo/NIM, Ollama, and other
+OpenAI-compatible deployments depends on the installed version and server
+configuration. Start with `orka.apiMode: auto`, run `orka-ops.sh smoke` to
+observe the negotiated mode, then set an explicit expectation when the
+deployment contract is known. Copilot uses Chat Completions; its non-streaming endpoint
+returns null tool calls for Claude, so `manifests/50-copilot-proxy.yaml`
+de-streams and injects the `Copilot-Integration-Id` header the Provider cannot
+set itself.
 
 ## Consumer-driven, multi-consumer
 
