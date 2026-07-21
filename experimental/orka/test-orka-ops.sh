@@ -64,6 +64,10 @@ if [[ $args == *' auth can-i '* ]]; then
 fi
 if [[ $args == *' create -f -'* ]]; then
   cat > "$SMOKE_MANIFEST"
+  if [[ ${FAKE_CREATE_ALREADY_EXISTS:-false} == true ]]; then
+    echo 'Error from server (AlreadyExists): tasks.core.orka.ai already exists' >&2
+    exit 1
+  fi
   if [[ ${FAKE_CREATE_ERROR_AFTER_ACCEPT:-false} == true ]]; then
     exit 1
   fi
@@ -111,6 +115,7 @@ export CALLS="$tmp/calls"
 export SMOKE_MANIFEST="$tmp/smoke.yaml"
 export SMOKE_COUNT="$tmp/smoke-count"
 export ORKA_OPS_POLL_SECONDS=0
+export ORKA_OPS_RANDOM_TOKEN=0123456789abcdef
 : > "$CALLS"
 
 "$script" --context test --namespace orka-system preflight \
@@ -164,6 +169,20 @@ fi
 grep -Fq 'Creating smoke Task orka-system/' "$tmp/smoke-create-ambiguous.txt"
 grep -Fq 'cleanup was attempted' "$tmp/smoke-create-ambiguous.txt"
 grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+if FAKE_CREATE_ALREADY_EXISTS=true "$script" --namespace orka-system smoke \
+  --provider copilot --timeout 5s > "$tmp/smoke-name-collision.txt" 2>&1; then
+  echo 'smoke accepted a Task name collision' >&2
+  exit 1
+fi
+grep -Fq 'Smoke Task name collision for orka-system/prow-ai-dashboard-smoke-' "$tmp/smoke-name-collision.txt"
+grep -Fq 'the existing Task was not deleted' "$tmp/smoke-name-collision.txt"
+if grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"; then
+  echo 'smoke deleted another invocation after AlreadyExists' >&2
+  exit 1
+fi
 
 : > "$CALLS"
 rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"

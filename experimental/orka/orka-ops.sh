@@ -354,8 +354,13 @@ smoke() {
     return 1
   fi
 
-  local suffix name expected model_yaml
-  suffix="$(date -u +%Y%m%d%H%M%S)-$$"
+  local suffix name expected model_yaml random_token create_error
+  random_token=${ORKA_OPS_RANDOM_TOKEN:-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')}
+  if [[ ! $random_token =~ ^[0-9a-f]{16}$ ]]; then
+    echo "could not generate a valid smoke Task operation token" >&2
+    return 1
+  fi
+  suffix="$($date_bin -u +%Y%m%d%H%M%S)-$random_token"
   name="prow-ai-dashboard-smoke-$suffix"
   expected="PROW_AI_DASHBOARD_ORKA_OK_$suffix"
   model_yaml=""
@@ -366,7 +371,7 @@ smoke() {
   smoke_cleanup_task=$name
   smoke_cleanup_keep=false
   trap cleanup_smoke EXIT
-  if ! cat <<EOF_TASK | kube -n "$namespace" create -f - >/dev/null
+  if ! create_error=$(cat <<EOF_TASK | kube -n "$namespace" create -f - 2>&1 >/dev/null
 apiVersion: core.orka.ai/v1alpha1
 kind: Task
 metadata:
@@ -382,7 +387,14 @@ spec:
 $model_yaml
     prompt: "Reply with exactly: $expected"
 EOF_TASK
-  then
+  ); then
+    if grep -Eqi 'alreadyexists|already exists' <<< "$create_error"; then
+      smoke_cleanup_task=""
+      trap - EXIT
+      echo "Smoke Task name collision for $namespace/$name; the existing Task was not deleted" >&2
+      return 1
+    fi
+    [[ -n $create_error ]] && printf '%s\n' "$create_error" >&2
     echo "Creating smoke Task $namespace/$name failed; cleanup was attempted" >&2
     return 1
   fi
