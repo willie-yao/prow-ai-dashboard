@@ -778,8 +778,10 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 
 	result := &models.BuildResult{BuildInfo: *info, TestCases: []models.TestCase{}}
 
-	junitPaths, err := prowbuild.DiscoverJUnitPaths(ctx, backend, loc)
+	junitPaths, complete, err := prowbuild.DiscoverJUnitPathsWithCompleteness(ctx, backend, loc)
+	result.JUnitComplete = complete
 	if err != nil {
+		result.JUnitComplete = false
 		log.Printf("    ⚠ %s/%s: discovering junit files: %v", job.Name, build.ID, err)
 		return result, nil
 	}
@@ -791,11 +793,13 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 		result.JUnitURLs = append(result.JUnitURLs, backend.WebURL(junitPath))
 		junitData, err := storage.ReadAll(ctx, backend, junitPath)
 		if err != nil {
+			result.JUnitComplete = false
 			log.Printf("    ⚠ %s/%s: fetching %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}
 		testCases, err := junit.ParseFile(junitData, path.Base(junitPath))
 		if err != nil {
+			result.JUnitComplete = false
 			log.Printf("    ⚠ %s/%s: parsing %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}

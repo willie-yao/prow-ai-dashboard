@@ -1,6 +1,7 @@
 package remediation
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,5 +140,30 @@ func TestLoadForRepoResetsAnotherTarget(t *testing.T) {
 	loaded := LoadForRepo(dir, "new/repo")
 	if loaded.Repo != "new/repo" || len(loaded.Remediations) != 0 {
 		t.Fatalf("loaded = %+v", loaded)
+	}
+}
+
+func TestPublicProjectionRedactsObservationEvidence(t *testing.T) {
+	state := NewState()
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern",
+		Attempts: []Attempt{{Observations: []BuildObservation{{
+			BuildID: "1", JobName: "job", JobType: models.JobTypePeriodic,
+			SourceRepo: "private/repo", SourceCommit: "secret-sha", HeadSHA: "secret-head",
+			Result: "SUCCESS", Outcome: OutcomePassed,
+			MatchedTests: []string{"suite\x00class\x00test"}, FailedMatches: []string{"secret-failure"},
+		}}}},
+	}
+	data, err := json.Marshal(state.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"private/repo", "secret-sha", "secret-head", "suite\\u0000class", "secret-failure"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("public projection leaked %q: %s", secret, data)
+		}
+	}
+	if !strings.Contains(string(data), `"build_id":"1"`) {
+		t.Fatalf("public projection omitted build link data: %s", data)
 	}
 }

@@ -70,7 +70,8 @@ type BuildInfo struct {
 	// JUnitURLs lists every junit*.xml under the build's artifacts/ dir,
 	// discovered at fetch time. Empty when discovery failed or the build
 	// has no junit output. Stable ordering keeps cache reuse deterministic.
-	JUnitURLs []string `json:"junit_urls,omitempty"`
+	JUnitURLs     []string `json:"junit_urls,omitempty"`
+	JUnitComplete bool     `json:"junit_complete"`
 	// PullNumber is the PR number that triggered this build for presubmits.
 	// Empty for periodics. Required for reconstructing presubmit GCS paths
 	// from cached BuildResults without reparsing the job config.

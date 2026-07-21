@@ -70,8 +70,8 @@ func TestReconcilerPresubmitThenPeriodicVerification(t *testing.T) {
 	after := []models.JobDetail{{
 		JobID: "periodic-job", Name: "periodic-job", JobType: models.JobTypePeriodic,
 		Runs: []models.BuildResult{
-			{BuildInfo: models.BuildInfo{BuildID: "12", Commit: "new2", Result: "SUCCESS", Passed: true}, TestCases: []models.TestCase{pass}},
-			{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "new1", Result: "SUCCESS", Passed: true}, TestCases: []models.TestCase{pass}},
+			{BuildInfo: models.BuildInfo{BuildID: "12", Commit: "new2", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
+			{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "new1", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
 		},
 	}}
 	state, err = reconciler.Reconcile(context.Background(), nil, after, nil, func(models.PatternAnalysis) string { return "" })

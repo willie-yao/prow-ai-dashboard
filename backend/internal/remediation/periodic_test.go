@@ -32,8 +32,8 @@ func TestObservePeriodic_VerifiesTwoCleanRuns(t *testing.T) {
 	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
 	pass := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
 	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{
-		{BuildInfo: models.BuildInfo{BuildID: "12", Commit: "c2", Result: "SUCCESS", Passed: true}, TestCases: []models.TestCase{pass}},
-		{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "c1", Result: "SUCCESS", Passed: true}, TestCases: []models.TestCase{pass}},
+		{BuildInfo: models.BuildInfo{BuildID: "12", Commit: "c2", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
+		{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "c1", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
 	}}}
 	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 2); err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestObservePeriodic_DetectsSameCause(t *testing.T) {
 	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
 	failed := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "failed", FailureMessage: failure}
 	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{
-		{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "c1", Result: "FAILURE"}, TestCases: []models.TestCase{failed}},
+		{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "c1", Result: "FAILURE", JUnitComplete: true}, TestCases: []models.TestCase{failed}},
 	}}}
 	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 2); err != nil {
 		t.Fatal(err)
@@ -152,12 +152,28 @@ func TestObservePeriodicReclassifiesInconclusiveBuild(t *testing.T) {
 	}
 	pass := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
 	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{{
-		BuildInfo: models.BuildInfo{BuildID: "11", Commit: "new", Result: "SUCCESS", Passed: true}, TestCases: []models.TestCase{pass},
+		BuildInfo: models.BuildInfo{BuildID: "11", Commit: "new", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass},
 	}}}}
 	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 1); err != nil {
 		t.Fatal(err)
 	}
 	if attempt.Status != StatusVerifiedFixed || attempt.Observations[0].Outcome != OutcomePassed {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestObservePeriodicIncompleteJUnitCannotPassWithExpectedTestPresent(t *testing.T) {
+	remediation := &Remediation{JobID: "job", JobName: "job", JobType: models.JobTypePeriodic, SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom")}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
+	pass := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "11", Commit: "new", Result: "SUCCESS", Passed: true, JUnitComplete: false},
+		TestCases: []models.TestCase{pass},
+	}}}}
+	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 1); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusInconclusive {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }

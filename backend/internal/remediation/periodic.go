@@ -89,6 +89,12 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 			StartedAt: run.Started.UTC().Format(timeFormat), CompletedAt: run.Finished.UTC().Format(timeFormat),
 			Reason: "merge ancestry " + status,
 		}
+		if !run.JUnitComplete {
+			observation.Outcome = OutcomeInconclusive
+			observation.Reason = "periodic JUnit ingestion was incomplete"
+			mergeObservations(attempt, []BuildObservation{observation})
+			continue
+		}
 		classifyObservation(remediation.Evidence, run.TestCases, run.Passed, &observation)
 		mergeObservations(attempt, []BuildObservation{observation})
 		switch observation.Outcome {
