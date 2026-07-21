@@ -17,6 +17,9 @@ import (
 // The accepted fix flows through the verify / open-PR / preview path.
 func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
 	a := gp.agent
+	if a != nil && a.API == "responses" {
+		return nil, fmt.Errorf("agent fix generation requires a Chat Completions endpoint; configure a separate agent runtime model endpoint")
+	}
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
 	}

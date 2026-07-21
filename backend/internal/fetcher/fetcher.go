@@ -675,6 +675,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	fixOpts.Agent = &fixpr.AgentConfig{
 		Runtime:    agentRuntime,
+		API:        aiAPI(cfg),
 		Model:      model,
 		Endpoint:   aiEndpoint(cfg),
 		ModelToken: aiToken,

@@ -252,6 +252,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 	}
 	opts.Agent = &fixpr.AgentConfig{
 		Runtime:    agentRuntime,
+		API:        s.ai.API,
 		Model:      model,
 		Endpoint:   s.ai.Endpoint,
 		ModelToken: s.ai.Token,

@@ -243,7 +243,8 @@ gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
   -f build_type=workflow
 
 # Set the required provider coordinates and token. You may instead commit
-# ai.endpoint and ai.model under project.yaml.
+# ai.api, ai.endpoint, and ai.model under project.yaml.
+gh variable set AI_API --body chat_completions --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}

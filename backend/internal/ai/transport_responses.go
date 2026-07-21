@@ -50,8 +50,9 @@ type responsesOutputItem struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 	Content   []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Refusal string `json:"refusal"`
 	} `json:"content"`
 }
 
@@ -177,6 +178,9 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 			for _, content := range item.Content {
 				if content.Type == "output_text" {
 					text += content.Text
+				}
+				if content.Type == "refusal" {
+					text += content.Refusal
 				}
 			}
 		case "reasoning":

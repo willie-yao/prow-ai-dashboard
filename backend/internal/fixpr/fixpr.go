@@ -87,6 +87,7 @@ type AgentConfig struct {
 	Runtime runtime.AgentRuntime
 	// Model, Endpoint, and ModelToken point the agent at the model. Empty Model
 	// uses the CLI default.
+	API        string
 	Model      string
 	Endpoint   string
 	ModelToken string
