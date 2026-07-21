@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282' <<< "$metadata"
+grep -Fq 'patch_sha256=540fd7cd85cdaf1298b467054c15a49bfc63d34731139fc0f2cbbc9ce2eb05d1' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}540fd7cd85cdaf1298b467054c15a49bfc63d34731139fc0f2cbbc9ce2eb05d1${backtick}" "$script_dir/COMPATIBILITY.md"
 workflow="$repo_root/.github/workflows/orka-compat-image.yml"
 grep -Fq 'experimental/orka/worker-patches/compat-worker.sh prepare _orka' "$workflow"
 grep -Fq 'inspect-published' "$workflow"
@@ -63,7 +63,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282
+patch=540fd7cd85cdaf1298b467054c15a49bfc63d34731139fc0f2cbbc9ce2eb05d1
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"
