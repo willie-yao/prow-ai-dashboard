@@ -207,7 +207,8 @@ func TestBuiltinEvidencePaths(t *testing.T) {
 			"junit-failure": "artifacts/junit.e2e_suite.1.xml",
 		},
 		"engine.prow.run-context": {
-			"run-metadata": "started.json",
+			"run-start":    "started.json",
+			"run-finish":   "finished.json",
 			"prow-context": "prowjob.json",
 		},
 		"engine.kubernetes.machine-node-providerid": {

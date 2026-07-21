@@ -5,10 +5,14 @@ triggers:
   - '(?i)\b(cleanup|teardown|artifact collection|collection error|podinfo|prowjob|revision|commit|checkout|clone|started|finished|timestamp|duration)\b'
   - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
 required_evidence:
-  - id: run-metadata
-    description: run start and finish metadata
+  - id: run-start
+    description: run start metadata
     any_of:
-      - '(?i)(^|/)(started|finished)\.json$'
+      - '(?i)(^|/)started\.json$'
+  - id: run-finish
+    description: run finish metadata and result
+    any_of:
+      - '(?i)(^|/)finished\.json$'
   - id: prow-context
     description: Prow scheduling, source, or pod metadata
     any_of:
