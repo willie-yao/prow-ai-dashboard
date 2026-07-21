@@ -19,30 +19,61 @@ const skillAbsenceTreeCap = 5000
 
 func init() {
 	registerQTool("/tool/validate_analysis", validateAnalysis)
+	registerQTool("/tool/submit_analysis", submitAnalysis)
+}
+
+type validationRequest struct {
+	Analysis       orka.AnalysisValidation `json:"analysis"`
+	EvidenceTokens []string                `json:"evidence_tokens"`
+}
+
+type submissionRequest struct {
+	orka.AnalysisValidation
+	EvidenceTokens []string `json:"evidence_tokens"`
 }
 
 func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	if !requirePOST(w, r) {
 		return
 	}
-	var args struct {
-		Analysis       orka.AnalysisValidation `json:"analysis"`
-		EvidenceTokens []string                `json:"evidence_tokens"`
-	}
+	var args validationRequest
 	if err := readArgs(r, &args); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	validateSubmission(env, w, r, args.Analysis, args.EvidenceTokens, "validate_analysis")
+}
+
+func submitAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
+	if !requirePOST(w, r) {
+		return
+	}
+	var args submissionRequest
+	if err := readArgs(r, &args); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	validateSubmission(env, w, r, args.AnalysisValidation, args.EvidenceTokens, "submit_analysis")
+}
+
+func validateSubmission(
+	env *toolEnv,
+	w http.ResponseWriter,
+	r *http.Request,
+	analysis orka.AnalysisValidation,
+	evidenceTokens []string,
+	toolName string,
+) {
 	set, err := skills.ParseHeader(r.Header.Get(skills.ContractHeader))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(args.Analysis.RootCause) == "" {
+	if strings.TrimSpace(analysis.RootCause) == "" {
 		http.Error(w, "analysis.root_cause is required", http.StatusBadRequest)
 		return
 	}
-	if args.Analysis.RelevantFiles == nil {
+	if analysis.RelevantFiles == nil {
 		http.Error(w, "analysis.relevant_files array is required", http.StatusBadRequest)
 		return
 	}
@@ -70,7 +101,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	seenTokens := map[string]bool{}
 	gcsBytes := 0
 	invalidTokens := 0
-	for _, token := range args.EvidenceTokens {
+	for _, token := range evidenceTokens {
 		token = strings.TrimSpace(token)
 		if seenTokens[token] {
 			continue
@@ -89,8 +120,8 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 	for readPath := range readPaths {
 		readBases[path.Base(readPath)] = true
 	}
-	fields := []string{args.Analysis.RootCause, args.Analysis.Summary, args.Analysis.SuggestedFix}
-	fields = append(fields, args.Analysis.RelevantFiles...)
+	fields := []string{analysis.RootCause, analysis.Summary, analysis.SuggestedFix}
+	fields = append(fields, analysis.RelevantFiles...)
 	citations := ai.ArtifactCitations(strings.Join(fields, "\n"))
 	present, missing := []string{}, []string{}
 	for _, citation := range citations {
@@ -105,7 +136,7 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	missingEvidence := []string{}
-	matchedSkills := set.Match(args.Analysis.EvidenceText())
+	matchedSkills := set.Match(analysis.EvidenceText())
 	var treePaths map[string]bool
 	treeChecked := false
 	for _, skill := range matchedSkills {
@@ -137,12 +168,12 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		"all_present":             valid,
 	}
 	if !valid {
-		log.Printf("⚠ validate_analysis paths=%d read=%d missing=%d invalid_tokens=%d evidence_missing=%d", len(args.Analysis.RelevantFiles), len(readPaths), len(missing), invalidTokens, len(missingEvidence))
+		log.Printf("⚠ %s paths=%d read=%d missing=%d invalid_tokens=%d evidence_missing=%d", toolName, len(analysis.RelevantFiles), len(readPaths), len(missing), invalidTokens, len(missingEvidence))
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
 		return
 	}
-	result["validation_token"] = orka.AnalysisValidationToken(validationKey, taskName, args.Analysis, gcsBytes)
-	log.Printf("✔ validate_analysis paths=%d read=%d matched_skills=%d", len(args.Analysis.RelevantFiles), len(readPaths), len(matchedSkills))
+	result["validation_token"] = orka.AnalysisValidationToken(validationKey, taskName, analysis, gcsBytes)
+	log.Printf("✔ %s paths=%d read=%d matched_skills=%d", toolName, len(analysis.RelevantFiles), len(readPaths), len(matchedSkills))
 	writeJSON(w, result)
 }
 

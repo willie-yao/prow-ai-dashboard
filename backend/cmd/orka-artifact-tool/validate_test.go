@@ -219,3 +219,54 @@ func TestValidateAnalysisEnforcesMinimumGCSBytes(t *testing.T) {
 		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestSubmitAnalysisAcceptsFlatSchema(t *testing.T) {
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		SuggestedFix: "fix", RelevantFiles: []string{"build-log.txt"},
+	}
+	token := attestor.issue("scope", "build-log.txt")
+	body, err := json.Marshal(map[string]any{
+		"summary":         analysis.Summary,
+		"root_cause":      analysis.RootCause,
+		"severity":        analysis.Severity,
+		"is_transient":    analysis.IsTransient,
+		"suggested_fix":   analysis.SuggestedFix,
+		"relevant_files":  analysis.RelevantFiles,
+		"evidence_tokens": []string{token},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tool/submit_analysis", bytes.NewReader(body))
+	req.Header.Set(orka.ToolScopeHeader, "scope")
+	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.ValidationTaskHeader, "task")
+	req.Header.Set(orka.MinGCSBytesHeader, "0")
+	recorder := httptest.NewRecorder()
+	submitAnalysis(env, recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var result struct {
+		GCSBytes        int    `json:"gcs_bytes"`
+		ValidationToken string `json:"validation_token"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ValidationToken == "" || result.GCSBytes <= 0 {
+		t.Fatalf("submission result = %+v", result)
+	}
+	if !orka.VerifyAnalysisValidationToken(
+		testArtifactValidationKey,
+		"task",
+		analysis,
+		result.GCSBytes,
+		result.ValidationToken,
+	) {
+		t.Fatal("submission token did not bind the flat analysis")
+	}
+}
