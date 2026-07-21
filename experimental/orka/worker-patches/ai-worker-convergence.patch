@@ -1947,7 +1947,7 @@ new file mode 100644
 index 0000000..52442dc
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
-@@ -0,0 +1,512 @@
+@@ -0,0 +1,513 @@
 +package main
 +
 +import (
@@ -2335,8 +2335,9 @@ index 0000000..52442dc
 +		". Correct the exact missing or invalid field and retry with changed arguments. Do not repeat the same call."
 +	lower := strings.ToLower(failure)
 +	if strings.Contains(lower, "relevant_files") && strings.Contains(lower, "required") {
-+		prompt += ` Your next call MUST include the array field exactly as "relevant_files": []. ` +
-+			"Use an empty array when no source files apply; never omit the field and never use null."
++		prompt += ` Your next call MUST include "relevant_files" as an array. ` +
++			`Preserve every applicable source path you already identified; use "relevant_files": [] only when no source files apply. ` +
++			"Never omit the field and never use null."
 +	}
 +	return prompt
 +}
@@ -2465,7 +2466,7 @@ new file mode 100644
 index 0000000..8ba710e
 --- /dev/null
 +++ b/workers/ai/validated_analysis_test.go
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,440 @@
 +package main
 +
 +import (
@@ -2579,7 +2580,7 @@ index 0000000..8ba710e
 +		testSubmissionToolName,
 +		"tool returned HTTP 400: relevant_files array is required",
 +	)
-+	for _, want := range []string{`"relevant_files": []`, "never omit the field", "never use null"} {
++	for _, want := range []string{`"relevant_files" as an array`, "Preserve every applicable source path", `"relevant_files": [] only when no source files apply`, "Never omit the field", "never use null"} {
 +		if !strings.Contains(prompt, want) {
 +			t.Fatalf("repair prompt = %q, missing %q", prompt, want)
 +		}
@@ -2641,12 +2642,13 @@ index 0000000..8ba710e
 +	}
 +	var repair string
 +	for _, message := range provider.requests[1].Messages {
-+		if strings.Contains(message.Content, `"relevant_files": []`) {
++		if strings.Contains(message.Content, `"relevant_files" as an array`) {
 +			repair = message.Content
 +			break
 +		}
 +	}
-+	if repair == "" || !strings.Contains(repair, "never omit the field") {
++	if repair == "" || !strings.Contains(repair, "Preserve every applicable source path") ||
++		!strings.Contains(repair, `"relevant_files": [] only when no source files apply`) {
 +		t.Fatalf("second request did not preserve targeted repair: %+v", provider.requests[1].Messages)
 +	}
 +}

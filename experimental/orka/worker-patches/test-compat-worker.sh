@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=dcf8802b9f9db13d94368ef51a22fc2f50ed1402532237c0fa42a54bcad97b19' <<< "$metadata"
+grep -Fq 'patch_sha256=8ff35bd421b32ea890612889dca99b12a8f95de7047e7866db0db0053914b85e' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}dcf8802b9f9db13d94368ef51a22fc2f50ed1402532237c0fa42a54bcad97b19${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}8ff35bd421b32ea890612889dca99b12a8f95de7047e7866db0db0053914b85e${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -98,7 +98,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=dcf8802b9f9db13d94368ef51a22fc2f50ed1402532237c0fa42a54bcad97b19
+patch=8ff35bd421b32ea890612889dca99b12a8f95de7047e7866db0db0053914b85e
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"

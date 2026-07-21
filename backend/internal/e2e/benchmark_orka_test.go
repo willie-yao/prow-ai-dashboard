@@ -120,7 +120,7 @@ func runOrkaBenchCase(t *testing.T, bc benchCase, cfg orkaBenchConfig) {
 		projectDir = writeOrkaBenchProject(t, bc, defaultBenchAgentic())
 	}
 
-	deadline := cfg.wait + 5*time.Minute
+	deadline := 2*cfg.wait + 5*time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	workDir := t.TempDir()
@@ -160,7 +160,7 @@ func runOrkaBenchCase(t *testing.T, bc benchCase, cfg orkaBenchConfig) {
 		"-version=" + cfg.version,
 		"-provider=" + cfg.provider,
 		"-model=" + cfg.model,
-		"-wait=1m",
+		"-wait=" + cfg.wait.String(),
 		"-poll=5s",
 		"-pattern-wait=0",
 		"-namespace=" + cfg.namespace,

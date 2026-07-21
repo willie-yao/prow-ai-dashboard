@@ -12,7 +12,7 @@ commit. Moving tags are not published.
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `dcf8802b9f9db13d94368ef51a22fc2f50ed1402532237c0fa42a54bcad97b19` |
+| Patch SHA-256 | `8ff35bd421b32ea890612889dca99b12a8f95de7047e7866db0db0053914b85e` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -23,8 +23,8 @@ build fails when its patch checksum, source commit, or tag inputs do not match.
 Compatibility v4 retains the provider API observability and Copilot model
 fallback from v3, and adds a targeted validation repair for weak models. When a
 final submission omits the required `relevant_files` array, the worker tells the
-model to include exactly `"relevant_files": []` when no source files apply. The
-validation Tool remains strict and still rejects omitted or null fields. A
+model to preserve applicable source paths and use `"relevant_files": []` only
+when no source files apply. The validation Tool remains strict and still rejects omitted or null fields. A
 subsequent Tool call resets the premature-final retry counter, so exploratory
 continuation after an early tools-free response does not exhaust finalization.
 

@@ -24,8 +24,9 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - checks the request-scoped Tool allowlist before duplicate-result reuse;
 - removes completed timeline Tools and re-prompts malformed, empty, or
   unvalidated final responses;
-- gives weak models an exact `"relevant_files": []` repair when that required
-  final array is omitted, without weakening deterministic validation;
+- tells weak models to preserve applicable source paths and use
+  `"relevant_files": []` only when that required array has no entries, without
+  weakening deterministic validation;
 - resets the premature-final retry counter after any Tool call so an early
   tools-free response cannot poison a later validated submission;
 - keeps a bounded evidence ledger containing successful Tool arguments,

@@ -82,6 +82,7 @@ type benchCase struct {
 	// transient-vs-persistent check) see the real persistence signal.
 	consecutiveFailures int
 	skillYAML           string
+	oppositeDiagnosis   string
 	signals             []benchSignal
 }
 
@@ -184,10 +185,11 @@ procedure: |
   Compare the CAPI Machine state with the workload Node describe. If the Node exists or is Ready while the Machine waits for a matching providerID, investigate external cloud-provider initialization.
   Read cloud-node-manager on the affected Node. If it cannot reach the Kubernetes API Service, read kube-proxy on that same Node and identify why Service or API synchronization failed.
 `,
+		oppositeDiagnosis: "The worker Node did not exist. Its providerID was set. cloud-node-manager reached the API Service.",
 		signals: []benchSignal{
-			{name: "recognizes the worker Node existed or registered", re: mustRE(`(?is)(?:worker|node).*(?:exist|register|ready)|(?:exist|register|ready).*(?:worker|node)`), must: true},
-			{name: "identifies missing providerID or cloud-provider initialization", re: mustRE(`(?i)provider.?id|cloud.?provider.*uninitialized|uninitialized.*cloud.?provider`), must: true},
-			{name: "identifies cloud-node-manager API reachability as the blocking failure", re: mustRE(`(?is)cloud-node-manager.*(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|crash|reach|timeout)|(?:10\.96\.0\.1|cluster.?ip).*(?:cloud-node-manager|api(?:server)?|timeout)`), must: true},
+			{name: "recognizes the worker Node existed or registered", re: mustRE(`(?is)(?:worker\s+)?node(?:\s+object)?\s+(?:exist(?:ed|s)?|registered|became\s+ready|was\s+(?:created|registered|ready))|(?:exist(?:ed|s)?|registered)\s+(?:as\s+)?(?:a\s+)?(?:worker\s+)?node`), must: true},
+			{name: "identifies missing providerID or cloud-provider initialization", re: mustRE(`(?is)(?:missing|empty|unset|absent|lacked?|without|no)\s+(?:the\s+)?provider.?id|provider.?id.{0,40}(?:missing|empty|unset|absent|not\s+(?:set|populated|assigned))|cloud.?provider.{0,80}uninitialized|uninitialized.{0,80}cloud.?provider`), must: true},
+			{name: "identifies cloud-node-manager API reachability as the blocking failure", re: mustRE(`(?is)cloud-node-manager.{0,200}(?:could\s+not|couldn't|cannot|can't|failed|unable|unreachable|refus|timed?\s*out|timeout|crash).{0,120}(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|kubernetes\s+service)|cloud-node-manager.{0,200}(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|kubernetes\s+service).{0,120}(?:could\s+not|couldn't|cannot|can't|failed|unable|unreachable|refus|timed?\s*out|timeout|crash)|(?:10\.96\.0\.1|cluster.?ip).{0,120}(?:refus|timeout|unreachable|failed).{0,120}cloud-node-manager`), must: true},
 			{name: "STRETCH: traces kube-proxy failing to synchronize", re: mustRE(`(?is)kube-proxy.*(?:sync|watch|list|api|dns|lookup|resolve|service)`)},
 			{name: "STRETCH: pinpoints DNS refusal on the loopback resolver", re: mustRE(`(?is)(?:\[?::1\]?|loopback).*(?:53|dns|resolv|refus)|(?:dns|resolv|nameserver).*(?:\[?::1\]?|connection refused)`)},
 		},
@@ -383,6 +385,19 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	elapsed := time.Since(start).Round(time.Second)
 
 	scoreBenchCase(t, bc, tc, elapsed, "in-process")
+}
+
+func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
+	for _, bc := range benchCases {
+		if bc.oppositeDiagnosis == "" {
+			continue
+		}
+		for _, signal := range bc.signals {
+			if signal.must && signal.re.MatchString(bc.oppositeDiagnosis) {
+				t.Errorf("benchmark %s required signal %q accepts opposite diagnosis %q", bc.name, signal.name, bc.oppositeDiagnosis)
+			}
+		}
+	}
 }
 
 func loadBenchCaseSkills(t *testing.T, bc benchCase) *skills.Set {
