@@ -553,10 +553,6 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 			continue
 		}
 		elidedMessage := false
-		if len(m.ProviderItems) > 0 {
-			m.ProviderItems = nil
-			elidedMessage = true
-		}
 		if m.Content != nil && !isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
 			m.Content = strPtr(stubContent(*m.Content))
 			elidedMessage = true

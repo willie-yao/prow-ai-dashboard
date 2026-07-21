@@ -165,7 +165,7 @@ func TestRequestSizeEstimate_IncludesSchemaBytes(t *testing.T) {
 
 func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 	small := []modelMessage{{Role: "assistant"}}
-	large := []modelMessage{{Role: "assistant", ProviderItems: []json.RawMessage{json.RawMessage(strings.Repeat("x", 1024))}}}
+	large := []modelMessage{{Role: "assistant", ToolCalls: []modelToolCall{{ID: "c", Type: "function", Function: modelFunction{Name: "read", Arguments: "{}"}}}, ProviderItems: []json.RawMessage{json.RawMessage(strings.Repeat("x", 1024))}}}
 	if requestSizeEstimate(large, 0) < requestSizeEstimate(small, 0)+1024 {
 		t.Fatal("provider items were not counted")
 	}
