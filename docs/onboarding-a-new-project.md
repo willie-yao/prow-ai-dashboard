@@ -1,8 +1,8 @@
 # Onboarding a project
 
 The `fetcher onboard` command verifies Prow job discovery and creates a small
-consumer scaffold. The generated project files work with both analysis backends.
-Only the deployment files differ.
+consumer scaffold. The project schema supports both analysis backends, while the
+command sets deployment-specific branding and files for Pages or Kubernetes.
 
 ## Choose the environment
 
@@ -138,7 +138,7 @@ A successful first deployment has:
 - `/healthz` and `/api/capabilities` in Kubernetes mode.
 
 If the dashboard has no jobs, use the discovery check in
-[Troubleshooting](troubleshooting.md#no-jobs-were-discovered).
+[Troubleshooting](troubleshooting.md#no-jobs-were-published).
 
 ## Versioning and pinning
 

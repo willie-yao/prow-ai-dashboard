@@ -78,8 +78,10 @@ prompts/system.md
 - **Deployment configuration** supplies infrastructure details such as runner
   selection, model credentials, persistence, and Orka settings.
 
-This boundary keeps one `project.yaml` portable between Pages, in-process
-Kubernetes, and Orka deployments.
+Most project settings are shared across deployments and analysis backends.
+`branding.base_path` and `branding.site_url` remain deployment-specific, and
+`onboard` generates the correct values for Pages or Kubernetes. In-process and
+Orka analysis within the same Kubernetes deployment use the same project file.
 
 ## How data flows
 

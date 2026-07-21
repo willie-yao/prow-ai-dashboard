@@ -9,7 +9,7 @@ cases below.
 | `AI_TOKEN is not set, disabling AI analysis` | No bearer token was supplied. | Set `AI_TOKEN`. Use any non-empty placeholder for an unauthenticated endpoint. |
 | Missing or empty `prompts/system.md` | AI was enabled without a project prompt. | Add a non-empty prompt under `<project_dir>/prompts/system.md`. |
 | `AI endpoint rejected tools` | The endpoint or model does not support OpenAI-style function calling. | Enable the provider's tool-call parser or choose a tool-capable model. |
-| Zero jobs in `dashboard.json` | The TestGrid dashboard does not match job annotations, or bucket discovery is filtered too narrowly. | Run a one-build discovery sweep and correct `testgrid.dashboard` or `discovery.job_filters`. |
+| Zero jobs in `dashboard.json` | Discovery found no matches, or every discovered job failed while loading build data. | Check fetcher storage and artifact errors first, then validate the discovery selector. |
 | Pages workflow cannot find `project.yaml` | `project_dir` does not match the consumer layout. | Use `.` for the repository root or the exact subdirectory in both workflows. |
 | Dashboard assets return 404 | `branding.base_path` does not match the Pages repository. | Set it to `/<host-repo>` with no trailing slash. |
 | Pages site is not deployed | Pages is not configured to use GitHub Actions. | Enable Pages with `gh api .../pages -X POST -F build_type=workflow`. |
@@ -40,32 +40,36 @@ curl -fsS http://localhost:8080/api/capabilities
 For deeper AI-loop behavior, see the troubleshooting section in
 [Agentic analysis](agentic.md#troubleshooting).
 
-## No jobs were discovered
+## No jobs were published
 
 A dashboard that loads with zero jobs has a valid frontend and manifest, but the
-latest fetch did not find matching Prow jobs.
+latest fetch published no job summaries. This has two common causes: discovery
+found no matching jobs, or every discovered job failed while loading build data.
 
-1. Run a one-build discovery check without AI:
+1. Check the fetcher logs first. `Warning: N jobs had fetch errors` and per-job
+   errors point to storage connectivity, credentials, bucket routing, or malformed
+   build data. Fix those errors before changing a valid discovery selector.
+2. Run a one-build check without AI:
 
    ```bash
    ./bin/fetcher -project-dir=../my-consumer -ai=false -builds=1
    ```
 
-2. Inspect the result:
+3. Inspect the result:
 
    ```bash
    python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
    ```
 
-3. For TestGrid discovery, confirm `testgrid.dashboard` exactly matches the
-   jobs' `testgrid-dashboards` annotation.
-4. For bucket discovery, remove `discovery.job_filters` temporarily and confirm
+4. If the logs contain no job fetch errors, confirm `testgrid.dashboard` exactly
+   matches the jobs' `testgrid-dashboards` annotation.
+5. For bucket discovery, remove `discovery.job_filters` temporarily and confirm
    the storage provider, bucket, and gcsweb base.
-5. Add `source.include_presubmits: true` only when the expected jobs are
+6. Add `source.include_presubmits: true` only when the expected jobs are
    presubmits rather than periodics.
 
-The `onboard` command performs this check before generating a scaffold and fails
-when discovery returns zero jobs.
+The `onboard` command validates discovery before generating a scaffold. A later
+fetch can still publish zero jobs when artifact loading fails for every match.
 
 
 ## Email notifications are not sent

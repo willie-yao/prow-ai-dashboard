@@ -14,10 +14,9 @@ same `/data/*.json` files the SPA already reads, then adds a capability
 descriptor the frontend uses to discover server-only features. The static path
 keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
 
-The server is independent of how the data was analyzed. Whether the worker runs
-the in-process agentic loop or the strategic [Orka preview](../experimental/orka/)
-pipeline produces the same `jobs/*.json`,
-so the server serves both identically. See
+The server is independent of how the data was analyzed. The in-process worker
+and the strategic [Orka preview](../experimental/orka/) pipeline produce the same
+`jobs/*.json`, so the server serves both identically. See
 [kubernetes.md](kubernetes.md#analysis-backend-in-process-or-orka) for the
 backend choice.
 

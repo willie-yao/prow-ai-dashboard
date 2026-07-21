@@ -74,14 +74,16 @@ function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
       }}
     >
       <Typography variant="h5" component="h1" sx={{ fontWeight: 700 }}>
-        No jobs published yet
+        No jobs available yet
       </Typography>
       <Typography color="text.secondary" sx={{ mt: 1.5 }}>
-        The dashboard configuration loaded, but the latest fetch returned zero
-        Prow jobs.
+        The dashboard loaded, but the latest fetch did not publish any Prow
+        jobs. Discovery may have found no matches, or every job may have failed
+        while loading build data.
       </Typography>
       <Typography color="text.secondary" sx={{ mt: 1 }}>
-        Check the fetcher logs, then verify{" "}
+        Check the fetcher logs first. Fix storage or artifact errors if jobs
+        failed to load. Otherwise verify{" "}
         <Box component="code">testgrid.dashboard</Box> or the bucket discovery
         settings in <Box component="code">project.yaml</Box>.
       </Typography>
