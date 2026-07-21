@@ -343,12 +343,70 @@ func (s *emailLoopScenario) assertState(t *testing.T, wantStatus string) *remedi
 	if !ok || publicEntry.Attempt == nil || publicEntry.Attempt.Status != wantStatus {
 		t.Fatalf("public remediation = %+v, want status %q", publicEntry, wantStatus)
 	}
-	for _, privateField := range []string{"source_commit", "matched_tests", "failed_matches", "ineligible_commits"} {
-		if strings.Contains(string(data), privateField) {
-			t.Fatalf("public remediation contains private field %q: %s", privateField, data)
+	assertPublicRemediationShape(t, data, s.pattern.ID)
+	return attempt
+}
+
+func assertPublicRemediationShape(t *testing.T, data []byte, patternID string) {
+	t.Helper()
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	assertAllowedKeys(t, "root", root, "remediations")
+	remediations, ok := root["remediations"].(map[string]any)
+	if !ok {
+		t.Fatalf("public remediations has type %T", root["remediations"])
+	}
+	entry, ok := remediations[patternID].(map[string]any)
+	if !ok {
+		t.Fatalf("public remediation %q has type %T", patternID, remediations[patternID])
+	}
+	assertAllowedKeys(t, "remediation", entry,
+		"id", "subject", "job_id", "job_name", "job_type", "issue", "attempt", "updated_at")
+	if issue, exists := entry["issue"]; exists {
+		issueObject, ok := issue.(map[string]any)
+		if !ok {
+			t.Fatalf("public issue has type %T", issue)
+		}
+		assertAllowedKeys(t, "issue", issueObject, "number", "url", "state")
+	}
+	attempt, ok := entry["attempt"].(map[string]any)
+	if !ok {
+		t.Fatalf("public attempt has type %T", entry["attempt"])
+	}
+	assertAllowedKeys(t, "attempt", attempt,
+		"number", "pr_number", "url", "target_repo", "head_sha", "merge_sha", "status", "pr_state",
+		"outcome", "outcome_reason", "observations")
+	observations, exists := attempt["observations"]
+	if !exists {
+		return
+	}
+	list, ok := observations.([]any)
+	if !ok {
+		t.Fatalf("public observations has type %T", observations)
+	}
+	for i, value := range list {
+		observation, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("public observation %d has type %T", i, value)
+		}
+		assertAllowedKeys(t, fmt.Sprintf("observation[%d]", i), observation,
+			"build_id", "job_name", "job_type", "result", "outcome", "reason", "prow_url", "started_at", "completed_at")
+	}
+}
+
+func assertAllowedKeys(t *testing.T, name string, object map[string]any, allowed ...string) {
+	t.Helper()
+	allow := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		allow[key] = true
+	}
+	for key := range object {
+		if !allow[key] {
+			t.Fatalf("public %s contains unexpected key %q: %+v", name, key, object)
 		}
 	}
-	return attempt
 }
 
 func (s *emailLoopScenario) writePresubmitBuild(buildID, pullNumber, headSHA string, passed bool) {
@@ -480,7 +538,9 @@ func TestEmailRemediationLoopE2E(t *testing.T) {
 		)
 		attempt := scenario.runRecurrenceTwice(t, details)
 		messages := scenario.sender.snapshot()
-		if !strings.Contains(messages[len(messages)-1].TextBody, emailLoopPRURL) || !strings.Contains(messages[len(messages)-1].TextBody, "https://dashboard.test/job/") {
+		wantJobURL := "https://dashboard.test/job/" + emailLoopJob
+		if !strings.Contains(messages[len(messages)-1].TextBody, emailLoopPRURL) ||
+			!strings.Contains(messages[len(messages)-1].TextBody, wantJobURL) {
 			t.Fatalf("recurrence email links missing: %s", messages[len(messages)-1].TextBody)
 		}
 		if attempt.Outcome != remediation.OutcomeSameCause {
