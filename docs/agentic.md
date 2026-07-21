@@ -95,10 +95,10 @@ the GCS fetch ceiling) are **not** configurable: the first two auto-size from
 the endpoint's context window and the GCS ceiling is a fixed engine safety cap
 (see [Automatic budget sizing](#automatic-budget-sizing)).
 
-> These knobs govern the in-process backend. On the Orka backend only
-> `ai.tools`, `ai.min_tool_calls`, the `storage` block, and the display id are
-> read from `project.yaml`; `max_iters`, `min_gcs_bytes`, `critique.*`, and
-> `evidence.*` live in the compatibility worker and shim tools instead. See
+> These knobs govern the in-process backend. Orka shares `ai.tools`,
+> `ai.min_tool_calls`, `ai.min_gcs_bytes`, the `storage` block, the display id,
+> and consumer `skills/*.yaml`. Settings such as `max_iters`, `timeout`,
+> `single_tool_call`, and `critique.*` do not configure Orka Tasks. See
 > [In-process and Orka backends](#in-process-and-orka-backends).
 
 ### `max_iters`

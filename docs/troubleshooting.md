@@ -10,7 +10,7 @@ cases below.
 | Missing or empty `prompts/system.md` | AI was enabled without a project prompt. | Add a non-empty prompt under `<project_dir>/prompts/system.md`. |
 | `AI endpoint rejected tools` | The endpoint or model does not support OpenAI-style function calling. | Enable the provider's tool-call parser or choose a tool-capable model. |
 | Zero jobs in `dashboard.json` | Discovery found no matches, or every discovered job failed while loading build data. | Check fetcher storage and artifact errors first, then validate the discovery selector. |
-| Pages workflow cannot find `project.yaml` | `project_dir` does not match the consumer layout. | Use `.` for the repository root or the exact subdirectory in both workflows. |
+| Pages workflow cannot find `project.yaml` | `project_dir` does not match the consumer layout. | Use `.` for the repository root or the exact subdirectory in the deploy workflow. |
 | Dashboard assets return 404 | `branding.base_path` does not match the Pages repository. | Set it to `/<host-repo>` with no trailing slash. |
 | Pages site is not deployed | Pages is not configured to use GitHub Actions. | Enable Pages with `gh api .../pages -X POST -F build_type=workflow`. |
 | Private endpoint times out | The GitHub-hosted runner cannot reach the network. | Use Kubernetes-native mode, a self-hosted runner, or `skip-fetch` with committed data. |
