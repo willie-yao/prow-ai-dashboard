@@ -503,6 +503,9 @@ func requestSizeEstimate(messages []modelMessage, schemaBytes int) int {
 		for _, tc := range messages[i].ToolCalls {
 			total += len(tc.Function.Name) + len(tc.Function.Arguments) + 32
 		}
+		for _, item := range messages[i].ProviderItems {
+			total += len(item)
+		}
 	}
 	return total
 }

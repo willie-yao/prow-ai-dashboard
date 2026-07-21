@@ -14,7 +14,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	shrinkCallDelay(t)
 	var requests []map[string]any
 	responses := []string{
-		`{"id":"resp-1","status":"completed","output":[{"id":"rs-1","type":"reasoning","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
+		`{"id":"resp-1","status":"completed","output":[{"id":"rs-1","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
 		`{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +41,10 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	if err != nil || second.Message.Content == nil || *second.Message.Content != "done" {
 		t.Fatalf("second response = %+v, err = %v", second, err)
 	}
+	include := requests[0]["include"].([]any)
+	if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("include = %#v", include)
+	}
 	if store, ok := requests[0]["store"].(bool); !ok || store {
 		t.Fatalf("store = %#v, want false", requests[0]["store"])
 	}
@@ -50,7 +54,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 		item := raw.(map[string]any)
 		switch item["type"] {
 		case "reasoning":
-			reasoning = true
+			reasoning = item["encrypted_content"] == "encrypted-state"
 		case "function_call":
 			call = item["call_id"] == "call-1"
 		case "function_call_output":

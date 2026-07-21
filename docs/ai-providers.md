@@ -13,7 +13,7 @@ Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 ```yaml
 ai:
   api: "chat_completions"  # or responses
-  endpoint: "..."         # Required. Chat-completions URL (e.g. Copilot, OpenAI, vLLM).
+  endpoint: "..."         # Required. URL for the selected API.
   model: "..."            # Required. Model identifier the endpoint expects.
   headers:                # Optional. Extra HTTP headers merged into every call.
     Some-Header: "value"

@@ -27,6 +27,7 @@ type responsesRequest struct {
 	Tools             []responsesTool `json:"tools,omitempty"`
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 	Store             bool            `json:"store"`
+	Include           []string        `json:"include,omitempty"`
 }
 
 type responsesTool struct {
@@ -59,7 +60,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	body, err := json.Marshal(responsesRequest{
 		Model: req.Model, Input: encodeResponsesInput(req.Messages),
 		Tools: encodeResponsesTools(req.Tools), ParallelToolCalls: req.ParallelToolCalls,
-		Store: false,
+		Store: false, Include: []string{"reasoning.encrypted_content"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
