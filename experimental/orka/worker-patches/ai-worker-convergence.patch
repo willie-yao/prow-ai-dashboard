@@ -1,9 +1,9 @@
 diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go
 new file mode 100644
-index 0000000..9d124d2
+index 0000000..dd6fca7
 --- /dev/null
 +++ b/workers/ai/compatibility_test.go
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,111 @@
 +package main
 +
 +import (
@@ -34,20 +34,22 @@ index 0000000..9d124d2
 +
 +func TestTransientWithoutTimeline(t *testing.T) {
 +	for _, content := range []string{
-+		`{"is_transient":true}`,
-+		`{ "is_transient" : true }`,
-+		`{"IS_TRANSIENT": true}`,
-+		"```json\n{\"Is_Transient\": true}\n```",
++		`{"summary":"analysis","is_transient":true}`,
++		`{ "summary":"analysis", "is_transient" : true }`,
++		`{"SUMMARY":"analysis","IS_TRANSIENT": true}`,
++		"```json\n{\"summary\":\"analysis\",\"Is_Transient\": true}\n```",
++		`{"status":"thinking"} {"summary":"final","is_transient":true}`,
 +	} {
 +		if !transientWithoutTimeline(content, nil) {
 +			t.Fatalf("transient verdict %q was accepted", content)
 +		}
 +	}
 +	for _, content := range []string{
-+		`{"is_transient":false}`,
-+		`{"is_transient":"true"}`,
-+		`{"nested":{"is_transient":true}}`,
++		`{"summary":"analysis","is_transient":false}`,
++		`{"summary":"analysis","is_transient":"true"}`,
++		`{"summary":"analysis","nested":{"is_transient":true}}`,
 +		`not json`,
++		`{"summary":"first","is_transient":true} {"summary":"final","is_transient":false}`,
 +	} {
 +		if transientWithoutTimeline(content, nil) {
 +			t.Fatalf("non-transient verdict %q was rejected", content)
@@ -57,15 +59,15 @@ index 0000000..9d124d2
 +		Role:      "assistant",
 +		ToolCalls: []llm.ToolCall{{Name: "verify_timeline"}},
 +	}}
-+	if transientWithoutTimeline(`{"IS_TRANSIENT":true}`, messages) {
++	if transientWithoutTimeline(`{"summary":"analysis","IS_TRANSIENT":true}`, messages) {
 +		t.Fatal("verified transient verdict was rejected")
 +	}
 +}
 +
 +func TestExecuteAgentLoopRepromptsUnsupportedTransient(t *testing.T) {
 +	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
-+		{Content: `{"is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
-+		{Content: `{"is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
 +	}}
 +	result, err := executeAgentLoopWithEvents(
 +		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
@@ -74,7 +76,7 @@ index 0000000..9d124d2
 +	if err != nil {
 +		t.Fatal(err)
 +	}
-+	if result != `{"is_transient":false}` || provider.callCount != 2 {
++	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 2 {
 +		t.Fatalf("result = %q, calls = %d, want corrected verdict after one re-prompt", result, provider.callCount)
 +	}
 +}
@@ -98,9 +100,9 @@ index 0000000..9d124d2
 +
 +func TestExecuteAgentLoopRejectsRepeatedUnsupportedTransient(t *testing.T) {
 +	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
-+		{Content: `{"is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
-+		{Content: `{"is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
-+		{Content: `{"is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
 +	}}
 +	result, err := executeAgentLoopWithEvents(
 +		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
@@ -114,7 +116,7 @@ index 0000000..9d124d2
 +	}
 +}
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca..5c30784 100644
+index 47bc4ca..66d9000 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -929,9 +929,9 @@ func executeAgentLoopWithEvents(
@@ -207,7 +209,7 @@ index 47bc4ca..5c30784 100644
  			stepSpan.End()
  			return resp.Content, nil
  		}
-@@ -1171,6 +1225,48 @@ func executeAgentLoopWithEvents(
+@@ -1171,6 +1225,81 @@ func executeAgentLoopWithEvents(
  	return "", fmt.Errorf("max iterations reached without completion")
  }
  
@@ -231,26 +233,59 @@ index 47bc4ca..5c30784 100644
 +}
 +
 +func responseClaimsTransient(content string) bool {
-+	start := strings.IndexByte(content, '{')
-+	end := strings.LastIndexByte(content, '}')
-+	if start < 0 || end < start {
++	var best map[string]json.RawMessage
++	depth, start := 0, -1
++	for i, ch := range content {
++		switch ch {
++		case '{':
++			if depth == 0 {
++				start = i
++			}
++			depth++
++		case '}':
++			if depth > 0 {
++				depth--
++				if depth == 0 && start >= 0 {
++					var candidate map[string]json.RawMessage
++					if json.Unmarshal([]byte(content[start:i+1]), &candidate) == nil && analysisShaped(candidate) {
++						best = candidate
++					}
++				}
++			}
++		}
++	}
++	if best == nil {
 +		return false
 +	}
-+	var candidate map[string]json.RawMessage
-+	if err := json.Unmarshal([]byte(content[start:end+1]), &candidate); err != nil {
++	raw, ok := fieldValue(best, "is_transient")
++	if !ok {
 +		return false
 +	}
-+	for key, raw := range candidate {
-+		if !strings.EqualFold(key, "is_transient") {
++	var transient bool
++	return json.Unmarshal(raw, &transient) == nil && transient
++}
++
++func analysisShaped(candidate map[string]json.RawMessage) bool {
++	for _, name := range []string{"summary", "root_cause", "severity"} {
++		raw, ok := fieldValue(candidate, name)
++		if !ok {
 +			continue
 +		}
-+		var transient bool
-+		if err := json.Unmarshal(raw, &transient); err != nil {
-+			return false
++		var value string
++		if json.Unmarshal(raw, &value) == nil && strings.TrimSpace(value) != "" {
++			return true
 +		}
-+		return transient
 +	}
 +	return false
++}
++
++func fieldValue(candidate map[string]json.RawMessage, name string) (json.RawMessage, bool) {
++	for key, value := range candidate {
++		if strings.EqualFold(key, name) {
++			return value, true
++		}
++	}
++	return nil, false
 +}
 +
  func approvalToolingRequested(coordinationEnv workerenv.CoordinationEnv, allowedToolCalls map[string]struct{}) bool {
