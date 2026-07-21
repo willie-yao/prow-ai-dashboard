@@ -147,12 +147,16 @@ func TestPublicProjectionRedactsObservationEvidence(t *testing.T) {
 	state := NewState()
 	state.Remediations["pattern"] = &Remediation{
 		ID: "pattern", FindingID: "pattern",
-		Attempts: []Attempt{{Observations: []BuildObservation{{
-			BuildID: "1", JobName: "job", JobType: models.JobTypePeriodic,
-			SourceRepo: "private/repo", SourceCommit: "secret-sha", HeadSHA: "secret-head",
-			Result: "SUCCESS", Outcome: OutcomePassed,
-			MatchedTests: []string{"suite\x00class\x00test"}, FailedMatches: []string{"secret-failure"},
-		}}}},
+		Attempts: []Attempt{{
+			Status: StatusInconclusive, OutcomeReason: "private/repo object secret-path",
+			IneligibleCommits: map[string]string{"private-build": "secret-ineligible"},
+			Observations: []BuildObservation{{
+				BuildID: "1", JobName: "job", JobType: models.JobTypePeriodic,
+				SourceRepo: "private/repo", SourceCommit: "secret-sha", HeadSHA: "secret-head",
+				Result: "SUCCESS", Outcome: OutcomeInconclusive, Reason: "read private/repo/secret-path",
+				MatchedTests: []string{"suite\x00class\x00test"}, FailedMatches: []string{"secret-failure"},
+			}},
+		}},
 	}
 	data, err := json.Marshal(state.Public())
 	if err != nil {
@@ -165,5 +169,9 @@ func TestPublicProjectionRedactsObservationEvidence(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"build_id":"1"`) {
 		t.Fatalf("public projection omitted build link data: %s", data)
+	}
+	if !strings.Contains(string(data), "Prow verification did not have enough evidence") ||
+		!strings.Contains(string(data), "Prow evidence was incomplete") {
+		t.Fatalf("public projection omitted safe reason text: %s", data)
 	}
 }

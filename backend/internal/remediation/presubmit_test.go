@@ -34,6 +34,33 @@ func TestObservePresubmits_PassesExactTest(t *testing.T) {
 	}
 }
 
+func TestObservePresubmitsIgnoresUnrelatedCoverageError(t *testing.T) {
+	identity := "suite\x00class\x00test"
+	b := memoryBackend{objects: map[string]string{
+		"pr-logs/pull/example_project/42/pull-e2e/10/started.json":        `{"timestamp":1}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/finished.json":       `{"timestamp":2,"passed":true,"result":"SUCCESS","revision":"head"}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/prowjob.json":        `{"spec":{"type":"presubmit","job":"pull-e2e","refs":{"org":"example","repo":"project","pulls":[{"number":42,"sha":"head"}]}},"status":{"state":"success"}}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/artifacts/junit.xml": `<testsuite name="suite"><testcase name="test" classname="class"/></testsuite>`,
+	}}
+	remediation := &Remediation{
+		JobType:  models.JobTypePeriodic,
+		Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}},
+	}
+	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", BaseRef: "main", TargetRepo: "example/project", Status: StatusOpen}
+	coverage := &CoverageCatalog{
+		Complete: false, Errors: []string{"unrelated job failed"},
+		Tests: map[string][]VerificationJob{identity: {{
+			JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project",
+		}}},
+	}
+	if err := ObservePresubmits(context.Background(), b, remediation, attempt, coverage); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusPremergeVerified {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
 func TestVerificationJobsPresubmitUsesOriginatingJob(t *testing.T) {
 	identity := "suite\x00class\x00test"
 	remediation := &Remediation{
@@ -257,6 +284,15 @@ func TestApplyPresubmitOutcomePreservesCompletedInconclusive(t *testing.T) {
 		JobName: "pull-a", Outcome: OutcomeInconclusive, Reason: "no JUnit tests found",
 	}}, true)
 	if attempt.Status != StatusInconclusive || attempt.OutcomeReason != "no JUnit tests found" {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestApplyPresubmitOutcomeRejectsMissingCoverageWithoutObservations(t *testing.T) {
+	remediation := &Remediation{Evidence: Evidence{Tests: []TestEvidence{{Identity: "a"}}}}
+	attempt := &Attempt{Status: StatusOpen}
+	applyPresubmitOutcome(remediation, attempt, []VerificationJob{{JobName: "pull-a"}}, nil, false)
+	if attempt.Status != StatusInconclusive {
 		t.Fatalf("attempt = %+v", attempt)
 	}
 }

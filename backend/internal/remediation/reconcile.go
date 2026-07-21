@@ -109,6 +109,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				}
 			}
 		}
+		if entry != nil {
+			refreshRemediationMetadata(entry, pattern, details)
+		}
 		if entry != nil && len(entry.Attempts) > 0 {
 			latest := &entry.Attempts[len(entry.Attempts)-1]
 			if entry.JobType == models.JobTypePresubmit && latest.Status == StatusVerifiedFixed && evidenceAdvanced(entry.Evidence, currentEvidence) {
@@ -157,13 +160,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				JobName: pattern.Subject, Classification: classificationForPattern(pattern, details),
 				Evidence: currentEvidence, CreatedAt: now, UpdatedAt: now,
 			}
-			for _, detail := range details {
-				if patternMatchesDetail(pattern, detail) {
-					entry.JobName, entry.JobType = detail.Name, detail.JobType
-					entry.SourceRepo = sourceRepoFromDetail(detail, "")
-					break
-				}
-			}
+			refreshRemediationMetadata(entry, pattern, details)
 			state.Remediations[id] = entry
 		}
 		syncLinkedIssue(entry, r.issues[pattern.JobID])
@@ -238,6 +235,49 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 		errs = append(errs, err)
 	}
 	return state, errors.Join(errs...)
+}
+
+func refreshRemediationMetadata(entry *Remediation, pattern models.PatternAnalysis, details []models.JobDetail) {
+	if entry == nil {
+		return
+	}
+	changed := false
+	if entry.Subject == "" && pattern.Subject != "" {
+		entry.Subject = pattern.Subject
+		changed = true
+	}
+	if entry.JobID == "" && pattern.JobID != "" {
+		entry.JobID = pattern.JobID
+		changed = true
+	}
+	classification := classificationForPattern(pattern, details)
+	if entry.Classification == "" || (entry.Classification == "pattern" && classification != "pattern") {
+		entry.Classification = classification
+		changed = true
+	}
+	for _, detail := range details {
+		if !patternMatchesDetail(pattern, detail) {
+			continue
+		}
+		if entry.JobType == "" {
+			entry.JobType = detail.JobType
+			entry.JobName = detail.Name
+			changed = true
+		} else if entry.JobName == "" {
+			entry.JobName = detail.Name
+			changed = true
+		}
+		if entry.SourceRepo == "" {
+			if repo := sourceRepoFromDetail(detail, ""); repo != "" {
+				entry.SourceRepo = repo
+				changed = true
+			}
+		}
+		break
+	}
+	if changed {
+		entry.UpdatedAt = nowString()
+	}
 }
 
 func syncLinkedIssue(entry *Remediation, issue IssueRef) {
@@ -367,6 +407,7 @@ func findAttempt(remediation *Remediation, pullURL string) *Attempt {
 func applyPullRequest(remediation *Remediation, attempt *Attempt, pull ghpr.PullRequest) {
 	previousStatus := attempt.Status
 	previousHead := attempt.HeadSHA
+	previousMerge := attempt.MergeSHA
 	attempt.PRNumber = pull.Number
 	attempt.URL = pull.HTMLURL
 	attempt.TargetRepo = pull.Base.Repo
@@ -386,9 +427,16 @@ func applyPullRequest(remediation *Remediation, attempt *Attempt, pull ghpr.Pull
 	}
 	if previousHead != "" && previousHead != attempt.HeadSHA {
 		attempt.Observations = nil
+		attempt.IneligibleCommits = nil
 		attempt.Outcome, attempt.OutcomeReason = "", ""
 		attempt.Status = attempt.PRState
 	} else {
+		if previousMerge != "" && previousMerge != attempt.MergeSHA {
+			attempt.Observations = nil
+			attempt.IneligibleCommits = nil
+			attempt.Outcome, attempt.OutcomeReason = "", ""
+			attempt.Status = attempt.PRState
+		}
 		switch attempt.PRState {
 		case StatusMerged:
 			if !postMergeStatus(attempt.Status) {

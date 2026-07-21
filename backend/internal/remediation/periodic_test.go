@@ -20,6 +20,15 @@ func (f fakeCompare) CompareCommits(context.Context, string, string, string, str
 	return f.contains, f.status, f.err
 }
 
+type countingCompare struct {
+	calls int
+}
+
+func (f *countingCompare) CompareCommits(context.Context, string, string, string, string) (bool, string, error) {
+	f.calls++
+	return false, "behind", nil
+}
+
 func periodicEvidence(failure string) Evidence {
 	test := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class"}
 	return Evidence{BuildWatermark: "10", Tests: []TestEvidence{{
@@ -40,6 +49,29 @@ func TestObservePeriodic_VerifiesTwoCleanRuns(t *testing.T) {
 	}
 	if attempt.Status != StatusVerifiedFixed || attempt.Outcome != OutcomePassed {
 		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestObservePeriodicCachesNegativeAncestry(t *testing.T) {
+	remediation := &Remediation{
+		JobID: "job", JobName: "job", JobType: models.JobTypePeriodic,
+		SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom"),
+	}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "11", Commit: "before-merge", Result: "SUCCESS", JUnitComplete: true},
+	}}}}
+	client := &countingCompare{}
+	for range 2 {
+		if err := ObservePeriodic(context.Background(), client, remediation, attempt, details, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if client.calls != 1 {
+		t.Fatalf("compare calls = %d, want 1", client.calls)
+	}
+	if attempt.IneligibleCommits["11"] != "before-merge" {
+		t.Fatalf("ineligible commits = %+v", attempt.IneligibleCommits)
 	}
 }
 

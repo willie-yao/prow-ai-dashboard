@@ -61,6 +61,15 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 			"originating Prow job is missing from the current dataset")
 		return nil
 	}
+	currentBuilds := make(map[string]bool, len(detail.Runs))
+	for _, run := range detail.Runs {
+		currentBuilds[run.BuildID] = true
+	}
+	for buildID := range attempt.IneligibleCommits {
+		if !currentBuilds[buildID] {
+			delete(attempt.IneligibleCommits, buildID)
+		}
+	}
 	var errs []error
 	missingCommit := false
 	for _, run := range detail.Runs {
@@ -69,6 +78,9 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 		}
 		if run.Commit == "" {
 			missingCommit = true
+			continue
+		}
+		if attempt.IneligibleCommits[run.BuildID] == run.Commit {
 			continue
 		}
 		if hasObservation(attempt, models.JobTypePeriodic, detail.Name, run.BuildID, run.Commit) {
@@ -80,8 +92,13 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 			continue
 		}
 		if !contains {
+			if attempt.IneligibleCommits == nil {
+				attempt.IneligibleCommits = map[string]string{}
+			}
+			attempt.IneligibleCommits[run.BuildID] = run.Commit
 			continue
 		}
+		delete(attempt.IneligibleCommits, run.BuildID)
 		observation := BuildObservation{
 			BuildID: run.BuildID, JobName: detail.Name, JobType: models.JobTypePeriodic,
 			SourceRepo: remediation.SourceRepo, SourceCommit: run.Commit,

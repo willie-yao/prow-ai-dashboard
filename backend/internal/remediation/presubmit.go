@@ -170,7 +170,7 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 		}
 	}
 	mergeObservations(attempt, observations)
-	coverageComplete := coverage == nil || coverage.Complete || remediation.JobType == models.JobTypePresubmit
+	coverageComplete := remediation.JobType == models.JobTypePresubmit || verificationCoverageComplete(remediation.Evidence, jobs, coverage)
 	applyPresubmitOutcome(remediation, attempt, jobs, currentPresubmitObservations(attempt, jobs), coverageComplete)
 	return nil
 }
@@ -233,6 +233,29 @@ func verificationJobAppliesToBranch(job VerificationJob, branch string) (bool, e
 		}
 	}
 	return false, nil
+}
+
+func verificationCoverageComplete(evidence Evidence, jobs []VerificationJob, coverage *CoverageCatalog) bool {
+	if coverage == nil || len(evidence.Tests) == 0 {
+		return false
+	}
+	selected := make(map[string]bool, len(jobs))
+	for _, job := range jobs {
+		selected[job.JobID] = true
+	}
+	for _, test := range evidence.Tests {
+		covered := false
+		for _, job := range coverage.Tests[test.Identity] {
+			if selected[job.JobID] {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return false
+		}
+	}
+	return true
 }
 
 func evidenceForVerificationJob(evidence Evidence, coverage *CoverageCatalog, job VerificationJob) Evidence {
@@ -427,12 +450,17 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 	previous := attempt.Status
 	attempt.Outcome, attempt.OutcomeReason = "", ""
 	if len(observations) == 0 {
-		attempt.Status = StatusAwaitingPresubmit
-		attempt.OutcomeReason = "waiting for Prow presubmit"
-		for _, job := range jobs {
-			if job.RerunCommand != "" {
-				attempt.OutcomeReason = "waiting for " + job.RerunCommand
-				break
+		if !coverageComplete {
+			attempt.Status, attempt.Outcome = StatusInconclusive, OutcomeInconclusive
+			attempt.OutcomeReason = "applicable Prow presubmits do not cover every affected test"
+		} else {
+			attempt.Status = StatusAwaitingPresubmit
+			attempt.OutcomeReason = "waiting for Prow presubmit"
+			for _, job := range jobs {
+				if job.RerunCommand != "" {
+					attempt.OutcomeReason = "waiting for " + job.RerunCommand
+					break
+				}
 			}
 		}
 	} else {
@@ -472,10 +500,11 @@ func applyPresubmitOutcome(remediation *Remediation, attempt *Attempt, jobs []Ve
 			}
 		} else if pending {
 			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPresubmitRunning, OutcomePending, "matching Prow presubmit is still running"
-		} else if allEvidencePassed && coverageComplete {
-			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPremergeVerified, OutcomePassed, "matching Prow presubmit passed"
+		} else if !coverageComplete {
+			attempt.Status, attempt.Outcome = StatusInconclusive, OutcomeInconclusive
+			attempt.OutcomeReason = "applicable Prow presubmits do not cover every affected test"
 		} else if allEvidencePassed {
-			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusInconclusive, OutcomeInconclusive, "Prow coverage discovery was incomplete"
+			attempt.Status, attempt.Outcome, attempt.OutcomeReason = StatusPremergeVerified, OutcomePassed, "matching Prow presubmit passed"
 		} else if attempt.Status != StatusPresubmitRunning {
 			attempt.Status = StatusAwaitingPresubmit
 			if passed {

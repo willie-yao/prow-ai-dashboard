@@ -48,6 +48,50 @@ type PublicObservation struct {
 	CompletedAt string `json:"completed_at,omitempty"`
 }
 
+func publicAttemptReason(status string) string {
+	switch status {
+	case StatusAwaitingPresubmit:
+		return "waiting for a matching Prow presubmit"
+	case StatusPresubmitRunning:
+		return "matching Prow presubmit is still running"
+	case StatusPremergeVerified:
+		return "matching Prow presubmit passed"
+	case StatusPresubmitFailedSameCause:
+		return "the original failure recurred in presubmit verification"
+	case StatusPresubmitFailedDifferentCause:
+		return "presubmit verification failed for a different reason"
+	case StatusMerged, StatusObserving:
+		return "waiting for post-merge Prow verification"
+	case StatusVerifiedFixed:
+		return "required post-merge Prow runs passed"
+	case StatusStillFailingSameCause:
+		return "the original failure recurred after merge"
+	case StatusFailingDifferentCause:
+		return "post-merge Prow failed for a different reason"
+	case StatusInconclusive:
+		return "Prow verification did not have enough evidence"
+	default:
+		return ""
+	}
+}
+
+func publicObservationReason(outcome string) string {
+	switch outcome {
+	case OutcomePassed:
+		return "expected tests passed"
+	case OutcomeSameCause:
+		return "the original failure signature recurred"
+	case OutcomeDifferentCause:
+		return "Prow completed with a different failure"
+	case OutcomeInconclusive:
+		return "Prow evidence was incomplete"
+	case OutcomePending:
+		return "Prow is still running"
+	default:
+		return ""
+	}
+}
+
 // Public returns the redacted frontend projection.
 func (s *State) Public() PublicState {
 	out := PublicState{Remediations: map[string]PublicRemediation{}}
@@ -74,7 +118,7 @@ func (s *State) Public() PublicState {
 			for _, observation := range attempt.Observations {
 				observations = append(observations, PublicObservation{
 					BuildID: observation.BuildID, JobName: observation.JobName, JobType: observation.JobType,
-					Result: observation.Result, Outcome: observation.Outcome, Reason: observation.Reason,
+					Result: observation.Result, Outcome: observation.Outcome, Reason: publicObservationReason(observation.Outcome),
 					ProwURL: observation.ProwURL, StartedAt: observation.StartedAt, CompletedAt: observation.CompletedAt,
 				})
 			}
@@ -82,7 +126,7 @@ func (s *State) Public() PublicState {
 				Number: attempt.Number, PRNumber: attempt.PRNumber, URL: attempt.URL,
 				TargetRepo: attempt.TargetRepo, HeadSHA: attempt.HeadSHA, MergeSHA: attempt.MergeSHA,
 				Status: attempt.Status, PRState: attempt.PRState,
-				Outcome: attempt.Outcome, OutcomeReason: attempt.OutcomeReason,
+				Outcome: attempt.Outcome, OutcomeReason: publicAttemptReason(attempt.Status),
 				Observations: observations,
 			}
 		}

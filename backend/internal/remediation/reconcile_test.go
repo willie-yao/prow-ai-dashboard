@@ -299,6 +299,48 @@ func TestReconcilePreservesLinkedIssueLifecycleFields(t *testing.T) {
 	}
 }
 
+func TestReconcileBackfillsRecoveredJobMetadata(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause",
+		SharedBuilds: []string{"1", "2", "3"},
+	}
+	client := fakePRClient{pull: ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "open",
+		Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"},
+	}}
+	reconciler := NewReconciler(client, dir)
+	fixes := map[string]FixReference{"key": {URL: "https://github.com/o/r/pull/7", Pattern: &pattern}}
+	state, err := reconciler.Reconcile(context.Background(), nil, nil, fixes, func(models.PatternAnalysis) string { return "key" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Remediations["pattern"].JobType != "" {
+		t.Fatalf("initial remediation = %+v", state.Remediations["pattern"])
+	}
+
+	failure := models.TestCase{Name: "test", Status: "failed", FailureMessage: "boom"}
+	details := []models.JobDetail{{
+		JobID: "job", Name: "periodic-job", JobType: models.JobTypePeriodic, Repo: "o/r",
+		Runs: []models.BuildResult{
+			{BuildInfo: models.BuildInfo{BuildID: "3"}, TestCases: []models.TestCase{failure}},
+			{BuildInfo: models.BuildInfo{BuildID: "2"}, TestCases: []models.TestCase{failure}},
+			{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{failure}},
+		},
+	}}
+	state, err = reconciler.Reconcile(context.Background(), nil, details, fixes, func(models.PatternAnalysis) string { return "key" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := state.Remediations["pattern"]
+	if entry.JobType != models.JobTypePeriodic || entry.JobName != "periodic-job" || entry.SourceRepo != "o/r" {
+		t.Fatalf("remediation = %+v", entry)
+	}
+	if entry.Classification != string(models.ClassificationPersistent) {
+		t.Fatalf("classification = %q", entry.Classification)
+	}
+}
+
 func TestReconcileUsesPatternSnapshotFromTrackedFix(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause"}

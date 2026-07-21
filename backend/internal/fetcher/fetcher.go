@@ -711,8 +711,8 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 		}
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
 		for _, r := range detail.Runs {
-			// Only cache completed builds.
-			if r.Result != "PENDING" && r.Result != "" {
+			// Incomplete JUnit may become available after the build finishes.
+			if r.Result != "PENDING" && r.Result != "" && r.JUnitComplete {
 				builds[r.BuildID] = r
 			}
 		}

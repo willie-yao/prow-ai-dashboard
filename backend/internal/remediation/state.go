@@ -92,6 +92,7 @@ type Attempt struct {
 	Outcome                    string             `json:"outcome,omitempty"`
 	OutcomeReason              string             `json:"outcome_reason,omitempty"`
 	Observations               []BuildObservation `json:"observations,omitempty"`
+	IneligibleCommits          map[string]string  `json:"ineligible_commits,omitempty"`
 	LastObservedAt             string             `json:"last_observed_at,omitempty"`
 	LastTransition             string             `json:"last_transition,omitempty"`
 	LastEmailedTransition      string             `json:"last_emailed_transition,omitempty"`
