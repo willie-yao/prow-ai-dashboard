@@ -8,7 +8,7 @@ PR or a patched controller, CRD, API server, or UI.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact source revision, patch
 checksum, image identity, and deployment instructions.
 
-## Compatibility v3 behavior
+## Compatibility v4 behavior
 
 The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 
@@ -24,6 +24,10 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - checks the request-scoped Tool allowlist before duplicate-result reuse;
 - removes completed timeline Tools and re-prompts malformed, empty, or
   unvalidated final responses;
+- gives weak models an exact `"relevant_files": []` repair when that required
+  final array is omitted, without weakening deterministic validation;
+- resets the premature-final retry counter after any Tool call so an early
+  tools-free response cannot poison a later validated submission;
 - keeps a bounded evidence ledger containing successful Tool arguments,
   byte-exact evidence tokens, and result excerpts; when necessary it removes
   non-token context or evicts whole older entries rather than truncating tokens;
@@ -44,8 +48,8 @@ selected remain worker-local and do not require a `ToolCallSkipped` event.
 
 A Phase 2 run used `moonshotai/Kimi-K2-Instruct-0905` against the same DRA
 failure from build `2078833416211533824`. The prompt included the bounded JUnit
-failure body and filtered artifact tree. Compatibility v3 retains the v2 evidence
-behavior through two proactive compactions.
+failure body and filtered artifact tree. Compatibility v4 retains the v2 evidence
+behavior and v3 API-mode telemetry through two proactive compactions.
 
 | Metric | Phase 1c | Compatibility v2 baseline |
 |---|---:|---:|

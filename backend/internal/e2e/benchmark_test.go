@@ -17,6 +17,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/universal"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
@@ -80,6 +81,7 @@ type benchCase struct {
 	// report; the benchmark feeds it so the analysis (and the critique gate's
 	// transient-vs-persistent check) see the real persistence signal.
 	consecutiveFailures int
+	skillYAML           string
 	signals             []benchSignal
 }
 
@@ -131,6 +133,66 @@ var benchCases = []benchCase{
 		},
 	},
 	{
+		// The Flatcar worker VM and Node both came up, but the Node remained
+		// cloud-provider uninitialized and had no providerID. cloud-node-manager
+		// crash-looped because it could not reach the API Service ClusterIP. The
+		// preceding kube-proxy log shows the initiating failure: it never synced
+		// because the API endpoint lookup used [::1]:53, where DNS was refusing
+		// connections. The next run passed with the same Kubernetes, Flatcar, and
+		// containerd versions, so this is a concrete transient bootstrap failure.
+		// Unlike the API-version case, the cause is not in build-log.txt; unlike
+		// the dual-stack case, following it needs only generic Kubernetes control
+		// plane, Service, and external cloud-provider reasoning.
+		name:                "flatcar-worker-dns-providerid",
+		bucket:              "kubernetes-ci-logs",
+		fixtureAsset:        "flatcar-sysext-dns-providerid.tar.gz",
+		jobType:             models.JobTypePeriodic,
+		jobName:             "periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24",
+		buildID:             "2073261474372915200",
+		webURL:              "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24/2073261474372915200/",
+		sourceRepo:          [2]string{"kubernetes-sigs", "cluster-api-provider-azure"},
+		testName:            "[It] Workload cluster creation Creating a Flatcar sysext cluster [OPTIONAL] With Flatcar control-plane and worker nodes",
+		junitFile:           "junit.e2e_suite.1.xml",
+		failureMsg:          `Timed out after 1500.000s. Timed out waiting for 1 nodes to be created for MachineDeployment capz-e2e-asfxe1/capz-e2e-asfxe1-flatcar-sysext-md-0. Expected 0 to equal 1`,
+		consecutiveFailures: 1,
+		skillYAML: `
+id: flatcar-node-providerid
+name: Flatcar node cloud-provider initialization
+priority: 200
+triggers:
+  - '(?i)\bflatcar\b'
+  - '(?i)(worker|machine|node).*(not ready|never became ready|registration|provider.?id|uninitialized)'
+required_evidence:
+  - id: machine-state
+    description: CAPI Machine or MachineDeployment state
+    any_of:
+      - '(?i)^artifacts/clusters/bootstrap/resources/[^/]+/Machine(?:Deployment)?/.*\.yaml$'
+  - id: node-state
+    description: workload Node state including providerID and taints
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/nodes/[^/]+/node-describe\.txt$'
+  - id: cloud-node-manager
+    description: cloud-node-manager state on the affected node
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/kube-system/cloud-node-manager-[^/]+/(cloud-node-manager\.log|pod-describe\.txt)$'
+  - id: kube-proxy
+    description: kube-proxy API and Service synchronization on the affected node
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/kube-system/kube-proxy-[^/]+/kube-proxy\.log$'
+procedure: |
+  Do not stop at Azure VM provisioning, an early kubelet error, or a generic Flatcar boot hypothesis.
+  Compare the CAPI Machine state with the workload Node describe. If the Node exists or is Ready while the Machine waits for a matching providerID, investigate external cloud-provider initialization.
+  Read cloud-node-manager on the affected Node. If it cannot reach the Kubernetes API Service, read kube-proxy on that same Node and identify why Service or API synchronization failed.
+`,
+		signals: []benchSignal{
+			{name: "recognizes the worker Node existed or registered", re: mustRE(`(?is)(?:worker|node).*(?:exist|register|ready)|(?:exist|register|ready).*(?:worker|node)`), must: true},
+			{name: "identifies missing providerID or cloud-provider initialization", re: mustRE(`(?i)provider.?id|cloud.?provider.*uninitialized|uninitialized.*cloud.?provider`), must: true},
+			{name: "identifies cloud-node-manager API reachability as the blocking failure", re: mustRE(`(?is)cloud-node-manager.*(?:10\.96\.0\.1|api(?:server)?|cluster.?ip|crash|reach|timeout)|(?:10\.96\.0\.1|cluster.?ip).*(?:cloud-node-manager|api(?:server)?|timeout)`), must: true},
+			{name: "STRETCH: traces kube-proxy failing to synchronize", re: mustRE(`(?is)kube-proxy.*(?:sync|watch|list|api|dns|lookup|resolve|service)`)},
+			{name: "STRETCH: pinpoints DNS refusal on the loopback resolver", re: mustRE(`(?is)(?:\[?::1\]?|loopback).*(?:53|dns|resolv|refus)|(?:dns|resolv|nameserver).*(?:\[?::1\]?|connection refused)`)},
+		},
+	},
+	{
 		// apiversion-upgrade periodic fails on clusterctl upgrade: during the
 		// management-cluster provider upgrade, clusterctl scales the Azure
 		// Service Operator (ASO) controller-manager down, so ASO's CRD
@@ -167,6 +229,52 @@ var benchCases = []benchCase{
 	},
 }
 
+func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
+	var flatcar *benchCase
+	for i := range benchCases {
+		if benchCases[i].name == "flatcar-worker-dns-providerid" {
+			flatcar = &benchCases[i]
+			break
+		}
+	}
+	if flatcar == nil {
+		t.Fatal("Flatcar benchmark case is missing")
+	}
+	set := loadBenchCaseSkills(t, *flatcar)
+	matched := set.Match("Flatcar sysext worker machine never became ready")
+	if len(matched) != 1 || matched[0].ID != "flatcar-node-providerid" {
+		t.Fatalf("matched skills = %+v", matched)
+	}
+	groups := map[string]bool{}
+	for _, group := range matched[0].RequiredEvidence {
+		groups[group.ID] = true
+	}
+	for _, want := range []string{"machine-state", "node-state", "cloud-node-manager", "kube-proxy"} {
+		if !groups[want] {
+			t.Errorf("missing evidence group %q", want)
+		}
+	}
+}
+
+func TestFlatcarBenchmarkSignalsMatchReferenceDiagnosis(t *testing.T) {
+	var flatcar *benchCase
+	for i := range benchCases {
+		if benchCases[i].name == "flatcar-worker-dns-providerid" {
+			flatcar = &benchCases[i]
+			break
+		}
+	}
+	if flatcar == nil {
+		t.Fatal("Flatcar benchmark case is missing")
+	}
+	reference := `The worker Node existed and registered Ready, but it retained the cloud-provider uninitialized taint and had no providerID. cloud-node-manager crash-looped because it could not reach the API Service ClusterIP 10.96.0.1. kube-proxy never synchronized because the API hostname lookup used [::1]:53 and DNS returned connection refused.`
+	for _, signal := range flatcar.signals {
+		if !signal.re.MatchString(reference) {
+			t.Errorf("reference diagnosis missed %q", signal.name)
+		}
+	}
+}
+
 func TestAIBenchmark(t *testing.T) {
 	if os.Getenv("RUN_AI_BENCHMARK") == "" {
 		t.Skip("set RUN_AI_BENCHMARK=1 (plus AI_ENDPOINT/AI_MODEL) to run the AI quality benchmark")
@@ -184,6 +292,7 @@ func TestAIBenchmark(t *testing.T) {
 	// matches that live deploy. Otherwise use the built-in prompt and defaults.
 	systemPrompt := ComposeBenchPrompt()
 	agentic := defaultBenchAgentic()
+	var projectSkills *skills.Set
 	if dir := os.Getenv("BENCH_PROJECT_DIR"); dir != "" {
 		cfg, prompt, err := project.LoadDir(dir)
 		if err != nil {
@@ -191,16 +300,20 @@ func TestAIBenchmark(t *testing.T) {
 		}
 		systemPrompt = ai.ComposeSystemPrompt(prompt)
 		agentic = cfg.AI.EffectiveAgentic()
+		projectSkills, err = skills.Load(dir)
+		if err != nil {
+			t.Fatalf("load BENCH_PROJECT_DIR skills: %v", err)
+		}
 	}
 
 	for _, bc := range benchCases {
 		t.Run(bc.name, func(t *testing.T) {
-			runBenchCase(t, bc, endpoint, model, token, systemPrompt, agentic)
+			runBenchCase(t, bc, endpoint, model, token, systemPrompt, agentic, projectSkills)
 		})
 	}
 }
 
-func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemPrompt string, agentic project.Agentic) {
+func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemPrompt string, agentic project.Agentic, projectSkills *skills.Set) {
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    token,
 		Endpoint: endpoint,
@@ -228,6 +341,11 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 	}
 
 	service := ai.NewService(client, universal.New(), systemPrompt, consecutiveMap)
+	if projectSkills != nil {
+		service.SetSkills(projectSkills)
+	} else if caseSkills := loadBenchCaseSkills(t, bc); caseSkills != nil {
+		service.SetSkills(caseSkills)
+	}
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
 
 	// Size the model/context budgets from the endpoint's window, matching the
@@ -258,29 +376,61 @@ func runBenchCase(t *testing.T, bc benchCase, endpoint, model, token, systemProm
 		PullNumber: bc.pullNumber,
 		WebURL:     bc.webURL,
 	}}
-	tc := &models.TestCase{
-		Name:           bc.testName,
-		Status:         "failed",
-		FailureMessage: bc.failureMsg,
-		JUnitFile:      bc.junitFile,
-	}
+	tc := benchTestCase(bc)
 
 	start := time.Now()
 	service.Analyze(context.Background(), &http.Client{Timeout: 60 * time.Second}, jobID, loc.BuildPath(), run, tc)
 	elapsed := time.Since(start).Round(time.Second)
 
+	scoreBenchCase(t, bc, tc, elapsed, "in-process")
+}
+
+func loadBenchCaseSkills(t *testing.T, bc benchCase) *skills.Set {
+	t.Helper()
+	if strings.TrimSpace(bc.skillYAML) == "" {
+		return nil
+	}
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, bc.name+".yaml"), []byte(strings.TrimSpace(bc.skillYAML)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set, err := skills.Load(dir)
+	if err != nil {
+		t.Fatalf("load benchmark skills: %v", err)
+	}
+	return set
+}
+
+func benchTestCase(bc benchCase) *models.TestCase {
+	return &models.TestCase{
+		Name:           bc.testName,
+		Status:         "failed",
+		FailureMessage: bc.failureMsg,
+		JUnitFile:      bc.junitFile,
+	}
+}
+
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string) {
+	t.Helper()
 	if tc.AIAnalysis == nil {
 		summary := "<none>"
 		if tc.AISummary != nil {
 			summary = tc.AISummary.Summary
 		}
-		t.Fatalf("analysis produced no AIAnalysis after %s (summary: %s)", elapsed, summary)
+		t.Fatalf("%s analysis produced no AIAnalysis after %s (summary: %s)", backend, elapsed, summary)
+	}
+	if tc.AISummary == nil {
+		t.Fatalf("%s analysis produced AIAnalysis without AISummary after %s", backend, elapsed)
 	}
 
 	a := tc.AIAnalysis
 	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, a.RootCause, a.SuggestedFix}, "\n"))
 
-	t.Logf("\n===== %s =====", bc.name)
+	t.Logf("\n===== %s (%s) =====", bc.name, backend)
 	t.Logf("elapsed=%s tool_calls=%d gcs_bytes=%d context_bytes=%d critique_passed=%v budget_exhausted=%v",
 		elapsed, a.ToolCalls, a.GCSBytes, a.ContextBytes, a.CritiquePassed, a.BudgetExhausted)
 	t.Logf("severity=%s transient=%v", a.Severity, tc.AISummary.IsTransient)
@@ -479,7 +629,8 @@ func benchEnvDuration(key string, def time.Duration) time.Duration {
 // ComposeBenchPrompt wraps a compact CAPZ/cloud-provider oriented addendum in
 // the engine's standard prompt composition, so a default run still gets the
 // engine BasePrompt + ResponseFormatFooter around it.
+const benchPromptAddendum = `You are debugging Kubernetes CI failures for Cluster API Provider Azure (CAPZ) and cloud-provider-azure e2e jobs. Many failures surface only as a generic "timed out waiting for the condition"; the real cause is usually deeper in the cluster state. Use the k8s discovery tools to read the dumped cluster resources under artifacts/clusters/**/resources (AzureCluster, subnets, route tables, machines) and the controller logs before concluding. When a test times out with no direct error, check whether cluster networking (subnets, route tables, CNI) or a core add-on (Calico, cloud-provider) is the underlying cause. The fix may live in a different repository than the one running the job.`
+
 func ComposeBenchPrompt() string {
-	const addendum = `You are debugging Kubernetes CI failures for Cluster API Provider Azure (CAPZ) and cloud-provider-azure e2e jobs. Many failures surface only as a generic "timed out waiting for the condition"; the real cause is usually deeper in the cluster state. Use the k8s discovery tools to read the dumped cluster resources under artifacts/clusters/**/resources (AzureCluster, subnets, route tables, machines) and the controller logs before concluding. When a test times out with no direct error, check whether cluster networking (subnets, route tables, CNI) or a core add-on (Calico, cloud-provider) is the underlying cause. The fix may live in a different repository than the one running the job.`
-	return ai.ComposeSystemPrompt(addendum)
+	return ai.ComposeSystemPrompt(benchPromptAddendum)
 }
