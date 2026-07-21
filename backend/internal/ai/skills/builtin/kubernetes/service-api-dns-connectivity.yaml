@@ -1,0 +1,28 @@
+id: engine.kubernetes.service-api-dns-connectivity
+name: Service, API, DNS, and kube-proxy connectivity
+priority: 230
+triggers:
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|lookup|resolve|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(sync|watch|list|lookup|resolve|refused|timeout|failed|error)\b'
+  - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused)\b'
+required_evidence:
+  - id: affected-client
+    description: component log that records the connectivity failure
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?[^/]+/(?:[^/]+/){1,2}(?:manager|controller|cloud-node-manager|cloud-controller-manager|kubelet|apiserver)\.log$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:kubelet|journal)\.log$'
+  - id: service-routing
+    description: kube-proxy or Kubernetes Service endpoint state
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
+      - '(?i)^artifacts/clusters/[^/]+/resources/[^/]+/(?:service|endpoints|endpointslice)/.*\.ya?ml$'
+  - id: dns-resolution
+    description: DNS or resolver evidence for hostname failures
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:coredns|node-local-dns)-[^/]+/.*\.(?:log|txt)$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:journal\.log|resolv\.conf|systemd-resolved\.log)$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/kube-proxy\.log$'
+procedure: |
+  1. Compare direct API endpoint access with Kubernetes Service ClusterIP access when both signals exist. This separates endpoint availability from Service routing.
+  2. Inspect kube-proxy synchronization before broadly blaming CNI. Identify list, watch, sync, or API lookup failures that prevented Service programming.
+  3. When an external API hostname cannot resolve, inspect the resolver address and DNS errors. Distinguish the initiating connectivity failure from downstream CrashLoopBackOff restarts.

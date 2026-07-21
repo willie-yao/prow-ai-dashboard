@@ -123,6 +123,51 @@ func TestValidateAnalysisEnforcesMatchedSkillReadEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisEnforcesMergedEngineEvidencePaths(t *testing.T) {
+	set, _, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	paths := map[string]string{
+		"machine": "artifacts/clusters/bootstrap/resources/ns/Machine/machine.yaml",
+		"node":    "artifacts/clusters/workload/nodes/node-1/node-describe.txt",
+		"cloud":   "artifacts/clusters/workload/kube-system/cloud-node-manager-node-1/cloud-node-manager.log",
+		"proxy":   "artifacts/clusters/workload/kube-system/kube-proxy-node-1/kube-proxy.log",
+	}
+	analysis := orka.AnalysisValidation{
+		Summary:   "worker initialization blocked",
+		RootCause: "the worker Node registered but providerID is missing and the external cloud-provider taint remains",
+		Severity:  "High", SuggestedFix: "restore cloud-provider initialization",
+		RelevantFiles: []string{paths["machine"]},
+	}
+
+	missing := runValidation(t, env, analysis, []string{
+		attestor.issue("scope", paths["machine"]),
+		attestor.issue("scope", paths["cloud"]),
+		attestor.issue("scope", paths["proxy"]),
+	}, "scope", header)
+	if missing.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(missing.Body.String(), "engine.kubernetes.machine-node-providerid:node-state") {
+		t.Fatalf("missing node evidence response = %d %s", missing.Code, missing.Body.String())
+	}
+
+	valid := runValidation(t, env, analysis, []string{
+		attestor.issue("scope", paths["machine"]),
+		attestor.issue("scope", paths["node"]),
+		attestor.issue("scope", paths["cloud"]),
+		attestor.issue("scope", paths["proxy"]),
+	}, "scope", header)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid merged evidence response = %d %s", valid.Code, valid.Body.String())
+	}
+}
+
 func TestValidateAnalysisPrunesRecipeEvidenceAbsentFromBuild(t *testing.T) {
 	set, err := skills.ParseContract([]byte(`{
 		"skills":[{

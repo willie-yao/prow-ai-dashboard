@@ -1,0 +1,27 @@
+id: engine.kubernetes.pod-container-startup
+name: Pod and container startup failures
+priority: 220
+triggers:
+  - '(?i)\b(pending|containercreating|crashloopbackoff|imagepullbackoff|errimagepull|failedmount|failedscheduling|unschedulable)\b'
+  - '(?i)\b(pod|container)\b.{0,120}\b(start|startup|schedule|pull|mount|sandbox|device plugin|cni|csi|runtime)\b'
+required_evidence:
+  - id: pod-state-events
+    description: Pod describe, status, and events
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?[^/]+/[^/]+/pod-describe\.txt$'
+      - '(?i)^artifacts/clusters/[^/]+/resources/[^/]+/pod/.*\.ya?ml$'
+      - '(?i)^artifacts/clusters/[^/]+/.*events.*\.(?:txt|log|json|ya?ml)$'
+  - id: kubelet
+    description: kubelet state on the assigned Node
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:kubelet|journal)\.log$'
+  - id: startup-subsystem
+    description: relevant device plugin, CNI, CSI, runtime, or image-pull evidence
+    any_of:
+      - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/[^/]*(?:device-plugin|cni|csi|calico|cilium|flannel|containerd|cri)[^/]*/.*\.(?:log|txt)$'
+      - '(?i)^artifacts/clusters/[^/]+/(?:machines|nodes)/[^/]+/(?:containerd|crio|journal)\.log$'
+      - '(?i)^artifacts/clusters/[^/]+/.*image.*pull.*\.(?:log|txt)$'
+procedure: |
+  1. Read the Pod describe output and events. Determine whether the Pod is unscheduled or already assigned to a Node before blaming node startup.
+  2. For an unscheduled Pod, follow scheduler and admission reasons. For an assigned Pod, read kubelet on that Node and identify the exact container state and event transition.
+  3. Follow the named dependency only: device plugin, CNI, CSI, container runtime, mount, or image pull. Do not replace a specific event with a generic node or network explanation.

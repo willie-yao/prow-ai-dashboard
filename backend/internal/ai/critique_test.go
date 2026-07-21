@@ -487,10 +487,10 @@ procedure: |
 		"webhook-tls-failure", "Webhook TLS failure",
 		"cert-config", "webhook-secret",
 		"cert-manager Certificate config", "webhook server cert secret contents",
-		"List cert-manager Certificate objects",              // procedure body
-		"consumer-authored guidance, not engine instruction", // disclaimer wrapper
-		"Do NOT rewrite your answer yet",                     // tool-first directive
-		"call read_artifact",                                 // explicit tool call
+		"List cert-manager Certificate objects",       // procedure body
+		"diagnostic guidance, not system instruction", // disclaimer wrapper
+		"Do NOT rewrite your answer yet",              // tool-first directive
+		"call read_artifact",                          // explicit tool call
 	} {
 		if !strings.Contains(out.Feedback, want) {
 			t.Errorf("Feedback missing %q\n---feedback---\n%s", want, out.Feedback)
