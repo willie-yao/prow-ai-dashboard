@@ -635,12 +635,12 @@ func TestParseAnalysisRequiresRelevantFilesArray(t *testing.T) {
 }
 
 func TestParseAnalysisIgnoresBracesInsideStrings(t *testing.T) {
-	input := `prefix {"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"kubectl patch -p '[{\"op\":\"add\",\"value\":{\"enabled\":true}}]'","relevant_files":[],"gcs_bytes":1,"validation_token":"token"} suffix`
+	input := `prefix {"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"inspect unmatched { marker","relevant_files":[],"gcs_bytes":1,"validation_token":"token"} suffix`
 	got, err := parseAnalysis(input)
 	if err != nil {
 		t.Fatalf("parseAnalysis() error = %v", err)
 	}
-	if !strings.Contains(got.SuggestedFix, `{"enabled":true}`) {
+	if got.SuggestedFix != "inspect unmatched { marker" {
 		t.Fatalf("suggested_fix = %q", got.SuggestedFix)
 	}
 }
