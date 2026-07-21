@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,8 @@ const (
 	eventPageSize = 500
 	maxEventPages = 100
 )
+
+var errTaskEventsNotReadableYet = errors.New("task events are not readable yet")
 
 type analysisTelemetry struct {
 	EventCount          int
@@ -99,7 +102,7 @@ func (c *orkaClient) analysisTelemetry(ctx context.Context, namespace, taskName 
 		events = append(events, page.Events...)
 		if len(page.Events) == 0 {
 			if page.LatestSeq > after {
-				return analysisTelemetry{}, fmt.Errorf("task events through sequence %d are not readable yet", page.LatestSeq)
+				return analysisTelemetry{}, fmt.Errorf("%w through sequence %d", errTaskEventsNotReadableYet, page.LatestSeq)
 			}
 			return summarizeEvents(events), nil
 		}

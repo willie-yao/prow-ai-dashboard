@@ -426,6 +426,90 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	}
 }
 
+func TestPatternTaskAnalyzerSurfacesTerminalTelemetryFailure(t *testing.T) {
+	const namespace = "orka-system"
+	result := `{
+		"systemic": true,
+		"confidence": "high",
+		"shared_root_cause": "stale controller writes",
+		"shared_builds": ["103", "102"],
+		"suggested_fix": "serialize controller updates",
+		"summary": "The same controller path failed twice."
+	}`
+	tests := []struct {
+		name    string
+		events  func(http.ResponseWriter)
+		wantErr string
+	}{
+		{
+			name: "events API failure",
+			events: func(w http.ResponseWriter) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			},
+			wantErr: "HTTP 401",
+		},
+		{
+			name: "missing API mode",
+			events: func(w http.ResponseWriter) {
+				base := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"latestSeq": 2,
+					"events": []map[string]any{
+						{"seq": 1, "type": "ModelRequestCompleted", "createdAt": base},
+						{"seq": 2, "type": "TaskSucceeded", "createdAt": base.Add(time.Second)},
+					},
+				})
+			},
+			wantErr: "did not report an API mode",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/events") {
+					tc.events(w)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+			}))
+			defer server.Close()
+			analyzer := &patternTaskAnalyzer{
+				kube: &fakePatternKube{}, client: &orkaClient{base: server.URL, http: server.Client()},
+				namespace: namespace, provider: "models", model: "model", apiMode: orkaapi.APIModeResponses,
+				version: "v1", projectScope: "project", timeout: "5m", retries: 1, poll: time.Millisecond,
+			}
+			failures := []ai.PatternFailure{{BuildID: "103", RootCause: "cause"}, {BuildID: "102", RootCause: "cause"}}
+			if _, err := analyzer.AnalyzePattern(context.Background(), "job", "job", failures); err == nil || !strings.Contains(err.Error(), tc.wantErr) || strings.Contains(err.Error(), "context deadline exceeded") {
+				t.Fatalf("AnalyzePattern error = %v, want %q without a deadline error", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestPatternTaskAnalyzerPreservesEventLagAtDeadline(t *testing.T) {
+	const namespace = "orka-system"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"latestSeq": 5, "events": []any{}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"systemic":true}`})
+	}))
+	defer server.Close()
+	analyzer := &patternTaskAnalyzer{
+		kube: &fakePatternKube{}, client: &orkaClient{base: server.URL, http: server.Client()},
+		namespace: namespace, provider: "models", model: "model", apiMode: orkaapi.APIModeResponses,
+		version: "v1", projectScope: "project", timeout: "5m", retries: 1, poll: 100 * time.Millisecond,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	failures := []ai.PatternFailure{{BuildID: "103", RootCause: "cause"}, {BuildID: "102", RootCause: "cause"}}
+	_, err := analyzer.AnalyzePattern(ctx, "job", "job", failures)
+	if err == nil || !strings.Contains(err.Error(), "not readable yet") || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("AnalyzePattern error = %v, want event-lag cause and deadline", err)
+	}
+}
+
 func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	dir := t.TempDir()
 	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{

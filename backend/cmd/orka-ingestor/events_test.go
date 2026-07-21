@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -243,7 +244,7 @@ func TestAnalysisTelemetryRetriesEmptyPageBeforeLatestSequence(t *testing.T) {
 	}))
 	defer server.Close()
 	client := &orkaClient{base: server.URL, http: server.Client()}
-	if _, err := client.analysisTelemetry(context.Background(), "orka-system", "task"); err == nil || !strings.Contains(err.Error(), "not readable yet") {
+	if _, err := client.analysisTelemetry(context.Background(), "orka-system", "task"); err == nil || !strings.Contains(err.Error(), "not readable yet") || !errors.Is(err, errTaskEventsNotReadableYet) {
 		t.Fatalf("telemetry error = %v", err)
 	}
 }

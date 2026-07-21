@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -967,22 +968,34 @@ func (a *patternTaskAnalyzer) AnalyzePattern(ctx context.Context, jobID, subject
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	var lastTelemetryErr error
 	for {
 		if result, ok := a.client.result(a.namespace, name); ok {
 			telemetry, telemetryErr := a.client.analysisTelemetry(ctx, a.namespace, name)
-			if telemetryErr == nil && telemetry.APIMode != "" {
-				if err := orka.ValidateObservedAPIMode(a.apiMode, telemetry.APIMode); err != nil {
-					return nil, fmt.Errorf("pattern Task %s API mode: %w", name, err)
-				}
+			if telemetryErr != nil {
+				lastTelemetryErr = fmt.Errorf("pattern Task %s telemetry: %w", name, telemetryErr)
+			} else if err := orka.ValidateObservedAPIMode(a.apiMode, telemetry.APIMode); err != nil {
+				lastTelemetryErr = fmt.Errorf("pattern Task %s API mode: %w", name, err)
+			} else {
 				return ai.ParsePatternResult(subject, input.Failures, result)
 			}
 		}
 		phase, err := a.kube.TaskPhase(ctx, a.namespace, name)
-		if err == nil && (phase == "Failed" || phase == "Cancelled") {
-			return nil, fmt.Errorf("pattern Task %s %s", name, strings.ToLower(phase))
+		if err == nil {
+			switch phase {
+			case "Failed", "Cancelled":
+				return nil, fmt.Errorf("pattern Task %s %s", name, strings.ToLower(phase))
+			case "Succeeded":
+				if lastTelemetryErr != nil && !errors.Is(lastTelemetryErr, errTaskEventsNotReadableYet) {
+					return nil, lastTelemetryErr
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
+			if lastTelemetryErr != nil {
+				return nil, fmt.Errorf("%w: %w", lastTelemetryErr, ctx.Err())
+			}
 			return nil, fmt.Errorf("pattern Task %s: %w", name, ctx.Err())
 		case <-ticker.C:
 		}
