@@ -48,15 +48,19 @@ cat > "$tmp/bin/docker" <<'EOF_DOCKER'
 set -euo pipefail
 [[ "$*" == "buildx imagetools inspect "* ]] || { echo "unexpected docker invocation: $*" >&2; exit 3; }
 if [[ "$*" == *' --raw' ]]; then
+  provenance=https://slsa.dev/provenance/v1
+  if [[ ${FAKE_REGISTRY_RESULT:-} == exact-v02 ]]; then
+    provenance=https://slsa.dev/provenance/v0.2
+  fi
   if [[ ${FAKE_REGISTRY_RESULT:-} == no-sbom ]]; then
-    echo '{"layers":[{"annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v1"}}]}'
+    printf '{"layers":[{"annotations":{"in-toto.io/predicate-type":"%s"}}]}\n' "$provenance"
   else
-    echo '{"layers":[{"annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v1"}},{"annotations":{"in-toto.io/predicate-type":"https://spdx.dev/Document"}}]}'
+    printf '{"layers":[{"annotations":{"in-toto.io/predicate-type":"%s"}},{"annotations":{"in-toto.io/predicate-type":"https://spdx.dev/Document"}}]}\n' "$provenance"
   fi
   exit 0
 fi
 case ${FAKE_REGISTRY_RESULT:-} in
-  exact|mismatch|no-sbom)
+  exact|exact-v02|mismatch|no-sbom)
     label_dashboard=${FAKE_LABEL_DASHBOARD:-$EXPECTED_DASHBOARD}
     cat <<JSON
 {"manifest":{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","manifests":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","annotations":{"vnd.docker.reference.type":"attestation-manifest"}}]},"image":{"os":"linux","architecture":"amd64","config":{"User":"65532:65532","Entrypoint":["/worker"],"Labels":{"org.opencontainers.image.revision":"$label_dashboard","io.orka.compatibility.revision":"$EXPECTED_ORKA","io.orka.compatibility.patch-sha256":"$EXPECTED_PATCH"}}}}
@@ -76,6 +80,8 @@ patch=2726008e9d2fa6f0c8b3aa567cb07095c3d3a172e46740fcf7325dafa0863cbb
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"
+FAKE_REGISTRY_RESULT=exact-v02 EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH" \
+  "$script" inspect-published ghcr.io/example/worker:test "$dashboard" > /dev/null
 
 for missing in missing missing404; do
   set +e

@@ -178,8 +178,8 @@ inspect_published() {
     raw=$(docker buildx imagetools inspect "$image@$attestation" --raw)
     predicates+=$'\n'$(jq -r '.layers[]?.annotations["in-toto.io/predicate-type"] // empty' <<< "$raw")
   done <<< "$attestations"
-  grep -Fqx 'https://slsa.dev/provenance/v1' <<< "$predicates" || {
-    echo "existing compatibility image has no SLSA provenance attestation: $image" >&2
+  grep -Eq '^https://slsa.dev/provenance/(v0\.2|v1)$' <<< "$predicates" || {
+    echo "existing compatibility image has no supported SLSA provenance attestation: $image" >&2
     return 1
   }
   grep -Fqx 'https://spdx.dev/Document' <<< "$predicates" || {
