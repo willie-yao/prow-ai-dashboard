@@ -11,10 +11,19 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=540fd7cd85cdaf1298b467054c15a49bfc63d34731139fc0f2cbbc9ce2eb05d1' <<< "$metadata"
+grep -Fq 'patch_sha256=2726008e9d2fa6f0c8b3aa567cb07095c3d3a172e46740fcf7325dafa0863cbb' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}540fd7cd85cdaf1298b467054c15a49bfc63d34731139fc0f2cbbc9ce2eb05d1${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}2726008e9d2fa6f0c8b3aa567cb07095c3d3a172e46740fcf7325dafa0863cbb${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq 'diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go' "$script_dir/ai-worker-convergence.patch"
+for test_name in \
+  TestExecuteAgentLoopRepromptsEmptyFinal \
+  TestExecuteAgentLoopRepromptsUnsupportedTransient \
+  TestExecuteAgentLoopRejectsRepeatedEmptyFinal \
+  TestExecuteAgentLoopRejectsRepeatedUnsupportedTransient \
+  TestTransientWithoutTimeline; do
+  grep -Fq "func $test_name" "$script_dir/ai-worker-convergence.patch"
+done
 workflow="$repo_root/.github/workflows/orka-compat-image.yml"
 grep -Fq 'experimental/orka/worker-patches/compat-worker.sh prepare _orka' "$workflow"
 grep -Fq 'inspect-published' "$workflow"
@@ -63,7 +72,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=540fd7cd85cdaf1298b467054c15a49bfc63d34731139fc0f2cbbc9ce2eb05d1
+patch=2726008e9d2fa6f0c8b3aa567cb07095c3d3a172e46740fcf7325dafa0863cbb
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"
