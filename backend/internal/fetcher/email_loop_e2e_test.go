@@ -79,8 +79,9 @@ func (emailLoopFixAgent) Generate(_ context.Context, spec runtimepkg.GenerateSpe
 }
 
 type emailLoopFixPRClient struct {
-	mu        sync.Mutex
-	openCalls int
+	mu          sync.Mutex
+	openCalls   int
+	searchCalls int
 }
 
 func (c *emailLoopFixPRClient) OpenPR(_ context.Context, _ ghpr.Request) (string, error) {
@@ -90,7 +91,10 @@ func (c *emailLoopFixPRClient) OpenPR(_ context.Context, _ ghpr.Request) (string
 	return emailLoopPRURL, nil
 }
 
-func (*emailLoopFixPRClient) SearchOpenPR(context.Context, string, string, string, string) (int, string, bool, error) {
+func (c *emailLoopFixPRClient) SearchOpenPR(context.Context, string, string, string, string) (int, string, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.searchCalls++
 	return 0, "", false, nil
 }
 
@@ -102,6 +106,12 @@ func (c *emailLoopFixPRClient) opens() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.openCalls
+}
+
+func (c *emailLoopFixPRClient) searches() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.searchCalls
 }
 
 type emailLoopGitHubTransport struct {
@@ -290,6 +300,7 @@ func (s *emailLoopScenario) runTwice(t *testing.T, details []models.JobDetail, w
 		t.Fatalf("messages after transition = %d, want %d: %v", got, wantMessages, s.sender.subjects())
 	}
 	opens := s.fixPR.opens()
+	searches := s.fixPR.searches()
 	s.run(details)
 	s.assertState(t, wantStatus)
 	if got := len(s.sender.snapshot()); got != wantMessages {
@@ -297,6 +308,9 @@ func (s *emailLoopScenario) runTwice(t *testing.T, details []models.JobDetail, w
 	}
 	if s.fixPR.opens() != opens {
 		t.Fatalf("fix PR opens changed from %d to %d", opens, s.fixPR.opens())
+	}
+	if s.fixPR.searches() != searches {
+		t.Fatalf("fix PR searches changed from %d to %d", searches, s.fixPR.searches())
 	}
 }
 
