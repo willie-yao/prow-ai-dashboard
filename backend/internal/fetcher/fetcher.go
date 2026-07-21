@@ -130,6 +130,9 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	// AI needs an explicit endpoint and model. Fail fast rather than publishing a
 	// dashboard with missing analysis.
 	if enableAI {
+		if err := project.ValidateAIAPI(aiAPI(cfg)); err != nil {
+			return nil, err
+		}
 		if aiEndpoint(cfg) == "" || aiModel(cfg) == "" {
 			return nil, fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
 		}

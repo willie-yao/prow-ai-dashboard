@@ -193,6 +193,9 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 const promptDraftTimeout = 3 * time.Minute
 
 func validateOptions(opts *Options) error {
+	if err := project.ValidateAIAPI(opts.AIAPI); err != nil {
+		return err
+	}
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}

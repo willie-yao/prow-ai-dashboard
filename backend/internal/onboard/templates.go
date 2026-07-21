@@ -131,7 +131,7 @@ persistence:
 ai:
   enabled: true
   api: "{{if .AIAPI}}{{.AIAPI}}{{else}}chat_completions{{end}}"
-  endpoint: "{{if .AIEndpoint}}{{.AIEndpoint}}{{else}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions{{end}}"
+  endpoint: "{{if .AIEndpoint}}{{.AIEndpoint}}{{else if eq .AIAPI "responses"}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/responses{{else}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions{{end}}"
   model: "{{if .AIModel}}{{.AIModel}}{{else}}<your-model-id>{{end}}"
 
 # Give a cold analysis pass room to finish on a self-hosted model.

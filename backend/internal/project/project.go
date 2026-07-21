@@ -311,6 +311,14 @@ const (
 	AIAPIResponses       = "responses"
 )
 
+func ValidateAIAPI(api string) error {
+	api = strings.ToLower(strings.TrimSpace(api))
+	if api == "" || api == AIAPIChatCompletions || api == AIAPIResponses {
+		return nil
+	}
+	return fmt.Errorf("AI API %q is invalid (want %q or %q)", api, AIAPIChatCompletions, AIAPIResponses)
+}
+
 // AI configures the agentic failure-analysis pipeline: the endpoint and model
 // to call, optional request headers, analysis concurrency, and the inlined
 // agentic loop tuning.
