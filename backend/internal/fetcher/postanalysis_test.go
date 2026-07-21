@@ -76,7 +76,7 @@ func TestLoadFinalizedDataRejectsMalformedJob(t *testing.T) {
 type finalizedFakePR struct{}
 
 func (finalizedFakePR) OpenPR(context.Context, ghpr.Request) (string, error) {
-	return "", nil
+	return "https://github.com/example/repo/pull/7", nil
 }
 func (finalizedFakePR) SearchOpenPR(context.Context, string, string, string, string) (int, string, bool, error) {
 	return 0, "", false, nil
@@ -160,6 +160,44 @@ ai:
 	}
 	if len(previews) != 1 || !strings.Contains(previews[0].Diff, "fixed: true") {
 		t.Fatalf("previews = %+v", previews)
+	}
+}
+
+func TestProcessFixPRsReportsPersistedReference(t *testing.T) {
+	zero := 0
+	cfg := &project.Config{
+		Name:     "Test Project",
+		Branding: project.Branding{SiteURL: "https://example.test"},
+		AI: &project.AI{FixPRs: &project.FixPRs{
+			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
+			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
+			AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+		}},
+	}
+	t.Setenv("FIX_TOKEN", "test-token")
+	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
+	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return finalizedFakeAgent{}, nil }
+	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
+		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
+	}
+	t.Cleanup(func() {
+		newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager
+	})
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
+		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml", Summary: "recurring",
+	}
+	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("persisted fix reference was not reported")
+	}
+	state := statefile.Load[fixpr.TrackedFix](filepath.Join(dataDir, "fix_pr_state.json"), "example/repo", "fix PRs")
+	if len(state.Tracked) != 1 {
+		t.Fatalf("tracked fixes = %+v", state.Tracked)
 	}
 }
 

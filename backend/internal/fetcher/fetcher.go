@@ -426,12 +426,15 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 	if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
 		log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
 	}
-	if err := processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir); err != nil {
-		sideEffectErrs = append(sideEffectErrs, err)
+	fixStateChanged, fixErr := processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir)
+	if fixErr != nil {
+		sideEffectErrs = append(sideEffectErrs, fixErr)
 	}
 	// Adopt a PR created in this pass before issues evaluate recovery.
-	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
-		sideEffectErrs = append(sideEffectErrs, err)
+	if fixStateChanged {
+		if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
+			sideEffectErrs = append(sideEffectErrs, err)
+		}
 	}
 	if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
@@ -578,22 +581,22 @@ var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixp
 // recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
 // operator PAT). In dry-run it writes previews instead of opening PRs. Any
 // missing piece is a no-op.
-func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) error {
+func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string) (bool, error) {
 	if cfg.AI == nil || cfg.AI.FixPRs == nil || !cfg.AI.FixPRs.Enabled {
-		return nil
+		return false, nil
 	}
 	if len(patterns) == 0 {
-		return nil
+		return false, nil
 	}
 	eff := cfg.EffectiveFixPRs()
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		log.Println("Fix PRs: no source repo resolved (set ai.fix_prs.repo or branding.source_repo); skipping")
-		return fmt.Errorf("fix PRs: no source repo resolved")
+		return false, fmt.Errorf("fix PRs: no source repo resolved")
 	}
 	fixToken := os.Getenv("FIX_TOKEN")
 	if fixToken == "" {
 		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping")
-		return fmt.Errorf("fix PRs: FIX_TOKEN is unset")
+		return false, fmt.Errorf("fix PRs: FIX_TOKEN is unset")
 	}
 
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
@@ -603,13 +606,13 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	if eff.AgentRuntime.Type != "orka" && aiClient == nil {
 		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")
-		return fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
+		return false, fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
 	}
 
 	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
 	if err != nil {
 		log.Printf("Fix PRs: %v; skipping", err)
-		return fmt.Errorf("fix PR critique: %w", err)
+		return false, fmt.Errorf("fix PR critique: %w", err)
 	}
 	var prFiller fixpr.PRBodyFiller
 	if aiClient != nil {
@@ -646,7 +649,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	agentRuntime, err := newBatchFixRuntime(ar)
 	if err != nil {
 		log.Printf("Fix PRs: %v; skipping", err)
-		return fmt.Errorf("fix PR runtime: %w", err)
+		return false, fmt.Errorf("fix PR runtime: %w", err)
 	}
 	model := ar.Model
 	if model == "" {
@@ -678,7 +681,8 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 			log.Printf("Warning: failed to save fix-PR state: %v", saveErr)
 		}
 	}
-	return errors.Join(wrapOptional("fix-PR processing", err), wrapOptional("save fix-PR state", saveErr))
+	changed := !eff.DryRun && saveErr == nil && stats.Proposed+stats.Adopted > 0
+	return changed, errors.Join(wrapOptional("fix-PR processing", err), wrapOptional("save fix-PR state", saveErr))
 }
 
 func wrapOptional(operation string, err error) error {

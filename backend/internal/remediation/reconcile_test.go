@@ -119,6 +119,26 @@ func TestReconcileRefreshesClosedPullRequest(t *testing.T) {
 	}
 }
 
+func TestApplyPullRequestPreservesPresubmitEvidenceWhenMergeSHAChanges(t *testing.T) {
+	entry := &Remediation{JobType: models.JobTypePresubmit}
+	attempt := &Attempt{
+		Status: StatusPremergeVerified, PRState: StatusOpen, HeadSHA: "head", MergeSHA: "synthetic",
+		Outcome: OutcomePassed, OutcomeReason: "matching Prow presubmit passed",
+		Observations: []BuildObservation{{BuildID: "10", HeadSHA: "head", Outcome: OutcomePassed}},
+	}
+	applyPullRequest(entry, attempt, ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "closed", Merged: true,
+		MergeCommitSHA: "final", Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"},
+	})
+	if attempt.Status != StatusMerged || attempt.Outcome != OutcomePassed || len(attempt.Observations) != 1 {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	finalizeMergedPresubmit(entry, attempt)
+	if attempt.Status != StatusVerifiedFixed {
+		t.Fatalf("finalized attempt = %+v", attempt)
+	}
+}
+
 func TestApplyPullRequestMovesPremergeVerificationToMerged(t *testing.T) {
 	entry := &Remediation{}
 	attempt := &Attempt{Status: StatusPremergeVerified, HeadSHA: "head"}

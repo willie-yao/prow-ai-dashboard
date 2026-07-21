@@ -413,7 +413,6 @@ func findAttempt(remediation *Remediation, pullURL string) *Attempt {
 func applyPullRequest(remediation *Remediation, attempt *Attempt, pull ghpr.PullRequest) {
 	previousStatus := attempt.Status
 	previousHead := attempt.HeadSHA
-	previousMerge := attempt.MergeSHA
 	attempt.PRNumber = pull.Number
 	attempt.URL = pull.HTMLURL
 	attempt.TargetRepo = pull.Base.Repo
@@ -437,12 +436,6 @@ func applyPullRequest(remediation *Remediation, attempt *Attempt, pull ghpr.Pull
 		attempt.Outcome, attempt.OutcomeReason = "", ""
 		attempt.Status = attempt.PRState
 	} else {
-		if previousMerge != "" && previousMerge != attempt.MergeSHA {
-			attempt.Observations = nil
-			attempt.IneligibleCommits = nil
-			attempt.Outcome, attempt.OutcomeReason = "", ""
-			attempt.Status = attempt.PRState
-		}
 		switch attempt.PRState {
 		case StatusMerged:
 			if !postMergeStatus(attempt.Status) {
