@@ -102,7 +102,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 	const namespace = "orka-system"
 	results := map[string]string{}
 	detail := models.JobDetail{Name: "periodic-controller", JobID: "periodic-controller"}
-	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", "v1", 2)
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	for _, buildID := range []string{"103", "102", "101"} {
 		tc := models.TestCase{
@@ -204,7 +204,7 @@ func TestIngestThenFinalizePatterns(t *testing.T) {
 
 func TestIngestLogsSortedRejectionSummary(t *testing.T) {
 	const namespace = "orka-system"
-	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", "v1", 2)
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	detail := models.JobDetail{Name: "periodic-controller", JobID: "periodic-controller"}
 	results := map[string]string{}
@@ -288,7 +288,7 @@ func TestApplyResultRedactsTelemetryURL(t *testing.T) {
 
 	tc := models.TestCase{Name: "test", Status: "failed"}
 	accepted, rejection := applyResult(
-		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", 0, 0, "", testValidationKey,
+		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", orkaapi.APIModeAuto, 0, 0, "", testValidationKey,
 	)
 	if accepted {
 		t.Fatal("applyResult accepted analysis without telemetry")
@@ -310,6 +310,10 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 		if r.URL.Query().Get("namespace") != namespace {
 			t.Fatalf("missing namespace query: %s", r.URL.RawQuery)
 		}
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			writeAcceptedEvents(w, false)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{
             "systemic": true,
             "confidence": "high",
@@ -328,6 +332,7 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 		namespace:    namespace,
 		provider:     "models",
 		model:        "strong-model",
+		apiMode:      orkaapi.APIModeResponses,
 		version:      "v1",
 		projectScope: "project",
 		timeout:      "5m",
@@ -364,6 +369,10 @@ func TestPatternTaskAnalyzerAppliesTaskAndParsesResult(t *testing.T) {
 	labels := metadata["labels"].(map[string]any)
 	if labels[orkaapi.ProjectLabel] != analyzer.projectScope || labels[orkaapi.TaskTypeLabel] != "pattern" {
 		t.Fatalf("pattern labels = %+v", labels)
+	}
+	annotations := metadata["annotations"].(map[string]any)
+	if annotations[orkaapi.APIModeAnnotation] != orkaapi.APIModeResponses {
+		t.Fatalf("pattern annotations = %+v", annotations)
 	}
 	variants := []struct {
 		name    string
@@ -426,7 +435,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	if err := output.WriteJobDetail(dir, detail); err != nil {
 		t.Fatal(err)
 	}
-	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", "v1", 2)
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
 	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
@@ -450,7 +459,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	transient := false
 	s.patchTask(webhookPayload{TaskName: name, Phase: "Succeeded"}, preparedPatch{
 		analysis:     &analysis{Summary: "root", RootCause: "root", Severity: "High", IsTransient: &transient, SuggestedFix: "fix"},
-		telemetry:    analysisTelemetry{EventCount: 1, ToolCalls: 2},
+		telemetry:    analysisTelemetry{APIMode: orkaapi.APIModeResponses, EventCount: 1, ToolCalls: 2},
 		model:        manifest.Model,
 		contractHash: manifest.ContractHash,
 	})
@@ -471,7 +480,7 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 
 func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 	const namespace = "orka-system"
-	manifest := orkaapi.NewAnalysisManifest("project", "test", "new-contract", "models", "model", "v1", 2)
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "new-contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
 		Name: "test", Status: "failed", FailureMessage: "boom",
@@ -524,7 +533,7 @@ func TestIngestRefreshesMismatchedContractHash(t *testing.T) {
 }
 
 func TestIngestKeepsMatchingContractHash(t *testing.T) {
-	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1", 2)
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
 		Name: "test", Status: "failed", FailureMessage: "boom",
@@ -556,7 +565,7 @@ func writeAcceptedEvents(w http.ResponseWriter, transient bool) {
 		{"seq": 5, "type": "ToolCallCompleted", "toolName": "grep-artifact", "toolCallID": "call-2", "content": map[string]any{"resultLength": 60}, "createdAt": base.Add(4 * time.Second)},
 		{"seq": 6, "type": "ToolCallStarted", "toolName": "validate-analysis-bscope", "toolCallID": "call-3", "createdAt": base.Add(5 * time.Second)},
 		{"seq": 7, "type": "ToolCallCompleted", "toolName": "validate-analysis-bscope", "toolCallID": "call-3", "createdAt": base.Add(6 * time.Second)},
-		{"seq": 8, "type": "ModelRequestCompleted", "provider": "openai", "model": "actual-model", "stopReason": "stop", "inputTokens": 100, "outputTokens": 20, "createdAt": base.Add(7 * time.Second)},
+		{"seq": 8, "type": "ModelRequestCompleted", "provider": "openai", "model": "actual-model", "stopReason": "stop", "inputTokens": 100, "outputTokens": 20, "content": map[string]any{"apiMode": "responses", "responseID": "resp-test"}, "createdAt": base.Add(7 * time.Second)},
 	}
 	if transient {
 		events = append(events,
@@ -588,7 +597,7 @@ func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
 	}))
 	defer server.Close()
-	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", "v1", 2)
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	s := &webhookServer{client: &orkaClient{base: server.URL, http: server.Client()}, namespace: namespace}
 	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)

@@ -100,7 +100,11 @@ fi
 if [[ $args == *' delete task.core.orka.ai '* ]]; then
   exit 0
 fi
-if [[ $args == *' describe task.core.orka.ai '* || $args == *' logs job/'* ]]; then
+if [[ $args == *' logs job/'* ]]; then
+  printf 'Model request completed iteration=1 api_mode=%s response_id=%s\n' "${FAKE_SMOKE_API_MODE:-responses}" "${FAKE_SMOKE_RESPONSE_ID:-resp-smoke}"
+  exit 0
+fi
+if [[ $args == *' describe task.core.orka.ai '* ]]; then
   exit 0
 fi
 
@@ -151,12 +155,23 @@ grep -Fq 'no Orka controller Deployment was found' "$tmp/preflight-unrelated-con
 
 : > "$CALLS"
 rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
-"$script" --namespace orka-system smoke --provider copilot --model claude-test --timeout 5s \
+"$script" --namespace orka-system smoke --provider copilot --model claude-test --expect-api responses --timeout 5s \
   > "$tmp/smoke.txt"
 grep -Fq 'Smoke Task succeeded with an available result.' "$tmp/smoke.txt"
+grep -Fq 'Smoke Task API mode: responses (response resp-smoke)' "$tmp/smoke.txt"
 grep -Fq 'Deleted smoke Task orka-system/' "$tmp/smoke.txt"
 grep -Fq 'model: "claude-test"' "$SMOKE_MANIFEST"
 grep -Fq 'Reply with exactly: PROW_AI_DASHBOARD_ORKA_OK_' "$SMOKE_MANIFEST"
+grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+if FAKE_SMOKE_API_MODE=chat_completions "$script" --namespace orka-system smoke \
+  --provider copilot --expect-api responses --timeout 5s > "$tmp/smoke-api-mismatch.txt" 2>&1; then
+  echo 'smoke accepted an API mode mismatch' >&2
+  exit 1
+fi
+grep -Fq 'Smoke Task used chat_completions, expected responses' "$tmp/smoke-api-mismatch.txt"
 grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
 
 : > "$CALLS"
