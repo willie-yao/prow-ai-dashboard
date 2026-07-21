@@ -27,6 +27,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,9 +38,11 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -188,6 +191,11 @@ func main() {
 		log.Fatalf("analysis contract: %v", err)
 	}
 	storageCfg := cfg.StorageConfig()
+	storageCfg.Bucket = bucket
+	artifactBackend, backendErr := storage.New(storageCfg, &http.Client{Timeout: 30 * time.Second})
+	if backendErr != nil {
+		log.Printf("⚠ artifact-tree seed unavailable: %v", backendErr)
+	}
 	projectScope := orka.ProjectScopeID(cfg.ID, string(storageCfg.Provider), bucket, storageCfg.Base, storageCfg.WebBase, storageCfg.ProwBase)
 	manifest := orka.NewAnalysisManifest(projectScope, projectLabel, contractHash, *provider, *model, *version, agentic.MinToolCalls)
 	manifest.SkillSetHash = skillSet.Hash()
@@ -222,15 +230,27 @@ func main() {
 			buildScope := orka.BuildScopeID(projectScope, detail.JobID, run.BuildID, buildPrefix)
 			toolScope := orka.ToolScopeID(buildScope, contractHash)
 			registered := false
+			artifactSeed := ""
 			for ti := range run.TestCases {
 				tc := run.TestCases[ti]
 				if tc.Status != "failed" {
 					continue
 				}
 				if !registered {
-					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix)
-					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 					registered = true
+					if artifactBackend != nil {
+						seedCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						browser := artifacts.NewUncachedBackendBrowser(artifactBackend, bucket, buildPrefix, detail.JobID+"/"+run.BuildID)
+						seed, seedErr := orka.ArtifactTreeSeed(seedCtx, browser)
+						cancel()
+						if seedErr != nil {
+							log.Printf("⚠ artifact-tree seed skipped for %s/%s: %v", detail.JobID, run.BuildID, seedErr)
+						} else {
+							artifactSeed = seed
+						}
+					}
+					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix, artifactSeed)
+					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 				}
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
 				if err != nil {
@@ -247,7 +267,7 @@ func main() {
 					WebhookURL:   *webhookURL,
 					Tools:        taskToolNames(toolNames, ref.ToolScope, ref.Name),
 					SystemPrompt: systemPrompt,
-					Prompt:       ref.Prompt,
+					Prompt:       orka.WithArtifactTreeSeed(ref.Prompt, artifactSeed),
 					Labels: map[string]string{
 						orka.ManagedByLabel: orka.ManagedByValue,
 						orka.BuildLabel:     ref.ToolScope,

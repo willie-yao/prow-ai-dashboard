@@ -64,6 +64,29 @@ thirds of failures remains model-bound (claude gets them right; gemini does not)
 The gate's value is a model-independent process guardrail - a transient claim must
 be grounded in a timeline check - which matters most with a capable model.
 
+## Phase 2 Kimi evidence-retention spike
+
+A follow-up run used `moonshotai/Kimi-K2-Instruct-0905` against the same DRA
+failure from build `2078833416211533824`. The Phase 2 prompt included the bounded
+JUnit failure body and filtered artifact tree. The worker kept an evidence ledger
+and proactively compacted the conversation twice.
+
+| Metric | Phase 1c | Phase 2 |
+|---|---:|---:|
+| Model requests | 22 | **13** |
+| Tool calls | 22 | **13** |
+| Tool failures | 3 | **0** |
+| Input tokens | 644,937 | **286,833** |
+| Context compactions | 0 | 2 |
+| Runtime | 5m39s | 6m02s |
+
+Phase 1c described only a pod timeout and generic resource-allocation delay.
+Phase 2 traced the actual chain: the device-plugin stream ended with EOF, kubelet
+removed the endpoint, and container creation failed with `endpoint not found in
+cache for a registered resource`. The model still set `is_transient=true`, so the
+spike demonstrates a substantial harness improvement in evidence use and root
+cause while confirming that the final classification remains model-bound.
+
 ## Build and validation
 
 ```bash
