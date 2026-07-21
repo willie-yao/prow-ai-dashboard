@@ -18,7 +18,7 @@ import (
 func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
 	a := gp.agent
 	if a != nil && a.SharedModelEndpoint && a.API == "responses" {
-		return nil, fmt.Errorf("agent fix generation requires a Chat Completions endpoint; configure a separate agent runtime model endpoint")
+		return nil, fmt.Errorf("agent fix generation with the local OpenCode runtime requires Chat Completions; use ai.api=chat_completions or select the Orka fix runtime")
 	}
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
