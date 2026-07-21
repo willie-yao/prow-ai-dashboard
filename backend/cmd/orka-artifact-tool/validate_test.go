@@ -77,7 +77,7 @@ func TestValidateAnalysisRequiresReadEvidence(t *testing.T) {
 
 func TestValidateAnalysisRequiresRelevantFilesArray(t *testing.T) {
 	env := &toolEnv{evidence: newEvidenceAttestor("secret")}
-	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"analysis":{"root_cause":"cause"},"evidence_tokens":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/tool/validate_analysis", strings.NewReader(`{"analysis":{"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"fix"},"evidence_tokens":[]}`))
 	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
 	req.Header.Set(orka.ValidationTaskHeader, "task")
 	req.Header.Set(orka.MinGCSBytesHeader, "0")
@@ -220,6 +220,58 @@ func TestValidateAnalysisEnforcesMinimumGCSBytes(t *testing.T) {
 	}
 }
 
+func runSubmission(t *testing.T, env *toolEnv, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tool/submit_analysis", bytes.NewReader(data))
+	req.Header.Set(orka.ToolScopeHeader, "scope")
+	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
+	req.Header.Set(orka.ValidationTaskHeader, "task")
+	req.Header.Set(orka.MinGCSBytesHeader, "0")
+	recorder := httptest.NewRecorder()
+	submitAnalysis(env, recorder, req)
+	return recorder
+}
+
+func TestSubmitAnalysisRejectsInvalidFinalShape(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{
+			"summary":         "summary",
+			"root_cause":      "cause",
+			"severity":        "High",
+			"is_transient":    false,
+			"suggested_fix":   "fix",
+			"relevant_files":  []string{},
+			"evidence_tokens": []string{},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{name: "summary", mutate: func(body map[string]any) { body["summary"] = " " }, want: "summary is required"},
+		{name: "root cause", mutate: func(body map[string]any) { delete(body, "root_cause") }, want: "root_cause is required"},
+		{name: "transient verdict", mutate: func(body map[string]any) { delete(body, "is_transient") }, want: "is_transient is required"},
+		{name: "severity", mutate: func(body map[string]any) { body["severity"] = "severe" }, want: `severity "severe" is invalid`},
+		{name: "suggested fix", mutate: func(body map[string]any) { body["suggested_fix"] = "" }, want: "suggested_fix is required"},
+		{name: "relevant files", mutate: func(body map[string]any) { body["relevant_files"] = nil }, want: "relevant_files array is required"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := base()
+			tc.mutate(body)
+			response := runSubmission(t, &toolEnv{}, body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), tc.want) {
+				t.Fatalf("response = %d %s, want %q", response.Code, response.Body.String(), tc.want)
+			}
+		})
+	}
+}
+
 func TestSubmitAnalysisAcceptsFlatSchema(t *testing.T) {
 	attestor := newEvidenceAttestor("secret")
 	env := &toolEnv{evidence: attestor}
@@ -228,7 +280,7 @@ func TestSubmitAnalysisAcceptsFlatSchema(t *testing.T) {
 		SuggestedFix: "fix", RelevantFiles: []string{"build-log.txt"},
 	}
 	token := attestor.issue("scope", "build-log.txt")
-	body, err := json.Marshal(map[string]any{
+	recorder := runSubmission(t, env, map[string]any{
 		"summary":         analysis.Summary,
 		"root_cause":      analysis.RootCause,
 		"severity":        analysis.Severity,
@@ -237,16 +289,6 @@ func TestSubmitAnalysisAcceptsFlatSchema(t *testing.T) {
 		"relevant_files":  analysis.RelevantFiles,
 		"evidence_tokens": []string{token},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/tool/submit_analysis", bytes.NewReader(body))
-	req.Header.Set(orka.ToolScopeHeader, "scope")
-	req.Header.Set(orka.ValidationKeyHeader, testArtifactValidationKey)
-	req.Header.Set(orka.ValidationTaskHeader, "task")
-	req.Header.Set(orka.MinGCSBytesHeader, "0")
-	recorder := httptest.NewRecorder()
-	submitAnalysis(env, recorder, req)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("response = %d %s", recorder.Code, recorder.Body.String())
 	}

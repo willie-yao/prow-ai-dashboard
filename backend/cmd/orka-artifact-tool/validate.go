@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"path"
@@ -22,14 +23,51 @@ func init() {
 	registerQTool("/tool/submit_analysis", submitAnalysis)
 }
 
+type analysisRequest struct {
+	Summary       string   `json:"summary"`
+	RootCause     string   `json:"root_cause"`
+	Severity      string   `json:"severity"`
+	IsTransient   *bool    `json:"is_transient"`
+	SuggestedFix  string   `json:"suggested_fix"`
+	RelevantFiles []string `json:"relevant_files"`
+}
+
 type validationRequest struct {
-	Analysis       orka.AnalysisValidation `json:"analysis"`
-	EvidenceTokens []string                `json:"evidence_tokens"`
+	Analysis       analysisRequest `json:"analysis"`
+	EvidenceTokens []string        `json:"evidence_tokens"`
 }
 
 type submissionRequest struct {
-	orka.AnalysisValidation
+	analysisRequest
 	EvidenceTokens []string `json:"evidence_tokens"`
+}
+
+func (a analysisRequest) validation() (orka.AnalysisValidation, error) {
+	if strings.TrimSpace(a.Summary) == "" {
+		return orka.AnalysisValidation{}, fmt.Errorf("summary is required")
+	}
+	if strings.TrimSpace(a.RootCause) == "" {
+		return orka.AnalysisValidation{}, fmt.Errorf("root_cause is required")
+	}
+	if a.IsTransient == nil {
+		return orka.AnalysisValidation{}, fmt.Errorf("is_transient is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(a.Severity)) {
+	case "critical", "high", "medium", "low":
+	default:
+		return orka.AnalysisValidation{}, fmt.Errorf("severity %q is invalid", a.Severity)
+	}
+	if strings.TrimSpace(a.SuggestedFix) == "" {
+		return orka.AnalysisValidation{}, fmt.Errorf("suggested_fix is required")
+	}
+	if a.RelevantFiles == nil {
+		return orka.AnalysisValidation{}, fmt.Errorf("relevant_files array is required")
+	}
+	return orka.AnalysisValidation{
+		Summary: a.Summary, RootCause: a.RootCause, Severity: a.Severity,
+		IsTransient: *a.IsTransient, SuggestedFix: a.SuggestedFix,
+		RelevantFiles: append([]string(nil), a.RelevantFiles...),
+	}, nil
 }
 
 func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
@@ -41,7 +79,12 @@ func validateAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	validateSubmission(env, w, r, args.Analysis, args.EvidenceTokens, "validate_analysis")
+	analysis, err := args.Analysis.validation()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	validateSubmission(env, w, r, analysis, args.EvidenceTokens, "validate_analysis")
 }
 
 func submitAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
@@ -53,7 +96,12 @@ func submitAnalysis(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	validateSubmission(env, w, r, args.AnalysisValidation, args.EvidenceTokens, "submit_analysis")
+	analysis, err := args.analysisRequest.validation()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	validateSubmission(env, w, r, analysis, args.EvidenceTokens, "submit_analysis")
 }
 
 func validateSubmission(
@@ -67,14 +115,6 @@ func validateSubmission(
 	set, err := skills.ParseHeader(r.Header.Get(skills.ContractHeader))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(analysis.RootCause) == "" {
-		http.Error(w, "analysis.root_cause is required", http.StatusBadRequest)
-		return
-	}
-	if analysis.RelevantFiles == nil {
-		http.Error(w, "analysis.relevant_files array is required", http.StatusBadRequest)
 		return
 	}
 	if env.evidence == nil {

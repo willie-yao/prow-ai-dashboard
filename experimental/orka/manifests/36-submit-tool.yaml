@@ -16,11 +16,13 @@ spec:
   parameters:
     type: object
     properties:
-      summary: {type: string}
-      root_cause: {type: string}
-      severity: {type: string}
+      summary: {type: string, minLength: 1}
+      root_cause: {type: string, minLength: 1}
+      severity:
+        type: string
+        enum: [Critical, High, Medium, Low]
       is_transient: {type: boolean}
-      suggested_fix: {type: string}
+      suggested_fix: {type: string, minLength: 1}
       relevant_files:
         type: array
         items: {type: string}
