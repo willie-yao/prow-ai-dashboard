@@ -35,11 +35,13 @@ type CoverageCatalog struct {
 
 // VerificationJob identifies one presubmit that executed a test.
 type VerificationJob struct {
-	JobID        string `json:"job_id"`
-	JobName      string `json:"job_name"`
-	Repo         string `json:"repo"`
-	RerunCommand string `json:"rerun_command,omitempty"`
-	BuildID      string `json:"build_id"`
+	JobID        string   `json:"job_id"`
+	JobName      string   `json:"job_name"`
+	Repo         string   `json:"repo"`
+	RerunCommand string   `json:"rerun_command,omitempty"`
+	Branches     []string `json:"branches,omitempty"`
+	SkipBranches []string `json:"skip_branches,omitempty"`
+	BuildID      string   `json:"build_id"`
 }
 
 // LoadCoverageCatalog returns a current cache for revision when available.
@@ -196,7 +198,10 @@ func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig
 				}
 				verification := VerificationJob{
 					JobID: jobID, JobName: definition.Name, Repo: definition.Repo,
-					RerunCommand: definition.EffectiveRerunCommand(), BuildID: build.ID,
+					RerunCommand: definition.EffectiveRerunCommand(),
+					Branches:     append([]string(nil), definition.Branches...),
+					SkipBranches: append([]string(nil), definition.SkipBranches...),
+					BuildID:      build.ID,
 				}
 				for _, identity := range junit.Identities(test) {
 					tests[identity] = appendVerificationJob(tests[identity], verification)

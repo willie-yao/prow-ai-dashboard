@@ -69,6 +69,49 @@ func TestReconcileLinkedIssuesWaitsForEveryFinding(t *testing.T) {
 	}
 }
 
+func TestReconcileLinkedIssuesClosedUnmergedBlocksClosure(t *testing.T) {
+	client := &fakeIssueLifecycle{}
+	state := NewState()
+	state.Remediations["verified"] = &Remediation{
+		Issue:    &IssueRef{Number: 9, Repo: "o/r"},
+		Attempts: []Attempt{{Status: StatusVerifiedFixed, LastTransition: "observing->verified_fixed"}},
+	}
+	state.Remediations["closed"] = &Remediation{
+		Issue:    &IssueRef{Number: 9, Repo: "o/r"},
+		Attempts: []Attempt{{Status: StatusClosedUnmerged, LastTransition: "open->closed_unmerged"}},
+	}
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.closed) != 0 {
+		t.Fatalf("issue closed with unresolved remediation: %v", client.closed)
+	}
+}
+
+func TestReconcileLinkedIssuesReopensForPendingFinding(t *testing.T) {
+	client := &fakeIssueLifecycle{}
+	state := NewState()
+	state.Remediations["verified"] = &Remediation{
+		Issue:    &IssueRef{Number: 9, Repo: "o/r", State: "closed"},
+		Attempts: []Attempt{{Status: StatusVerifiedFixed, LastTransition: "observing->verified_fixed"}},
+	}
+	state.Remediations["pending"] = &Remediation{
+		Issue:    &IssueRef{Number: 9, Repo: "o/r", State: "closed"},
+		Attempts: []Attempt{{Status: StatusAwaitingPresubmit, LastTransition: "open->awaiting_presubmit"}},
+	}
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.reopened) != 1 {
+		t.Fatalf("reopen calls = %v", client.reopened)
+	}
+	for id, entry := range state.Remediations {
+		if entry.Issue.State != "open" {
+			t.Fatalf("%s issue = %+v", id, entry.Issue)
+		}
+	}
+}
+
 func TestReconcileIssueReopensOnSameCauseRecurrence(t *testing.T) {
 	client := &fakeIssueLifecycle{}
 	remediation := &Remediation{Issue: &IssueRef{

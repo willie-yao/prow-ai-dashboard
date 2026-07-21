@@ -75,7 +75,10 @@ func TestBuildCoverageCatalog(t *testing.T) {
 		"pr-logs/pull/example_project/42/pull-e2e/10/artifacts/junit.xml": `<testsuite name="suite"><testcase name="test" classname="class"/></testsuite>`,
 	}}
 	catalog := &jobconfig.Catalog{Revision: "sha", Jobs: map[string]jobconfig.JobDefinition{
-		"example/project/pull-e2e": {Name: "pull-e2e", JobType: "presubmit", Repo: "example/project"},
+		"example/project/pull-e2e": {
+			Name: "pull-e2e", JobType: "presubmit", Repo: "example/project",
+			Branches: []string{"^main$"}, SkipBranches: []string{"^release-"},
+		},
 	}}
 	got, err := BuildCoverageCatalog(context.Background(), b, catalog, []string{"example/project"})
 	if err != nil {
@@ -84,6 +87,9 @@ func TestBuildCoverageCatalog(t *testing.T) {
 	jobs := got.Tests["suite\x00class\x00test"]
 	if len(jobs) != 1 || jobs[0].JobName != "pull-e2e" || jobs[0].RerunCommand != "/test pull-e2e" {
 		t.Fatalf("coverage = %+v", got)
+	}
+	if len(jobs[0].Branches) != 1 || jobs[0].Branches[0] != "^main$" || len(jobs[0].SkipBranches) != 1 {
+		t.Fatalf("branch selectors = %+v", jobs[0])
 	}
 	if len(got.Tests["name\x00test"]) != 1 {
 		t.Fatalf("name fallback missing: %+v", got.Tests)

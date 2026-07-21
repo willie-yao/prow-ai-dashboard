@@ -41,11 +41,51 @@ func TestVerificationJobsPresubmitUsesOriginatingJob(t *testing.T) {
 		Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}},
 	}
 	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{
-		identity: {{JobID: "example/project/pull-other", JobName: "pull-other", Repo: "example/project"}},
+		identity: {
+			{JobID: "example/project/pull-origin", JobName: "pull-origin", Repo: "example/project", Branches: []string{"^main$"}},
+			{JobID: "example/project/pull-other", JobName: "pull-other", Repo: "example/project"},
+		},
 	}}
 	jobs := verificationJobs(remediation, coverage)
-	if len(jobs) != 1 || jobs[0].JobName != "pull-origin" {
+	if len(jobs) != 1 || jobs[0].JobName != "pull-origin" || len(jobs[0].Branches) != 1 {
 		t.Fatalf("jobs = %+v", jobs)
+	}
+}
+
+func TestObservePresubmitsRejectsInapplicableBranch(t *testing.T) {
+	identity := "suite\x00class\x00test"
+	remediation := &Remediation{
+		JobType:  models.JobTypePeriodic,
+		Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}},
+	}
+	attempt := &Attempt{
+		PRNumber: 42, HeadSHA: "head", BaseRef: "main",
+		TargetRepo: "example/project", Status: StatusOpen,
+	}
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{
+		identity: {{
+			JobID: "example/project/pull-release", JobName: "pull-release", Repo: "example/project",
+			Branches: []string{"^release-"},
+		}},
+	}}
+	if err := ObservePresubmits(context.Background(), memoryBackend{}, remediation, attempt, coverage); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusInconclusive || !strings.Contains(attempt.OutcomeReason, "base branch main") {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestVerificationJobAppliesToBranch(t *testing.T) {
+	job := VerificationJob{JobName: "pull-e2e", Branches: []string{"^main$"}, SkipBranches: []string{"^main-old$"}}
+	if ok, err := verificationJobAppliesToBranch(job, "main"); err != nil || !ok {
+		t.Fatalf("main applies = %v, err = %v", ok, err)
+	}
+	if ok, err := verificationJobAppliesToBranch(job, "main-old"); err != nil || ok {
+		t.Fatalf("main-old applies = %v, err = %v", ok, err)
+	}
+	if _, err := verificationJobAppliesToBranch(VerificationJob{JobName: "bad", Branches: []string{"["}}, "main"); err == nil {
+		t.Fatal("invalid selector must fail")
 	}
 }
 

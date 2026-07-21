@@ -47,12 +47,11 @@ export function PatternBanner({
   const attempt = remediation?.attempt;
   const latestObservation = attempt?.observations?.reduce((latest, observation) => {
     if (!latest) return observation;
-    const completed = observation.completed_at ?? "";
-    const latestCompleted = latest.completed_at ?? "";
-    if (completed !== latestCompleted) return completed > latestCompleted ? observation : latest;
-    return observation.build_id.localeCompare(latest.build_id, undefined, { numeric: true }) > 0
-      ? observation
-      : latest;
+    const buildOrder = observation.build_id.localeCompare(latest.build_id, undefined, { numeric: true });
+    if (buildOrder !== 0) return buildOrder > 0 ? observation : latest;
+    const observedAt = observation.completed_at ?? observation.started_at ?? "";
+    const latestObservedAt = latest.completed_at ?? latest.started_at ?? "";
+    return observedAt > latestObservedAt ? observation : latest;
   }, undefined as RemediationObservation | undefined);
 
   return (

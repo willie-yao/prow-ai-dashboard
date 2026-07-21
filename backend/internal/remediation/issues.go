@@ -80,23 +80,47 @@ func reconcileLinkedIssues(ctx context.Context, client IssueLifecycleClient, rep
 	var errs []error
 	for _, entries := range groups {
 		pending := false
+		issueClosed := true
 		var closureOwner *Remediation
 		for _, entry := range entries {
 			attempt := &entry.Attempts[len(entry.Attempts)-1]
-			if attempt.Status == StatusVerifiedFixed {
-				if closureOwner == nil || entry.UpdatedAt > closureOwner.UpdatedAt {
-					closureOwner = entry
-				}
+			if entry.Issue.State != "closed" {
+				issueClosed = false
+			}
+			if attempt.Status != StatusVerifiedFixed {
+				pending = true
 				continue
 			}
-			if attempt.Status != StatusClosedUnmerged {
-				pending = true
-			}
-			if err := reconcileIssue(ctx, client, entry, attempt); err != nil {
-				errs = append(errs, err)
+			if closureOwner == nil || entry.UpdatedAt > closureOwner.UpdatedAt {
+				closureOwner = entry
 			}
 		}
-		if pending || closureOwner == nil {
+		if pending && issueClosed {
+			issue := entries[0].Issue
+			if err := client.ReopenIssue(ctx, issue.Number); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			issueClosed = false
+		}
+		if !issueClosed {
+			for _, entry := range entries {
+				entry.Issue.State = "open"
+			}
+		}
+		if pending {
+			for _, entry := range entries {
+				attempt := &entry.Attempts[len(entry.Attempts)-1]
+				if attempt.Status == StatusVerifiedFixed {
+					continue
+				}
+				if err := reconcileIssue(ctx, client, entry, attempt); err != nil {
+					errs = append(errs, err)
+				}
+			}
+			continue
+		}
+		if closureOwner == nil {
 			continue
 		}
 		attempt := &closureOwner.Attempts[len(closureOwner.Attempts)-1]

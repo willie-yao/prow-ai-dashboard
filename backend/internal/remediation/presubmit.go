@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,6 +56,23 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 		return nil
 	}
 	jobs = matching
+	applicable := jobs[:0]
+	for _, job := range jobs {
+		matches, err := verificationJobAppliesToBranch(job, attempt.BaseRef)
+		if err != nil {
+			transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive, err.Error())
+			return nil
+		}
+		if matches {
+			applicable = append(applicable, job)
+		}
+	}
+	if len(applicable) == 0 {
+		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
+			fmt.Sprintf("no discovered Prow presubmit applies to base branch %s", attempt.BaseRef))
+		return nil
+	}
+	jobs = applicable
 	var observations []BuildObservation
 	for _, job := range jobs {
 		jobEvidence := evidenceForVerificationJob(remediation.Evidence, coverage, job)
@@ -165,6 +183,16 @@ func verificationJobs(remediation *Remediation, coverage *CoverageCatalog) []Ver
 			JobName: remediation.JobName, Repo: remediation.SourceRepo,
 			RerunCommand: "/test " + remediation.JobName,
 		}
+		if coverage != nil {
+			for _, evidence := range remediation.Evidence.Tests {
+				for _, candidate := range coverage.Tests[evidence.Identity] {
+					if candidate.JobID == job.JobID {
+						job = candidate
+						break
+					}
+				}
+			}
+		}
 		byID[job.JobID] = job
 	}
 	if remediation.JobType != models.JobTypePresubmit && coverage != nil {
@@ -180,6 +208,31 @@ func verificationJobs(remediation *Remediation, coverage *CoverageCatalog) []Ver
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].JobID < out[j].JobID })
 	return out
+}
+
+func verificationJobAppliesToBranch(job VerificationJob, branch string) (bool, error) {
+	for _, pattern := range job.SkipBranches {
+		matches, err := regexp.MatchString(pattern, branch)
+		if err != nil {
+			return false, fmt.Errorf("invalid skip_branches selector for %s: %w", job.JobName, err)
+		}
+		if matches {
+			return false, nil
+		}
+	}
+	if len(job.Branches) == 0 {
+		return true, nil
+	}
+	for _, pattern := range job.Branches {
+		matches, err := regexp.MatchString(pattern, branch)
+		if err != nil {
+			return false, fmt.Errorf("invalid branches selector for %s: %w", job.JobName, err)
+		}
+		if matches {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func evidenceForVerificationJob(evidence Evidence, coverage *CoverageCatalog, job VerificationJob) Evidence {
