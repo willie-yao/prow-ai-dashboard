@@ -38,6 +38,9 @@ func RunFinalizedSideEffects(ctx context.Context, opts FinalizedSideEffectsOptio
 		return fmt.Errorf("configuring storage: %w", err)
 	}
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	if err := project.ValidateAIAPI(provider.API); err != nil {
+		return err
+	}
 	aiToken := os.Getenv("AI_TOKEN")
 	enableAI := aiToken != "" && provider.Endpoint != "" && provider.Model != ""
 	client := &http.Client{Timeout: 30 * time.Second}

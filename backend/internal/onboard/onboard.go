@@ -196,6 +196,10 @@ func validateOptions(opts *Options) error {
 	if err := project.ValidateAIAPI(opts.AIAPI); err != nil {
 		return err
 	}
+	opts.AIAPI = strings.ToLower(strings.TrimSpace(opts.AIAPI))
+	if opts.AIAPI == "" {
+		opts.AIAPI = project.AIAPIChatCompletions
+	}
 	if (opts.TestGrid == "") == (opts.Bucket == "") {
 		return fmt.Errorf("provide exactly one of --testgrid or --bucket")
 	}
