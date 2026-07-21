@@ -1,9 +1,9 @@
 diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go
 new file mode 100644
-index 0000000..50e9abd
+index 0000000..a988b56
 --- /dev/null
 +++ b/workers/ai/compatibility_test.go
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,201 @@
 +package main
 +
 +import (
@@ -107,6 +107,19 @@ index 0000000..50e9abd
 +	}
 +}
 +
++func TestIsVerifyTimelineTool(t *testing.T) {
++	for _, name := range []string{"verify_timeline", "verify-timeline-babc123", "VERIFY_TIMELINE_BABC123"} {
++		if !isVerifyTimelineTool(name) {
++			t.Fatalf("required timeline tool %q was not recognized", name)
++		}
++	}
++	for _, name := range []string{"preverify-timeline-check", "verify_timeline_custom", "verify-timeline" + "-custom"} {
++		if isVerifyTimelineTool(name) {
++			t.Fatalf("unrelated tool %q was recognized as verify_timeline", name)
++		}
++	}
++}
++
 +type retryTimelineTool struct {
 +	calls int
 +}
@@ -193,7 +206,7 @@ index 0000000..50e9abd
 +	}
 +}
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca..dbd025a 100644
+index 47bc4ca..978c2ae 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -929,9 +929,9 @@ func executeAgentLoopWithEvents(
@@ -311,8 +324,8 @@ index 47bc4ca..dbd025a 100644
 +}
 +
 +func isVerifyTimelineTool(name string) bool {
-+	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "_", "-")
-+	return strings.Contains(normalized, "verify-timeline")
++	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "-", "_")
++	return normalized == "verify_timeline" || strings.HasPrefix(normalized, "verify_timeline_b")
 +}
 +
 +type analysisCandidate struct {
