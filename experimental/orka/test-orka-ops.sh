@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+script="$root/experimental/orka/orka-ops.sh"
+tmp="${TMPDIR:-/tmp}/prow-ai-dashboard-orka-ops-$$"
+mkdir -p "$tmp/bin"
+trap 'rm -rf "$tmp"' EXIT
+
+bash -n "$script"
+
+cat > "$tmp/bin/kubectl" <<'EOF_KUBECTL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$CALLS"
+args="$*"
+
+if [[ $args == *' get namespace '* ]]; then
+  printf 'resource/test\n'
+  exit 0
+fi
+if [[ $args == *' get crd '* ]]; then
+  printf '%s' "${FAKE_CRD_ESTABLISHED:-True}"
+  exit 0
+fi
+if [[ $args == *' get deployments '* && $args == *'status.readyReplicas'* ]]; then
+  printf 'orka-controller\t1\t1\t1\n'
+  exit 0
+fi
+if [[ $args == *' get deployments '* && $args == *'range .args'* ]]; then
+  printf '%s\n' '--api-port=8080' "--ai-worker-image=${FAKE_WORKER_IMAGE:-compat-image}"
+  exit 0
+fi
+if [[ $args == *' get services '* ]]; then
+  printf 'orka\tapi,metrics,\n'
+  exit 0
+fi
+if [[ $args == *' get endpoints '* ]]; then
+  printf '10.0.0.1\n'
+  exit 0
+fi
+if [[ $args == *' get provider.core.orka.ai '* && $args == *'status.message'* ]]; then
+  printf '%s' "${FAKE_PROVIDER_STATE:-true|Ready}"
+  exit 0
+fi
+if [[ $args == *' get provider.core.orka.ai '* ]]; then
+  printf '%s' "${FAKE_PROVIDER_READY:-true}"
+  exit 0
+fi
+if [[ $args == *' auth can-i '* ]]; then
+  if [[ ${FAKE_RBAC_DENY:-} == "$2 $3" ]]; then
+    printf 'no\n'
+  else
+    printf 'yes\n'
+  fi
+  exit 0
+fi
+if [[ $args == *' create -f -'* ]]; then
+  cat > "$SMOKE_MANIFEST"
+  exit 0
+fi
+if [[ $args == *' get task.core.orka.ai prow-ai-dashboard-smoke-'* ]]; then
+  if [[ -n ${FAKE_SMOKE_PHASE:-} ]]; then
+    printf '%s|false|provider failed|smoke-job' "$FAKE_SMOKE_PHASE"
+    exit 0
+  fi
+  count=0
+  [[ -f $SMOKE_COUNT ]] && count=$(cat "$SMOKE_COUNT")
+  count=$((count + 1))
+  printf '%d' "$count" > "$SMOKE_COUNT"
+  if (( count == 1 )); then
+    printf 'Pending|||'
+  else
+    printf 'Succeeded|true||smoke-job'
+  fi
+  exit 0
+fi
+if [[ $args == *' get tasks.core.orka.ai '* && $args == *'jsonpath='* ]]; then
+  printf '%s\n' "${FAKE_RECHECK_PHASE:-Succeeded}"
+  exit 0
+fi
+if [[ $args == *' get tasks.core.orka.ai '* && $args == *'go-template='* ]]; then
+  printf '%s' "${FAKE_TASKS:-}"
+  exit 0
+fi
+if [[ $args == *' get tools.core.orka.ai '* && $args == *'go-template='* ]]; then
+  printf '%s' "${FAKE_TOOLS:-}"
+  exit 0
+fi
+if [[ $args == *' delete task.core.orka.ai '* || $args == *' delete tool.core.orka.ai '* ]]; then
+  exit 0
+fi
+if [[ $args == *' describe task.core.orka.ai '* || $args == *' logs job/'* ]]; then
+  exit 0
+fi
+
+echo "unexpected kubectl invocation: $args" >&2
+exit 1
+EOF_KUBECTL
+chmod +x "$tmp/bin/kubectl"
+
+export PATH="$tmp/bin:$PATH"
+export KUBECTL="$tmp/bin/kubectl"
+export CALLS="$tmp/calls"
+export SMOKE_MANIFEST="$tmp/smoke.yaml"
+export SMOKE_COUNT="$tmp/smoke-count"
+export ORKA_OPS_POLL_SECONDS=0
+: > "$CALLS"
+
+"$script" --context test --namespace orka-system preflight \
+  --provider copilot --worker-image compat-image \
+  --service-account dashboards/dashboard-orka > "$tmp/preflight.txt"
+grep -Fq 'PASS  Provider copilot is ready' "$tmp/preflight.txt"
+grep -Fq 'PASS  AI worker image is compat-image' "$tmp/preflight.txt"
+grep -Fq 'Preflight passed.' "$tmp/preflight.txt"
+grep -Fq -- '--context test auth can-i delete tools.core.orka.ai -n orka-system --as=system:serviceaccount:dashboards:dashboard-orka' "$CALLS"
+
+if FAKE_WORKER_IMAGE=wrong-image "$script" --namespace orka-system preflight \
+  --provider copilot --worker-image compat-image > "$tmp/preflight-fail.txt" 2>&1; then
+  echo 'preflight accepted the wrong compatibility worker image' >&2
+  exit 1
+fi
+grep -Fq 'AI worker image is wrong-image, expected compat-image' "$tmp/preflight-fail.txt"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+"$script" --namespace orka-system smoke --provider copilot --model claude-test --timeout 5s \
+  > "$tmp/smoke.txt"
+grep -Fq 'Smoke Task succeeded with an available result.' "$tmp/smoke.txt"
+grep -Fq 'Deleted smoke Task orka-system/' "$tmp/smoke.txt"
+grep -Fq 'model: "claude-test"' "$SMOKE_MANIFEST"
+grep -Fq 'Reply with exactly: PROW_AI_DASHBOARD_ORKA_OK_' "$SMOKE_MANIFEST"
+grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+if FAKE_SMOKE_PHASE=Failed "$script" --namespace orka-system smoke \
+  --provider copilot --timeout 5s > "$tmp/smoke-failed.txt" 2>&1; then
+  echo 'smoke accepted a failed Task' >&2
+  exit 1
+fi
+grep -Fq 'Smoke Task Failed: provider failed' "$tmp/smoke-failed.txt"
+grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+project=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+build_old=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+build_active=cccccccccccccccccccccccccccccccc
+export FAKE_TASKS
+FAKE_TASKS=$(cat <<EOF_TASKS
+$project	$build_old	analysis	task-old	Succeeded	2019-01-01T00:00:00Z	2020-01-01T00:00:00Z	<no value>
+$project	$build_active	analysis	task-active	Running	2020-01-01T00:00:00Z	<no value>	<no value>
+$project	<no value>	pattern	task-new	Succeeded	2020-01-01T00:00:00Z	2099-01-01T00:00:00Z	<no value>
+<no value>	<no value>	<no value>	legacy-task	Failed	2020-01-01T00:00:00Z	<no value>	<no value>
+EOF_TASKS
+)
+export FAKE_TOOLS
+FAKE_TOOLS=$(cat <<EOF_TOOLS
+$project	$build_old	tool-old	2020-01-01T00:00:00Z	<no value>
+$project	$build_active	tool-active	2020-01-01T00:00:00Z	<no value>
+$project	$build_old	tool-new	2099-01-01T00:00:00Z	<no value>
+EOF_TOOLS
+)
+
+"$script" --namespace orka-system status > "$tmp/status.txt"
+grep -Fq $'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\t3\t1\t2\t0\t0\t0\t3' "$tmp/status.txt"
+grep -Fq $'<unlabeled>\t1\t0\t0\t1\t0\t0\t0' "$tmp/status.txt"
+grep -Fq "$build_active" "$tmp/status.txt"
+grep -Fq $'<none>\tpattern\t1' "$tmp/status.txt"
+
+FAKE_TOOLS='' FAKE_TASKS="$project	$build_active	analysis	task-pending	<none>	2020-01-01T00:00:00Z	<no value>	<no value>
+" \
+  "$script" --namespace orka-system status > "$tmp/status-tasks-only.txt"
+grep -Fq "$project" "$tmp/status-tasks-only.txt"
+grep -Fq $'1\t1\t0\t0\t0\t0\t0' "$tmp/status-tasks-only.txt"
+
+: > "$CALLS"
+"$script" --namespace orka-system gc --project "$project" --older-than 7d > "$tmp/gc-dry-run.txt"
+grep -Fq 'Tasks eligible: 1' "$tmp/gc-dry-run.txt"
+grep -Fq 'Task task-old phase=Succeeded' "$tmp/gc-dry-run.txt"
+grep -Fq 'Tools eligible: 1' "$tmp/gc-dry-run.txt"
+grep -Fq 'Tool tool-old' "$tmp/gc-dry-run.txt"
+grep -Fq 'Dry-run only.' "$tmp/gc-dry-run.txt"
+if grep -Fq ' delete ' "$CALLS"; then
+  echo 'GC dry-run deleted a resource' >&2
+  exit 1
+fi
+
+: > "$CALLS"
+"$script" --namespace orka-system gc --project "$project" --older-than 7d --delete > "$tmp/gc-delete.txt"
+grep -Fq 'Deleted Tool tool-old' "$tmp/gc-delete.txt"
+grep -Fq 'Deleted Task task-old' "$tmp/gc-delete.txt"
+grep -Fq "delete tool.core.orka.ai tool-old --wait=false" "$CALLS"
+grep -Fq "delete task.core.orka.ai task-old --wait=false" "$CALLS"
+if grep -Eq 'delete (tool|task)\.core\.orka\.ai (tool-active|tool-new|task-active|task-new|legacy-task)' "$CALLS"; then
+  echo 'GC deleted an ineligible resource' >&2
+  exit 1
+fi
+
+: > "$CALLS"
+FAKE_RECHECK_PHASE=Running "$script" --namespace orka-system gc --project "$project" \
+  --older-than 7d --delete > "$tmp/gc-race.txt" 2>&1
+grep -Fq "Skipped Tool tool-old because build $build_old became active" "$tmp/gc-race.txt"
+if grep -Fq 'delete tool.core.orka.ai tool-old' "$CALLS"; then
+  echo 'GC deleted a Tool after its build became active' >&2
+  exit 1
+fi
+
+if "$script" gc --project not-a-scope > "$tmp/gc-invalid.txt" 2>&1; then
+  echo 'GC accepted an invalid project scope' >&2
+  exit 1
+fi
+grep -Fq '32-character project scope' "$tmp/gc-invalid.txt"
+
+echo 'Orka operation helper checks passed.'
