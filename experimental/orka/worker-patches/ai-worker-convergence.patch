@@ -1,13 +1,14 @@
 diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go
 new file mode 100644
-index 0000000..dd6fca7
+index 0000000..b471b0b
 --- /dev/null
 +++ b/workers/ai/compatibility_test.go
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,133 @@
 +package main
 +
 +import (
 +	"context"
++	"encoding/json"
 +	"strings"
 +	"testing"
 +
@@ -39,8 +40,10 @@ index 0000000..dd6fca7
 +		`{"SUMMARY":"analysis","IS_TRANSIENT": true}`,
 +		"```json\n{\"summary\":\"analysis\",\"Is_Transient\": true}\n```",
 +		`{"status":"thinking"} {"summary":"final","is_transient":true}`,
++		`{"summary":"unexpected } in log","is_transient":true}`,
++		`{"summary":"escaped \" } in log","is_transient":true}`,
 +	} {
-+		if !transientWithoutTimeline(content, nil) {
++		if !transientWithoutTimeline(content, false) {
 +			t.Fatalf("transient verdict %q was accepted", content)
 +		}
 +	}
@@ -51,15 +54,11 @@ index 0000000..dd6fca7
 +		`not json`,
 +		`{"summary":"first","is_transient":true} {"summary":"final","is_transient":false}`,
 +	} {
-+		if transientWithoutTimeline(content, nil) {
++		if transientWithoutTimeline(content, false) {
 +			t.Fatalf("non-transient verdict %q was rejected", content)
 +		}
 +	}
-+	messages := []llm.Message{{
-+		Role:      "assistant",
-+		ToolCalls: []llm.ToolCall{{Name: "verify_timeline"}},
-+	}}
-+	if transientWithoutTimeline(`{"summary":"analysis","IS_TRANSIENT":true}`, messages) {
++	if transientWithoutTimeline(`{"summary":"analysis","IS_TRANSIENT":true}`, true) {
 +		t.Fatal("verified transient verdict was rejected")
 +	}
 +}
@@ -78,6 +77,29 @@ index 0000000..dd6fca7
 +	}
 +	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 2 {
 +		t.Fatalf("result = %q, calls = %d, want corrected verdict after one re-prompt", result, provider.callCount)
++	}
++}
++
++func TestExecuteAgentLoopRepromptsAfterFailedTimeline(t *testing.T) {
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{
++			Content:    "checking timeline",
++			ToolCalls:  []llm.ToolCall{{ID: "timeline-1", Name: "verify_timeline", Arguments: json.RawMessage(`{}`)}},
++			StopReason: "tool_use",
++			Model:      "test-model",
++		},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
++		"", "test-model", nil, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 3 {
++		t.Fatalf("result = %q, calls = %d, want corrected verdict after failed timeline call", result, provider.callCount)
 +	}
 +}
 +
@@ -116,7 +138,7 @@ index 0000000..dd6fca7
 +	}
 +}
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca..66d9000 100644
+index 47bc4ca..c6e820a 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -929,9 +929,9 @@ func executeAgentLoopWithEvents(
@@ -131,7 +153,7 @@ index 47bc4ca..66d9000 100644
  	}
  	if coordinationEnv.AutonomousMode {
  		maxIterations = 100
-@@ -946,6 +946,13 @@ func executeAgentLoopWithEvents(
+@@ -946,6 +946,14 @@ func executeAgentLoopWithEvents(
  		return "", err
  	}
  
@@ -141,11 +163,12 @@ index 47bc4ca..66d9000 100644
 +	const maxCritiqueRetries = 2
 +	emptyFinalRetries := 0
 +	const maxEmptyFinalRetries = 1
++	timelineVerified := false
 +
  	for iteration := range maxIterations {
  		stepCtx, stepSpan := startAgentStepSpan(ctx, iteration, provider, model, llmTools, baseToolCtx)
  		req := &llm.CompletionRequest{
-@@ -955,6 +962,18 @@ func executeAgentLoopWithEvents(
+@@ -955,6 +963,18 @@ func executeAgentLoopWithEvents(
  			MaxTokens:    4096,
  			Tools:        llmTools,
  		}
@@ -164,7 +187,7 @@ index 47bc4ca..66d9000 100644
  		common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeModelRequestStarted, modelLoopEventTimeout,
  			common.WithEventSummary("model request started"),
  			common.WithEventContent(eventContent(map[string]any{
-@@ -1026,8 +1045,43 @@ func executeAgentLoopWithEvents(
+@@ -1026,8 +1046,43 @@ func executeAgentLoopWithEvents(
  			common.WithEventContentText(resp.Content),
  		)
  
@@ -193,7 +216,7 @@ index 47bc4ca..66d9000 100644
 +			// with the engine's contract (confirm or default to a real bug). A
 +			// generic "context deadline exceeded" or signature match is background
 +			// noise in CI logs, not proof of a transient.
-+			if transientWithoutTimeline(resp.Content, messages) {
++			if transientWithoutTimeline(resp.Content, timelineVerified) {
 +				if critiqueRetries < maxCritiqueRetries && iteration < maxIterations-1 {
 +					critiqueRetries++
 +					messages = append(messages,
@@ -209,7 +232,18 @@ index 47bc4ca..66d9000 100644
  			stepSpan.End()
  			return resp.Content, nil
  		}
-@@ -1171,6 +1225,81 @@ func executeAgentLoopWithEvents(
+@@ -1136,6 +1191,10 @@ func executeAgentLoopWithEvents(
+ 				}
+ 			}
+ 
++			if execErr == nil && isVerifyTimelineTool(toolName) {
++				timelineVerified = true
++			}
++
+ 			if execErr != nil {
+ 				common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeToolCallFailed, modelLoopEventTimeout,
+ 					common.WithEventSeverity(events.ExecutionEventSeverityError),
+@@ -1171,6 +1230,92 @@ func executeAgentLoopWithEvents(
  	return "", fmt.Errorf("max iterations reached without completion")
  }
  
@@ -217,25 +251,36 @@ index 47bc4ca..66d9000 100644
 +// is_transient=true while the model never called verify_timeline to confirm it.
 +// It backs the critique gate: a transient verdict must be earned with a timeline
 +// confirmation, matching the engine's "default to bug unless proven" contract.
-+func transientWithoutTimeline(content string, messages []llm.Message) bool {
-+	if !responseClaimsTransient(content) {
-+		return false
-+	}
-+	for _, m := range messages {
-+		for _, tc := range m.ToolCalls {
-+			name := strings.ToLower(tc.Name)
-+			if strings.Contains(name, "verify-timeline") || strings.Contains(name, "verify_timeline") {
-+				return false
-+			}
-+		}
-+	}
-+	return true
++func transientWithoutTimeline(content string, timelineVerified bool) bool {
++	return responseClaimsTransient(content) && !timelineVerified
++}
++
++func isVerifyTimelineTool(name string) bool {
++	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "_", "-")
++	return strings.Contains(normalized, "verify-timeline")
 +}
 +
 +func responseClaimsTransient(content string) bool {
 +	var best map[string]json.RawMessage
 +	depth, start := 0, -1
-+	for i, ch := range content {
++	inString, escaped := false, false
++	for i := 0; i < len(content); i++ {
++		ch := content[i]
++		if inString {
++			switch {
++			case escaped:
++				escaped = false
++			case ch == '\\':
++				escaped = true
++			case ch == '"':
++				inString = false
++			}
++			continue
++		}
++		if ch == '"' {
++			inString = true
++			continue
++		}
 +		switch ch {
 +		case '{':
 +			if depth == 0 {
