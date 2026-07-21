@@ -46,3 +46,12 @@ func TestFetchProwJobMetadataRejectsWrongRepo(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestFetchProwJobMetadataRejectsMissingPullSHA(t *testing.T) {
+	path := "pr-logs/pull/example_project/42/pull-e2e/100/prowjob.json"
+	b := &fakeBackend{objects: map[string]string{path: `{"spec":{"type":"presubmit","job":"pull-e2e","refs":{"org":"example","repo":"project","pulls":[{"number":42}]}}}`}}
+	loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePresubmit, Repo: "example/project"}, JobName: "pull-e2e", BuildID: "100", PullNumber: "42"}
+	if _, err := FetchProwJobMetadata(context.Background(), b, loc); err == nil || !strings.Contains(err.Error(), "head SHA") {
+		t.Fatalf("error = %v", err)
+	}
+}
