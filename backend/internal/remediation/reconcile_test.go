@@ -368,13 +368,13 @@ func (c multiRecoveringPRClient) SearchPullRequests(context.Context, string, str
 	return c.results, nil
 }
 
-func TestReconcileRecoverySkipsAlreadyTrackedMarkerMatch(t *testing.T) {
+func TestReconcileRecoveryDoesNotAdoptOlderMarkerMatch(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{ID: "pattern", JobID: "job", Subject: "job", SharedRootCause: "cause"}
 	state := NewStateForRepo("o/r")
 	state.Remediations["pattern"] = &Remediation{
 		ID: "pattern", FindingID: "pattern", JobID: "job",
-		Attempts: []Attempt{{Number: 1, URL: "https://github.com/o/r/pull/1"}},
+		Attempts: []Attempt{{Number: 1, URL: "https://github.com/o/r/pull/2"}},
 	}
 	if err := state.Save(dir); err != nil {
 		t.Fatal(err)
@@ -385,8 +385,8 @@ func TestReconcileRecoverySkipsAlreadyTrackedMarkerMatch(t *testing.T) {
 			Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"},
 		}},
 		results: []ghpr.PullRequestSearchResult{
-			{Number: 1, HTMLURL: "https://github.com/o/r/pull/1"},
 			{Number: 2, HTMLURL: "https://github.com/o/r/pull/2"},
+			{Number: 1, HTMLURL: "https://github.com/o/r/pull/1"},
 		},
 	}
 	reconciler := NewReconciler(client, dir)
@@ -395,7 +395,7 @@ func TestReconcileRecoverySkipsAlreadyTrackedMarkerMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Remediations["pattern"].Attempts) != 2 || state.Remediations["pattern"].Attempts[1].URL != "https://github.com/o/r/pull/2" {
+	if len(state.Remediations["pattern"].Attempts) != 1 || state.Remediations["pattern"].Attempts[0].URL != "https://github.com/o/r/pull/2" {
 		t.Fatalf("attempts = %+v", state.Remediations["pattern"].Attempts)
 	}
 }

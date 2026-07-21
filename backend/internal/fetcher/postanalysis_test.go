@@ -227,6 +227,38 @@ ai:
 	}
 }
 
+func TestProcessRemediationsRemovesPublicStateWhenInactive(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *project.Config
+	}{
+		{name: "removed", cfg: &project.Config{}},
+		{name: "dry run", cfg: &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+			DryRun: true, Repo: &project.SourceRepo{Owner: "o", Name: "r"},
+		}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			state := remediation.NewStateForRepo("o/r")
+			state.Remediations["pattern"] = &remediation.Remediation{ID: "pattern", FindingID: "pattern"}
+			if err := state.Save(dataDir); err != nil {
+				t.Fatal(err)
+			}
+			p := &pipeline{cfg: tt.cfg, opts: Options{OutDir: dataDir}}
+			if err := p.processRemediations(context.Background(), nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(dataDir, remediation.PublicFileName)); !os.IsNotExist(err) {
+				t.Fatalf("public state still exists: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(dataDir, remediation.FileName)); err != nil {
+				t.Fatalf("private state was removed: %v", err)
+			}
+		})
+	}
+}
+
 func TestProcessRemediationsClearsStateForChangedRepo(t *testing.T) {
 	dataDir := t.TempDir()
 	old := remediation.NewStateForRepo("old/r")

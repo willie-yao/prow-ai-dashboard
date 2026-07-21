@@ -825,13 +825,21 @@ func configuredFixRepo(cfg *project.Config) string {
 	return eff.Repo.Owner + "/" + eff.Repo.Name
 }
 
+func removeRemediationPublicState(dataDir string) error {
+	err := os.Remove(filepath.Join(dataDir, remediation.PublicFileName))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func (p *pipeline) processRemediations(ctx context.Context, patterns []models.PatternAnalysis, details []models.JobDetail) error {
 	targetRepo := configuredFixRepo(p.cfg)
 	if targetRepo == "" {
-		return nil
+		return removeRemediationPublicState(p.opts.OutDir)
 	}
 	if p.cfg.EffectiveFixPRs().DryRun {
-		return nil
+		return removeRemediationPublicState(p.opts.OutDir)
 	}
 	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
 	ledger := remediation.LoadForRepo(p.opts.OutDir, targetRepo)

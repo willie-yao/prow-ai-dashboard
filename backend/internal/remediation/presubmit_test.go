@@ -67,14 +67,19 @@ func TestVerificationJobsPresubmitUsesOriginatingJob(t *testing.T) {
 		JobType: models.JobTypePresubmit, SourceRepo: "example/project", JobName: "pull-origin",
 		Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}},
 	}
-	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{
-		identity: {
-			{JobID: "example/project/pull-origin", JobName: "pull-origin", Repo: "example/project", Branches: []string{"^main$"}},
-			{JobID: "example/project/pull-other", JobName: "pull-other", Repo: "example/project"},
+	coverage := &CoverageCatalog{
+		Jobs: map[string]VerificationJob{
+			"example/project/pull-origin": {
+				JobID: "example/project/pull-origin", JobName: "pull-origin", Repo: "example/project",
+				RerunCommand: "/test custom-origin", Branches: []string{"^main$"},
+			},
 		},
-	}}
+		Tests: map[string][]VerificationJob{
+			identity: {{JobID: "example/project/pull-other", JobName: "pull-other", Repo: "example/project"}},
+		},
+	}
 	jobs := verificationJobs(remediation, coverage)
-	if len(jobs) != 1 || jobs[0].JobName != "pull-origin" || len(jobs[0].Branches) != 1 {
+	if len(jobs) != 1 || jobs[0].JobName != "pull-origin" || jobs[0].RerunCommand != "/test custom-origin" || len(jobs[0].Branches) != 1 {
 		t.Fatalf("jobs = %+v", jobs)
 	}
 }

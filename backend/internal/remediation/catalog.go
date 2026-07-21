@@ -30,6 +30,7 @@ type CoverageCatalog struct {
 	Repos     []string                     `json:"repos,omitempty"`
 	Complete  bool                         `json:"complete"`
 	Errors    []string                     `json:"errors,omitempty"`
+	Jobs      map[string]VerificationJob   `json:"jobs"`
 	Tests     map[string][]VerificationJob `json:"tests"`
 }
 
@@ -51,7 +52,7 @@ func LoadCoverageCatalog(dir, revision string, repos []string, now time.Time) *C
 		return nil
 	}
 	var catalog CoverageCatalog
-	if json.Unmarshal(data, &catalog) != nil || catalog.Revision != revision || !catalog.Complete || catalog.Tests == nil {
+	if json.Unmarshal(data, &catalog) != nil || catalog.Revision != revision || !catalog.Complete || catalog.Jobs == nil || catalog.Tests == nil {
 		return nil
 	}
 	if !containsRepos(catalog.Repos, repos) {
@@ -72,7 +73,10 @@ func (c *CoverageCatalog) Save(dir string) error {
 // BuildCoverageCatalog reads recent completed presubmits and indexes their tests.
 func BuildCoverageCatalog(ctx context.Context, b storage.Backend, catalog *jobconfig.Catalog, repos []string) (*CoverageCatalog, error) {
 	repos = normalizedRepos(repos)
-	out := &CoverageCatalog{CreatedAt: nowString(), Repos: repos, Complete: true, Tests: map[string][]VerificationJob{}}
+	out := &CoverageCatalog{
+		CreatedAt: nowString(), Repos: repos, Complete: true,
+		Jobs: map[string]VerificationJob{}, Tests: map[string][]VerificationJob{},
+	}
 	if catalog == nil {
 		return out, nil
 	}
@@ -87,6 +91,7 @@ func BuildCoverageCatalog(ctx context.Context, b storage.Backend, catalog *jobco
 		jobID := job.ID()
 		if job.JobType == models.JobTypePresubmit && repoSet[job.Repo] && !seenJobs[jobID] {
 			definitions = append(definitions, job)
+			out.Jobs[jobID] = verificationJobFromDefinition(job)
 			seenJobs[jobID] = true
 		}
 	}
@@ -151,6 +156,15 @@ func BuildCoverageCatalog(ctx context.Context, b storage.Backend, catalog *jobco
 	return out, errors.Join(errs...)
 }
 
+func verificationJobFromDefinition(definition jobconfig.JobDefinition) VerificationJob {
+	return VerificationJob{
+		JobID: definition.ID(), JobName: definition.Name, Repo: definition.Repo,
+		RerunCommand: definition.EffectiveRerunCommand(),
+		Branches:     append([]string(nil), definition.Branches...),
+		SkipBranches: append([]string(nil), definition.SkipBranches...),
+	}
+}
+
 func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig.JobDefinition) (map[string][]VerificationJob, error) {
 	jobID := definition.ID()
 	job := models.ProwJob{Name: definition.Name, JobType: models.JobTypePresubmit, Repo: definition.Repo, JobID: jobID}
@@ -196,13 +210,8 @@ func coverageForJob(ctx context.Context, b storage.Backend, definition jobconfig
 				if test.Status == "skipped" {
 					continue
 				}
-				verification := VerificationJob{
-					JobID: jobID, JobName: definition.Name, Repo: definition.Repo,
-					RerunCommand: definition.EffectiveRerunCommand(),
-					Branches:     append([]string(nil), definition.Branches...),
-					SkipBranches: append([]string(nil), definition.SkipBranches...),
-					BuildID:      build.ID,
-				}
+				verification := verificationJobFromDefinition(definition)
+				verification.BuildID = build.ID
 				for _, identity := range junit.Identities(test) {
 					tests[identity] = appendVerificationJob(tests[identity], verification)
 				}

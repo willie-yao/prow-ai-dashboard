@@ -91,6 +91,10 @@ func TestBuildCoverageCatalog(t *testing.T) {
 	if len(jobs[0].Branches) != 1 || jobs[0].Branches[0] != "^main$" || len(jobs[0].SkipBranches) != 1 {
 		t.Fatalf("branch selectors = %+v", jobs[0])
 	}
+	definition := got.Jobs["example/project/pull-e2e"]
+	if definition.RerunCommand != "/test pull-e2e" || len(definition.Branches) != 1 {
+		t.Fatalf("job definition = %+v", definition)
+	}
 	if len(got.Tests["name\x00test"]) != 1 {
 		t.Fatalf("name fallback missing: %+v", got.Tests)
 	}

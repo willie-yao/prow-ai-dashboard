@@ -184,11 +184,15 @@ func verificationJobs(remediation *Remediation, coverage *CoverageCatalog) []Ver
 			RerunCommand: "/test " + remediation.JobName,
 		}
 		if coverage != nil {
-			for _, evidence := range remediation.Evidence.Tests {
-				for _, candidate := range coverage.Tests[evidence.Identity] {
-					if candidate.JobID == job.JobID {
-						job = candidate
-						break
+			if definition, ok := coverage.Jobs[job.JobID]; ok {
+				job = definition
+			} else {
+				for _, evidence := range remediation.Evidence.Tests {
+					for _, candidate := range coverage.Tests[evidence.Identity] {
+						if candidate.JobID == job.JobID {
+							job = candidate
+							break
+						}
 					}
 				}
 			}

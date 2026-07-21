@@ -138,13 +138,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 				results, err := r.search.SearchPullRequests(ctx, owner, repo, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 				if err != nil {
 					errs = append(errs, fmt.Errorf("recover remediation pull request: %w", err))
-				} else {
-					for _, result := range results {
-						if entry == nil || findAttempt(entry, result.HTMLURL) == nil {
-							copy := pattern
-							fix, ok = FixReference{URL: result.HTMLURL, OpenedAt: nowString(), Pattern: &copy}, true
-							break
-						}
+				} else if len(results) > 0 {
+					result := results[0]
+					if entry == nil || findAttempt(entry, result.HTMLURL) == nil {
+						copy := pattern
+						fix, ok = FixReference{URL: result.HTMLURL, OpenedAt: nowString(), Pattern: &copy}, true
 					}
 				}
 			}

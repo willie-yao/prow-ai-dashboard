@@ -57,6 +57,9 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 	}
 	detail := findJobDetail(remediation, details)
 	if detail == nil {
+		if attempt.Status == StatusVerifiedFixed {
+			return nil
+		}
 		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
 			"originating Prow job is missing from the current dataset")
 		return nil

@@ -102,6 +102,23 @@ func TestObservePeriodic_RejectsTargetMismatch(t *testing.T) {
 	}
 }
 
+func TestObservePeriodicPreservesVerifiedOutcomeWhenJobDataIsMissing(t *testing.T) {
+	remediation := &Remediation{
+		JobID: "job", JobName: "job", JobType: models.JobTypePeriodic,
+		SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom"),
+	}
+	attempt := &Attempt{
+		Status: StatusVerifiedFixed, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r",
+		Outcome: OutcomePassed, OutcomeReason: "2 clean post-merge runs",
+	}
+	if err := ObservePeriodic(context.Background(), fakeCompare{}, remediation, attempt, nil, 2); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusVerifiedFixed || attempt.Outcome != OutcomePassed {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
 func TestObservePeriodicPreservesVerifiedOutcomeWhenOldRunsAgeOut(t *testing.T) {
 	remediation := &Remediation{JobID: "job", JobName: "job", JobType: models.JobTypePeriodic, SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom")}
 	attempt := &Attempt{
