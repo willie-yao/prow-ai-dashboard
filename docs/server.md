@@ -1,6 +1,6 @@
 # Server mode (Kubernetes-native)
 
-The dashboard ships two coequal deploy paths from one codebase:
+The dashboard supports two deployment environments from one codebase:
 
 - **Kubernetes-native (this page).** A small Go server (`backend/cmd/server`)
   serves the dashboard and its JSON over HTTP alongside the inference stack,
@@ -15,8 +15,8 @@ descriptor the frontend uses to discover server-only features. The static path
 keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
 
 The server is independent of how the data was analyzed. Whether the worker runs
-the in-process agentic loop or the advanced experimental
-[Orka](../experimental/orka/) pipeline produces the same `jobs/*.json`,
+the in-process agentic loop or the strategic [Orka preview](../experimental/orka/)
+pipeline produces the same `jobs/*.json`,
 so the server serves both identically. See
 [kubernetes.md](kubernetes.md#analysis-backend-in-process-or-orka) for the
 backend choice.

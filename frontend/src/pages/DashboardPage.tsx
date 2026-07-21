@@ -58,6 +58,56 @@ const toggleButtonSx: SxProps<Theme> = {
   },
 };
 
+function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
+  return (
+    <Box
+      sx={{
+        maxWidth: 720,
+        mx: "auto",
+        mt: { xs: 4, sm: 8 },
+        p: { xs: 3, sm: 5 },
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 3,
+        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+        textAlign: "center",
+      }}
+    >
+      <Typography variant="h5" component="h1" sx={{ fontWeight: 700 }}>
+        No jobs published yet
+      </Typography>
+      <Typography color="text.secondary" sx={{ mt: 1.5 }}>
+        The dashboard configuration loaded, but the latest fetch returned zero
+        Prow jobs.
+      </Typography>
+      <Typography color="text.secondary" sx={{ mt: 1 }}>
+        Check the fetcher logs, then verify{" "}
+        <Box component="code">testgrid.dashboard</Box> or the bucket discovery
+        settings in <Box component="code">project.yaml</Box>.
+      </Typography>
+      <Box
+        component="code"
+        sx={{
+          display: "block",
+          mt: 3,
+          p: 1.5,
+          borderRadius: 2,
+          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
+          color: "text.primary",
+          fontFamily: "monospace",
+          fontSize: "0.8rem",
+          overflowWrap: "anywhere",
+        }}
+      >
+        fetcher -project-dir=&lt;consumer&gt; -ai=false -builds=1
+      </Box>
+      <Typography variant="data" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+        Last generated {timeAgo(generatedAt)}
+      </Typography>
+    </Box>
+  );
+}
+
 export function DashboardPage() {
   const { data, loading, error } = useDashboard();
   const manifest = useManifest();
@@ -116,6 +166,10 @@ export function DashboardPage() {
   }
 
   if (!data) return null;
+
+  if (data.jobs.length === 0) {
+    return <EmptyDashboardState generatedAt={data.generated_at} />;
+  }
 
   const sortedCategories = Object.keys(grouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);

@@ -17,7 +17,7 @@ cases below.
 | Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md` and let prompt fingerprinting refresh affected entries. |
 | Cached analysis came from the old provider | A replacement analysis has not completed yet. | Provider fingerprinting refreshes it automatically. Clear the cache only for an immediate full rebaseline. |
 | `Propose fix` reports unavailable | The process cannot find `opencode` or git. | Use a runner or custom server image containing both tools. |
-| Orka Tasks remain pending | Orka, the Provider, tool shim, compatibility worker, or RBAC is incomplete. | Follow the experimental Orka quickstart and inspect Task and ai-worker status. |
+| Orka Tasks remain pending | Orka, the Provider, tool shim, compatibility worker, or RBAC is incomplete. | Follow the Orka preview quickstart and inspect Task and ai-worker status. |
 
 ## Useful checks
 
@@ -39,6 +39,33 @@ curl -fsS http://localhost:8080/api/capabilities
 
 For deeper AI-loop behavior, see the troubleshooting section in
 [Agentic analysis](agentic.md#troubleshooting).
+
+## No jobs were discovered
+
+A dashboard that loads with zero jobs has a valid frontend and manifest, but the
+latest fetch did not find matching Prow jobs.
+
+1. Run a one-build discovery check without AI:
+
+   ```bash
+   ./bin/fetcher -project-dir=../my-consumer -ai=false -builds=1
+   ```
+
+2. Inspect the result:
+
+   ```bash
+   python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
+   ```
+
+3. For TestGrid discovery, confirm `testgrid.dashboard` exactly matches the
+   jobs' `testgrid-dashboards` annotation.
+4. For bucket discovery, remove `discovery.job_filters` temporarily and confirm
+   the storage provider, bucket, and gcsweb base.
+5. Add `source.include_presubmits: true` only when the expected jobs are
+   presubmits rather than periodics.
+
+The `onboard` command performs this check before generating a scaffold and fails
+when discovery returns zero jobs.
 
 
 ## Email notifications are not sent

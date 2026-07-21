@@ -21,11 +21,12 @@ The agentic loop is one analysis approach, but it runs in one of two backends:
 - **In-process** (default): the fetcher runs the loop itself, as goroutines,
   enforcing every quality gate in Go. This is the backend the rest of this doc
   describes, and the only one the GitHub Actions + Pages path uses.
-- **Orka** (opt-in, Kubernetes-native): the same loop runs as one
-  [Orka](https://github.com/orka-agents/orka) Task per failing test, alongside an
-  in-cluster inference stack. Discovery and output are unchanged; only the
-  per-failure analysis step moves. Select it with `analysis: orka` in the Helm
-  chart.
+- **Orka preview** (Kubernetes-native): the same loop runs as one
+  [Orka](https://github.com/orka-agents/orka) Task per failing test. It is the
+  strategic orchestration backend for retries, per-failure telemetry, and agent
+  runtimes. Today it requires a compatible external Orka installation; the
+  intended product experience is for the dashboard deployment to manage those
+  dependencies. Select it with `analysis: orka` in the Helm chart.
 
 Both backends run the same loop against the same artifact tools and write the
 same `jobs/*.json` wire shape with `Mode: "agentic"`. What differs is where the
@@ -36,14 +37,13 @@ loop runs and how the guardrails are enforced:
 | Orchestration | Goroutines in the fetcher | One Task per failure, applied to the cluster |
 | Quality gates | Enforced in Go code | Enforced as tools the agent must call plus ai-worker re-prompts |
 | Cache | On-disk JSON keyed by mode + hash | The Kubernetes object store: Task names fingerprint project/build/test identity and the model-visible analysis contract; `-version` is a manual override |
-| Config surface | Every `ai.*` knob | Only `ai.tools`, the `storage` block, and the display id are read; the rest is provided by the compatibility worker and shim tools |
-| Endpoint | Any OpenAI-compatible chat-completions | Orka tries Responses first and falls back to Chat Completions; Copilot needs a de-streaming proxy |
+| Config surface | Every `ai.*` knob | Shared prompt, skills, storage, `ai.tools`, `ai.min_tool_calls`, and `ai.min_gcs_bytes`; execution settings live under Helm `orka.*` |
+| Endpoint | Any OpenAI-compatible chat-completions | Orka tries Responses first and falls back to Chat Completions through its Provider; Copilot needs a de-streaming proxy |
 
 The trade-off from the evaluation: Orka with a strong co-located model matches or
-beats the engine's reference labels on the hardest cases, but that edge is the
-model, not the harness. On a cheap model it reaches process parity, not better
-classification. So the recommendation keeps both: Orka as an optional
-strong-model backend, the in-process loop as the default. For the code-level
+beats the engine's reference labels on the hardest cases, while cheaper models
+remain bounded by their reasoning capability. The in-process backend stays the
+self-contained first install during the Orka preview. For the code-level
 mechanics of how each harness piece is reconstructed out of Kubernetes objects,
 see [experimental/orka/ARCHITECTURE.md](../experimental/orka/ARCHITECTURE.md); for
 setup, [experimental/orka/QUICKSTART.md](../experimental/orka/QUICKSTART.md).
