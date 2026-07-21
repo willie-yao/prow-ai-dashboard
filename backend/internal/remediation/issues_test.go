@@ -53,7 +53,7 @@ func TestReconcileLinkedIssuesWaitsForEveryFinding(t *testing.T) {
 		UpdatedAt: "2026-07-20T02:00:00Z", Issue: &IssueRef{Number: 9, Repo: "o/r"},
 		Attempts: []Attempt{{Status: StatusObserving, LastTransition: "merged->observing"}},
 	}
-	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state); err != nil {
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.closed) != 0 {
@@ -61,7 +61,7 @@ func TestReconcileLinkedIssuesWaitsForEveryFinding(t *testing.T) {
 	}
 	state.Remediations["new"].Attempts[0].Status = StatusVerifiedFixed
 	state.Remediations["new"].Attempts[0].LastTransition = "observing->verified_fixed"
-	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state); err != nil {
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.closed) != 1 {
@@ -80,7 +80,7 @@ func TestReconcileLinkedIssuesClosedUnmergedBlocksClosure(t *testing.T) {
 		Issue:    &IssueRef{Number: 9, Repo: "o/r"},
 		Attempts: []Attempt{{Status: StatusClosedUnmerged, LastTransition: "open->closed_unmerged"}},
 	}
-	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state); err != nil {
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.closed) != 0 {
@@ -99,7 +99,7 @@ func TestReconcileLinkedIssuesReopensForPendingFinding(t *testing.T) {
 		Issue:    &IssueRef{Number: 9, Repo: "o/r", State: "closed"},
 		Attempts: []Attempt{{Status: StatusAwaitingPresubmit, LastTransition: "open->awaiting_presubmit"}},
 	}
-	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state); err != nil {
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.reopened) != 1 {
@@ -109,6 +109,21 @@ func TestReconcileLinkedIssuesReopensForPendingFinding(t *testing.T) {
 		if entry.Issue.State != "open" {
 			t.Fatalf("%s issue = %+v", id, entry.Issue)
 		}
+	}
+}
+
+func TestReconcileLinkedIssuesKeepsOpenForUnremediatedPattern(t *testing.T) {
+	client := &fakeIssueLifecycle{}
+	state := NewState()
+	state.Remediations["verified"] = &Remediation{
+		JobID: "job", Issue: &IssueRef{Number: 9, Repo: "o/r", State: "closed"},
+		Attempts: []Attempt{{Status: StatusVerifiedFixed, LastTransition: "observing->verified_fixed"}},
+	}
+	if err := reconcileLinkedIssues(context.Background(), client, "o/r", state, map[string]bool{"job": true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.reopened) != 1 || len(client.closed) != 0 || state.Remediations["verified"].Issue.State != "open" {
+		t.Fatalf("reopened=%v closed=%v issue=%+v", client.reopened, client.closed, state.Remediations["verified"].Issue)
 	}
 }
 

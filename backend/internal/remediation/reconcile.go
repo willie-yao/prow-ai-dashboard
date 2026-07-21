@@ -186,17 +186,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			continue
 		}
 		attempt := &entry.Attempts[len(entry.Attempts)-1]
-		owner, repo, number, err := ParsePullRequestURL(attempt.URL)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("remediation %s: %w", id, err))
-			continue
+		if attempt.PRState != StatusMerged {
+			owner, repo, number, err := ParsePullRequestURL(attempt.URL)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("remediation %s: %w", id, err))
+				continue
+			}
+			pull, err := r.client.GetPullRequest(ctx, owner, repo, number)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("remediation %s pull request: %w", id, err))
+				continue
+			}
+			applyPullRequest(entry, attempt, pull)
 		}
-		pull, err := r.client.GetPullRequest(ctx, owner, repo, number)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("remediation %s pull request: %w", id, err))
-			continue
-		}
-		applyPullRequest(entry, attempt, pull)
 		if entry.SourceRepo == "" {
 			entry.SourceRepo = testedRepoFor(entry, attempt.TargetRepo, r.catalog)
 		}
@@ -226,7 +228,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			}
 		}
 	}
-	if err := reconcileLinkedIssues(ctx, r.issueClient, r.issueRepo, state); err != nil {
+	pendingIssueJobs := map[string]bool{}
+	for _, pattern := range UntrackedPatterns(state, patterns, details) {
+		if pattern.JobID != "" {
+			pendingIssueJobs[pattern.JobID] = true
+		}
+	}
+	if err := reconcileLinkedIssues(ctx, r.issueClient, r.issueRepo, state, pendingIssueJobs); err != nil {
 		errs = append(errs, fmt.Errorf("reconcile remediation issues: %w", err))
 	}
 	if err := state.Save(r.dataDir); err != nil {

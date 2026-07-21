@@ -76,7 +76,7 @@ func TestAIModel_NilAIBlock(t *testing.T) {
 	}
 }
 
-func TestLoadCachedJobDetailsSkipsIncompleteJUnit(t *testing.T) {
+func TestLoadCachedJobDetailsCachesCompleteOrTruncatedJUnit(t *testing.T) {
 	dir := t.TempDir()
 	jobsDir := filepath.Join(dir, "jobs")
 	if err := os.MkdirAll(jobsDir, 0o755); err != nil {
@@ -85,7 +85,8 @@ func TestLoadCachedJobDetailsSkipsIncompleteJUnit(t *testing.T) {
 	detail := models.JobDetail{
 		JobID: "job",
 		Runs: []models.BuildResult{
-			{BuildInfo: models.BuildInfo{BuildID: "2", Result: "SUCCESS", JUnitComplete: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "3", Result: "SUCCESS", JUnitComplete: true}},
+			{BuildInfo: models.BuildInfo{BuildID: "2", Result: "SUCCESS", JUnitTruncated: true}},
 			{BuildInfo: models.BuildInfo{BuildID: "1", Result: "SUCCESS"}},
 		},
 	}
@@ -98,7 +99,7 @@ func TestLoadCachedJobDetailsSkipsIncompleteJUnit(t *testing.T) {
 	}
 
 	cached := loadCachedJobDetails(dir)[detail.JobID]
-	if len(cached) != 1 || cached["2"].BuildID != "2" {
+	if len(cached) != 2 || cached["3"].BuildID != "3" || cached["2"].BuildID != "2" {
 		t.Fatalf("cached = %+v", cached)
 	}
 }

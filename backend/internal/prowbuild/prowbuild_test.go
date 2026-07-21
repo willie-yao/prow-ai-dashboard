@@ -263,13 +263,13 @@ func TestDiscoverJUnitPathsPreservesPartialResults(t *testing.T) {
 		objects[fmt.Sprintf("logs/job/1/artifacts/z-%04d.txt", i)] = "x"
 	}
 	b := &fakeBackend{objects: objects}
-	paths, complete, err := DiscoverJUnitPathsWithCompleteness(context.Background(), b,
+	paths, complete, truncated, err := DiscoverJUnitPathsWithStatus(context.Background(), b,
 		BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if complete || len(paths) != 1 || !strings.HasSuffix(paths[0], "junit.xml") {
-		t.Fatalf("paths=%v complete=%v", paths, complete)
+	if complete || !truncated || len(paths) != 1 || !strings.HasSuffix(paths[0], "junit.xml") {
+		t.Fatalf("paths=%v complete=%v truncated=%v", paths, complete, truncated)
 	}
 	usable, err := DiscoverJUnitPaths(context.Background(), b,
 		BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "1"})

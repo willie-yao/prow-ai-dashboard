@@ -72,6 +72,9 @@ type BuildInfo struct {
 	// has no junit output. Stable ordering keeps cache reuse deterministic.
 	JUnitURLs     []string `json:"junit_urls,omitempty"`
 	JUnitComplete bool     `json:"junit_complete"`
+	// JUnitTruncated means discovery hit the stable object cap. The partial
+	// result is cacheable but remains unusable as complete verification evidence.
+	JUnitTruncated bool `json:"junit_truncated,omitempty"`
 	// PullNumber is the PR number that triggered this build for presubmits.
 	// Empty for periodics. Required for reconstructing presubmit GCS paths
 	// from cached BuildResults without reparsing the job config.

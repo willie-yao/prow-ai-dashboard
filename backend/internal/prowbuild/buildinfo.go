@@ -85,17 +85,24 @@ func DiscoverJUnitPaths(ctx context.Context, b storage.Backend, loc BuildLocatio
 
 // DiscoverJUnitPathsWithCompleteness also reports whether the full tree was scanned.
 func DiscoverJUnitPathsWithCompleteness(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, bool, error) {
+	paths, complete, _, err := DiscoverJUnitPathsWithStatus(ctx, b, loc)
+	return paths, complete, err
+}
+
+// DiscoverJUnitPathsWithStatus distinguishes capped trees from retryable listing failures.
+func DiscoverJUnitPathsWithStatus(ctx context.Context, b storage.Backend, loc BuildLocation) ([]string, bool, bool, error) {
 	artifactsDir := loc.BuildPath() + "artifacts/"
 	objects, truncated, err := b.ListTree(ctx, artifactsDir, 2000)
+	complete := err == nil && !truncated
+	permanentlyTruncated := err == nil && truncated
 	if err != nil {
 		listing, listErr := b.List(ctx, artifactsDir)
 		if listErr != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		for _, object := range listing.Files {
 			objects = append(objects, object.Name)
 		}
-		truncated = true
 	}
 	var paths []string
 	for _, object := range objects {
@@ -104,5 +111,5 @@ func DiscoverJUnitPathsWithCompleteness(ctx context.Context, b storage.Backend, 
 		}
 	}
 	sort.Strings(paths)
-	return paths, !truncated, nil
+	return paths, complete, permanentlyTruncated, nil
 }

@@ -65,7 +65,7 @@ func reconcileIssue(ctx context.Context, client IssueLifecycleClient, remediatio
 	return nil
 }
 
-func reconcileLinkedIssues(ctx context.Context, client IssueLifecycleClient, repo string, state *State) error {
+func reconcileLinkedIssues(ctx context.Context, client IssueLifecycleClient, repo string, state *State, pendingJobs map[string]bool) error {
 	if client == nil || state == nil {
 		return nil
 	}
@@ -83,6 +83,9 @@ func reconcileLinkedIssues(ctx context.Context, client IssueLifecycleClient, rep
 		issueClosed := true
 		var closureOwner *Remediation
 		for _, entry := range entries {
+			if pendingJobs[entry.JobID] {
+				pending = true
+			}
 			attempt := &entry.Attempts[len(entry.Attempts)-1]
 			if entry.Issue.State != "closed" {
 				issueClosed = false

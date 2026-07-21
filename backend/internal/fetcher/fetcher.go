@@ -712,7 +712,7 @@ func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResul
 		builds := make(map[string]models.BuildResult, len(detail.Runs))
 		for _, r := range detail.Runs {
 			// Incomplete JUnit may become available after the build finishes.
-			if r.Result != "PENDING" && r.Result != "" && r.JUnitComplete {
+			if r.Result != "PENDING" && r.Result != "" && (r.JUnitComplete || r.JUnitTruncated) {
 				builds[r.BuildID] = r
 			}
 		}
@@ -771,10 +771,12 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 
 	result := &models.BuildResult{BuildInfo: *info, TestCases: []models.TestCase{}}
 
-	junitPaths, complete, err := prowbuild.DiscoverJUnitPathsWithCompleteness(ctx, backend, loc)
+	junitPaths, complete, truncated, err := prowbuild.DiscoverJUnitPathsWithStatus(ctx, backend, loc)
 	result.JUnitComplete = complete
+	result.JUnitTruncated = truncated
 	if err != nil {
 		result.JUnitComplete = false
+		result.JUnitTruncated = false
 		log.Printf("    ⚠ %s/%s: discovering junit files: %v", job.Name, build.ID, err)
 		return result, nil
 	}
@@ -787,12 +789,14 @@ func fetchBuildResult(ctx context.Context, backend storage.Backend, job *models.
 		junitData, err := storage.ReadAll(ctx, backend, junitPath)
 		if err != nil {
 			result.JUnitComplete = false
+			result.JUnitTruncated = false
 			log.Printf("    ⚠ %s/%s: fetching %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}
 		testCases, err := junit.ParseFile(junitData, path.Base(junitPath))
 		if err != nil {
 			result.JUnitComplete = false
+			result.JUnitTruncated = false
 			log.Printf("    ⚠ %s/%s: parsing %s: %v", job.Name, build.ID, path.Base(junitPath), err)
 			continue
 		}

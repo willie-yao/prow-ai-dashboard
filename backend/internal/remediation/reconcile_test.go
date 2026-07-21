@@ -18,6 +18,36 @@ func (f fakePRClient) GetPullRequest(context.Context, string, string, int) (ghpr
 	return f.pull, f.err
 }
 
+type countingPRClient struct {
+	calls int
+}
+
+func (c *countingPRClient) GetPullRequest(context.Context, string, string, int) (ghpr.PullRequest, error) {
+	c.calls++
+	return ghpr.PullRequest{}, nil
+}
+
+func TestReconcileSkipsGitHubRefreshForMergedPullRequest(t *testing.T) {
+	dir := t.TempDir()
+	state := NewState()
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job",
+		Attempts: []Attempt{{
+			URL: "https://github.com/o/r/pull/7", Status: StatusVerifiedFixed, PRState: StatusMerged,
+		}},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	client := &countingPRClient{}
+	if _, err := NewReconciler(client, dir).Reconcile(context.Background(), nil, nil, nil, func(models.PatternAnalysis) string { return "" }); err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("pull request calls = %d, want 0", client.calls)
+	}
+}
+
 func TestReconcileTracksMergedPullRequest(t *testing.T) {
 	dir := t.TempDir()
 	mergedAt := time.Date(2026, 7, 20, 2, 0, 0, 0, time.UTC)
