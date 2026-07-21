@@ -138,7 +138,6 @@ jobs:
             echo "- Orka commit: \`$ORKA_COMMIT\`"
             echo "- Dashboard commit: \`$DASHBOARD_COMMIT\`"
             echo "- Patch SHA-256: \`$PATCH_SHA256\`"
-            echo "- Recovered existing tag: \`$RECOVERED\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload validation record
@@ -264,6 +263,7 @@ jobs:
             echo "- Orka commit: \`$ORKA_COMMIT\`"
             echo "- Dashboard commit: \`$DASHBOARD_COMMIT\`"
             echo "- Patch SHA-256: \`$PATCH_SHA256\`"
+            echo "- Recovered existing tag: \`$RECOVERED\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload compatibility record

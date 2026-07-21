@@ -77,8 +77,16 @@ for missing in missing missing404; do
 done
 
 for failure in mismatch no-sbom error; do
+  label_dashboard=$dashboard
+  if [[ $failure == mismatch ]]; then
+    label_dashboard=ffffffffffffffffffffffffffffffffffffffff
+  fi
   set +e
-  FAKE_REGISTRY_RESULT=$failure FAKE_LABEL_DASHBOARD=ffffffffffffffffffffffffffffffffffffffff     EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"     "$script" inspect-published ghcr.io/example/worker:test "$dashboard" > /dev/null 2>&1
+  FAKE_REGISTRY_RESULT=$failure FAKE_LABEL_DASHBOARD=$label_dashboard \
+    EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch \
+    PATH="$tmp/bin:$PATH" \
+    "$script" inspect-published ghcr.io/example/worker:test "$dashboard" \
+    > /dev/null 2>&1
   rc=$?
   set -e
   [[ $rc -eq 1 ]] || { echo "$failure registry response returned $rc, want 1" >&2; exit 1; }

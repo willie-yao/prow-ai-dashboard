@@ -331,7 +331,29 @@ make orka-compat-image ORKA_COMPAT_IMAGE=orka-ai-worker:local
 kind load docker-image orka-ai-worker:local --name <cluster>
 ```
 
-For Helm, override the structured image values:
+Point the Orka controller at that loaded worker in the pinned Orka checkout:
+
+```yaml
+# /tmp/orka-local-worker-values.yaml
+workers:
+  ai:
+    image:
+      repository: orka-ai-worker
+      tag: local
+```
+
+```bash
+helm upgrade --install orka charts/orka \
+  --namespace orka-system \
+  -f /tmp/orka-local-worker-values.yaml
+```
+
+The pinned Orka controller creates dynamic AI-worker Jobs with
+`imagePullPolicy: IfNotPresent`, so the kind-loaded `orka-ai-worker:local` image
+is used without a registry pull. The chart's `workers.ai.image.pullPolicy` value
+does not control those dynamic Jobs at this pinned revision.
+
+For the dashboard Helm release, override its structured pipeline image values:
 
 ```bash
 --set orka.producer.image.repository=orka-producer \
