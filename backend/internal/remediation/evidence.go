@@ -97,7 +97,7 @@ func classificationForPattern(pattern models.PatternAnalysis, details []models.J
 			continue
 		}
 		for _, test := range evidence.Tests {
-			info := aggregator.ClassifyFailure(test.Name, detail.Runs, 3)
+			info := aggregator.ClassifyFailure(test.Name, runsForTestIdentity(detail.Runs, test.Identity), 3)
 			if info.Classification == models.ClassificationFlaky {
 				return string(models.ClassificationFlaky)
 			}
@@ -111,6 +111,24 @@ func classificationForPattern(pattern models.PatternAnalysis, details []models.J
 		return string(models.ClassificationPersistent)
 	}
 	return "pattern"
+}
+
+func runsForTestIdentity(runs []models.BuildResult, identity string) []models.BuildResult {
+	out := make([]models.BuildResult, 0, len(runs))
+	for _, run := range runs {
+		filtered := run
+		filtered.TestCases = nil
+		for _, test := range run.TestCases {
+			for _, candidate := range junit.Identities(test) {
+				if candidate == identity {
+					filtered.TestCases = append(filtered.TestCases, test)
+					break
+				}
+			}
+		}
+		out = append(out, filtered)
+	}
+	return out
 }
 
 // UntrackedPatterns excludes findings already represented by a remediation attempt.

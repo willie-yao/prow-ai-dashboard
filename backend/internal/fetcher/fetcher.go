@@ -836,7 +836,7 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
 	ledger := remediation.LoadForRepo(p.opts.OutDir, targetRepo)
 	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 && len(patterns) == 0 {
-		return nil
+		return ledger.Save(p.opts.OutDir)
 	}
 	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
 	for key, fix := range fixState.Tracked {
@@ -985,6 +985,10 @@ func remediationCoverageRepos(targetRepo string, patterns []models.PatternAnalys
 	return out
 }
 
+var newRemediationEmailSender = func(config notify.SMTPConfig) (notify.Sender, error) {
+	return notify.NewSMTPSender(config)
+}
+
 func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation.State) error {
 	email, enabled := p.cfg.EffectiveEmailNotifications()
 	if !enabled || state == nil {
@@ -998,7 +1002,7 @@ func (p *pipeline) sendRemediationEmails(ctx context.Context, state *remediation
 	if err != nil {
 		return err
 	}
-	sender, err := notify.NewSMTPSender(notify.SMTPConfig{
+	sender, err := newRemediationEmailSender(notify.SMTPConfig{
 		Host: email.SMTP.Host, Port: email.SMTP.Port, Username: email.SMTP.Username,
 		Password: password, TLSMode: email.SMTP.TLS,
 	})

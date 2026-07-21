@@ -118,6 +118,28 @@ func TestEvidenceForPatternPrefersQualifiedJobID(t *testing.T) {
 	}
 }
 
+func TestClassificationUsesQualifiedTestIdentity(t *testing.T) {
+	pattern := models.PatternAnalysis{JobID: "job", Subject: "job", SharedBuilds: []string{"3", "2", "1"}}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "3"}, TestCases: []models.TestCase{
+			{Name: "test", SuiteName: "suite", ClassName: "persistent", Status: "failed"},
+			{Name: "test", SuiteName: "suite", ClassName: "target", Status: "failed"},
+		}},
+		{BuildInfo: models.BuildInfo{BuildID: "2"}, TestCases: []models.TestCase{
+			{Name: "test", SuiteName: "suite", ClassName: "persistent", Status: "failed"},
+			{Name: "test", SuiteName: "suite", ClassName: "target", Status: "passed"},
+		}},
+		{BuildInfo: models.BuildInfo{BuildID: "1"}, TestCases: []models.TestCase{
+			{Name: "test", SuiteName: "suite", ClassName: "persistent", Status: "failed"},
+			{Name: "test", SuiteName: "suite", ClassName: "target", Status: "failed"},
+		}},
+	}}}
+	pattern.SharedBuilds = []string{"3", "1"}
+	if got := classificationForPattern(pattern, details); got != string(models.ClassificationFlaky) {
+		t.Fatalf("classification = %q", got)
+	}
+}
+
 func TestClassificationPrefersFlakyAcrossMultipleTests(t *testing.T) {
 	pattern := models.PatternAnalysis{JobID: "job", Subject: "job", SharedBuilds: []string{"3", "2", "1"}}
 	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{

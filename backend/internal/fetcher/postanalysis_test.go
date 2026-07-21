@@ -13,6 +13,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -226,6 +227,35 @@ ai:
 	}
 }
 
+func TestProcessRemediationsClearsStateForChangedRepo(t *testing.T) {
+	dataDir := t.TempDir()
+	old := remediation.NewStateForRepo("old/r")
+	old.Remediations["pattern"] = &remediation.Remediation{ID: "pattern", FindingID: "pattern"}
+	if err := old.Save(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeline{
+		opts: Options{OutDir: dataDir},
+		cfg: &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+			Repo: &project.SourceRepo{Owner: "new", Name: "r"},
+		}}},
+	}
+	if err := p.processRemediations(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	state := remediation.LoadForRepo(dataDir, "new/r")
+	if state.Repo != "new/r" || len(state.Remediations) != 0 {
+		t.Fatalf("state = %+v", state)
+	}
+	data, err := os.ReadFile(filepath.Join(dataDir, remediation.PublicFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "pattern") {
+		t.Fatalf("public remediation state was not cleared: %s", data)
+	}
+}
+
 func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
 	dataDir := t.TempDir()
 	fixState := statefile.State[fixpr.TrackedFix]{
@@ -248,6 +278,105 @@ func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
 	}
 	if got := remediation.LoadForRepo(dataDir, "o/r"); len(got.Remediations) != 0 {
 		t.Fatalf("remediations = %+v", got.Remediations)
+	}
+}
+
+type recordingRemediationSender struct {
+	messages []notify.Message
+	err      error
+}
+
+func (s *recordingRemediationSender) Send(_ context.Context, message notify.Message) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.messages = append(s.messages, message)
+	return nil
+}
+
+func remediationEmailTestConfig() *project.Config {
+	return &project.Config{
+		Name:     "Test Project",
+		Branding: project.Branding{SiteURL: "https://dashboard.test"},
+		Notifications: &project.Notifications{Email: &project.EmailNotifications{
+			Enabled: true, From: "dashboard@example.test", To: []string{"maintainer@example.test"},
+			SMTP: project.EmailSMTP{Host: "smtp.example.test", Port: 25, TLS: project.EmailTLSNone},
+		}},
+	}
+}
+
+func remediationEmailTestState(t *testing.T, dir string) *remediation.State {
+	t.Helper()
+	state := remediation.NewState()
+	state.Remediations["pattern"] = &remediation.Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job", JobName: "job",
+		Attempts: []remediation.Attempt{{
+			Number: 1, Status: remediation.StatusAwaitingPresubmit,
+			URL: "https://github.com/o/r/pull/7", OutcomeReason: "waiting for Prow",
+			LastTransition: "open->awaiting_presubmit", TransitionIndex: 1,
+		}},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestSendRemediationEmailsPersistsSuccessfulDelivery(t *testing.T) {
+	dir := t.TempDir()
+	state := remediationEmailTestState(t, dir)
+	sender := &recordingRemediationSender{}
+	oldFactory := newRemediationEmailSender
+	newRemediationEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	t.Cleanup(func() { newRemediationEmailSender = oldFactory })
+	p := &pipeline{cfg: remediationEmailTestConfig(), opts: Options{OutDir: dir}}
+
+	if err := p.sendRemediationEmails(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(sender.messages))
+	}
+	reloaded := remediation.Load(dir)
+	attempt := reloaded.Remediations["pattern"].Attempts[0]
+	if attempt.LastEmailedTransitionIndex != 1 || attempt.LastEmailedTransition != attempt.LastTransition {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	if err := p.sendRemediationEmails(context.Background(), reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("messages after reload = %d, want 1", len(sender.messages))
+	}
+}
+
+func TestSendRemediationEmailsRetriesFailedDeliveryAfterReload(t *testing.T) {
+	dir := t.TempDir()
+	state := remediationEmailTestState(t, dir)
+	failedSender := &recordingRemediationSender{err: errors.New("delivery failed")}
+	oldFactory := newRemediationEmailSender
+	newRemediationEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return failedSender, nil }
+	t.Cleanup(func() { newRemediationEmailSender = oldFactory })
+	p := &pipeline{cfg: remediationEmailTestConfig(), opts: Options{OutDir: dir}}
+
+	if err := p.sendRemediationEmails(context.Background(), state); err == nil {
+		t.Fatal("failed delivery must return an error")
+	}
+	if state.Remediations["pattern"].Attempts[0].LastEmailedTransitionIndex != 0 {
+		t.Fatalf("attempt advanced after failure: %+v", state.Remediations["pattern"].Attempts[0])
+	}
+	reloaded := remediation.Load(dir)
+	if reloaded.Remediations["pattern"].Attempts[0].LastEmailedTransitionIndex != 0 {
+		t.Fatalf("reloaded attempt advanced after failure: %+v", reloaded.Remediations["pattern"].Attempts[0])
+	}
+
+	retrySender := &recordingRemediationSender{}
+	newRemediationEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return retrySender, nil }
+	if err := p.sendRemediationEmails(context.Background(), reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if len(retrySender.messages) != 1 || reloaded.Remediations["pattern"].Attempts[0].LastEmailedTransitionIndex != 1 {
+		t.Fatalf("messages = %d, attempt = %+v", len(retrySender.messages), reloaded.Remediations["pattern"].Attempts[0])
 	}
 }
 
