@@ -840,6 +840,9 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	}
 	fixes := make(map[string]remediation.FixReference, len(fixState.Tracked))
 	for key, fix := range fixState.Tracked {
+		if !fix.HasPatternSnapshot() {
+			continue
+		}
 		pattern := fix.Pattern
 		fixes[key] = remediation.FixReference{URL: fix.URL, OpenedAt: fix.OpenedAt, Pattern: &pattern}
 	}

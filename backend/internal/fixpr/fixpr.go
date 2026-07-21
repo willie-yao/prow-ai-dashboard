@@ -163,6 +163,11 @@ type TrackedFix struct {
 	Pattern  models.PatternAnalysis `json:"pattern"`
 }
 
+// HasPatternSnapshot reports whether the fix can be reconciled.
+func (f TrackedFix) HasPatternSnapshot() bool {
+	return f.Pattern.JobID != "" || f.Pattern.Subject != ""
+}
+
 func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
 	return TrackedFix{URL: url, OpenedAt: now(), Pattern: pattern}
 }
@@ -202,7 +207,7 @@ func NewManager(pr prClient, stateFile string, opts Options) *Manager {
 	repo := opts.SourceOwner + "/" + opts.SourceName
 	state := statefile.Load[TrackedFix](stateFile, repo, "fix PRs")
 	for key, tracked := range state.Tracked {
-		if tracked.Pattern.JobID == "" && tracked.Pattern.Subject == "" {
+		if !tracked.HasPatternSnapshot() {
 			delete(state.Tracked, key)
 			log.Printf("Fix PRs: discarded unsupported state entry %s without a pattern snapshot", key)
 		}

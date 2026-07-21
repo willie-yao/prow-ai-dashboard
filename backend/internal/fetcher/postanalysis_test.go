@@ -226,6 +226,31 @@ ai:
 	}
 }
 
+func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	fixState := statefile.State[fixpr.TrackedFix]{
+		Repo: "o/r",
+		Tracked: map[string]fixpr.TrackedFix{
+			"legacy": {URL: "https://github.com/o/r/pull/7"},
+		},
+	}
+	if err := fixState.Save(filepath.Join(dataDir, "fix_pr_state.json")); err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeline{
+		opts: Options{OutDir: dataDir},
+		cfg: &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+			Repo: &project.SourceRepo{Owner: "o", Name: "r"},
+		}}},
+	}
+	if err := p.processRemediations(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := remediation.LoadForRepo(dataDir, "o/r"); len(got.Remediations) != 0 {
+		t.Fatalf("remediations = %+v", got.Remediations)
+	}
+}
+
 func TestRemediationIssueLifecycleKeys(t *testing.T) {
 	state := remediation.NewState()
 	state.Remediations["closed"] = &remediation.Remediation{

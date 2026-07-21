@@ -34,6 +34,47 @@ func TestObservePresubmits_PassesExactTest(t *testing.T) {
 	}
 }
 
+func TestVerificationJobsPresubmitUsesOriginatingJob(t *testing.T) {
+	identity := "suite\x00class\x00test"
+	remediation := &Remediation{
+		JobType: models.JobTypePresubmit, SourceRepo: "example/project", JobName: "pull-origin",
+		Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}},
+	}
+	coverage := &CoverageCatalog{Tests: map[string][]VerificationJob{
+		identity: {{JobID: "example/project/pull-other", JobName: "pull-other", Repo: "example/project"}},
+	}}
+	jobs := verificationJobs(remediation, coverage)
+	if len(jobs) != 1 || jobs[0].JobName != "pull-origin" {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+}
+
+func TestObservePresubmitsMissingFinishedRevisionIsInconclusive(t *testing.T) {
+	identity := "suite\x00class\x00test"
+	b := memoryBackend{objects: map[string]string{
+		"pr-logs/pull/example_project/42/pull-e2e/10/started.json":        `{"timestamp":1}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/finished.json":       `{"timestamp":2,"passed":true,"result":"SUCCESS"}`,
+		"pr-logs/pull/example_project/42/pull-e2e/10/artifacts/junit.xml": `<testsuite name="suite"><testcase name="test" classname="class"/></testsuite>`,
+	}}
+	remediation := &Remediation{
+		JobType:  models.JobTypePeriodic,
+		Evidence: Evidence{Tests: []TestEvidence{{Identity: identity}}},
+	}
+	attempt := &Attempt{PRNumber: 42, HeadSHA: "head", TargetRepo: "example/project", Status: StatusOpen}
+	coverage := &CoverageCatalog{Complete: true, Tests: map[string][]VerificationJob{
+		identity: {{JobID: "example/project/pull-e2e", JobName: "pull-e2e", Repo: "example/project"}},
+	}}
+	if err := ObservePresubmits(context.Background(), b, remediation, attempt, coverage); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusInconclusive || !strings.Contains(attempt.OutcomeReason, "revision") {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+	if len(attempt.Observations) != 1 || attempt.Observations[0].HeadSHA != "" {
+		t.Fatalf("observations = %+v", attempt.Observations)
+	}
+}
+
 func TestClassifyObservation_SameCause(t *testing.T) {
 	failure := "timed out after 42 seconds"
 	test := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "failed", FailureMessage: failure}

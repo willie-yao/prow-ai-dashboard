@@ -312,6 +312,15 @@ func TestTrackedFixStoresPatternSnapshot(t *testing.T) {
 	}
 }
 
+func TestTrackedFixHasPatternSnapshot(t *testing.T) {
+	if (TrackedFix{}).HasPatternSnapshot() {
+		t.Fatal("empty tracked fix must be unsupported")
+	}
+	if !(TrackedFix{Pattern: models.PatternAnalysis{JobID: "job"}}).HasPatternSnapshot() {
+		t.Fatal("job snapshot must be supported")
+	}
+}
+
 func TestNewManagerDiscardsStateWithoutPatternSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	legacy := statefile.State[TrackedFix]{

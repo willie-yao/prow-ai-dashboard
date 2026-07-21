@@ -62,6 +62,8 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 		if err != nil {
 			return fmt.Errorf("list pull builds for %s: %w", job.JobName, err)
 		}
+		var missingRevision *BuildObservation
+		observed := false
 		for _, build := range builds {
 			loc := prowbuild.BuildLocation{
 				JobLocation: prowbuild.JobLocation{JobType: models.JobTypePresubmit, Repo: job.Repo},
@@ -74,6 +76,7 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 					PullNumber: attempt.PRNumber, SourceRepo: job.Repo, HeadSHA: attempt.HeadSHA,
 					Outcome: OutcomeInconclusive, Reason: metadataErr.Error(),
 				})
+				observed = true
 				break
 			}
 			if metadataErr == nil && metadata.Refs != nil && len(metadata.Refs.Pulls) > 0 {
@@ -95,22 +98,39 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 				if metadata.State == "pending" || metadata.State == "triggered" {
 					observation.Outcome = OutcomePending
 					observations = append(observations, observation)
+					observed = true
 					break
 				}
 				info, cases, err := fetchBuildTests(ctx, b, loc)
 				if err != nil {
 					observation.Outcome, observation.Reason = OutcomeInconclusive, err.Error()
 					observations = append(observations, observation)
+					observed = true
 					break
 				}
 				observation.Result = info.Result
 				classifyObservation(jobEvidence, cases, info.Passed, &observation)
 				observations = append(observations, observation)
+				observed = true
 				break
 			}
 
 			info, cases, err := fetchBuildTests(ctx, b, loc)
-			if info == nil || info.Revision == "" || info.Revision != attempt.HeadSHA {
+			if info == nil {
+				continue
+			}
+			if info.Revision == "" {
+				if info.Result != "PENDING" && missingRevision == nil {
+					missingRevision = &BuildObservation{
+						BuildID: build.ID, JobName: job.JobName, JobType: models.JobTypePresubmit,
+						PullNumber: attempt.PRNumber, SourceRepo: job.Repo, Result: info.Result,
+						ProwURL: info.ProwURL, Outcome: OutcomeInconclusive,
+						Reason: "finished.json is missing revision metadata",
+					}
+				}
+				continue
+			}
+			if info.Revision != attempt.HeadSHA {
 				continue
 			}
 			observation := BuildObservation{
@@ -124,7 +144,11 @@ func ObservePresubmits(ctx context.Context, b storage.Backend, remediation *Reme
 				classifyObservation(jobEvidence, cases, info.Passed, &observation)
 			}
 			observations = append(observations, observation)
+			observed = true
 			break
+		}
+		if !observed && missingRevision != nil {
+			observations = append(observations, *missingRevision)
 		}
 	}
 	mergeObservations(attempt, observations)
@@ -143,7 +167,7 @@ func verificationJobs(remediation *Remediation, coverage *CoverageCatalog) []Ver
 		}
 		byID[job.JobID] = job
 	}
-	if coverage != nil {
+	if remediation.JobType != models.JobTypePresubmit && coverage != nil {
 		for _, evidence := range remediation.Evidence.Tests {
 			for _, job := range coverage.Tests[evidence.Identity] {
 				byID[job.JobID] = job
@@ -327,7 +351,10 @@ func currentPresubmitObservations(attempt *Attempt, jobs []VerificationJob) []Bu
 	}
 	latest := map[string]BuildObservation{}
 	for _, observation := range attempt.Observations {
-		if observation.JobType != models.JobTypePresubmit || observation.HeadSHA != attempt.HeadSHA || !selected[observation.JobName] {
+		if observation.JobType != models.JobTypePresubmit || !selected[observation.JobName] {
+			continue
+		}
+		if observation.HeadSHA != attempt.HeadSHA && (observation.HeadSHA != "" || observation.Outcome != OutcomeInconclusive) {
 			continue
 		}
 		current, exists := latest[observation.JobName]
