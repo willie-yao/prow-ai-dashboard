@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,17 @@ func TestRequestSizeEstimate_IncludesSchemaBytes(t *testing.T) {
 	withSchema := requestSizeEstimate(msgs, 1000)
 	if withSchema-base != 1000 {
 		t.Errorf("schema bytes should add to the estimate: delta=%d want 1000", withSchema-base)
+	}
+}
+
+func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
+	small := []modelMessage{{Role: "assistant"}}
+	large := []modelMessage{{Role: "assistant", ProviderItems: []json.RawMessage{json.RawMessage(strings.Repeat("x", 1024))}}}
+	if requestSizeEstimate(large, 0) < requestSizeEstimate(small, 0)+1024 {
+		t.Fatal("provider items were not counted")
+	}
+	compacted, _ := compactMessages(large, 0, 1)
+	if len(compacted[0].ProviderItems) != 1 {
+		t.Fatal("compaction dropped provider state")
 	}
 }

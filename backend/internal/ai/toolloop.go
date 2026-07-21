@@ -137,7 +137,8 @@ func (c *Client) ToolLoop(
 
 	// The model never returned a tools-free answer within the budget. Force one
 	// finalize round with tools omitted so the caller still gets a response.
-	return c.runFinalizeRound(ctx, messages, opts.ContextByteBudget), nil
+	final, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	return final, nil
 }
 
 // dispatchToolLoop routes one tool call through the registry and returns the

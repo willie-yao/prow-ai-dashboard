@@ -101,6 +101,9 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return nil, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
 	}
+	if wire.Status != "completed" {
+		return nil, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+	}
 	return decodeResponsesResponse(wire), nil
 }
 

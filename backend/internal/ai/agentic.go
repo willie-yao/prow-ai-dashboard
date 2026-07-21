@@ -884,7 +884,7 @@ func (c *Client) doAnalyzeAgentic(
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
 	if !ok {
-		finalContent = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
+		finalContent, finalProviderItems = c.runFinalizeRound(loopCtx, messages, in.Opts.ContextByteBudget)
 		parsed, ok = tryParseAnalysis(finalContent)
 	}
 	if !ok {
@@ -937,10 +937,10 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		return parsed
 	}
 	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
-	revised := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+	revised, _ := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
-		revised = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
+		revised, _ = c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 		next, ok = tryParseAnalysis(revised)
 	}
 	if !ok {
@@ -1187,7 +1187,7 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 // just the final JSON. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
-func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, contextByteBudget int) string {
+func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, contextByteBudget int) (string, []json.RawMessage) {
 	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
 	if contextByteBudget > 0 {
 		// The finalize round sends no tool schemas, so estimate against
@@ -1197,12 +1197,12 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
-		return ""
+		return "", nil
 	}
 	if !resp.HasMessage || resp.Message.Content == nil {
-		return ""
+		return "", resp.Message.ProviderItems
 	}
-	return *resp.Message.Content
+	return *resp.Message.Content, resp.Message.ProviderItems
 }
 
 // tryParseAnalysis extracts and unmarshals the JSON answer, returning ok=false

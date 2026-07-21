@@ -133,7 +133,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	msgs := append(messages,
 		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
 		modelMessage{Role: "user", Content: strPtr(formatSemanticObjections(objs))})
-	revised := c.runFinalizeRound(ctx, msgs, budget)
+	revised, _ := c.runFinalizeRound(ctx, msgs, budget)
 	rp, ok := tryParseAnalysis(revised)
 	if !ok {
 		log.Printf("  ✗ semantic judge (post-loop): %d objection(s); refinalize did not parse, keeping draft", len(objs))

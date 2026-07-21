@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
@@ -71,5 +72,17 @@ func TestResponsesTransportFlattensTools(t *testing.T) {
 	got := encodeResponsesTools(schemas)
 	if len(got) != 1 || got[0].Name != "read" || got[0].Type != "function" || got[0].Strict {
 		t.Fatalf("tools = %+v", got)
+	}
+}
+
+func TestResponsesTransportRejectsIncomplete(t *testing.T) {
+	shrinkCallDelay(t)
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"r","status":"incomplete","output":[{"type":"function_call","call_id":"c","name":"read","arguments":"{}"}]}`))
+	}))
+	defer s.Close()
+	c := NewClientWithOptions(Options{API: APIResponses, Endpoint: s.URL, Model: "m"})
+	if _, err := c.callModel(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("error = %v", err)
 	}
 }
