@@ -244,10 +244,10 @@ index 0000000000000000000000000000000000000000..4f6e1f4926ee821d47e960a2d97b3902
 +}
 diff --git a/workers/ai/analysis_context.go b/workers/ai/analysis_context.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..b36974fab283910e3ed19e0f9dd0ca548a305051
+index 0000000000000000000000000000000000000000..87e48177afa809f8c7b3146e6822ab12ad8c726b
 --- /dev/null
 +++ b/workers/ai/analysis_context.go
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,276 @@
 +package main
 +
 +import (
@@ -347,7 +347,14 @@ index 0000000000000000000000000000000000000000..b36974fab283910e3ed19e0f9dd0ca54
 +			parts = append(parts, key+"="+strconv.Quote(truncateEvidenceValue(text, 160)))
 +		}
 +	}
-+	compact := strings.Join(strings.Fields(result), " ")
++	excerptSource := result
++	if values != nil {
++		delete(values, "evidence_token")
++		if data, err := json.Marshal(values); err == nil {
++			excerptSource = string(data)
++		}
++	}
++	compact := strings.Join(strings.Fields(excerptSource), " ")
 +	return evidenceToken, strings.Join(parts, "; "), truncateEvidenceHeadTail(compact, analysisEvidenceEntryMaxBytes)
 +}
 +
@@ -519,10 +526,10 @@ index 0000000000000000000000000000000000000000..b36974fab283910e3ed19e0f9dd0ca54
 +}
 diff --git a/workers/ai/analysis_context_test.go b/workers/ai/analysis_context_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..57b9816b11f364a4662b5e5095796c6e8a12e270
+index 0000000000000000000000000000000000000000..2a42f5eb9bcbf61a866bcc9d024d22221a0237c5
 --- /dev/null
 +++ b/workers/ai/analysis_context_test.go
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,184 @@
 +package main
 +
 +import (
@@ -695,8 +702,12 @@ index 0000000000000000000000000000000000000000..57b9816b11f364a4662b5e5095796c6e
 +		t.Fatal("newest long evidence token was not retained")
 +	}
 +	for _, token := range tokens {
-+		if strings.Contains(ledger, token[:300]) && !strings.Contains(ledger, token) {
++		prefixCount := strings.Count(ledger, token[:300])
++		if prefixCount > 0 && !strings.Contains(ledger, token) {
 +			t.Fatal("ledger contains a truncated evidence token")
++		}
++		if prefixCount > 1 {
++			t.Fatal("ledger repeated a token prefix outside its complete reference")
 +		}
 +	}
 +	if !strings.Contains(ledger, "entries omitted whole") {
