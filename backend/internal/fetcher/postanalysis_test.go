@@ -313,7 +313,10 @@ func TestProcessRemediationsClearsStateForChangedRepo(t *testing.T) {
 	if err := p.processRemediations(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	state := remediation.LoadForRepo(dataDir, "new/r")
+	state, err := remediation.LoadForRepo(dataDir, "new/r")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if state.Repo != "new/r" || len(state.Remediations) != 0 {
 		t.Fatalf("state = %+v", state)
 	}
@@ -346,7 +349,11 @@ func TestProcessRemediationsSkipsFixWithoutPatternSnapshot(t *testing.T) {
 	if err := p.processRemediations(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := remediation.LoadForRepo(dataDir, "o/r"); len(got.Remediations) != 0 {
+	got, err := remediation.LoadForRepo(dataDir, "o/r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Remediations) != 0 {
 		t.Fatalf("remediations = %+v", got.Remediations)
 	}
 }
@@ -407,7 +414,10 @@ func TestSendRemediationEmailsPersistsSuccessfulDelivery(t *testing.T) {
 	if len(sender.messages) != 1 {
 		t.Fatalf("messages = %d, want 1", len(sender.messages))
 	}
-	reloaded := remediation.Load(dir)
+	reloaded, err := remediation.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	attempt := reloaded.Remediations["pattern"].Attempts[0]
 	if attempt.LastEmailedTransitionIndex != 1 || attempt.LastEmailedTransition != attempt.LastTransition {
 		t.Fatalf("attempt = %+v", attempt)
@@ -435,7 +445,10 @@ func TestSendRemediationEmailsRetriesFailedDeliveryAfterReload(t *testing.T) {
 	if state.Remediations["pattern"].Attempts[0].LastEmailedTransitionIndex != 0 {
 		t.Fatalf("attempt advanced after failure: %+v", state.Remediations["pattern"].Attempts[0])
 	}
-	reloaded := remediation.Load(dir)
+	reloaded, err := remediation.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if reloaded.Remediations["pattern"].Attempts[0].LastEmailedTransitionIndex != 0 {
 		t.Fatalf("reloaded attempt advanced after failure: %+v", reloaded.Remediations["pattern"].Attempts[0])
 	}

@@ -3,7 +3,7 @@ package remediation
 
 import (
 	"encoding/json"
-	"log"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -130,26 +130,29 @@ func NewStateForRepo(repo string) *State {
 }
 
 // Load reads the private ledger without applying a repository scope.
-func Load(dir string) *State {
+func Load(dir string) (*State, error) {
 	return LoadForRepo(dir, "")
 }
 
 // LoadForRepo reads the private ledger and resets state from another target repo.
-func LoadForRepo(dir, repo string) *State {
+func LoadForRepo(dir, repo string) (*State, error) {
 	path := filepath.Join(dir, FileName)
 	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return NewStateForRepo(repo), nil
+	}
 	if err != nil {
-		return NewStateForRepo(repo)
+		return nil, fmt.Errorf("read remediation state: %w", err)
 	}
 	var state State
-	if err := json.Unmarshal(data, &state); err != nil || state.Version != currentVersion {
-		if err != nil {
-			log.Printf("Warning: failed to parse remediation state: %v", err)
-		}
-		return NewStateForRepo(repo)
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parse remediation state: %w", err)
+	}
+	if state.Version != currentVersion {
+		return NewStateForRepo(repo), nil
 	}
 	if repo != "" && state.Repo != repo {
-		return NewStateForRepo(repo)
+		return NewStateForRepo(repo), nil
 	}
 	if repo != "" {
 		state.Repo = repo
@@ -157,7 +160,7 @@ func LoadForRepo(dir, repo string) *State {
 	if state.Remediations == nil {
 		state.Remediations = map[string]*Remediation{}
 	}
-	return &state
+	return &state, nil
 }
 
 // Save writes the private ledger to dir.

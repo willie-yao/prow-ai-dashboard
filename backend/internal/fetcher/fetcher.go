@@ -419,16 +419,27 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 	}
 
 	// Recover existing fix state before issue recovery or new automatic writes.
+	remediationReady := true
 	if err := p.processRemediations(ctx, flakinessReport.RecurringPatterns, details); err != nil {
 		sideEffectErrs = append(sideEffectErrs, err)
+		remediationReady = false
 	}
-	fixPatterns := remediation.UntrackedPatterns(remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg)), flakinessReport.RecurringPatterns, details)
-	if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
-		log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
-	}
-	fixStateChanged, fixErr := processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir)
-	if fixErr != nil {
-		sideEffectErrs = append(sideEffectErrs, fixErr)
+	fixStateChanged := false
+	if remediationReady {
+		ledger, err := remediation.LoadForRepo(opts.OutDir, configuredFixRepo(cfg))
+		if err != nil {
+			sideEffectErrs = append(sideEffectErrs, fmt.Errorf("load remediation state for fix PRs: %w", err))
+		} else {
+			fixPatterns := remediation.UntrackedPatterns(ledger, flakinessReport.RecurringPatterns, details)
+			if skipped := len(flakinessReport.RecurringPatterns) - len(fixPatterns); skipped > 0 {
+				log.Printf("Fix PRs: %d pattern(s) already have remediation history; skipping duplicate proposals", skipped)
+			}
+			var fixErr error
+			fixStateChanged, fixErr = processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir)
+			if fixErr != nil {
+				sideEffectErrs = append(sideEffectErrs, fixErr)
+			}
+		}
 	}
 	// Adopt a PR created in this pass before issues evaluate recovery.
 	if fixStateChanged {
@@ -547,8 +558,11 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
-	keepOpen, retire := remediationIssueLifecycleKeys(
-		remediation.LoadForRepo(outDir, configuredFixRepo(cfg)), targetRepo)
+	ledger, err := remediation.LoadForRepo(outDir, configuredFixRepo(cfg))
+	if err != nil {
+		return fmt.Errorf("load remediation state for issues: %w", err)
+	}
+	keepOpen, retire := remediationIssueLifecycleKeys(ledger, targetRepo)
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
 		CloseOnRecovery:   eff.CloseOnRecovery,
@@ -850,7 +864,10 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 		return removeRemediationPublicState(p.opts.OutDir)
 	}
 	fixState := statefile.Load[fixpr.TrackedFix](filepath.Join(p.opts.OutDir, "fix_pr_state.json"), targetRepo, "fix PRs")
-	ledger := remediation.LoadForRepo(p.opts.OutDir, targetRepo)
+	ledger, err := remediation.LoadForRepo(p.opts.OutDir, targetRepo)
+	if err != nil {
+		return err
+	}
 	if len(fixState.Tracked) == 0 && len(ledger.Remediations) == 0 && len(patterns) == 0 {
 		return ledger.Save(p.opts.OutDir)
 	}

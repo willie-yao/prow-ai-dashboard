@@ -17,7 +17,10 @@ func TestStateRoundTrip(t *testing.T) {
 	if err := state.Save(dir); err != nil {
 		t.Fatal(err)
 	}
-	loaded := Load(dir)
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := loaded.Remediations["x"]; got == nil || got.Attempts[0].PRNumber != 7 {
 		t.Fatalf("loaded = %+v", loaded)
 	}
@@ -159,9 +162,22 @@ func TestLoadForRepoResetsAnotherTarget(t *testing.T) {
 	if err := state.Save(dir); err != nil {
 		t.Fatal(err)
 	}
-	loaded := LoadForRepo(dir, "new/repo")
+	loaded, err := LoadForRepo(dir, "new/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if loaded.Repo != "new/repo" || len(loaded.Remediations) != 0 {
 		t.Fatalf("loaded = %+v", loaded)
+	}
+}
+
+func TestLoadForRepoReturnsReadError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadForRepo(dir, "o/r"); err == nil {
+		t.Fatal("read error was treated as empty state")
 	}
 }
 

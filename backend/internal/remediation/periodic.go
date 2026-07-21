@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -123,28 +124,33 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 			return errors.Join(errs...)
 		}
 	}
+	var periodicObservations []BuildObservation
+	for _, observation := range attempt.Observations {
+		if observation.JobType == models.JobTypePeriodic {
+			periodicObservations = append(periodicObservations, observation)
+		}
+	}
+	sort.Slice(periodicObservations, func(i, j int) bool {
+		return newerBuild(periodicObservations[i].BuildID, periodicObservations[j].BuildID)
+	})
 	clean := 0
 	different := false
 	inconclusive := false
 	inconclusiveReason := ""
-	comparable := 0
-	for _, observation := range attempt.Observations {
-		if observation.JobType != models.JobTypePeriodic {
-			continue
-		}
-		comparable++
+	for _, observation := range periodicObservations {
 		switch observation.Outcome {
 		case OutcomePassed:
 			clean++
+			continue
 		case OutcomeDifferentCause:
 			different = true
 		case OutcomeInconclusive:
 			inconclusive = true
-			if observation.Reason != "" {
-				inconclusiveReason = observation.Reason
-			}
+			inconclusiveReason = observation.Reason
 		}
+		break
 	}
+	comparable := len(periodicObservations)
 	if comparable == 0 && missingCommit {
 		transitionAttempt(remediation, attempt, StatusInconclusive, OutcomeInconclusive,
 			"completed post-merge Prow build has no source commit")
@@ -159,6 +165,9 @@ func ObservePeriodic(ctx context.Context, client CompareClient, remediation *Rem
 	switch {
 	case clean >= minCleanRuns:
 		transitionAttempt(remediation, attempt, StatusVerifiedFixed, OutcomePassed, fmt.Sprintf("%d clean post-merge runs", clean))
+	case clean > 0:
+		transitionAttempt(remediation, attempt, StatusObserving, OutcomePending,
+			fmt.Sprintf("%d/%d clean post-merge runs after the latest non-passing result", clean, minCleanRuns))
 	case different:
 		transitionAttempt(remediation, attempt, StatusFailingDifferentCause, OutcomeDifferentCause, "original test failed with a different signature")
 	case inconclusive:

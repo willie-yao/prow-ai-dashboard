@@ -2,6 +2,8 @@ package remediation
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,6 +27,22 @@ type countingPRClient struct {
 func (c *countingPRClient) GetPullRequest(context.Context, string, string, int) (ghpr.PullRequest, error) {
 	c.calls++
 	return ghpr.PullRequest{}, nil
+}
+
+func TestReconcileStopsOnStateReadError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewReconciler(&countingPRClient{}, dir).Reconcile(
+		context.Background(), nil, nil, nil, func(models.PatternAnalysis) string { return "" }); err == nil {
+		t.Fatal("reconciliation continued after state read failure")
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("state path was overwritten: info=%v err=%v", info, err)
+	}
 }
 
 func TestReconcileSkipsGitHubRefreshForMergedPullRequest(t *testing.T) {
@@ -167,7 +185,11 @@ func TestReconcileRefreshesFindingIDFromMatchingEvidence(t *testing.T) {
 		TestCases: []models.TestCase{{Name: "test", SuiteName: "suite", ClassName: "class", Status: "failed", FailureMessage: "same"}},
 	}}}}
 	current := EvidenceForPattern(pattern, details)
-	existing = Load(dir)
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing = loaded
 	existing.Remediations["old"].Evidence.Tests[0].ErrorHash = current.Tests[0].ErrorHash
 	if err := existing.Save(dir); err != nil {
 		t.Fatal(err)

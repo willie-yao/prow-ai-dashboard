@@ -77,7 +77,10 @@ func (r *Reconciler) SetRecovery(targetRepo string, search PullRequestSearchClie
 
 // Reconcile attaches tracked fixes to findings and refreshes every known pull request.
 func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAnalysis, details []models.JobDetail, fixes map[string]FixReference, keyFor func(models.PatternAnalysis) string) (*State, error) {
-	state := LoadForRepo(r.dataDir, r.targetRepo)
+	state, err := LoadForRepo(r.dataDir, r.targetRepo)
+	if err != nil {
+		return nil, err
+	}
 	var errs []error
 
 	combined := append([]models.PatternAnalysis(nil), patterns...)

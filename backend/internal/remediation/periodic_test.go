@@ -75,6 +75,48 @@ func TestObservePeriodicCachesNegativeAncestry(t *testing.T) {
 	}
 }
 
+func TestObservePeriodicNewerDifferentCauseOverridesOlderPasses(t *testing.T) {
+	remediation := &Remediation{
+		JobID: "job", JobName: "job", JobType: models.JobTypePeriodic,
+		SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom"),
+	}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
+	pass := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
+	different := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "failed", FailureMessage: "different"}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "13", Commit: "c3", Result: "FAILURE", JUnitComplete: true}, TestCases: []models.TestCase{different}},
+		{BuildInfo: models.BuildInfo{BuildID: "12", Commit: "c2", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
+		{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "c1", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
+	}}}
+	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 2); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusFailingDifferentCause {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
+func TestObservePeriodicVerifiesCleanRunsAfterOlderFailure(t *testing.T) {
+	remediation := &Remediation{
+		JobID: "job", JobName: "job", JobType: models.JobTypePeriodic,
+		SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence("boom"),
+	}
+	attempt := &Attempt{Status: StatusMerged, PRState: StatusMerged, MergeSHA: "merge", TargetRepo: "o/r"}
+	pass := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "passed"}
+	different := models.TestCase{Name: "test", SuiteName: "suite", ClassName: "class", Status: "failed", FailureMessage: "different"}
+	details := []models.JobDetail{{JobID: "job", Name: "job", Runs: []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "13", Commit: "c3", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
+		{BuildInfo: models.BuildInfo{BuildID: "12", Commit: "c2", Result: "SUCCESS", Passed: true, JUnitComplete: true}, TestCases: []models.TestCase{pass}},
+		{BuildInfo: models.BuildInfo{BuildID: "11", Commit: "c1", Result: "FAILURE", JUnitComplete: true}, TestCases: []models.TestCase{different}},
+	}}}
+	if err := ObservePeriodic(context.Background(), fakeCompare{contains: true, status: "ahead"}, remediation, attempt, details, 2); err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Status != StatusVerifiedFixed {
+		t.Fatalf("attempt = %+v", attempt)
+	}
+}
+
 func TestObservePeriodic_DetectsSameCause(t *testing.T) {
 	failure := "boom 42"
 	remediation := &Remediation{JobID: "job", JobName: "job", JobType: models.JobTypePeriodic, SourceRepo: "o/r", CommitRepo: "o/r", Evidence: periodicEvidence(failure)}
