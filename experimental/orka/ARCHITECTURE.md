@@ -168,8 +168,8 @@ The ingestor's immediate `gcTools` pass deletes scoped Tools after every Task
 for a build becomes terminal. The producer also labels per-test Tasks, pattern
 Tasks, and Tools with `orka.dashboard/project`; per-test resources carry
 `orka.dashboard/build`, and Tasks carry `orka.dashboard/task-type`. The operator
-helper uses those labels for project and batch status plus age-bounded cleanup.
-Task and Tool cleanup is a dry-run unless the operator passes `--delete`.
+helper uses those labels for project and batch status plus an age-bounded,
+read-only garbage-collection preview.
 
 After per-test ingestion, the ingestor runs the same bounded cross-build pattern
 contract as the in-process backend. It applies one content-addressed, tool-free

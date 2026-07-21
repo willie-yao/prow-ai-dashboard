@@ -461,10 +461,9 @@ New per-test Tasks, pattern Tasks, and scoped Tools carry the project label.
 Resources produced before this labeling contract appear as `<unlabeled>` and are
 never selected by project-scoped garbage collection.
 
-Garbage collection is age-bounded and dry-run by default. It selects only
+The garbage-collection preview is age-bounded and read-only. It reports only
 terminal Tasks for one exact project scope. A Tool is eligible only when it is
-older than the retention window and no Task for its build is active. Delete mode
-rechecks the build immediately before each Tool deletion.
+older than the retention window and no Task for its build is active.
 
 ```bash
 # Preview the default 168-hour retention plan.
@@ -476,20 +475,15 @@ experimental/orka/orka-ops.sh --namespace orka-system gc \
   --project <32-character-project-scope> \
   --older-than 30d
 
-# Apply the exact scoped plan.
-experimental/orka/orka-ops.sh --namespace orka-system gc \
-  --project <32-character-project-scope> \
-  --older-than 30d \
-  --delete
 ```
 
-Deleting a terminal Task also removes its Kubernetes-backed analysis cache. A
-later producer run recreates the same content-addressed Task and performs the
-analysis again. Keep the retention window long enough for the dashboard's normal
-fetch history and rollback window.
+The command never deletes resources. Its Task candidates are Kubernetes-backed
+analysis cache entries, so deleting them through another process would force a
+later producer run to perform the analysis again. Review the preview through the
+cluster's normal change-control process before any manual deletion.
 
 The ingestor still performs immediate per-build Tool cleanup after completed
-batches. The operator GC handles abandoned Tools and old Task cache entries when
+batches. The preview identifies abandoned Tools and old Task cache entries when
 a batch failed before that cleanup ran.
 
 ```bash

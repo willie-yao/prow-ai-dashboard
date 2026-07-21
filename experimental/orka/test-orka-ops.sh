@@ -24,7 +24,7 @@ if [[ $args == *' get crd '* ]]; then
   exit 0
 fi
 if [[ $args == *' get deployments '* && $args == *'status.readyReplicas'* ]]; then
-  printf 'orka-controller\t1\t1\t1\n'
+  printf 'orka-controller\t1\t1\t1\torka\torka\n'
   exit 0
 fi
 if [[ $args == *' get deployments '* && $args == *'range .args'* ]]; then
@@ -46,6 +46,13 @@ fi
 if [[ $args == *' get provider.core.orka.ai '* ]]; then
   printf '%s' "${FAKE_PROVIDER_READY:-true}"
   exit 0
+fi
+if [[ $args == *' get serviceaccount '* ]]; then
+  if [[ ${FAKE_SERVICE_ACCOUNT_EXISTS:-true} == true ]]; then
+    printf 'serviceaccount/test\n'
+    exit 0
+  fi
+  exit 1
 fi
 if [[ $args == *' auth can-i '* ]]; then
   if [[ ${FAKE_RBAC_DENY:-} == "$2 $3" ]]; then
@@ -75,10 +82,6 @@ if [[ $args == *' get task.core.orka.ai prow-ai-dashboard-smoke-'* ]]; then
   fi
   exit 0
 fi
-if [[ $args == *' get tasks.core.orka.ai '* && $args == *'jsonpath='* ]]; then
-  printf '%s\n' "${FAKE_RECHECK_PHASE:-Succeeded}"
-  exit 0
-fi
 if [[ $args == *' get tasks.core.orka.ai '* && $args == *'go-template='* ]]; then
   printf '%s' "${FAKE_TASKS:-}"
   exit 0
@@ -87,7 +90,7 @@ if [[ $args == *' get tools.core.orka.ai '* && $args == *'go-template='* ]]; the
   printf '%s' "${FAKE_TOOLS:-}"
   exit 0
 fi
-if [[ $args == *' delete task.core.orka.ai '* || $args == *' delete tool.core.orka.ai '* ]]; then
+if [[ $args == *' delete task.core.orka.ai '* ]]; then
   exit 0
 fi
 if [[ $args == *' describe task.core.orka.ai '* || $args == *' logs job/'* ]]; then
@@ -114,6 +117,14 @@ grep -Fq 'PASS  Provider copilot is ready' "$tmp/preflight.txt"
 grep -Fq 'PASS  AI worker image is compat-image' "$tmp/preflight.txt"
 grep -Fq 'Preflight passed.' "$tmp/preflight.txt"
 grep -Fq -- '--context test auth can-i delete tools.core.orka.ai -n orka-system --as=system:serviceaccount:dashboards:dashboard-orka' "$CALLS"
+grep -Fq -- '--context test -n orka-system get services -l app.kubernetes.io/instance=orka,app.kubernetes.io/name=orka' "$CALLS"
+
+if FAKE_SERVICE_ACCOUNT_EXISTS=false "$script" --namespace orka-system preflight \
+  --provider copilot --service-account dashboards/missing > "$tmp/preflight-missing-sa.txt" 2>&1; then
+  echo 'preflight accepted a missing ServiceAccount' >&2
+  exit 1
+fi
+grep -Fq 'ServiceAccount dashboards/missing is missing or unreadable' "$tmp/preflight-missing-sa.txt"
 
 if FAKE_WORKER_IMAGE=wrong-image "$script" --namespace orka-system preflight \
   --provider copilot --worker-image compat-image > "$tmp/preflight-fail.txt" 2>&1; then
@@ -185,25 +196,12 @@ if grep -Fq ' delete ' "$CALLS"; then
   exit 1
 fi
 
-: > "$CALLS"
-"$script" --namespace orka-system gc --project "$project" --older-than 7d --delete > "$tmp/gc-delete.txt"
-grep -Fq 'Deleted Tool tool-old' "$tmp/gc-delete.txt"
-grep -Fq 'Deleted Task task-old' "$tmp/gc-delete.txt"
-grep -Fq "delete tool.core.orka.ai tool-old --wait=false" "$CALLS"
-grep -Fq "delete task.core.orka.ai task-old --wait=false" "$CALLS"
-if grep -Eq 'delete (tool|task)\.core\.orka\.ai (tool-active|tool-new|task-active|task-new|legacy-task)' "$CALLS"; then
-  echo 'GC deleted an ineligible resource' >&2
+if "$script" --namespace orka-system gc --project "$project" --older-than 7d --delete \
+  > "$tmp/gc-delete-option.txt" 2>&1; then
+  echo 'GC accepted the removed --delete option' >&2
   exit 1
 fi
-
-: > "$CALLS"
-FAKE_RECHECK_PHASE=Running "$script" --namespace orka-system gc --project "$project" \
-  --older-than 7d --delete > "$tmp/gc-race.txt" 2>&1
-grep -Fq "Skipped Tool tool-old because build $build_old became active" "$tmp/gc-race.txt"
-if grep -Fq 'delete tool.core.orka.ai tool-old' "$CALLS"; then
-  echo 'GC deleted a Tool after its build became active' >&2
-  exit 1
-fi
+grep -Fq 'unknown gc option: --delete' "$tmp/gc-delete-option.txt"
 
 if "$script" gc --project not-a-scope > "$tmp/gc-invalid.txt" 2>&1; then
   echo 'GC accepted an invalid project scope' >&2

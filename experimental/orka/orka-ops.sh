@@ -4,7 +4,6 @@ set -euo pipefail
 managed_by_label="app.kubernetes.io/managed-by"
 managed_by_value="orka-producer"
 project_label="orka.dashboard/project"
-build_label="orka.dashboard/build"
 smoke_managed_by="prow-ai-dashboard-orka-ops"
 
 usage() {
@@ -17,7 +16,7 @@ Usage:
   orka-ops.sh [--context <name>] [--namespace <name>] status \
     [--project <scope>]
   orka-ops.sh [--context <name>] [--namespace <name>] gc \
-    --project <scope> [--older-than <duration>] [--delete]
+    --project <scope> [--older-than <duration>]
 
 Commands:
   preflight  Check Orka CRDs, controller readiness, API endpoints, Provider
@@ -25,8 +24,8 @@ Commands:
              dashboard ServiceAccount permissions.
   smoke      Create a disposable AI Task and require a successful result.
   status     Report Task phases and Tool counts by project and build batch.
-  gc         List terminal Tasks and inactive Tools older than the retention
-             window. This is a dry-run unless --delete is passed.
+  gc         Preview terminal Tasks and inactive Tools older than the retention
+             window. This command never deletes resources.
 
 Durations accept one integer unit, for example 30m, 24h, or 7d.
 USAGE
@@ -197,16 +196,22 @@ preflight() {
     fi
   done
 
-  local controllers controller_ready=false controller_rows
+  local controllers controller_ready=false controller_rows controller_selectors
   controller_rows=$(kube -n "$namespace" get deployments -l app.kubernetes.io/component=controller \
-    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{.spec.replicas}}{{"\t"}}{{.status.readyReplicas}}{{"\t"}}{{.status.availableReplicas}}{{"\n"}}{{end}}' 2>/dev/null || true)
+    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{.spec.replicas}}{{"\t"}}{{.status.readyReplicas}}{{"\t"}}{{.status.availableReplicas}}{{"\t"}}{{index .metadata.labels "app.kubernetes.io/instance"}}{{"\t"}}{{index .metadata.labels "app.kubernetes.io/name"}}{{"\n"}}{{end}}' 2>/dev/null || true)
   controllers=0
-  while IFS=$'\t' read -r name desired ready available; do
+  controller_selectors=""
+  while IFS=$'\t' read -r name desired ready available instance app_name; do
     [[ -z $name ]] && continue
     controllers=$((controllers + 1))
     [[ $desired =~ ^[0-9]+$ ]] || desired=0
     [[ $ready =~ ^[0-9]+$ ]] || ready=0
     [[ $available =~ ^[0-9]+$ ]] || available=0
+    if [[ -n $instance && $instance != "<no value>" && -n $app_name && $app_name != "<no value>" ]]; then
+      controller_selectors+="${controller_selectors:+$'\n'}$instance"$'\t'"$app_name"
+    else
+      fail "controller Deployment $name is missing release identity labels"
+    fi
     if (( desired > 0 && ready == desired && available > 0 )); then
       pass "controller Deployment $name is ready ($ready/$desired)"
       controller_ready=true
@@ -232,12 +237,20 @@ preflight() {
     pass "AI worker image is $worker_image"
   fi
 
-  local service_rows services service endpoint_addresses
-  service_rows=$(kube -n "$namespace" get services \
-    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{range .spec.ports}}{{.name}}{{","}}{{end}}{{"\n"}}{{end}}' 2>/dev/null || true)
-  services=$(awk -F '\t' '{count = split($2, ports, ","); for (i = 1; i <= count; i++) if (ports[i] == "api") print $1}' <<< "$service_rows")
+  local service_rows services="" service_matches service endpoint_addresses instance app_name
+  while IFS=$'\t' read -r instance app_name; do
+    [[ -z $instance || -z $app_name ]] && continue
+    service_rows=$(kube -n "$namespace" get services \
+      -l "app.kubernetes.io/instance=$instance,app.kubernetes.io/name=$app_name" \
+      -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{range .spec.ports}}{{.name}}{{","}}{{end}}{{"\n"}}{{end}}' 2>/dev/null || true)
+    service_matches=$(awk -F '\t' '{count = split($2, ports, ","); for (i = 1; i <= count; i++) if (ports[i] == "api") print $1}' <<< "$service_rows")
+    if [[ -n $service_matches ]]; then
+      services+="${services:+$'\n'}$service_matches"
+    fi
+  done <<< "$(printf '%s\n' "$controller_selectors" | sort -u)"
+  services=$(printf '%s\n' "$services" | sed '/^$/d' | sort -u)
   if [[ -z $services ]]; then
-    fail "no Service exposes the Orka API port"
+    fail "no Orka controller Service exposes the API port"
   else
     while IFS= read -r service; do
       [[ -z $service ]] && continue
@@ -267,18 +280,23 @@ preflight() {
   if [[ -n $service_account ]]; then
     local sa_namespace=${service_account%%/*}
     local sa_name=${service_account#*/}
-    local identity="system:serviceaccount:$sa_namespace:$sa_name"
-    local resource verb allowed
-    for resource in tasks.core.orka.ai tools.core.orka.ai; do
-      for verb in create get list watch patch update delete; do
-        allowed=$(kube auth can-i "$verb" "$resource" -n "$namespace" --as="$identity" 2>/dev/null || true)
-        if [[ $allowed == "yes" ]]; then
-          pass "$service_account can $verb $resource in $namespace"
-        else
-          fail "$service_account cannot $verb $resource in $namespace"
-        fi
+    if ! kube -n "$sa_namespace" get serviceaccount "$sa_name" -o name >/dev/null 2>&1; then
+      fail "ServiceAccount $service_account is missing or unreadable"
+    else
+      pass "ServiceAccount $service_account exists"
+      local identity="system:serviceaccount:$sa_namespace:$sa_name"
+      local resource verb allowed
+      for resource in tasks.core.orka.ai tools.core.orka.ai; do
+        for verb in create get list watch patch update delete; do
+          allowed=$(kube auth can-i "$verb" "$resource" -n "$namespace" --as="$identity" 2>/dev/null || true)
+          if [[ $allowed == "yes" ]]; then
+            pass "$service_account can $verb $resource in $namespace"
+          else
+            fail "$service_account cannot $verb $resource in $namespace"
+          fi
+        done
       done
-    done
+    fi
   fi
 
   if (( failures > 0 )); then
@@ -522,7 +540,7 @@ timestamp_epoch() {
 }
 
 gc_resources() {
-  local project="" older_than="168h" delete=false
+  local project="" older_than="168h"
   while [[ $# -gt 0 ]]; do
     case $1 in
       --project)
@@ -534,10 +552,6 @@ gc_resources() {
         [[ $# -ge 2 ]] || { usage >&2; exit 2; }
         older_than=$2
         shift 2
-        ;;
-      --delete)
-        delete=true
-        shift
         ;;
       -h|--help)
         usage
@@ -631,42 +645,8 @@ gc_resources() {
     awk -F '\t' '{printf "  Tool %s build=%s created=%s\n", $1, $2, $3}' "$tool_candidates"
   fi
 
-  if [[ $delete != true ]]; then
-    printf 'Dry-run only. Pass --delete to remove these resources.\n'
-    return 0
-  fi
+  printf 'Dry-run only. This command never deletes resources.\n'
 
-  local phases active=false
-  while IFS=$'\t' read -r tool_name build created; do
-    [[ -z $tool_name ]] && continue
-    if ! phases=$(kube -n "$namespace" get tasks.core.orka.ai \
-      -l "$managed_by_label=$managed_by_value,$project_label=$project,$build_label=$build" \
-      -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null); then
-      echo "Skipped Tool $tool_name because build $build could not be rechecked" >&2
-      continue
-    fi
-    active=false
-    if [[ -n $phases ]]; then
-      while IFS= read -r phase; do
-        if [[ -z $phase || ( $phase != "Succeeded" && $phase != "Failed" && $phase != "Cancelled" ) ]]; then
-          active=true
-          break
-        fi
-      done <<< "$phases"
-    fi
-    if [[ $active == true ]]; then
-      echo "Skipped Tool $tool_name because build $build became active" >&2
-      continue
-    fi
-    kube -n "$namespace" delete tool.core.orka.ai "$tool_name" --wait=false >/dev/null
-    printf 'Deleted Tool %s\n' "$tool_name"
-  done < "$tool_candidates"
-
-  while IFS=$'\t' read -r name phase created task_type; do
-    [[ -z $name ]] && continue
-    kube -n "$namespace" delete task.core.orka.ai "$name" --wait=false >/dev/null
-    printf 'Deleted Task %s\n' "$name"
-  done < "$task_candidates"
 }
 
 case $command in
