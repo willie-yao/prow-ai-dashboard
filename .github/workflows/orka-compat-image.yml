@@ -138,6 +138,7 @@ jobs:
             echo "- Orka commit: \`$ORKA_COMMIT\`"
             echo "- Dashboard commit: \`$DASHBOARD_COMMIT\`"
             echo "- Patch SHA-256: \`$PATCH_SHA256\`"
+            echo "- Recovered existing tag: \`$RECOVERED\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload validation record
@@ -180,12 +181,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Refuse an existing immutable tag
+      - name: Inspect existing immutable tag
+        id: existing
         env:
           IMAGE: ghcr.io/${{ github.repository }}/orka-ai-worker:${{ needs.validate.outputs.image_tag }}
-        run: experimental/orka/worker-patches/compat-worker.sh assert-tag-absent "$IMAGE"
+          DASHBOARD_COMMIT: ${{ needs.validate.outputs.dashboard_commit }}
+        run: |
+          set +e
+          experimental/orka/worker-patches/compat-worker.sh \
+            inspect-published "$IMAGE" "$DASHBOARD_COMMIT" > existing-image.json
+          rc=$?
+          set -e
+          case $rc in
+            0)
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              echo "digest=$(jq -r '.digest' existing-image.json)" >> "$GITHUB_OUTPUT"
+              ;;
+            10)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$rc"
+              ;;
+          esac
 
       - name: Build and push compatibility image
+        if: steps.existing.outputs.exists != 'true'
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -204,13 +225,27 @@ jobs:
           cache-from: type=gha,scope=orka-compat-worker
           cache-to: type=gha,mode=max,scope=orka-compat-worker
 
+      - name: Resolve published digest
+        id: coordinates
+        env:
+          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          digest=${EXISTING_DIGEST:-$BUILT_DIGEST}
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "invalid published digest: $digest" >&2
+            exit 1
+          }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
       - name: Record published image
         env:
           IMAGE: ghcr.io/${{ github.repository }}/orka-ai-worker:${{ needs.validate.outputs.image_tag }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.coordinates.outputs.digest }}
           ORKA_COMMIT: ${{ needs.validate.outputs.orka_commit }}
           PATCH_SHA256: ${{ needs.validate.outputs.patch_sha256 }}
           DASHBOARD_COMMIT: ${{ needs.validate.outputs.dashboard_commit }}
+          RECOVERED: ${{ steps.existing.outputs.exists }}
         run: |
           jq -n \
             --arg image "$IMAGE" \
@@ -218,7 +253,8 @@ jobs:
             --arg orkaCommit "$ORKA_COMMIT" \
             --arg patchSHA256 "$PATCH_SHA256" \
             --arg dashboardCommit "$DASHBOARD_COMMIT" \
-            '{image:$image,digest:$digest,orka_commit:$orkaCommit,patch_sha256:$patchSHA256,dashboard_commit:$dashboardCommit,published:true}' \
+            --arg recovered "$RECOVERED" \
+            '{image:$image,digest:$digest,orka_commit:$orkaCommit,patch_sha256:$patchSHA256,dashboard_commit:$dashboardCommit,published:true,recovered:($recovered == "true")}' \
             > orka-compat-image.json
           {
             echo "### Published Orka compatibility worker"

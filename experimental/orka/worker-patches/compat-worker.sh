@@ -23,7 +23,7 @@ Usage:
   compat-worker.sh check-source <orka-source>
   compat-worker.sh prepare <orka-source>
   compat-worker.sh test <patched-orka-source>
-  compat-worker.sh assert-tag-absent <image>
+  compat-worker.sh inspect-published <image> <dashboard-commit>
   compat-worker.sh build <image> [orka-source]
 
 build clones the pinned Orka commit when orka-source is omitted, applies the
@@ -121,8 +121,8 @@ test_source() {
   (
     cd "$source"
     test -z "$(gofmt -l workers/ai/main.go workers/ai/compatibility_test.go)"
-    go test ./workers/ai -run 'TestExecuteAgentLoopRepromptsEmptyFinal|TestExecuteAgentLoopRepromptsUnsupportedTransient|TestTransientWithoutTimeline' -count=1
-    go test -race ./workers/ai -run 'TestExecuteAgentLoopRepromptsEmptyFinal|TestExecuteAgentLoopRepromptsUnsupportedTransient|TestTransientWithoutTimeline' -count=1
+    go test ./workers/ai -run 'TestExecuteAgentLoop(RepromptsEmptyFinal|RepromptsUnsupportedTransient|RejectsRepeatedEmptyFinal|RejectsRepeatedUnsupportedTransient)|TestTransientWithoutTimeline' -count=1
+    go test -race ./workers/ai -run 'TestExecuteAgentLoop(RepromptsEmptyFinal|RepromptsUnsupportedTransient|RejectsRepeatedEmptyFinal|RejectsRepeatedUnsupportedTransient)|TestTransientWithoutTimeline' -count=1
     go test ./workers/ai -count=1
   )
 }
@@ -136,23 +136,60 @@ clone_source() {
 }
 
 
-assert_tag_absent() {
-  local image=$1 output status
+inspect_published() {
+  local image=$1 dashboard_commit=$2 output rc
+  [[ $dashboard_commit =~ ^[0-9a-f]{40}$ ]] || {
+    echo "dashboard commit must be a full 40-character SHA" >&2
+    return 1
+  }
   set +e
-  output=$(docker buildx imagetools inspect "$image" 2>&1)
-  status=$?
+  output=$(docker buildx imagetools inspect "$image" --format '{{json .}}' 2>&1)
+  rc=$?
   set -e
-  if [[ $status -eq 0 ]]; then
-    echo "refusing to overwrite existing compatibility image: $image" >&2
+  if [[ $rc -ne 0 ]]; then
+    if grep -Eqi '404 Not Found|manifest unknown|MANIFEST_UNKNOWN|: not found$' <<< "$output"; then
+      return 10
+    fi
+    echo "registry inspection failed for $image:" >&2
+    echo "$output" >&2
     return 1
   fi
-  if grep -Eqi '404 Not Found|manifest unknown|MANIFEST_UNKNOWN|: not found$' <<< "$output"; then
-    return 0
-  fi
-  echo "registry inspection failed for $image:" >&2
-  echo "$output" >&2
-  return 2
+
+  jq -e     --arg orka "$ORKA_COMMIT"     --arg patch "$ORKA_PATCH_SHA256"     --arg dashboard "$dashboard_commit"     '.image.os == "linux" and
+     .image.architecture == "amd64" and
+     .image.config.User == "65532:65532" and
+     .image.config.Entrypoint == ["/worker"] and
+     .image.config.Labels["org.opencontainers.image.revision"] == $dashboard and
+     .image.config.Labels["io.orka.compatibility.revision"] == $orka and
+     .image.config.Labels["io.orka.compatibility.patch-sha256"] == $patch'     <<< "$output" > /dev/null || {
+      echo "existing compatibility image does not match the requested contract: $image" >&2
+      return 1
+    }
+
+  local attestations
+  attestations=$(jq -r '.manifest.manifests[]? | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest") | .digest' <<< "$output")
+  [[ -n $attestations ]] || {
+    echo "existing compatibility image has no attestation manifest: $image" >&2
+    return 1
+  }
+  local predicates="" attestation raw
+  while IFS= read -r attestation; do
+    [[ -z $attestation ]] && continue
+    raw=$(docker buildx imagetools inspect "$image@$attestation" --raw)
+    predicates+=$'\n'$(jq -r '.layers[]?.annotations["in-toto.io/predicate-type"] // empty' <<< "$raw")
+  done <<< "$attestations"
+  grep -Fqx 'https://slsa.dev/provenance/v1' <<< "$predicates" || {
+    echo "existing compatibility image has no SLSA provenance attestation: $image" >&2
+    return 1
+  }
+  grep -Fqx 'https://spdx.dev/Document' <<< "$predicates" || {
+    echo "existing compatibility image has no SPDX SBOM attestation: $image" >&2
+    return 1
+  }
+
+  jq -n     --arg image "$image"     --arg digest "$(jq -r '.manifest.digest' <<< "$output")"     --arg orkaCommit "$ORKA_COMMIT"     --arg patchSHA256 "$ORKA_PATCH_SHA256"     --arg dashboardCommit "$dashboard_commit"     '{image:$image,digest:$digest,orka_commit:$orkaCommit,patch_sha256:$patchSHA256,dashboard_commit:$dashboardCommit,published:true,recovered:true}'
 }
+
 
 build_image() {
   local image=$1
@@ -189,9 +226,9 @@ case $command in
     [[ $# -eq 2 ]] || { usage >&2; exit 2; }
     test_source "$2"
     ;;
-  assert-tag-absent)
-    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
-    assert_tag_absent "$2"
+  inspect-published)
+    [[ $# -eq 3 ]] || { usage >&2; exit 2; }
+    inspect_published "$2" "$3"
     ;;
   build)
     [[ $# -ge 2 && $# -le 3 ]] || { usage >&2; exit 2; }

@@ -11,12 +11,13 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=f662d2190f3113c67d4955524657c6051e1f46f353a195731187ddfa3c5918fb' <<< "$metadata"
+grep -Fq 'patch_sha256=bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}f662d2190f3113c67d4955524657c6051e1f46f353a195731187ddfa3c5918fb${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282${backtick}" "$script_dir/COMPATIBILITY.md"
 workflow="$repo_root/.github/workflows/orka-compat-image.yml"
 grep -Fq 'experimental/orka/worker-patches/compat-worker.sh prepare _orka' "$workflow"
+grep -Fq 'inspect-published' "$workflow"
 grep -Fq 'push: false' "$workflow"
 grep -Fq 'push: true' "$workflow"
 if [[ $(grep -Fc 'packages: write' "$workflow") -ne 1 ]]; then
@@ -37,8 +38,21 @@ cat > "$tmp/bin/docker" <<'EOF_DOCKER'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$*" == "buildx imagetools inspect "* ]] || { echo "unexpected docker invocation: $*" >&2; exit 3; }
+if [[ "$*" == *' --raw' ]]; then
+  if [[ ${FAKE_REGISTRY_RESULT:-} == no-sbom ]]; then
+    echo '{"layers":[{"annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v1"}}]}'
+  else
+    echo '{"layers":[{"annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v1"}},{"annotations":{"in-toto.io/predicate-type":"https://spdx.dev/Document"}}]}'
+  fi
+  exit 0
+fi
 case ${FAKE_REGISTRY_RESULT:-} in
-  exists) echo '{"manifest":"present"}'; exit 0 ;;
+  exact|mismatch|no-sbom)
+    label_dashboard=${FAKE_LABEL_DASHBOARD:-$EXPECTED_DASHBOARD}
+    cat <<JSON
+{"manifest":{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","manifests":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","annotations":{"vnd.docker.reference.type":"attestation-manifest"}}]},"image":{"os":"linux","architecture":"amd64","config":{"User":"65532:65532","Entrypoint":["/worker"],"Labels":{"org.opencontainers.image.revision":"$label_dashboard","io.orka.compatibility.revision":"$EXPECTED_ORKA","io.orka.compatibility.patch-sha256":"$EXPECTED_PATCH"}}}}
+JSON
+    ;;
   missing) echo 'ERROR: ghcr.io/example/worker:test: not found' >&2; exit 1 ;;
   missing404) echo 'ERROR: unexpected status from HEAD request: 404 Not Found' >&2; exit 1 ;;
   error) echo 'ERROR: unexpected status from HEAD request: 401 Unauthorized' >&2; exit 1 ;;
@@ -46,15 +60,28 @@ case ${FAKE_REGISTRY_RESULT:-} in
 esac
 EOF_DOCKER
 chmod +x "$tmp/bin/docker"
-FAKE_REGISTRY_RESULT=missing PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test
-FAKE_REGISTRY_RESULT=missing404 PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test
-if FAKE_REGISTRY_RESULT=exists PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test > /dev/null 2>&1; then
-  echo 'existing compatibility tag was accepted' >&2
-  exit 1
-fi
-if FAKE_REGISTRY_RESULT=error PATH="$tmp/bin:$PATH" "$script" assert-tag-absent ghcr.io/example/worker:test > /dev/null 2>&1; then
-  echo 'registry inspection error was treated as tag absence' >&2
-  exit 1
-fi
+
+dashboard=0123456789abcdef0123456789abcdef01234567
+orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
+patch=bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282
+published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
+grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
+grep -Fq '"recovered": true' <<< "$published"
+
+for missing in missing missing404; do
+  set +e
+  FAKE_REGISTRY_RESULT=$missing PATH="$tmp/bin:$PATH"     "$script" inspect-published ghcr.io/example/worker:test "$dashboard" > /dev/null 2>&1
+  rc=$?
+  set -e
+  [[ $rc -eq 10 ]] || { echo "$missing registry response returned $rc, want 10" >&2; exit 1; }
+done
+
+for failure in mismatch no-sbom error; do
+  set +e
+  FAKE_REGISTRY_RESULT=$failure FAKE_LABEL_DASHBOARD=ffffffffffffffffffffffffffffffffffffffff     EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"     "$script" inspect-published ghcr.io/example/worker:test "$dashboard" > /dev/null 2>&1
+  rc=$?
+  set -e
+  [[ $rc -eq 1 ]] || { echo "$failure registry response returned $rc, want 1" >&2; exit 1; }
+done
 
 echo 'Orka compatibility metadata checks passed.'

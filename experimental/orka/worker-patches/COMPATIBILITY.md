@@ -12,7 +12,7 @@ commit. Moving tags are not published.
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `f662d2190f3113c67d4955524657c6051e1f46f353a195731187ddfa3c5918fb` |
+| Patch SHA-256 | `bc2239f121e3ddb782140f85d8e8d9df23cc40a76e2c29a3609349c36b6e8282` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -34,10 +34,15 @@ For this contract the image repository is:
 ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker
 ```
 
-The tag contains both source revisions and is refused if it already exists. The
-workflow summary and `orka-compat-image-<dashboard-commit>` artifact record the
-registry digest, Orka commit, dashboard commit, and patch checksum. Deploy by
-digest when the surrounding Orka installation supports a full image reference.
+The tag contains both source revisions and is never overwritten. A rerun accepts
+an existing tag only when its runtime contract labels, SLSA provenance, and SPDX
+SBOM match the exact Orka commit, dashboard commit, and patch checksum. This lets
+a run reconstruct a missing summary or artifact after the registry push already
+succeeded. Any mismatch or registry inspection error fails closed.
+
+The workflow summary and `orka-compat-image-<dashboard-commit>` artifact record
+the registry digest and source identities. Deploy by digest when the surrounding
+Orka installation supports a full image reference.
 
 ## Find the current deployable coordinate
 

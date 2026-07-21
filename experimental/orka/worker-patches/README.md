@@ -21,15 +21,17 @@ focused regression tests:
 
 3. **Empty-final re-prompt (G-Converge, the decisive one):** when the model returns
    no tool calls AND empty content (a small-model failure mode - it terminates
-   without answering), the loop re-prompts once for the final JSON instead of
+   without answering), the loop re-prompts once for the final JSON. A second
+   empty response fails the Task instead of continuing to the iteration cap or
    accepting an empty result.
 
 4. **Transient critique gate (G-Critique):** when the final answer sets
    is_transient=true but the model never called verify_timeline, the loop
    re-prompts (up to twice) with the engine's contract: confirm the failing
    operation was actually dropped/never-registered with verify_timeline, or set
-   is_transient=false (default to a real bug). A bare "context deadline exceeded"
-   or signature match is background noise, not proof.
+   is_transient=false (default to a real bug). If the retry budget is exhausted,
+   the Task fails rather than publishing an unsupported transient verdict. A bare
+   "context deadline exceeded" or signature match is background noise, not proof.
 
 ## Why (measured, Orka on gemini-3.5-flash, same 15 A2 failures)
 
