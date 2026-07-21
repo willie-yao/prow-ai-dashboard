@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=a41744b308091c23b6c5b00fbc7242c18cee4d0b00a9f8cc83d99c4af82860f6' <<< "$metadata"
+grep -Fq 'patch_sha256=f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}a41744b308091c23b6c5b00fbc7242c18cee4d0b00a9f8cc83d99c4af82860f6${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -30,6 +30,7 @@ for test_name in \
   TestCachedToolResultDoesNotBypassRequestAllowlist \
   TestAnalysisEvidenceLedgerPreservesSuccessfulReads \
   TestAnalysisEvidenceLedgerNeverTruncatesLongTokens \
+  TestAnalysisEvidenceLedgerRetainsNewestTokenPrefix \
   TestPrepareAnalysisRequestKeepsFinalizationPromptAfterCompaction \
   TestAnalysisTransientStateRejectsNull \
   TestValidatedAnalysisResultSupportsFlatSubmission \
@@ -92,7 +93,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=a41744b308091c23b6c5b00fbc7242c18cee4d0b00a9f8cc83d99c4af82860f6
+patch=f40676522fa77289a3eecb2121d45b9b648e9e985b0d85d8bd55009c8b23dc00
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"
