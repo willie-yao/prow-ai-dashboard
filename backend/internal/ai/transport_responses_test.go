@@ -34,7 +34,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Message.ToolCalls) != 1 || len(first.Message.ProviderItems) != 1 {
+	if len(first.Message.ToolCalls) != 1 || len(first.Message.ProviderItems) != 2 {
 		t.Fatalf("first response = %+v", first)
 	}
 	messages = append(messages, first.Message, modelMessage{Role: "tool", ToolCallID: "call-1", Content: strPtr(`{"ok":true}`)})

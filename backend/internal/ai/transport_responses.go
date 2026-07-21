@@ -117,6 +117,9 @@ func encodeResponsesInput(messages []modelMessage) []any {
 		for _, raw := range message.ProviderItems {
 			items = append(items, raw)
 		}
+		if message.Role == "assistant" && len(message.ProviderItems) > 0 {
+			continue
+		}
 		switch message.Role {
 		case "tool":
 			output := ""
@@ -164,6 +167,7 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 	message := modelMessage{Role: "assistant"}
 	var text string
 	for _, raw := range resp.Output {
+		message.ProviderItems = append(message.ProviderItems, append(json.RawMessage(nil), raw...))
 		var item responsesOutputItem
 		if json.Unmarshal(raw, &item) != nil {
 			continue
@@ -183,8 +187,6 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 					text += content.Refusal
 				}
 			}
-		case "reasoning":
-			message.ProviderItems = append(message.ProviderItems, append(json.RawMessage(nil), raw...))
 		}
 	}
 	if text != "" {

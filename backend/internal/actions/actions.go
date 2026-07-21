@@ -205,6 +205,9 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 	}
 	aiClient := s.aiClient()
 	ar := eff.AgentRuntime
+	if ar.Type != "orka" && s.ai.API == ai.APIResponses {
+		return nil, fmt.Errorf("local fix runtime requires chat_completions or an Orka fix runtime")
+	}
 	if aiClient == nil && ar.Type != "orka" {
 		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a local fix")
 	}

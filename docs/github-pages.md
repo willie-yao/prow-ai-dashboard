@@ -41,6 +41,7 @@ jobs:
   deploy:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
+      ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
     secrets:
@@ -60,6 +61,7 @@ are not at the repository root.
 gh api repos/my-org/my-dashboard/pages -X POST -F build_type=workflow
 
 # Required unless project.yaml contains ai.endpoint and ai.model.
+gh variable set AI_API --body chat_completions --repo my-org/my-dashboard
 gh variable set AI_ENDPOINT --repo my-org/my-dashboard
 gh variable set AI_MODEL --repo my-org/my-dashboard
 
