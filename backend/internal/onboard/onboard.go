@@ -176,6 +176,7 @@ func buildSystemPrompt(ctx context.Context, opts Options, data scaffoldData) (st
 
 	client := ai.NewClientWithOptions(ai.Options{
 		Token:    opts.AIToken,
+		API:      opts.AIAPI,
 		Endpoint: opts.AIEndpoint,
 		Model:    opts.AIModel,
 	})
@@ -295,6 +296,7 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		IncludePresubmits: opts.IncludePresubmits,
 		EngineRef:         opts.EngineRef,
 		Mode:              mode,
+		AIAPI:             opts.AIAPI,
 		AIEndpoint:        opts.AIEndpoint,
 		AIModel:           opts.AIModel,
 		Namespace:         k8sName(derivedID(opts)),

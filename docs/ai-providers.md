@@ -12,6 +12,7 @@ Configure your provider in your consumer repo's `project.yaml` under `ai:`:
 
 ```yaml
 ai:
+  api: "chat_completions"  # or responses
   endpoint: "..."         # Required. Chat-completions URL (e.g. Copilot, OpenAI, vLLM).
   model: "..."            # Required. Model identifier the endpoint expects.
   headers:                # Optional. Extra HTTP headers merged into every call.
@@ -110,6 +111,17 @@ The fetcher automatically sends `Copilot-Integration-Id: copilot-developer-cli`
 when (and only when) the endpoint's host is `*.githubcopilot.com`.
 
 ## OpenAI
+
+Responses example:
+
+```yaml
+ai:
+  api: responses
+  endpoint: "https://api.openai.com/v1/responses"
+  model: "<model-id>"
+```
+
+Responses requests use `store: false` and preserve reasoning items across tool calls.
 
 ```yaml
 ai:

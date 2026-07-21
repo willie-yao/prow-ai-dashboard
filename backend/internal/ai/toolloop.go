@@ -100,7 +100,7 @@ func (c *Client) ToolLoop(
 			if opts.MinToolCalls > 0 && calls < opts.MinToolCalls && !nudged {
 				nudged = true
 				if msg.Content != nil {
-					messages = append(messages, modelMessage{Role: "assistant", Content: msg.Content})
+					messages = append(messages, modelMessage{Role: "assistant", Content: msg.Content, ProviderItems: msg.ProviderItems})
 				}
 				messages = append(messages, modelMessage{
 					Role:    "user",
@@ -118,7 +118,7 @@ func (c *Client) ToolLoop(
 		if dropped > 0 {
 			log.Printf("  ⤵ single_tool_call: executing 1 of %d tool calls, dropping %d", len(msg.ToolCalls), dropped)
 		}
-		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls}
+		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}

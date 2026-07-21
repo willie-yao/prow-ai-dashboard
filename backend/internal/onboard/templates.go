@@ -25,6 +25,7 @@ type scaffoldData struct {
 	IncludePresubmits bool
 	EngineRef         string
 	Mode              string // "pages" or "k8s"
+	AIAPI             string // seeds deploy/values.yaml ai.api (k8s mode)
 	AIEndpoint        string // seeds deploy/values.yaml ai.endpoint (k8s mode)
 	AIModel           string // seeds deploy/values.yaml ai.model (k8s mode)
 	Namespace         string // k8s namespace / helm release name (k8s mode)
@@ -102,6 +103,7 @@ jobs:
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@{{.EngineRef}}
     with:
       # Repository variables keep provider coordinates out of project.yaml.
+      ai-api: ${{"{{"}} vars.AI_API {{"}}"}}
       ai-model: ${{"{{"}} vars.AI_MODEL {{"}}"}}
       ai-endpoint: ${{"{{"}} vars.AI_ENDPOINT {{"}}"}}
     secrets:
@@ -128,6 +130,7 @@ persistence:
 
 ai:
   enabled: true
+  api: "{{if .AIAPI}}{{.AIAPI}}{{else}}chat_completions{{end}}"
   endpoint: "{{if .AIEndpoint}}{{.AIEndpoint}}{{else}}http://<your-model-svc>.<ns>.svc.cluster.local:8000/v1/chat/completions{{end}}"
   model: "{{if .AIModel}}{{.AIModel}}{{else}}<your-model-id>{{end}}"
 

@@ -549,6 +549,7 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	if enableAI {
 		aiClient := ai.NewClientWithOptions(ai.Options{
 			Token:        aiToken,
+			API:          aiAPI(cfg),
 			Endpoint:     aiEndpoint(cfg),
 			Model:        aiModel(cfg),
 			ExtraHeaders: aiHeaders(cfg),
@@ -613,10 +614,10 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		return false, fmt.Errorf("fix PRs: FIX_TOKEN is unset")
 	}
 
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 	var aiClient *ai.Client
 	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
-		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers})
+		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers})
 	}
 	if eff.AgentRuntime.Type != "orka" && aiClient == nil {
 		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")

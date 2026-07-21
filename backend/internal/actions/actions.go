@@ -42,6 +42,7 @@ const previewTTL = 15 * time.Minute
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
 	Token    string
+	API      string
 	Endpoint string
 	Model    string
 	Headers  map[string]string
@@ -119,6 +120,7 @@ func (s *Service) aiClient() *ai.Client {
 	}
 	return ai.NewClientWithOptions(ai.Options{
 		Token:        s.ai.Token,
+		API:          s.ai.API,
 		Endpoint:     s.ai.Endpoint,
 		Model:        s.ai.Model,
 		ExtraHeaders: s.ai.Headers,

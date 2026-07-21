@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +14,11 @@ import (
 // modelTransport executes one model turn. The analysis loops operate only on
 // these neutral types; each API adapter owns its wire encoding and response
 // conversion.
+const (
+	APIChatCompletions = "chat_completions"
+	APIResponses       = "responses"
+)
+
 type modelTransport interface {
 	Complete(context.Context, modelRequest) (*modelResponse, error)
 }
@@ -23,6 +30,14 @@ func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDef
 		Tools:             toolDefs,
 		ParallelToolCalls: parallelToolCalls,
 	})
+}
+
+type unsupportedTransport struct {
+	api string
+}
+
+func (t unsupportedTransport) Complete(context.Context, modelRequest) (*modelResponse, error) {
+	return nil, fmt.Errorf("unsupported AI API %q", t.api)
 }
 
 type modelRequest struct {
@@ -41,11 +56,12 @@ type modelResponse struct {
 // The JSON tags preserve the existing compaction size estimate. API adapters
 // still map these neutral messages to their own wire types explicitly.
 type modelMessage struct {
-	Role       string          `json:"role"`
-	Content    *string         `json:"content,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	ToolCalls  []modelToolCall `json:"tool_calls,omitempty"`
+	Role          string            `json:"role"`
+	Content       *string           `json:"content,omitempty"`
+	Name          string            `json:"name,omitempty"`
+	ToolCallID    string            `json:"tool_call_id,omitempty"`
+	ToolCalls     []modelToolCall   `json:"tool_calls,omitempty"`
+	ProviderItems []json.RawMessage `json:"provider_items,omitempty"`
 }
 
 type modelToolCall struct {

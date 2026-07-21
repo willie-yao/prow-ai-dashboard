@@ -546,9 +546,20 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 	// the tool_calls wiring intact.
 	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; i++ {
 		m := &messages[i]
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 && m.Content != nil &&
-			!isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
-			stub(i)
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		elidedMessage := false
+		if len(m.ProviderItems) > 0 {
+			m.ProviderItems = nil
+			elidedMessage = true
+		}
+		if m.Content != nil && !isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
+			m.Content = strPtr(stubContent(*m.Content))
+			elidedMessage = true
+		}
+		if elidedMessage {
+			elided++
 		}
 	}
 	return messages, elided
@@ -648,6 +659,7 @@ func (c *Client) doAnalyzeAgentic(
 	defer cancel()
 
 	var finalContent string
+	var finalProviderItems []json.RawMessage
 	// Per-floor anti-thrash: track the calls + gcsBytes counters at the
 	// time we last nudged so we can detect whether the model has made
 	// progress on the unmet axis since then. A model that keeps coming
@@ -726,7 +738,7 @@ func (c *Client) doAnalyzeAgentic(
 					progressed = true
 				}
 				if progressed {
-					echo := modelMessage{Role: "assistant"}
+					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
@@ -774,7 +786,7 @@ func (c *Client) doAnalyzeAgentic(
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
 						case len(objs) > 0:
 							state.judgeObjected = true
-							echo := modelMessage{Role: "assistant"}
+							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 							if msg.Content != nil {
 								echo.Content = msg.Content
 							}
@@ -796,7 +808,7 @@ func (c *Client) doAnalyzeAgentic(
 					}
 					state.critiquePassed = true
 				} else if critiqueRetriesUsed < in.Opts.CritiqueMaxRetries {
-					echo := modelMessage{Role: "assistant"}
+					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
@@ -838,6 +850,7 @@ func (c *Client) doAnalyzeAgentic(
 			}
 
 			finalContent = candidate
+			finalProviderItems = msg.ProviderItems
 			break
 		}
 
@@ -847,7 +860,7 @@ func (c *Client) doAnalyzeAgentic(
 				len(msg.ToolCalls), dropped)
 		}
 
-		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls}
+		echo := modelMessage{Role: "assistant", ToolCalls: toolCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
@@ -886,7 +899,7 @@ func (c *Client) doAnalyzeAgentic(
 		return summary, analysis, nil
 	}
 
-	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, parsed, in.Opts)
+	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts)
 
 	c.cacheAcceptedAnalysis(cacheKey, parsed, state, in.Opts, state.critiquePassed)
 	summary, analysis := c.buildOutputs(parsed)
@@ -894,7 +907,7 @@ func (c *Client) doAnalyzeAgentic(
 	return summary, analysis, nil
 }
 
-func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
 	if state.critiquePassed {
 		return parsed
 	}
@@ -906,7 +919,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	}
 	if out.Passed {
 		if opts.SemanticJudge {
-			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, parsed, opts.ContextByteBudget)
+			parsed = c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, opts.ContextByteBudget)
 		}
 		state.critiquePassed = true
 		return parsed
@@ -920,7 +933,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		log.Printf("  ⚠ agentic critique: post-loop draft still failing %v; no fetchable evidence to inject; accepting but not caching", out.Matches())
 		return parsed
 	}
-	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent)}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
+	messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems}, modelMessage{Role: "user", Content: strPtr(out.Feedback + "\n\n" + injection)})
 	revised := c.runFinalizeRound(ctx, messages, opts.ContextByteBudget)
 	next, ok := tryParseAnalysis(revised)
 	if !ok {
