@@ -103,7 +103,7 @@ func TestFailurePromptIncludesShardAndLocation(t *testing.T) {
 
 func TestFailurePromptIncludesConsecutiveFailures(t *testing.T) {
 	prompt := FailurePrompt("project", "job", "logs/job/1/", models.TestCase{Name: "test"}, 7)
-	if !strings.Contains(prompt, "Consecutive failures on this test: 7 (persistent, not flaky).") {
+	if !strings.Contains(prompt, "Consecutive failures on this test: at least 3 (persistent, not flaky).") {
 		t.Fatalf("prompt missing recurrence evidence: %s", prompt)
 	}
 }

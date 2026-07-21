@@ -87,6 +87,9 @@ func (m *AnalysisManifest) SetConsecutiveFailures(jobID, testName string, count 
 	if m.ConsecutiveFailures == nil {
 		m.ConsecutiveFailures = map[string]int{}
 	}
+	if count > persistentFailurePromptFloor {
+		count = persistentFailurePromptFloor
+	}
 	m.ConsecutiveFailures[jobID+"::"+testName] = count
 }
 

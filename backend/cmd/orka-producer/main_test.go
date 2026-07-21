@@ -33,7 +33,7 @@ func TestLoadConsecutiveFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(ref.Prompt, "Consecutive failures on this test: 7") {
+	if !strings.Contains(ref.Prompt, "Consecutive failures on this test: at least 3") {
 		t.Fatalf("prompt missing recurrence evidence: %s", ref.Prompt)
 	}
 }

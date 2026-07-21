@@ -27,7 +27,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if first.Name == second.Name {
 		t.Fatalf("duplicate test indices produced the same Task %q", first.Name)
 	}
-	if first.ToolScope != "tool-scope" || !strings.Contains(first.Prompt, "Consecutive failures on this test: 7") {
+	if first.ToolScope != "tool-scope" || !strings.Contains(first.Prompt, "Consecutive failures on this test: at least 3") {
 		t.Fatalf("task ref = %+v", first)
 	}
 
@@ -43,12 +43,12 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != first || loaded.ConsecutiveFailures["job::test"] != 7 || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
+	if got != first || loaded.ConsecutiveFailures["job::test"] != persistentFailurePromptFloor || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
 		t.Fatalf("loaded task ref = %+v, jobs = %+v, min_tool_calls = %d", got, loaded.Jobs, loaded.MinToolCalls)
 	}
 }
 
-func TestAnalysisManifestRecurrenceChangesTaskIdentity(t *testing.T) {
+func TestAnalysisManifestRecurrenceIdentityStabilizesAtPersistenceFloor(t *testing.T) {
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", FailureMessage: "failure"}
 	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", APIModeAuto, "v1", 2)
@@ -57,13 +57,21 @@ func TestAnalysisManifestRecurrenceChangesTaskIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest.SetConsecutiveFailures("job", "test", 7)
-	withRecurrence, err := manifest.TaskRef("job", run, 0, tc)
+	manifest.SetConsecutiveFailures("job", "test", persistentFailurePromptFloor)
+	atFloor, err := manifest.TaskRef("job", run, 0, tc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if withoutRecurrence.Name == withRecurrence.Name {
-		t.Fatalf("recurrence evidence did not change Task identity %q", withoutRecurrence.Name)
+	manifest.SetConsecutiveFailures("job", "test", 9)
+	aboveFloor, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutRecurrence.Name == atFloor.Name {
+		t.Fatalf("persistence evidence did not change Task identity %q", withoutRecurrence.Name)
+	}
+	if atFloor != aboveFloor {
+		t.Fatalf("persistent recurrence changed Task identity: at floor=%+v above floor=%+v", atFloor, aboveFloor)
 	}
 }
 
