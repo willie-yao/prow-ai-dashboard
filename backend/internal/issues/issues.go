@@ -94,6 +94,9 @@ type Options struct {
 	RecoverPrefixes []string
 	// KeepOpenKeys suppresses recovery while a linked remediation is pending.
 	KeepOpenKeys map[string]bool
+	// RetireKeys removes tracking without repeating recovery actions after a
+	// linked remediation has already closed the issue.
+	RetireKeys map[string]bool
 	// TemplateFiller, when set, reformats a new issue's title and body to follow
 	// the repo's issue template before filing. A nil filler (or one that finds
 	// no template) is a pass-through.
@@ -246,6 +249,10 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 			continue
 		}
 		if m.opts.KeepOpenKeys[key] {
+			continue
+		}
+		if m.opts.RetireKeys[key] {
+			delete(m.state.Tracked, key)
 			continue
 		}
 		if !recoverable(key, m.opts.RecoverPrefixes) {

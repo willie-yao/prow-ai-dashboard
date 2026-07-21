@@ -226,44 +226,36 @@ ai:
 	}
 }
 
-func TestSyncClosedRemediationIssuesRetiresTrackedIssue(t *testing.T) {
-	dir := t.TempDir()
-	issueState := statefile.State[issues.TrackedIssue]{Repo: "o/r", Tracked: map[string]issues.TrackedIssue{
-		issues.KeyPrefixPattern + "job": {Number: 7, URL: "https://github.com/o/r/issues/7"},
-	}}
-	if err := issueState.Save(filepath.Join(dir, "issue_state.json")); err != nil {
-		t.Fatal(err)
+func TestRemediationIssueLifecycleKeys(t *testing.T) {
+	state := remediation.NewState()
+	state.Remediations["closed"] = &remediation.Remediation{
+		JobID: "closed", Issue: &remediation.IssueRef{Number: 7, Repo: "o/r"},
+		Attempts: []remediation.Attempt{{Status: remediation.StatusClosedUnmerged}},
 	}
-	remediationState := remediation.NewState()
-	remediationState.Remediations["pattern"] = &remediation.Remediation{
-		JobID: "job", Issue: &remediation.IssueRef{Number: 7, Repo: "o/r", State: "closed"},
+	state.Remediations["verified"] = &remediation.Remediation{
+		JobID: "verified", Issue: &remediation.IssueRef{Number: 8, Repo: "o/r"},
+		Attempts: []remediation.Attempt{{Status: remediation.StatusVerifiedFixed}},
 	}
-	if err := syncClosedRemediationIssues(dir, "o/r", remediationState); err != nil {
-		t.Fatal(err)
+	state.Remediations["older-verified"] = &remediation.Remediation{
+		JobID: "closed", Issue: &remediation.IssueRef{Number: 7, Repo: "o/r"},
+		Attempts: []remediation.Attempt{{Status: remediation.StatusVerifiedFixed}},
 	}
-	loaded := statefile.Load[issues.TrackedIssue](filepath.Join(dir, "issue_state.json"), "o/r", "issues")
-	if len(loaded.Tracked) != 0 {
-		t.Fatalf("tracked issues = %+v", loaded.Tracked)
+	state.Remediations["other-repo"] = &remediation.Remediation{
+		JobID: "other", Issue: &remediation.IssueRef{Number: 9, Repo: "other/r"},
+		Attempts: []remediation.Attempt{{Status: remediation.StatusOpen}},
 	}
-}
+	state.Remediations["unlinked"] = &remediation.Remediation{
+		JobID: "unlinked", Attempts: []remediation.Attempt{{Status: remediation.StatusOpen}},
+	}
 
-func TestSyncClosedRemediationIssuesKeepsNewerIssue(t *testing.T) {
-	dir := t.TempDir()
-	issueState := statefile.State[issues.TrackedIssue]{Repo: "o/r", Tracked: map[string]issues.TrackedIssue{
-		issues.KeyPrefixPattern + "job": {Number: 10, URL: "https://github.com/o/r/issues/10"},
-	}}
-	if err := issueState.Save(filepath.Join(dir, "issue_state.json")); err != nil {
-		t.Fatal(err)
+	keepOpen, retire := remediationIssueLifecycleKeys(state, "o/r")
+	if !keepOpen[issues.KeyPrefixPattern+"closed"] {
+		t.Fatalf("keepOpen = %+v", keepOpen)
 	}
-	remediationState := remediation.NewState()
-	remediationState.Remediations["old"] = &remediation.Remediation{
-		JobID: "job", Issue: &remediation.IssueRef{Number: 9, Repo: "o/r", State: "closed"},
+	if !retire[issues.KeyPrefixPattern+"verified"] {
+		t.Fatalf("retire = %+v", retire)
 	}
-	if err := syncClosedRemediationIssues(dir, "o/r", remediationState); err != nil {
-		t.Fatal(err)
-	}
-	loaded := statefile.Load[issues.TrackedIssue](filepath.Join(dir, "issue_state.json"), "o/r", "issues")
-	if tracked := loaded.Tracked[issues.KeyPrefixPattern+"job"]; tracked.Number != 10 {
-		t.Fatalf("tracked issue = %+v", tracked)
+	if len(keepOpen) != 1 || len(retire) != 1 {
+		t.Fatalf("keepOpen = %+v, retire = %+v", keepOpen, retire)
 	}
 }

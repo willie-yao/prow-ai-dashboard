@@ -544,22 +544,15 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
 	targetRepo := eff.Repo.Owner + "/" + eff.Repo.Name
-	keepOpen := map[string]bool{}
-	for _, remediationEntry := range remediation.LoadForRepo(outDir, configuredFixRepo(cfg)).Remediations {
-		if remediationEntry == nil || len(remediationEntry.Attempts) == 0 {
-			continue
-		}
-		latest := remediationEntry.Attempts[len(remediationEntry.Attempts)-1]
-		if latest.Status != remediation.StatusVerifiedFixed && latest.Status != remediation.StatusClosedUnmerged {
-			keepOpen[issues.KeyPrefixPattern+remediationEntry.JobID] = true
-		}
-	}
+	keepOpen, retire := remediationIssueLifecycleKeys(
+		remediation.LoadForRepo(outDir, configuredFixRepo(cfg)), targetRepo)
 	mgr := issues.NewManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
 		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
 		CloseOnRecovery:   eff.CloseOnRecovery,
 		MaxNewPerRun:      eff.MaxNewPerRun,
 		RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
 		KeepOpenKeys:      keepOpen,
+		RetireKeys:        retire,
 		TemplateFiller:    filler,
 	})
 	stats, err := mgr.Reconcile(ctx, specs)
@@ -919,38 +912,35 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 	if err != nil {
 		log.Printf("Warning: remediation reconciliation failed: %v", err)
 	}
-	issueSyncErr := syncClosedRemediationIssues(p.opts.OutDir, issueRepo, state)
-	if issueSyncErr != nil {
-		log.Printf("Warning: failed to synchronize verified remediation issues: %v", issueSyncErr)
-	}
 	emailErr := p.sendRemediationEmails(ctx, state)
 	if emailErr != nil {
 		log.Printf("Warning: remediation email failed: %v", emailErr)
 	}
-	return errors.Join(wrapOptional("remediation reconciliation", err),
-		wrapOptional("remediation issue state", issueSyncErr), wrapOptional("remediation email", emailErr))
+	return errors.Join(wrapOptional("remediation reconciliation", err), wrapOptional("remediation email", emailErr))
 }
 
-func syncClosedRemediationIssues(dataDir, issueRepo string, state *remediation.State) error {
-	if issueRepo == "" || state == nil {
-		return nil
+func remediationIssueLifecycleKeys(state *remediation.State, issueRepo string) (map[string]bool, map[string]bool) {
+	keepOpen := map[string]bool{}
+	retire := map[string]bool{}
+	if state == nil || issueRepo == "" {
+		return keepOpen, retire
 	}
-	issueState := statefile.Load[issues.TrackedIssue](filepath.Join(dataDir, "issue_state.json"), issueRepo, "issues")
-	changed := false
 	for _, entry := range state.Remediations {
-		if entry == nil || entry.Issue == nil || entry.Issue.State != "closed" || entry.Issue.Repo != issueRepo {
+		if entry == nil || entry.Issue == nil || entry.Issue.Repo != issueRepo || len(entry.Attempts) == 0 {
 			continue
 		}
 		key := issues.KeyPrefixPattern + entry.JobID
-		if tracked, ok := issueState.Tracked[key]; ok && tracked.Number == entry.Issue.Number {
-			delete(issueState.Tracked, key)
-			changed = true
+		latest := entry.Attempts[len(entry.Attempts)-1]
+		if latest.Status == remediation.StatusVerifiedFixed {
+			retire[key] = true
+			continue
 		}
+		keepOpen[key] = true
 	}
-	if !changed {
-		return nil
+	for key := range keepOpen {
+		delete(retire, key)
 	}
-	return issueState.Save(filepath.Join(dataDir, "issue_state.json"))
+	return keepOpen, retire
 }
 
 func remediationCoverageRepos(targetRepo string, patterns []models.PatternAnalysis, details []models.JobDetail, ledger *remediation.State) []string {

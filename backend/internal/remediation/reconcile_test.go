@@ -48,6 +48,47 @@ func TestParsePullRequestURL(t *testing.T) {
 	}
 }
 
+func TestReconcileRefreshesClosedPullRequest(t *testing.T) {
+	dir := t.TempDir()
+	state := NewState()
+	state.Remediations["pattern"] = &Remediation{
+		ID: "pattern", FindingID: "pattern", JobID: "job",
+		Attempts: []Attempt{{
+			Number: 1, PRNumber: 7, URL: "https://github.com/o/r/pull/7",
+			Status: StatusClosedUnmerged, PRState: StatusClosedUnmerged,
+		}},
+	}
+	if err := state.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &fakePRClient{pull: ghpr.PullRequest{
+		Number: 7, HTMLURL: "https://github.com/o/r/pull/7", State: "open",
+		Head: ghpr.PullRequestRef{SHA: "head"}, Base: ghpr.PullRequestRef{Repo: "o/r"},
+	}}
+	reconciler := NewReconciler(client, dir)
+	state, err := reconciler.Reconcile(context.Background(), nil, nil, nil, func(models.PatternAnalysis) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := state.Remediations["pattern"].Attempts[0]
+	if attempt.Status != StatusOpen || attempt.PRState != StatusOpen {
+		t.Fatalf("reopened attempt = %+v", attempt)
+	}
+
+	client.pull.State = "closed"
+	client.pull.Merged = true
+	client.pull.MergeCommitSHA = "merge"
+	state, err = reconciler.Reconcile(context.Background(), nil, nil, nil, func(models.PatternAnalysis) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt = state.Remediations["pattern"].Attempts[0]
+	if attempt.Status != StatusMerged || attempt.PRState != StatusMerged || attempt.MergeSHA != "merge" {
+		t.Fatalf("merged attempt = %+v", attempt)
+	}
+}
+
 func TestApplyPullRequestMovesPremergeVerificationToMerged(t *testing.T) {
 	entry := &Remediation{}
 	attempt := &Attempt{Status: StatusPremergeVerified, HeadSHA: "head"}

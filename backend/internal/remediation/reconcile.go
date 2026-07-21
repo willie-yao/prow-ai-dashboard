@@ -191,9 +191,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, patterns []models.PatternAna
 			continue
 		}
 		attempt := &entry.Attempts[len(entry.Attempts)-1]
-		if attempt.Status == StatusClosedUnmerged {
-			continue
-		}
 		owner, repo, number, err := ParsePullRequestURL(attempt.URL)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("remediation %s: %w", id, err))
