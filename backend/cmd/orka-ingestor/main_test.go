@@ -528,3 +528,32 @@ func TestParseAnalysisRequiresRelevantFilesArray(t *testing.T) {
 		}
 	}
 }
+
+func TestParseAnalysisIgnoresBracesInsideStrings(t *testing.T) {
+	input := `prefix {"summary":"summary","root_cause":"cause","severity":"High","is_transient":false,"suggested_fix":"kubectl patch -p '[{\"op\":\"add\",\"value\":{\"enabled\":true}}]'","relevant_files":[],"gcs_bytes":1,"validation_token":"token"} suffix`
+	got, err := parseAnalysis(input)
+	if err != nil {
+		t.Fatalf("parseAnalysis() error = %v", err)
+	}
+	if !strings.Contains(got.SuggestedFix, `{"enabled":true}`) {
+		t.Fatalf("suggested_fix = %q", got.SuggestedFix)
+	}
+}
+
+func TestSetUnavailableReplacesOnlyEnginePlaceholder(t *testing.T) {
+	tc := &models.TestCase{AISummary: &models.AISummary{Summary: unavailablePrefix + "analysis did not complete before the deadline"}}
+	if !setUnavailable(tc, "analysis Task failed acceptance: validation token mismatch") {
+		t.Fatal("setUnavailable() did not replace the stale placeholder")
+	}
+	if got := tc.AISummary.Summary; got != unavailablePrefix+"analysis Task failed acceptance: validation token mismatch" {
+		t.Fatalf("summary = %q", got)
+	}
+	if setUnavailable(tc, "analysis Task failed acceptance: validation token mismatch") {
+		t.Fatal("setUnavailable() rewrote an identical placeholder")
+	}
+
+	real := &models.TestCase{AISummary: &models.AISummary{Summary: "real analysis"}}
+	if setUnavailable(real, "new reason") {
+		t.Fatal("setUnavailable() replaced a real analysis summary")
+	}
+}

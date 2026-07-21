@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,6 +264,16 @@ const unavailablePrefix = "AI analysis unavailable: "
 // for Tool garbage collection. Returns patched, seen, and unresolved counts.
 func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir string, manifest *orka.AnalysisManifest, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
 	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
+	rejectionCounts := map[string]int{}
+	var rejectionMu sync.Mutex
+	recordRejection := func(reason string) {
+		if !final || reason == "" {
+			return
+		}
+		rejectionMu.Lock()
+		rejectionCounts[reason]++
+		rejectionMu.Unlock()
+	}
 	for _, jf := range jobFiles {
 		raw, err := os.ReadFile(jf)
 		if err != nil {
@@ -293,6 +304,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 				ref, err := manifest.TaskRef(detail.JobID, *run, ti, *tc)
 				if err != nil {
 					missing++
+					recordRejection("analysis Task identity is missing")
 					if final && setUnavailable(tc, "analysis Task identity is missing") {
 						changed.Store(true)
 					}
@@ -328,6 +340,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 						changed.Store(true)
 					}
 					if rejection != "" {
+						recordRejection(rejection)
 						if setUnavailable(item.tc, rejection) {
 							changed.Store(true)
 						}
@@ -344,6 +357,16 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			if err := statefile.WriteJSON(jf, detail); err != nil {
 				log.Printf("write %s: %v", jf, err)
 			}
+		}
+	}
+	if final && len(rejectionCounts) > 0 {
+		reasons := make([]string, 0, len(rejectionCounts))
+		for reason := range rejectionCounts {
+			reasons = append(reasons, reason)
+		}
+		sort.Strings(reasons)
+		for _, reason := range reasons {
+			log.Printf("⚠ Orka rejection summary: %d x %s", rejectionCounts[reason], reason)
 		}
 	}
 	return patched, failedTests, missing
@@ -416,12 +439,18 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 // with no result, mirroring internal/ai/service.go (AISummary with the prefix,
 // no AIAnalysis). Returns true if it changed the test.
 func setUnavailable(tc *models.TestCase, reason string) bool {
-	if tc.AISummary != nil || tc.AIAnalysis != nil {
+	if tc.AIAnalysis != nil {
 		return false
+	}
+	summary := unavailablePrefix + reason
+	if tc.AISummary != nil {
+		if !strings.HasPrefix(tc.AISummary.Summary, unavailablePrefix) || tc.AISummary.Summary == summary {
+			return false
+		}
 	}
 	tc.AISummary = &models.AISummary{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Summary:     unavailablePrefix + reason,
+		Summary:     summary,
 		IsTransient: false,
 	}
 	return true
@@ -680,8 +709,25 @@ func parseAnalysis(text string) (analysis, error) {
 	var best analysis
 	found := false
 	depth, start := 0, -1
-	for i, ch := range text {
+	inString, escaped := false, false
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case ch == '\\':
+				escaped = true
+			case ch == '"':
+				inString = false
+			}
+			continue
+		}
 		switch ch {
+		case '"':
+			if depth > 0 {
+				inString = true
+			}
 		case '{':
 			if depth == 0 {
 				start = i
