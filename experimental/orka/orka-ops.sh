@@ -197,12 +197,16 @@ preflight() {
   done
 
   local controllers controller_ready=false controller_rows controller_selectors
+  local worker_image controller_args
   controller_rows=$(kube -n "$namespace" get deployments -l app.kubernetes.io/component=controller \
-    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{.spec.replicas}}{{"\t"}}{{.status.readyReplicas}}{{"\t"}}{{.status.availableReplicas}}{{"\t"}}{{index .metadata.labels "app.kubernetes.io/instance"}}{{"\t"}}{{index .metadata.labels "app.kubernetes.io/name"}}{{"\n"}}{{end}}' 2>/dev/null || true)
+    -o go-template='{{range .items}}{{.metadata.name}}{{"\t"}}{{.spec.replicas}}{{"\t"}}{{.status.readyReplicas}}{{"\t"}}{{.status.availableReplicas}}{{"\t"}}{{index .metadata.labels "app.kubernetes.io/instance"}}{{"\t"}}{{index .metadata.labels "app.kubernetes.io/name"}}{{"\t"}}{{range .spec.template.spec.containers}}{{range .args}}{{.}}{{","}}{{end}}{{end}}{{"\n"}}{{end}}' 2>/dev/null || true)
   controllers=0
   controller_selectors=""
-  while IFS=$'\t' read -r name desired ready available instance app_name; do
+  while IFS=$'\t' read -r name desired ready available instance app_name controller_args; do
     [[ -z $name ]] && continue
+    if [[ $controller_args != *"--api-port="* || $controller_args != *"--ai-worker-image="* ]]; then
+      continue
+    fi
     controllers=$((controllers + 1))
     [[ $desired =~ ^[0-9]+$ ]] || desired=0
     [[ $ready =~ ^[0-9]+$ ]] || ready=0
@@ -218,23 +222,19 @@ preflight() {
     else
       fail "controller Deployment $name is not ready ($ready/$desired, available=$available)"
     fi
+    worker_image=$(tr ',' '\n' <<< "$controller_args" | sed -n 's/^--ai-worker-image=//p' | head -1)
+    if [[ -z $worker_image ]]; then
+      fail "controller Deployment $name does not expose --ai-worker-image"
+    elif [[ -n $expected_worker && $worker_image != "$expected_worker" ]]; then
+      fail "AI worker image is $worker_image, expected $expected_worker"
+    else
+      pass "AI worker image is $worker_image"
+    fi
   done <<< "$controller_rows"
   if (( controllers == 0 )); then
     fail "no Orka controller Deployment was found in $namespace"
   elif [[ $controller_ready != true ]]; then
     fail "no Orka controller Deployment is available"
-  fi
-
-  local worker_args worker_image
-  worker_args=$(kube -n "$namespace" get deployments -l app.kubernetes.io/component=controller \
-    -o go-template='{{range .items}}{{range .spec.template.spec.containers}}{{range .args}}{{.}}{{"\n"}}{{end}}{{end}}{{end}}' 2>/dev/null || true)
-  worker_image=$(sed -n 's/^--ai-worker-image=//p' <<< "$worker_args" | head -1)
-  if [[ -z $worker_image ]]; then
-    fail "controller does not expose --ai-worker-image"
-  elif [[ -n $expected_worker && $worker_image != "$expected_worker" ]]; then
-    fail "AI worker image is $worker_image, expected $expected_worker"
-  else
-    pass "AI worker image is $worker_image"
   fi
 
   local service_rows services="" service_matches service endpoint_addresses instance app_name
@@ -363,7 +363,10 @@ smoke() {
     model_yaml="    model: \"$model\""
   fi
 
-  cat <<EOF_TASK | kube -n "$namespace" create -f - >/dev/null
+  smoke_cleanup_task=$name
+  smoke_cleanup_keep=false
+  trap cleanup_smoke EXIT
+  if ! cat <<EOF_TASK | kube -n "$namespace" create -f - >/dev/null
 apiVersion: core.orka.ai/v1alpha1
 kind: Task
 metadata:
@@ -379,10 +382,11 @@ spec:
 $model_yaml
     prompt: "Reply with exactly: $expected"
 EOF_TASK
-
-  smoke_cleanup_task=$name
+  then
+    echo "Creating smoke Task $namespace/$name failed; cleanup was attempted" >&2
+    return 1
+  fi
   smoke_cleanup_keep=$keep
-  trap cleanup_smoke EXIT
 
   printf 'Created smoke Task %s/%s\n' "$namespace" "$name"
   local deadline=$((SECONDS + timeout_seconds))

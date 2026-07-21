@@ -24,11 +24,11 @@ if [[ $args == *' get crd '* ]]; then
   exit 0
 fi
 if [[ $args == *' get deployments '* && $args == *'status.readyReplicas'* ]]; then
-  printf 'orka-controller\t1\t1\t1\torka\torka\n'
-  exit 0
-fi
-if [[ $args == *' get deployments '* && $args == *'range .args'* ]]; then
-  printf '%s\n' '--api-port=8080' "--ai-worker-image=${FAKE_WORKER_IMAGE:-compat-image}"
+  if [[ -n ${FAKE_CONTROLLER_ROWS:-} ]]; then
+    printf '%s' "$FAKE_CONTROLLER_ROWS"
+  else
+    printf 'orka-controller\t1\t1\t1\torka\torka\t--api-port=8080,--ai-worker-image=%s,\n' "${FAKE_WORKER_IMAGE:-compat-image}"
+  fi
   exit 0
 fi
 if [[ $args == *' get services '* ]]; then
@@ -64,6 +64,9 @@ if [[ $args == *' auth can-i '* ]]; then
 fi
 if [[ $args == *' create -f -'* ]]; then
   cat > "$SMOKE_MANIFEST"
+  if [[ ${FAKE_CREATE_ERROR_AFTER_ACCEPT:-false} == true ]]; then
+    exit 1
+  fi
   exit 0
 fi
 if [[ $args == *' get task.core.orka.ai prow-ai-dashboard-smoke-'* ]]; then
@@ -133,6 +136,14 @@ if FAKE_WORKER_IMAGE=wrong-image "$script" --namespace orka-system preflight \
 fi
 grep -Fq 'AI worker image is wrong-image, expected compat-image' "$tmp/preflight-fail.txt"
 
+unrelated_row=$'other-controller\t1\t1\t1\tother\tother\t--metrics-bind-address=:8080,\n'
+if FAKE_CONTROLLER_ROWS="$unrelated_row" "$script" --namespace orka-system preflight \
+  --provider copilot > "$tmp/preflight-unrelated-controller.txt" 2>&1; then
+  echo 'preflight accepted an unrelated controller API Service' >&2
+  exit 1
+fi
+grep -Fq 'no Orka controller Deployment was found' "$tmp/preflight-unrelated-controller.txt"
+
 : > "$CALLS"
 rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
 "$script" --namespace orka-system smoke --provider copilot --model claude-test --timeout 5s \
@@ -141,6 +152,17 @@ grep -Fq 'Smoke Task succeeded with an available result.' "$tmp/smoke.txt"
 grep -Fq 'Deleted smoke Task orka-system/' "$tmp/smoke.txt"
 grep -Fq 'model: "claude-test"' "$SMOKE_MANIFEST"
 grep -Fq 'Reply with exactly: PROW_AI_DASHBOARD_ORKA_OK_' "$SMOKE_MANIFEST"
+grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
+
+: > "$CALLS"
+rm -f "$SMOKE_COUNT" "$SMOKE_MANIFEST"
+if FAKE_CREATE_ERROR_AFTER_ACCEPT=true "$script" --namespace orka-system smoke \
+  --provider copilot --timeout 5s > "$tmp/smoke-create-ambiguous.txt" 2>&1; then
+  echo 'smoke accepted an ambiguous create failure' >&2
+  exit 1
+fi
+grep -Fq 'Creating smoke Task orka-system/' "$tmp/smoke-create-ambiguous.txt"
+grep -Fq 'cleanup was attempted' "$tmp/smoke-create-ambiguous.txt"
 grep -Fq 'delete task.core.orka.ai prow-ai-dashboard-smoke-' "$CALLS"
 
 : > "$CALLS"
