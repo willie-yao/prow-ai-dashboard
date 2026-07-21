@@ -466,6 +466,15 @@ func TestScaffold_K8sMode(t *testing.T) {
 	}
 }
 
+func TestScaffoldGuideUsesModeFile(t *testing.T) {
+	if got := scaffoldGuide(modePages); got != "CHECKLIST.md" {
+		t.Fatalf("Pages guide = %q, want CHECKLIST.md", got)
+	}
+	if got := scaffoldGuide(modeK8s); got != "deploy/README.md" {
+		t.Fatalf("Kubernetes guide = %q, want deploy/README.md", got)
+	}
+}
+
 func TestScaffoldPRBodyUsesModeGuide(t *testing.T) {
 	pages := scaffoldPRBody("Project", modePages)
 	if !strings.Contains(pages, "CHECKLIST.md") || strings.Contains(pages, "deploy/README.md") {
