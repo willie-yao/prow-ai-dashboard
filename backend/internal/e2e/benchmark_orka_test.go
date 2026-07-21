@@ -251,7 +251,14 @@ func writeOrkaBenchSkeleton(t *testing.T, bc benchCase) string {
 	if err := output.WriteJobDetail(dataDir, detail); err != nil {
 		t.Fatal(err)
 	}
-	if err := output.WriteFlakinessReport(dataDir, models.FlakinessReport{}); err != nil {
+	report := models.FlakinessReport{}
+	if bc.consecutiveFailures > 1 {
+		report.PersistentFailures = []models.TestFlakiness{{
+			TestName: bc.testName, JobName: bc.jobName, JobID: jobID,
+			ConsecutiveFailures: bc.consecutiveFailures, Classification: models.ClassificationPersistent,
+		}}
+	}
+	if err := output.WriteFlakinessReport(dataDir, report); err != nil {
 		t.Fatal(err)
 	}
 	return dataDir
@@ -422,5 +429,16 @@ func TestWriteOrkaBenchSkeleton(t *testing.T) {
 	tc := readOrkaBenchResult(t, dataDir, bc)
 	if tc.Name != bc.testName || tc.FailureMessage != bc.failureMsg || tc.Status != "failed" {
 		t.Fatalf("test case = %+v", tc)
+	}
+	data, err := os.ReadFile(filepath.Join(dataDir, "flakiness.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report models.FlakinessReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.PersistentFailures) != 1 || report.PersistentFailures[0].ConsecutiveFailures != bc.consecutiveFailures {
+		t.Fatalf("persistent failures = %+v", report.PersistentFailures)
 	}
 }

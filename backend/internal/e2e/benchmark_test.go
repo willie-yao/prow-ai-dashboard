@@ -2,8 +2,10 @@ package e2e
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -65,17 +67,18 @@ type benchCase struct {
 	// run extracts it and reads through the local storage provider, so the
 	// benchmark survives Prow garbage-collecting the original GCS artifacts. Set
 	// BENCH_USE_GCS=1 to read live GCS instead (only works before GC).
-	fixtureAsset string
-	jobType      string
-	repo         string // org/repo, required for presubmits
-	jobName      string
-	buildID      string
-	pullNumber   string
-	webURL       string
-	sourceRepo   [2]string // owner, name for repo-relative file-link resolution
-	testName     string
-	junitFile    string
-	failureMsg   string
+	fixtureAsset  string
+	fixtureSHA256 string
+	jobType       string
+	repo          string // org/repo, required for presubmits
+	jobName       string
+	buildID       string
+	pullNumber    string
+	webURL        string
+	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
+	testName      string
+	junitFile     string
+	failureMsg    string
 	// consecutiveFailures is how many consecutive builds this test had failed at
 	// the time of the snapshot. The live engine derives this from the flakiness
 	// report; the benchmark feeds it so the analysis (and the critique gate's
@@ -103,19 +106,20 @@ var benchCases = []benchCase{
 		// the agent must read the AzureCluster resource dump to find the empty
 		// control-plane routeTable. The fix lives in a different repo than the
 		// job, so a correct answer also recognizes it is a CAPZ change.
-		name:         "ccm-dualstack-control-plane-routetable",
-		bucket:       "kubernetes-ci-logs",
-		fixtureAsset: "ccm-dualstack-capz-6358.tar.gz",
-		jobType:      models.JobTypePresubmit,
-		repo:         "kubernetes-sigs/cloud-provider-azure",
-		jobName:      "pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30",
-		buildID:      "2062345846720040960",
-		pullNumber:   "10388",
-		webURL:       "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/pr-logs/pull/kubernetes-sigs_cloud-provider-azure/10388/pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30/2062345846720040960/",
-		sourceRepo:   [2]string{"kubernetes-sigs", "cloud-provider-azure"},
-		testName:     "[It] Azure node resources should set node provider id correctly [Node]",
-		junitFile:    "junit_01.xml",
-		failureMsg:   `Unexpected error: <wait.errInterrupted>: timed out waiting for the condition { cause: <*errors.errorString>{ s: "timed out waiting for the condition", }, } occurred`,
+		name:          "ccm-dualstack-control-plane-routetable",
+		bucket:        "kubernetes-ci-logs",
+		fixtureAsset:  "ccm-dualstack-capz-6358.tar.gz",
+		fixtureSHA256: "179dcf40be61d6c8f4e1369793ec2b0c8c73eda0a0eb0fa5d832e488418c832f",
+		jobType:       models.JobTypePresubmit,
+		repo:          "kubernetes-sigs/cloud-provider-azure",
+		jobName:       "pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30",
+		buildID:       "2062345846720040960",
+		pullNumber:    "10388",
+		webURL:        "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/pr-logs/pull/kubernetes-sigs_cloud-provider-azure/10388/pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30/2062345846720040960/",
+		sourceRepo:    [2]string{"kubernetes-sigs", "cloud-provider-azure"},
+		testName:      "[It] Azure node resources should set node provider id correctly [Node]",
+		junitFile:     "junit_01.xml",
+		failureMsg:    `Unexpected error: <wait.errInterrupted>: timed out waiting for the condition { cause: <*errors.errorString>{ s: "timed out waiting for the condition", }, } occurred`,
 		// This dual-stack job failed ~9 consecutive builds before PR #6358; a
 		// genuine flake would not, so a transient verdict is contradicted.
 		consecutiveFailures: 9,
@@ -147,6 +151,7 @@ var benchCases = []benchCase{
 		name:                "flatcar-worker-dns-providerid",
 		bucket:              "kubernetes-ci-logs",
 		fixtureAsset:        "flatcar-sysext-dns-providerid.tar.gz",
+		fixtureSHA256:       "8ed886395742d145c014be4b6a2dc38b3ddf3db0ad6e7a5740da10eea80a1945",
 		jobType:             models.JobTypePeriodic,
 		jobName:             "periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24",
 		buildID:             "2073261474372915200",
@@ -212,6 +217,7 @@ procedure: |
 		name:                "apiversion-upgrade-clusterctl-aso-ratelimit",
 		bucket:              "kubernetes-ci-logs",
 		fixtureAsset:        "apiversion-upgrade-aso-clusterctl.tar.gz",
+		fixtureSHA256:       "74e87df63463559f917e22723e86757b6ea1027fe6b27cab4b07fa5a4647dca2",
 		jobType:             models.JobTypePeriodic,
 		jobName:             "periodic-cluster-api-provider-azure-apiversion-upgrade-main",
 		buildID:             "2074603331648491520",
@@ -496,7 +502,7 @@ func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 		t.Logf("reading artifacts from live GCS bucket %q", bc.bucket)
 		return backend, bc.bucket
 	}
-	root := ensureFixture(t, bc.fixtureAsset)
+	root := ensureFixture(t, bc.fixtureAsset, bc.fixtureSHA256)
 	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
 	if err != nil {
 		t.Fatalf("local backend: %v", err)
@@ -506,21 +512,26 @@ func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 }
 
 // ensureFixture downloads and extracts a benchmark-fixtures release asset into a
-// per-asset cache dir, returning the extract root (which contains the
-// bucket-relative pr-logs/... tree). A present, non-empty cache is reused.
-func ensureFixture(t *testing.T, asset string) string {
+// digest-scoped cache dir, returning the extract root. Cached fixtures are
+// reused only when their verified digest marker matches.
+func ensureFixture(t *testing.T, asset, wantSHA256 string) string {
 	t.Helper()
+	if len(wantSHA256) != sha256.Size*2 {
+		t.Fatalf("fixture %s has invalid SHA-256 %q", asset, wantSHA256)
+	}
 	cacheRoot, err := os.UserCacheDir()
 	if err != nil {
 		cacheRoot = os.TempDir()
 	}
-	dir := filepath.Join(cacheRoot, "prow-ai-dashboard-benchmark", strings.TrimSuffix(asset, ".tar.gz"))
-	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
-		return dir // already extracted
+	cacheName := strings.TrimSuffix(asset, ".tar.gz") + "-" + wantSHA256[:12]
+	dir := filepath.Join(cacheRoot, "prow-ai-dashboard-benchmark", cacheName)
+	marker := filepath.Join(dir, ".sha256")
+	if digest, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(digest)) == wantSHA256 {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) > 1 {
+			return dir
+		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("fixture cache dir: %v", err)
-	}
+
 	url := fixtureReleaseBase + asset
 	t.Logf("downloading fixture %s", url)
 	resp, err := http.Get(url)
@@ -531,10 +542,45 @@ func ensureFixture(t *testing.T, asset string) string {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("download fixture %s: HTTP %d", url, resp.StatusCode)
 	}
-	if err := extractTarGz(resp.Body, dir); err != nil {
+	archive, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", asset, err)
+	}
+	if err := verifyFixtureDigest(archive, wantSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("reset fixture cache dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("fixture cache dir: %v", err)
+	}
+	if err := extractTarGz(bytes.NewReader(archive), dir); err != nil {
 		t.Fatalf("extract fixture: %v", err)
 	}
+	if err := os.WriteFile(marker, []byte(wantSHA256+"\n"), 0o644); err != nil {
+		t.Fatalf("write fixture digest marker: %v", err)
+	}
 	return dir
+}
+
+func verifyFixtureDigest(archive []byte, wantSHA256 string) error {
+	got := fmt.Sprintf("%x", sha256.Sum256(archive))
+	if got != wantSHA256 {
+		return fmt.Errorf("fixture SHA-256 = %s, want %s", got, wantSHA256)
+	}
+	return nil
+}
+
+func TestVerifyFixtureDigest(t *testing.T) {
+	archive := []byte("fixture archive")
+	want := fmt.Sprintf("%x", sha256.Sum256(archive))
+	if err := verifyFixtureDigest(archive, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyFixtureDigest(archive, strings.Repeat("0", sha256.Size*2)); err == nil {
+		t.Fatal("verifyFixtureDigest accepted a mismatched digest")
+	}
 }
 
 // extractTarGz unpacks a gzip'd tar stream under dest, rejecting entries whose

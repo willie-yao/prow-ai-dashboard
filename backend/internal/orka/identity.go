@@ -95,12 +95,15 @@ const (
 )
 
 // FailurePrompt renders the per-test prompt shared by the producer and ingestor.
-func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase) string {
+func FailurePrompt(projectLabel, jobID, buildPrefix string, tc models.TestCase, consecutiveFailures int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This %s CI test FAILED. Root-cause it and classify transient vs real bug.\n\n", projectLabel)
 	fmt.Fprintf(&b, "Job: %s\n", jobID)
 	fmt.Fprintf(&b, "Build: %s\n", buildPrefix)
 	fmt.Fprintf(&b, "Failed test: %s\n", tc.Name)
+	if consecutiveFailures > 1 {
+		fmt.Fprintf(&b, "Consecutive failures on this test: %d (persistent, not flaky).\n", consecutiveFailures)
+	}
 	if tc.FailureLocation != "" {
 		fmt.Fprintf(&b, "Failure location: %s\n", tc.FailureLocation)
 	}
