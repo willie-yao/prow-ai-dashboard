@@ -100,7 +100,7 @@ BENCH_ORKA_TOKEN=<short-lived-Orka-API-token> \
 BENCH_ORKA_CONTEXT=<kube-context> \
   go test ./internal/e2e \
     -run 'TestOrkaAIBenchmark/flatcar-worker-dns-providerid$' \
-    -v -timeout 35m
+    -v -timeout 60m
 ```
 
 Start the API endpoint with `kubectl -n orka-system port-forward svc/orka

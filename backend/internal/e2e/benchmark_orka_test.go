@@ -120,7 +120,7 @@ func runOrkaBenchCase(t *testing.T, bc benchCase, cfg orkaBenchConfig) {
 		projectDir = writeOrkaBenchProject(t, bc, defaultBenchAgentic())
 	}
 
-	deadline := 2*cfg.wait + 5*time.Minute
+	deadline := cfg.taskTimeout + cfg.wait + 5*time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	workDir := t.TempDir()
@@ -140,7 +140,7 @@ func runOrkaBenchCase(t *testing.T, bc benchCase, cfg orkaBenchConfig) {
 		"-tool-auth-secret=" + cfg.toolAuthName,
 		"-tool-auth-key=" + cfg.toolAuthKey,
 		"-max-concurrent-tasks=1",
-		"-wave-timeout=" + cfg.wait.String(),
+		"-wave-timeout=" + cfg.taskTimeout.String(),
 		"-apply",
 	}
 	if cfg.kubeContext != "" {

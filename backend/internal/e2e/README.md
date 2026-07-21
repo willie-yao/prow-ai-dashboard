@@ -67,7 +67,7 @@ BENCH_ORKA_TOKEN=<short-lived-token> \
 BENCH_ORKA_CONTEXT=<kube-context> \
   go test ./internal/e2e \
     -run 'TestOrkaAIBenchmark/flatcar-worker-dns-providerid$' \
-    -v -timeout 35m
+    -v -timeout 60m
 ```
 
 The test builds and invokes the production `orka-producer` and `orka-ingestor`.
@@ -81,8 +81,8 @@ Additional options:
 - `BENCH_ORKA_NAMESPACE` selects the Task and Tool namespace.
 - `BENCH_ORKA_API_MODE` selects `auto`, `responses`, or `chat_completions`.
 - `BENCH_ORKA_VERSION` sets the manual analysis-contract version.
-- `BENCH_ORKA_TASK_TIMEOUT` and `BENCH_ORKA_WAIT` set the Task and ingestion
-  deadlines.
+- `BENCH_ORKA_TASK_TIMEOUT` sets the Task execution and producer wait deadline.
+  `BENCH_ORKA_WAIT` sets the ingestion deadline.
 - `BENCH_ORKA_TOKEN_FILE` avoids placing the API token directly in the
   environment.
 - `BENCH_ORKA_TOOL_MANIFESTS` points at Tool manifests customized for a release.
