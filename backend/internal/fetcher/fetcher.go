@@ -674,15 +674,16 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		model = aiModel(cfg)
 	}
 	fixOpts.Agent = &fixpr.AgentConfig{
-		Runtime:    agentRuntime,
-		API:        aiAPI(cfg),
-		Model:      model,
-		Endpoint:   aiEndpoint(cfg),
-		ModelToken: aiToken,
-		MaxTurns:   ar.MaxTurns,
-		AllowBash:  allowBash,
-		Timeout:    ar.ParsedTimeout(),
-		GitToken:   fixToken,
+		Runtime:             agentRuntime,
+		API:                 aiAPI(cfg),
+		SharedModelEndpoint: ar.Type != "orka",
+		Model:               model,
+		Endpoint:            aiEndpoint(cfg),
+		ModelToken:          aiToken,
+		MaxTurns:            ar.MaxTurns,
+		AllowBash:           allowBash,
+		Timeout:             ar.ParsedTimeout(),
+		GitToken:            fixToken,
 	}
 	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	stats, err := mgr.Reconcile(ctx, patterns)

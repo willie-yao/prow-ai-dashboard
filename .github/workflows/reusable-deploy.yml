@@ -60,7 +60,7 @@ on:
         type: string
         default: ""
       ai-endpoint:
-        description: "Optional. AI chat-completions URL passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
+        description: "Optional. URL for the selected AI API, passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
         required: false
         type: string
         default: ""

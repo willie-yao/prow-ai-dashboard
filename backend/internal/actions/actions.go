@@ -251,15 +251,16 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 		model = s.ai.Model
 	}
 	opts.Agent = &fixpr.AgentConfig{
-		Runtime:    agentRuntime,
-		API:        s.ai.API,
-		Model:      model,
-		Endpoint:   s.ai.Endpoint,
-		ModelToken: s.ai.Token,
-		MaxTurns:   ar.MaxTurns,
-		AllowBash:  allowBash,
-		Timeout:    ar.ParsedTimeout(),
-		GitToken:   userToken,
+		Runtime:             agentRuntime,
+		API:                 s.ai.API,
+		SharedModelEndpoint: ar.Type != "orka",
+		Model:               model,
+		Endpoint:            s.ai.Endpoint,
+		ModelToken:          s.ai.Token,
+		MaxTurns:            ar.MaxTurns,
+		AllowBash:           allowBash,
+		Timeout:             ar.ParsedTimeout(),
+		GitToken:            userToken,
 	}
 	mgr := fixpr.NewManager(prClient,
 		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
