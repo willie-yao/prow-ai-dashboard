@@ -11,14 +11,16 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=4f2a9f3c3bfb13ce5d7800481312ab9b4793c7f534c4cbc320fef1ff4d7e4bbf' <<< "$metadata"
+grep -Fq 'patch_sha256=811bd06736b46ebf6325175f690ac6ab0f4e3b80ff49bf5dba4bde761d76a633' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}4f2a9f3c3bfb13ce5d7800481312ab9b4793c7f534c4cbc320fef1ff4d7e4bbf${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}811bd06736b46ebf6325175f690ac6ab0f4e3b80ff49bf5dba4bde761d76a633${backtick}" "$script_dir/COMPATIBILITY.md"
 grep -Fq 'diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go' "$script_dir/ai-worker-convergence.patch"
 for test_name in \
   TestExecuteAgentLoopRepromptsEmptyFinal \
   TestExecuteAgentLoopRepromptsUnsupportedTransient \
+  TestExecuteAgentLoopRepromptsAfterFailedTimeline \
+  TestExecuteAgentLoopRepromptsAfterFailedTimelineRetry \
   TestExecuteAgentLoopRejectsRepeatedEmptyFinal \
   TestExecuteAgentLoopRejectsRepeatedUnsupportedTransient \
   TestTransientWithoutTimeline; do
@@ -76,7 +78,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=4f2a9f3c3bfb13ce5d7800481312ab9b4793c7f534c4cbc320fef1ff4d7e4bbf
+patch=811bd06736b46ebf6325175f690ac6ab0f4e3b80ff49bf5dba4bde761d76a633
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"

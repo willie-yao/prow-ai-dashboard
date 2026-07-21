@@ -1,18 +1,20 @@
 diff --git a/workers/ai/compatibility_test.go b/workers/ai/compatibility_test.go
 new file mode 100644
-index 0000000..b471b0b
+index 0000000..50e9abd
 --- /dev/null
 +++ b/workers/ai/compatibility_test.go
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,188 @@
 +package main
 +
 +import (
 +	"context"
 +	"encoding/json"
++	"errors"
 +	"strings"
 +	"testing"
 +
 +	"github.com/orka-agents/orka/internal/llm"
++	toolspkg "github.com/orka-agents/orka/internal/tools"
 +	"github.com/orka-agents/orka/workers/common"
 +)
 +
@@ -42,6 +44,7 @@ index 0000000..b471b0b
 +		`{"status":"thinking"} {"summary":"final","is_transient":true}`,
 +		`{"summary":"unexpected } in log","is_transient":true}`,
 +		`{"summary":"escaped \" } in log","is_transient":true}`,
++		`{"summary":"analysis","is_transient":false,"IS_TRANSIENT":true}`,
 +	} {
 +		if !transientWithoutTimeline(content, false) {
 +			t.Fatalf("transient verdict %q was accepted", content)
@@ -53,6 +56,7 @@ index 0000000..b471b0b
 +		`{"summary":"analysis","nested":{"is_transient":true}}`,
 +		`not json`,
 +		`{"summary":"first","is_transient":true} {"summary":"final","is_transient":false}`,
++		`{"summary":"analysis","is_transient":true,"IS_TRANSIENT":false}`,
 +	} {
 +		if transientWithoutTimeline(content, false) {
 +			t.Fatalf("non-transient verdict %q was rejected", content)
@@ -103,6 +107,57 @@ index 0000000..b471b0b
 +	}
 +}
 +
++type retryTimelineTool struct {
++	calls int
++}
++
++func (*retryTimelineTool) Name() string        { return "verify_timeline" }
++func (*retryTimelineTool) Description() string { return "test timeline tool" }
++func (*retryTimelineTool) Parameters() json.RawMessage {
++	return json.RawMessage(`{"type":"object","properties":{}}`)
++}
++func (tool *retryTimelineTool) Execute(context.Context, json.RawMessage) (string, error) {
++	tool.calls++
++	if tool.calls == 1 {
++		return "timeline verified", nil
++	}
++	return "", errors.New("timeline unavailable")
++}
++
++func TestExecuteAgentLoopRepromptsAfterFailedTimelineRetry(t *testing.T) {
++	restore := replaceDefaultToolRegistryForTest(t)
++	defer restore()
++	timeline := &retryTimelineTool{}
++	toolspkg.DefaultRegistry.Register(timeline)
++	llmTools := toolspkg.DefaultRegistry.ToLLMTools([]string{timeline.Name()})
++	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
++		{
++			Content:    "checking timeline",
++			ToolCalls:  []llm.ToolCall{{ID: "timeline-1", Name: timeline.Name(), Arguments: json.RawMessage(`{}`)}},
++			StopReason: "tool_use",
++			Model:      "test-model",
++		},
++		{
++			Content:    "retrying timeline",
++			ToolCalls:  []llm.ToolCall{{ID: "timeline-2", Name: timeline.Name(), Arguments: json.RawMessage(`{}`)}},
++			StopReason: "tool_use",
++			Model:      "test-model",
++		},
++		{Content: `{"summary":"analysis","is_transient":true}`, StopReason: "end_turn", Model: "test-model"},
++		{Content: `{"summary":"analysis","is_transient":false}`, StopReason: "end_turn", Model: "test-model"},
++	}}
++	result, err := executeAgentLoopWithEvents(
++		context.Background(), provider, []llm.Message{{Role: "user", Content: "classify"}},
++		"", "test-model", llmTools, nil, nil, common.NewFakeEventRecorder(),
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result != `{"summary":"analysis","is_transient":false}` || provider.callCount != 4 {
++		t.Fatalf("result = %q, calls = %d, want corrected verdict after failed timeline retry", result, provider.callCount)
++	}
++}
++
 +func TestExecuteAgentLoopRejectsRepeatedEmptyFinal(t *testing.T) {
 +	provider := &sequenceProvider{responses: []*llm.CompletionResponse{
 +		{Content: "", StopReason: "end_turn", Model: "test-model"},
@@ -138,7 +193,7 @@ index 0000000..b471b0b
 +	}
 +}
 diff --git a/workers/ai/main.go b/workers/ai/main.go
-index 47bc4ca..c6e820a 100644
+index 47bc4ca..dbd025a 100644
 --- a/workers/ai/main.go
 +++ b/workers/ai/main.go
 @@ -929,9 +929,9 @@ func executeAgentLoopWithEvents(
@@ -236,14 +291,14 @@ index 47bc4ca..c6e820a 100644
  				}
  			}
  
-+			if execErr == nil && isVerifyTimelineTool(toolName) {
-+				timelineVerified = true
++			if isVerifyTimelineTool(toolName) {
++				timelineVerified = execErr == nil
 +			}
 +
  			if execErr != nil {
  				common.RecordEventWithTimeout(eventRecorder, events.ExecutionEventTypeToolCallFailed, modelLoopEventTimeout,
  					common.WithEventSeverity(events.ExecutionEventSeverityError),
-@@ -1171,6 +1230,92 @@ func executeAgentLoopWithEvents(
+@@ -1171,6 +1230,74 @@ func executeAgentLoopWithEvents(
  	return "", fmt.Errorf("max iterations reached without completion")
  }
  
@@ -260,8 +315,15 @@ index 47bc4ca..c6e820a 100644
 +	return strings.Contains(normalized, "verify-timeline")
 +}
 +
++type analysisCandidate struct {
++	Summary     string `json:"summary"`
++	RootCause   string `json:"root_cause"`
++	Severity    string `json:"severity"`
++	IsTransient *bool  `json:"is_transient"`
++}
++
 +func responseClaimsTransient(content string) bool {
-+	var best map[string]json.RawMessage
++	var best *analysisCandidate
 +	depth, start := 0, -1
 +	inString, escaped := false, false
 +	for i := 0; i < len(content); i++ {
@@ -291,46 +353,21 @@ index 47bc4ca..c6e820a 100644
 +			if depth > 0 {
 +				depth--
 +				if depth == 0 && start >= 0 {
-+					var candidate map[string]json.RawMessage
-+					if json.Unmarshal([]byte(content[start:i+1]), &candidate) == nil && analysisShaped(candidate) {
-+						best = candidate
++					var candidate analysisCandidate
++					if json.Unmarshal([]byte(content[start:i+1]), &candidate) == nil && candidate.shaped() {
++						best = &candidate
 +					}
 +				}
 +			}
 +		}
 +	}
-+	if best == nil {
-+		return false
-+	}
-+	raw, ok := fieldValue(best, "is_transient")
-+	if !ok {
-+		return false
-+	}
-+	var transient bool
-+	return json.Unmarshal(raw, &transient) == nil && transient
++	return best != nil && best.IsTransient != nil && *best.IsTransient
 +}
 +
-+func analysisShaped(candidate map[string]json.RawMessage) bool {
-+	for _, name := range []string{"summary", "root_cause", "severity"} {
-+		raw, ok := fieldValue(candidate, name)
-+		if !ok {
-+			continue
-+		}
-+		var value string
-+		if json.Unmarshal(raw, &value) == nil && strings.TrimSpace(value) != "" {
-+			return true
-+		}
-+	}
-+	return false
-+}
-+
-+func fieldValue(candidate map[string]json.RawMessage, name string) (json.RawMessage, bool) {
-+	for key, value := range candidate {
-+		if strings.EqualFold(key, name) {
-+			return value, true
-+		}
-+	}
-+	return nil, false
++func (candidate analysisCandidate) shaped() bool {
++	return strings.TrimSpace(candidate.Summary) != "" ||
++		strings.TrimSpace(candidate.RootCause) != "" ||
++		strings.TrimSpace(candidate.Severity) != ""
 +}
 +
  func approvalToolingRequested(coordinationEnv workerenv.CoordinationEnv, allowedToolCalls map[string]struct{}) bool {
