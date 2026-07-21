@@ -1599,10 +1599,10 @@ index 0000000000000000000000000000000000000000..0b44bddb2c54795a5a06a92a7de8f7a1
 +}
 diff --git a/workers/ai/validated_analysis.go b/workers/ai/validated_analysis.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..fff93252597f0f2004cb0270070da06bcd1f8fb1
+index 0000000000000000000000000000000000000000..5adfecd4a63a0468125e28e992fa32a39005b837
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
-@@ -0,0 +1,497 @@
+@@ -0,0 +1,500 @@
 +package main
 +
 +import (
@@ -1747,6 +1747,7 @@ index 0000000000000000000000000000000000000000..fff93252597f0f2004cb0270070da06b
 +	maxValidationFailures         = 3
 +	maxValidationFinalRetries     = 2
 +	maxTransientCritiqueRetries   = 2
++	maxEmptyFinalRetries          = 1
 +	defaultSubmissionToolName     = "validate_analysis"
 +	defaultTimelineToolName       = "verify_timeline"
 +	validationRequiredPrompt      = "The final answer cannot be accepted until validate_analysis succeeds. " +
@@ -1781,6 +1782,7 @@ index 0000000000000000000000000000000000000000..fff93252597f0f2004cb0270070da06b
 +	validationFailures       map[string]int
 +	validationFinalRetries   int
 +	transientCritiqueRetries int
++	emptyFinalRetries        int
 +	timelineVerified         bool
 +	transientCritiqueEnabled bool
 +	investigationToolCalls   int
@@ -1901,9 +1903,10 @@ index 0000000000000000000000000000000000000000..fff93252597f0f2004cb0270070da06b
 +		}
 +	}
 +	if strings.TrimSpace(content) == "" {
-+		if iteration >= maxIterations-1 {
++		if g.emptyFinalRetries >= maxEmptyFinalRetries || iteration >= maxIterations-1 {
 +			return finalResponseDecision{err: fmt.Errorf("model returned an empty final response")}
 +		}
++		g.emptyFinalRetries++
 +		return finalResponseDecision{
 +			messages: append(messages,
 +				llm.Message{Role: "assistant", Content: content},
@@ -2102,10 +2105,10 @@ index 0000000000000000000000000000000000000000..fff93252597f0f2004cb0270070da06b
 +}
 diff --git a/workers/ai/validated_analysis_test.go b/workers/ai/validated_analysis_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..09e67d5bf0e1373565000a178c3490c1435387f3
+index 0000000000000000000000000000000000000000..ffd21ae9bbc268ff6c54caaf5fec35361ee0db11
 --- /dev/null
 +++ b/workers/ai/validated_analysis_test.go
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,280 @@
 +package main
 +
 +import (
@@ -2317,6 +2320,18 @@ index 0000000000000000000000000000000000000000..09e67d5bf0e1373565000a178c3490c1
 +	decision := guard.handleFinalResponse("", 9, 10, nil)
 +	if decision.err == nil || decision.retry || decision.result != "" {
 +		t.Fatalf("empty final decision = %+v", decision)
++	}
++}
++
++func TestOrdinaryTaskRejectsRepeatedEarlyEmptyFinal(t *testing.T) {
++	guard := newAnalysisLoopGuard(nil, nil)
++	first := guard.handleFinalResponse("", 1, 100, nil)
++	if first.err != nil || !first.retry {
++		t.Fatalf("first empty final decision = %+v", first)
++	}
++	second := guard.handleFinalResponse("", 2, 100, first.messages)
++	if second.err == nil || second.retry || second.result != "" {
++		t.Fatalf("second empty final decision = %+v", second)
 +	}
 +}
 +
