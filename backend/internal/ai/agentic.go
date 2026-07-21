@@ -859,21 +859,14 @@ func (c *Client) doAnalyzeAgentic(
 				len(msg.ToolCalls), dropped)
 		}
 
-		echoCalls := toolCalls
-		if c.apiMode == APIResponses && dropped > 0 {
-			echoCalls = msg.ToolCalls
-		}
+		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
 		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
 		messages = append(messages, echo)
 
-		if c.apiMode == APIResponses && dropped > 0 {
-			for _, tc := range msg.ToolCalls[len(toolCalls):] {
-				messages = append(messages, modelMessage{Role: "tool", ToolCallID: tc.ID, Content: strPtr(`{"error":"skipped by single_tool_call; request again if still needed"}`)})
-			}
-		}
+		messages = append(messages, skippedOutputs...)
 
 		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(loopCtx, state, tc)

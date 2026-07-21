@@ -119,4 +119,15 @@ func isCopilotEndpoint(rawURL string) bool {
 	return strings.HasSuffix(u.Hostname(), "githubcopilot.com")
 }
 
+func continuationCalls(api string, message modelMessage, kept []modelToolCall) ([]modelToolCall, []modelMessage) {
+	if api != APIResponses || len(kept) == len(message.ToolCalls) {
+		return kept, nil
+	}
+	skipped := make([]modelMessage, 0, len(message.ToolCalls)-len(kept))
+	for _, call := range message.ToolCalls[len(kept):] {
+		skipped = append(skipped, modelMessage{Role: "tool", ToolCallID: call.ID, Content: strPtr(`{"error":"skipped by single_tool_call; request again if still needed"}`)})
+	}
+	return message.ToolCalls, skipped
+}
+
 func strPtr(s string) *string { return &s }
