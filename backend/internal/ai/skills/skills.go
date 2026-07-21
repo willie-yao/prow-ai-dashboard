@@ -150,11 +150,16 @@ type EvidenceGroup struct {
 	// Defaults to ID if empty.
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 
+	// When optionally limits this group to drafts that match one of these
+	// patterns. An empty list makes the group apply whenever its skill matches.
+	When []string `yaml:"when,omitempty" json:"when,omitempty"`
+
 	// AnyOf is the list of regex patterns. Any single match satisfies
 	// the group.
 	AnyOf []string `yaml:"any_of" json:"any_of"`
 
 	// compiled patterns. Not serialized.
+	whenREs  []*regexp.Regexp
 	anyOfREs []*regexp.Regexp
 }
 
@@ -299,6 +304,20 @@ func (s *Set) Match(text string) []Skill {
 		}
 	}
 	return out
+}
+
+// Applies reports whether this evidence group applies to the supplied draft.
+// Groups without when patterns apply whenever their parent skill matches.
+func (g EvidenceGroup) Applies(text string) bool {
+	if len(g.whenREs) == 0 {
+		return true
+	}
+	for _, re := range g.whenREs {
+		if re.MatchString(text) {
+			return true
+		}
+	}
+	return false
 }
 
 // Satisfied reports whether the evidence group is met by the set of
@@ -524,6 +543,15 @@ func validateAndCompile(sk *Skill) error {
 		if len(g.AnyOf) == 0 {
 			return fmt.Errorf("skill %q evidence %q has empty any_of", sk.ID, g.ID)
 		}
+		g.whenREs = make([]*regexp.Regexp, 0, len(g.When))
+		for i, pat := range g.When {
+			re, err := regexp.Compile(pat)
+			if err != nil {
+				return fmt.Errorf("skill %q evidence %q when[%d] %q: %w",
+					sk.ID, g.ID, i, pat, err)
+			}
+			g.whenREs = append(g.whenREs, re)
+		}
 		g.anyOfREs = make([]*regexp.Regexp, 0, len(g.AnyOf))
 		for i, pat := range g.AnyOf {
 			re, err := regexp.Compile(pat)
@@ -562,6 +590,9 @@ func computeHash(loaded []Skill) string {
 		for _, g := range sk.RequiredEvidence {
 			fmt.Fprintf(h, "evidence-id:%s\n", g.ID)
 			fmt.Fprintf(h, "evidence-desc:%s\n", g.Description)
+			for _, p := range g.When {
+				fmt.Fprintf(h, "evidence-when:%s\n", p)
+			}
 			for _, p := range g.AnyOf {
 				fmt.Fprintf(h, "evidence-anyof:%s\n", p)
 			}

@@ -106,6 +106,21 @@ func resolveTools(aiTools []string) (names []string, k8sEnabled bool) {
 			}
 		}
 		if !mapped {
+			candidate := strings.ReplaceAll(t, "_", "-")
+			for _, group := range engineToolGroups {
+				for _, member := range group {
+					if candidate == member {
+						add(candidate)
+						mapped = true
+						break
+					}
+				}
+				if mapped {
+					break
+				}
+			}
+		}
+		if !mapped {
 			add(t)
 		}
 	}

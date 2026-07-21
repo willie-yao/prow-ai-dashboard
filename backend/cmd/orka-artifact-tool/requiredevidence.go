@@ -56,11 +56,17 @@ func requiredEvidence(_ *toolEnv, w http.ResponseWriter, r *http.Request) {
 		MatchedSkills: make([]requiredEvidenceSkill, 0, len(matched)),
 	}
 	for _, skill := range matched {
+		applicable := make([]skills.EvidenceGroup, 0, len(skill.RequiredEvidence))
+		for _, group := range skill.RequiredEvidence {
+			if group.Applies(signal) {
+				applicable = append(applicable, group)
+			}
+		}
 		response.MatchedSkills = append(response.MatchedSkills, requiredEvidenceSkill{
 			ID:               skill.ID,
 			Name:             skill.Name,
 			Procedure:        skill.Procedure,
-			RequiredEvidence: skill.RequiredEvidence,
+			RequiredEvidence: applicable,
 		})
 	}
 	log.Printf("📋 required_evidence signal=%q matched=%d", signal, len(response.MatchedSkills))

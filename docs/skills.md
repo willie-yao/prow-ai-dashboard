@@ -97,10 +97,13 @@ triggers:
 # Optional but usually present. Evidence groups the agent must satisfy
 # before critique accepts a draft that matched this recipe. Each group
 # is satisfied if any single regex matches any path the agent
-# successfully read.
+# successfully read. An optional when list limits a group to matching
+# drafts, so one recipe can require different evidence by failure class.
 required_evidence:
   - id: cert-manager-config
     description: cert-manager Certificate or Issuer config
+    when:
+      - "(?i)certificate|issuer|x509"
     any_of:
       - "config/certmanager/.*\\.ya?ml"
       - ".*certificate\\.ya?ml"
@@ -218,6 +221,9 @@ canonical artifact for it lives at one of these paths":
   (e.g. `clusters/.*/machines/`).
 - Use `any_of` to handle natural variation: different namespaces,
   different generated filenames, different controller pod names.
+- Use `when` only when one recipe spans distinct failure classes. Its regexes
+  match the same draft text as skill triggers and keep unrelated groups out of
+  critique and final validation.
 - Prefer 2-3 evidence groups over a single sprawling group: smaller
   groups give more precise feedback to the model.
 - Keep `description` short and human-readable; the engine surfaces

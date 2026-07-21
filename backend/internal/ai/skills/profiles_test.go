@@ -228,7 +228,7 @@ func TestBuiltinEvidencePaths(t *testing.T) {
 		"engine.kubernetes.service-api-dns-connectivity": {
 			"affected-client": "artifacts/clusters/workload/kube-system/cloud-node-manager-node-1/cloud-node-manager.log",
 			"service-routing": "artifacts/clusters/workload/kube-system/kube-proxy-node-1/kube-proxy.log",
-			"dns-resolution":  "artifacts/clusters/workload/kube-system/kube-proxy-node-1/kube-proxy.log",
+			"dns-resolution":  "artifacts/clusters/workload/nodes/node-1/resolv.conf",
 		},
 	}
 
@@ -243,6 +243,25 @@ func TestBuiltinEvidencePaths(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := findSkill(t, set, "engine.kubernetes.service-api-dns-connectivity")
+	service := findGroup(t, skill, "service-routing")
+	dns := findGroup(t, skill, "dns-resolution")
+
+	serviceDraft := "cloud-node-manager cannot reach the Kubernetes API ClusterIP: connection refused"
+	if !service.Applies(serviceDraft) || dns.Applies(serviceDraft) {
+		t.Fatalf("service draft applicability: service=%v dns=%v", service.Applies(serviceDraft), dns.Applies(serviceDraft))
+	}
+	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
+	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
+		t.Fatalf("DNS draft applicability: service=%v dns=%v", service.Applies(dnsDraft), dns.Applies(dnsDraft))
 	}
 }
 

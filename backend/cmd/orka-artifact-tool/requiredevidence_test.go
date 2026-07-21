@@ -84,6 +84,41 @@ func TestRequiredEvidenceUsesMergedEngineProfiles(t *testing.T) {
 	}
 }
 
+func TestRequiredEvidenceFiltersConditionalGroups(t *testing.T) {
+	contract, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"connectivity",
+			"triggers":["(?i)connectivity"],
+			"required_evidence":[
+				{"id":"service","when":["(?i)cluster.?ip|service"],"any_of":["service"]},
+				{"id":"dns","when":["(?i)dns|resolver"],"any_of":["resolv\\.conf"]}
+			]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := contract.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/tool/required_evidence", strings.NewReader(`{"signal":"connectivity failed because the DNS resolver refused lookup"}`))
+	req.Header.Set(skills.ContractHeader, header)
+	recorder := httptest.NewRecorder()
+	requiredEvidence(nil, recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response requiredEvidenceResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	groups := response.MatchedSkills[0].RequiredEvidence
+	if len(groups) != 1 || groups[0].ID != "dns" {
+		t.Fatalf("conditional groups = %+v, want only dns", groups)
+	}
+}
+
 func TestRequiredEvidenceWithoutSkillsReturnsNoMatches(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/tool/required_evidence", strings.NewReader(`{"signal":"anything"}`))
 	recorder := httptest.NewRecorder()

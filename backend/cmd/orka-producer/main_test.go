@@ -99,6 +99,23 @@ func TestResolveToolsKeepsQualityToolsForExplicitNames(t *testing.T) {
 	}
 }
 
+func TestResolveToolsNormalizesKnownUnqualifiedAliases(t *testing.T) {
+	names, k8sEnabled := resolveTools([]string{"resolve_controller_log", "custom_extension_tool"})
+	if !k8sEnabled {
+		t.Fatal("known k8s alias did not enable the Kubernetes profile")
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	if !seen["resolve-controller-log"] || seen["resolve_controller_log"] {
+		t.Fatalf("known alias was not normalized: %v", names)
+	}
+	if !seen["custom_extension_tool"] || seen["custom-extension-tool"] {
+		t.Fatalf("unknown extension alias was changed: %v", names)
+	}
+}
+
 func TestResolveToolsAddsEvidenceReadersForIndividualK8sOnly(t *testing.T) {
 	names, k8sEnabled := resolveTools([]string{"k8s.discover_clusters"})
 	if !k8sEnabled {

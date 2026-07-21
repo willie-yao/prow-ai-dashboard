@@ -350,9 +350,13 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 	// successfully read. Only skills with at least one missing group are
 	// surfaced in feedback.
 	var missingSkillEv []skillEvidenceMiss
+	draftText := strings.Join(fields, "\n")
 	for _, sk := range matchedSkills {
 		var missing []skills.EvidenceGroup
 		for _, g := range sk.RequiredEvidence {
+			if !g.Applies(draftText) {
+				continue
+			}
 			if !g.Satisfied(readsFull) {
 				missing = append(missing, g)
 			}

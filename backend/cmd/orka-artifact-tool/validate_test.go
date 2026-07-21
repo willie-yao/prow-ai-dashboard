@@ -168,6 +168,43 @@ func TestValidateAnalysisEnforcesMergedEngineEvidencePaths(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisAppliesDNSWithoutServiceEvidence(t *testing.T) {
+	set, _, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor}
+	clientPath := "artifacts/clusters/workload/kube-system/kube-proxy-node-1/kube-proxy.log"
+	resolverPath := "artifacts/clusters/workload/nodes/node-1/resolv.conf"
+	analysis := orka.AnalysisValidation{
+		Summary:   "resolver blocked API hostname lookup",
+		RootCause: "the API hostname lookup used a loopback DNS resolver that refused connections",
+		Severity:  "High", SuggestedFix: "restore the node resolver configuration",
+		RelevantFiles: []string{clientPath},
+	}
+
+	missing := runValidation(t, env, analysis, []string{attestor.issue("scope", clientPath)}, "scope", header)
+	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "engine.kubernetes.service-api-dns-connectivity:dns-resolution") {
+		t.Fatalf("missing DNS evidence response = %d %s", missing.Code, missing.Body.String())
+	}
+	if strings.Contains(missing.Body.String(), "service-routing") {
+		t.Fatalf("DNS-only draft required Service evidence: %s", missing.Body.String())
+	}
+
+	valid := runValidation(t, env, analysis, []string{
+		attestor.issue("scope", clientPath),
+		attestor.issue("scope", resolverPath),
+	}, "scope", header)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid DNS evidence response = %d %s", valid.Code, valid.Body.String())
+	}
+}
+
 func TestValidateAnalysisPrunesRecipeEvidenceAbsentFromBuild(t *testing.T) {
 	set, err := skills.ParseContract([]byte(`{
 		"skills":[{
