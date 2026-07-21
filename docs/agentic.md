@@ -105,13 +105,14 @@ The effective tool selection also selects diagnostic profiles. The engine-owned
 Prow profile is always enabled. The provider-neutral Kubernetes profile is
 enabled with the `k8s` group or an individual `k8s.*` tool. Set
 `tools: [filesystem]` to opt out of Kubernetes recipes for projects where they
-do not apply. Consumer `skills/*.yaml` recipes are merged after the selected
-engine profiles.
+do not apply. Consumer `skills/*.yaml` recipes join the selected built-ins in
+one merged contract.
 
-The runtime context is layered in this order: the universal engine contract,
-the Prow profile, the selected Kubernetes profile, consumer recipes, and the
-per-failure artifact evidence returned by tools. Recipes extend evidence
-requirements. They do not replace or override the universal contract.
+The merged recipes are sorted globally by priority descending and ID ascending,
+regardless of source. They are not inserted as ordered prompt layers. After the
+model produces a draft, only recipes whose triggers match that draft contribute
+procedures and required-evidence groups. Per-failure artifact reads satisfy
+those groups. No recipe can replace or override the universal engine contract.
 
 ### `max_iters`
 

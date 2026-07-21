@@ -99,6 +99,25 @@ func TestResolveToolsKeepsQualityToolsForExplicitNames(t *testing.T) {
 	}
 }
 
+func TestResolveToolsAddsEvidenceReadersForIndividualK8sOnly(t *testing.T) {
+	names, k8sEnabled := resolveTools([]string{"k8s.discover_clusters"})
+	if !k8sEnabled {
+		t.Fatal("individual k8s tool did not enable the Kubernetes profile")
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		seen[name] = true
+	}
+	for _, want := range evidenceReaderTools {
+		if !seen[want] {
+			t.Fatalf("resolved tools = %v, missing evidence reader %q", names, want)
+		}
+	}
+	if !seen["discover-clusters"] {
+		t.Fatalf("resolved tools = %v, missing requested k8s tool", names)
+	}
+}
+
 func TestOrkaAnalysisIdentityChangesWithSelectedProfiles(t *testing.T) {
 	filesystemSet, filesystemSelection, err := skills.LoadForTools(t.TempDir(), []string{"filesystem"})
 	if err != nil {

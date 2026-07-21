@@ -21,6 +21,10 @@ The engine composes one merged set for both analysis backends:
 3. **Consumer recipes.** Loaded from
    `<project-dir>/skills/*.{yaml,yml}` for project and provider knowledge.
 
+These are composition sources, not precedence layers. The complete merged set
+is sorted by priority descending and ID ascending, and only recipes whose
+triggers match a model draft are surfaced for that draft.
+
 The universal system prompt stays small. The Prow profile is engine-owned
 because Prow artifacts are part of the product contract. Kubernetes knowledge
 is conditional because some Prow consumers do not produce Kubernetes cluster

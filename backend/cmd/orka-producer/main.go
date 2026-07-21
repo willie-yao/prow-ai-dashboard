@@ -53,6 +53,10 @@ var engineToolGroups = map[string][]string{
 	"k8s":        {"discover-clusters", "find-my-cluster", "list-cluster-machines", "list-machine-logs", "discover-controllers", "resolve-controller-log"},
 }
 
+// evidenceReaderTools return content plus signed evidence tokens. Orka analysis
+// always needs them because Prow recipes are always active.
+var evidenceReaderTools = []string{"grep-artifact", "read-artifact", "tail-artifact"}
+
 // qualityTools are the deterministic shim tools added to every analysis. They
 // degrade gracefully on non-CAPZ projects (return "no match" when their patterns
 // do not apply), so they are safe to always include.
@@ -65,8 +69,8 @@ const (
 )
 
 // resolveTools maps a consumer's ai.tools group selection to the Orka Tool CRD
-// names, always appending the quality tools. Group names expand; anything else
-// passes through so an individual tool name still works. k8sEnabled reports
+// names, always appending evidence readers and quality tools. Group names expand;
+// anything else passes through so an individual tool name still works. k8sEnabled reports
 // whether Kubernetes cluster-navigation tools are in the set, which gates the
 // cluster-specific prompt guidance and diagnostic profile.
 func resolveTools(aiTools []string) (names []string, k8sEnabled bool) {
@@ -104,6 +108,9 @@ func resolveTools(aiTools []string) (names []string, k8sEnabled bool) {
 		if !mapped {
 			add(t)
 		}
+	}
+	for _, reader := range evidenceReaderTools {
+		add(reader)
 	}
 	for _, q := range qualityTools {
 		add(q)
