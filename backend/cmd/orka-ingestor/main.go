@@ -32,6 +32,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -344,8 +345,12 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 						if setUnavailable(item.tc, rejection) {
 							changed.Store(true)
 						}
-					} else if markUnavailable(item.tc, kube, namespace, item.name) {
-						changed.Store(true)
+					} else {
+						updated, reason := markUnavailable(item.tc, kube, namespace, item.name)
+						recordRejection(reason)
+						if updated {
+							changed.Store(true)
+						}
 					}
 				}
 			}(item)
@@ -381,14 +386,14 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	}
 	a, err := parseAnalysis(result)
 	if err != nil {
-		return false, "analysis Task produced an invalid result: " + oneLine(err.Error())
+		return false, rejectionReason("analysis Task produced an invalid result: ", err)
 	}
 	telemetry, err := client.analysisTelemetry(context.Background(), namespace, taskName)
 	if err != nil {
-		return false, "analysis Task telemetry unavailable: " + oneLine(err.Error())
+		return false, rejectionReason("analysis Task telemetry unavailable: ", err)
 	}
 	if err := validateAnalysisAcceptance(a, telemetry, taskName, minToolCalls, minGCSBytes, skillSetHash, validationKey); err != nil {
-		return false, "analysis Task failed acceptance: " + oneLine(err.Error())
+		return false, rejectionReason("analysis Task failed acceptance: ", err)
 	}
 	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
 	return true, ""
@@ -458,7 +463,7 @@ func setUnavailable(tc *models.TestCase, reason string) bool {
 
 // markUnavailable derives the deadline/Task-phase reason (batch path) and marks
 // tc unavailable.
-func markUnavailable(tc *models.TestCase, kube *orka.KubeClient, namespace, taskName string) bool {
+func markUnavailable(tc *models.TestCase, kube *orka.KubeClient, namespace, taskName string) (bool, string) {
 	reason := "analysis did not complete before the deadline"
 	if kube != nil {
 		phase, err := kube.TaskPhase(context.Background(), namespace, taskName)
@@ -471,7 +476,7 @@ func markUnavailable(tc *models.TestCase, kube *orka.KubeClient, namespace, task
 			reason = "analysis Task " + strings.ToLower(phase)
 		}
 	}
-	return setUnavailable(tc, reason)
+	return setUnavailable(tc, reason), reason
 }
 
 // gcTools deletes the per-build Tool CRDs for every build whose Tasks are all
@@ -590,15 +595,15 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	}
 	parsed, err := parseAnalysis(result)
 	if err != nil {
-		return preparedPatch{reason: "analysis Task produced an invalid result: " + oneLine(err.Error())}
+		return preparedPatch{reason: rejectionReason("analysis Task produced an invalid result: ", err)}
 	}
 	telemetry, err := s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
 	if err != nil {
-		return preparedPatch{reason: "analysis Task telemetry unavailable: " + oneLine(err.Error()), retry: true}
+		return preparedPatch{reason: rejectionReason("analysis Task telemetry unavailable: ", err), retry: true}
 	}
 	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.ValidationKey); err != nil {
 		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
-		return preparedPatch{reason: "analysis Task failed acceptance: " + oneLine(err.Error()), retry: retry}
+		return preparedPatch{reason: rejectionReason("analysis Task failed acceptance: ", err), retry: retry}
 	}
 	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash}
 }
@@ -837,6 +842,10 @@ func (a analysis) validationInput() orka.AnalysisValidation {
 
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+func rejectionReason(prefix string, err error) string {
+	return prefix + oneLine(redact.URLs(err.Error()))
 }
 
 type orkaClient struct {

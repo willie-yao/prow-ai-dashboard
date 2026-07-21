@@ -212,6 +212,7 @@ func TestIngestLogsSortedRejectionSummary(t *testing.T) {
 		"not JSON",
 		"not JSON",
 		`{"summary":"present"}`,
+		"",
 	}
 	for i, result := range invalidResults {
 		buildID := fmt.Sprintf("%d", i+1)
@@ -258,15 +259,48 @@ func TestIngestLogsSortedRejectionSummary(t *testing.T) {
 	patched, failed, missing := ingestPass(
 		&orkaClient{base: server.URL, http: server.Client()}, nil, namespace, dir, manifest, "test-model", true, map[string]bool{},
 	)
-	if patched != 0 || failed != 3 || missing != 3 {
+	if patched != 0 || failed != 4 || missing != 4 {
 		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
 	}
 	want := strings.Join([]string{
 		"⚠ Orka rejection summary: 2 x analysis Task produced an invalid result: no analysis JSON object found",
 		"⚠ Orka rejection summary: 1 x analysis Task produced an invalid result: root_cause is required",
+		"⚠ Orka rejection summary: 1 x analysis did not complete before the deadline",
 	}, "\n")
 	if got := strings.TrimSpace(logs.String()); got != want {
 		t.Fatalf("rejection summary:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestApplyResultRedactsTelemetryURL(t *testing.T) {
+	nonTransient := false
+	result := validatedAnalysisJSON(t, analysis{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		IsTransient: &nonTransient, SuggestedFix: "fix",
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			panic(http.ErrAbortHandler)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": result})
+	}))
+	defer server.Close()
+
+	tc := models.TestCase{Name: "test", Status: "failed"}
+	accepted, rejection := applyResult(
+		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", 0, 0, "", testValidationKey,
+	)
+	if accepted {
+		t.Fatal("applyResult accepted analysis without telemetry")
+	}
+	if strings.Contains(rejection, server.URL) || !strings.Contains(rejection, "[redacted-url]") {
+		t.Fatalf("rejection = %q, want redacted telemetry URL", rejection)
+	}
+	if !setUnavailable(&tc, rejection) {
+		t.Fatal("setUnavailable did not publish the rejection")
+	}
+	if strings.Contains(tc.AISummary.Summary, server.URL) {
+		t.Fatalf("published summary contains telemetry URL: %q", tc.AISummary.Summary)
 	}
 }
 
