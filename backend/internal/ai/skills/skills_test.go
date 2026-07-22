@@ -163,6 +163,19 @@ required_evidence:
 `,
 		},
 		{
+			name: "duplicate evidence id",
+			body: `
+id: duplicate-evidence
+triggers: ["foo"]
+required_evidence:
+  - id: logs
+    any_of: ["one"]
+  - id: logs
+    any_of: ["two"]
+`,
+			wantSubstr: "duplicate evidence id",
+		},
+		{
 			name: "unknown field (strict yaml)",
 			body: `
 id: strict

@@ -331,15 +331,15 @@ func ParseInitialEvidenceHeader(value string) (InitialEvidenceContract, error) {
 	if err := json.Unmarshal(data, &contract); err != nil {
 		return InitialEvidenceContract{}, fmt.Errorf("parse initial evidence contract: %w", err)
 	}
-	seen := map[string]bool{}
+	seen := map[[2]string]bool{}
 	for i := range contract.Requirements {
 		requirement := &contract.Requirements[i]
 		if strings.TrimSpace(requirement.SkillID) == "" {
 			return InitialEvidenceContract{}, fmt.Errorf("initial evidence requirement %d is missing skill_id", i)
 		}
-		key := requirement.SkillID + ":" + requirement.Group.ID
+		key := [2]string{requirement.SkillID, requirement.Group.ID}
 		if seen[key] {
-			return InitialEvidenceContract{}, fmt.Errorf("duplicate initial evidence requirement %q", key)
+			return InitialEvidenceContract{}, fmt.Errorf("duplicate initial evidence requirement %q:%q", key[0], key[1])
 		}
 		seen[key] = true
 		temporary := Skill{
@@ -765,11 +765,17 @@ func validateAndCompile(sk *Skill) error {
 		sk.triggerREs = append(sk.triggerREs, re)
 	}
 
+	groupIDs := map[string]bool{}
 	for gi := range sk.RequiredEvidence {
 		g := &sk.RequiredEvidence[gi]
-		if strings.TrimSpace(g.ID) == "" {
+		groupID := strings.TrimSpace(g.ID)
+		if groupID == "" {
 			return fmt.Errorf("skill %q evidence[%d] missing id", sk.ID, gi)
 		}
+		if groupIDs[groupID] {
+			return fmt.Errorf("skill %q has duplicate evidence id %q", sk.ID, groupID)
+		}
+		groupIDs[groupID] = true
 		if len(g.AnyOf) == 0 {
 			return fmt.Errorf("skill %q evidence %q has empty any_of", sk.ID, g.ID)
 		}

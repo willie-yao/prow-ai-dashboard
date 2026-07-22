@@ -207,6 +207,37 @@ func TestValidateAnalysisEnforcesInitialEvidenceAgainstGenericFinalText(t *testi
 	}
 }
 
+func TestValidateAnalysisKeepsDelimiterCollidingRequirementsDistinct(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[
+			{"id":"a:b","triggers":["cause"],"required_evidence":[{"id":"c","any_of":["one\\.log$"]}]},
+			{"id":"a","triggers":["cause"],"required_evidence":[{"id":"b:c","any_of":["two\\.log$"]}]}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor, browser: validationTreeBrowser{paths: []string{"one.log", "two.log"}}}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "cause", Severity: "High", SuggestedFix: "fix", RelevantFiles: []string{},
+	}
+	oneRead := runValidation(t, env, analysis, []string{attestor.issue("scope", "one.log")}, "scope", header)
+	if oneRead.Code != http.StatusUnprocessableEntity || !strings.Contains(oneRead.Body.String(), "a:b:c") {
+		t.Fatalf("one-read response = %d %s", oneRead.Code, oneRead.Body.String())
+	}
+	bothRead := runValidation(t, env, analysis, []string{
+		attestor.issue("scope", "one.log"), attestor.issue("scope", "two.log"),
+	}, "scope", header)
+	if bothRead.Code != http.StatusOK {
+		t.Fatalf("both-read response = %d %s", bothRead.Code, bothRead.Body.String())
+	}
+}
+
 func TestValidateAnalysisEnforcesMergedEngineEvidencePaths(t *testing.T) {
 	set, _, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
 	if err != nil {

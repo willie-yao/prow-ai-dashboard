@@ -32,8 +32,17 @@ type analysisRequest struct {
 	RelevantFiles []string `json:"relevant_files"`
 }
 
+type evidenceRequirementID struct {
+	skillID string
+	groupID string
+}
+
+func (id evidenceRequirementID) String() string {
+	return id.skillID + ":" + id.groupID
+}
+
 type evidenceRequirement struct {
-	key            string
+	id             evidenceRequirementID
 	signal         string
 	group          skills.EvidenceGroup
 	candidatePaths []string
@@ -192,17 +201,17 @@ func validateSubmission(
 	evidenceText := analysis.EvidenceText()
 	matchedSkills := set.Match(evidenceText)
 	requirements := make([]evidenceRequirement, 0)
-	seenRequirements := map[string]bool{}
+	seenRequirements := map[evidenceRequirementID]bool{}
 	initialEvidenceKeys := make([]string, 0, len(initialEvidence.Requirements))
 	for _, initial := range initialEvidence.Requirements {
-		key := initial.SkillID + ":" + initial.Group.ID
-		if seenRequirements[key] {
+		id := evidenceRequirementID{skillID: initial.SkillID, groupID: initial.Group.ID}
+		if seenRequirements[id] {
 			continue
 		}
-		seenRequirements[key] = true
-		initialEvidenceKeys = append(initialEvidenceKeys, key)
+		seenRequirements[id] = true
+		initialEvidenceKeys = append(initialEvidenceKeys, id.String())
 		requirements = append(requirements, evidenceRequirement{
-			key: key, signal: evidenceText, group: initial.Group, candidatePaths: initial.CandidatePaths,
+			id: id, signal: evidenceText, group: initial.Group, candidatePaths: initial.CandidatePaths,
 		})
 	}
 	for _, skill := range matchedSkills {
@@ -210,12 +219,12 @@ func validateSubmission(
 			if !group.Applies(evidenceText) {
 				continue
 			}
-			key := skill.ID + ":" + group.ID
-			if seenRequirements[key] {
+			id := evidenceRequirementID{skillID: skill.ID, groupID: group.ID}
+			if seenRequirements[id] {
 				continue
 			}
-			seenRequirements[key] = true
-			requirements = append(requirements, evidenceRequirement{key: key, signal: evidenceText, group: group})
+			seenRequirements[id] = true
+			requirements = append(requirements, evidenceRequirement{id: id, signal: evidenceText, group: group})
 		}
 	}
 	var tree artifactTreeEvidence
@@ -231,13 +240,14 @@ func validateSubmission(
 		if tree.completePaths != nil && !requirement.group.Satisfied(tree.completePaths) {
 			continue
 		}
-		missingEvidence = append(missingEvidence, requirement.key)
+		key := requirement.id.String()
+		missingEvidence = append(missingEvidence, key)
 		candidates := requirement.candidatePaths
 		if len(candidates) == 0 {
 			candidates = requirement.group.CandidatePaths(requirement.signal, tree.paths, evidenceCandidatePathLimit)
 		}
 		if len(candidates) > 0 {
-			missingEvidenceCandidates[requirement.key] = candidates
+			missingEvidenceCandidates[key] = candidates
 		}
 	}
 	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0 && gcsBytes >= minGCSBytes

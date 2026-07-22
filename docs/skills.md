@@ -216,7 +216,8 @@ widen on speculation.
 ## Writing good evidence groups
 
 Each group should encode "if this failure pattern is real, the
-canonical artifact for it lives at one of these paths":
+canonical artifact for it lives at one of these paths." Group IDs must be unique
+within a recipe:
 
 - Patterns are matched against the agent's successfully-read paths
   (full path, lowercase, slash-normalized). Use slash-style globs
