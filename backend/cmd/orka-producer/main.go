@@ -305,8 +305,9 @@ func main() {
 
 	jobFiles, _ := filepath.Glob(filepath.Join(*dataDir, "jobs", "*.json"))
 	type buildPlan struct {
-		scope  string
-		prefix string
+		scope                 string
+		prefix                string
+		initialEvidenceHeader string
 	}
 	builds := map[string]buildPlan{}
 	validationTasks := map[string]buildPlan{}
@@ -358,7 +359,10 @@ func main() {
 					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix, artifactSeed)
 					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 				}
-				evidencePlan, evidencePlanComplete := initialEvidencePlan(skillSet, tc, artifactPaths, artifactTreeTruncated)
+				evidencePlan, evidencePlanComplete, initialEvidenceHeader, planErr := initialEvidencePlan(skillSet, tc, artifactPaths, artifactTreeTruncated)
+				if planErr != nil {
+					log.Fatalf("initial evidence plan: %v", planErr)
+				}
 				manifest.SetEvidencePlan(detail.JobID, run.BuildID, ti, evidencePlan, evidencePlanComplete)
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
 				if err != nil {
@@ -368,7 +372,9 @@ func main() {
 				if evidencePlan != "" {
 					evidencePlanCount++
 				}
-				validationTasks[ref.Name] = buildPlan{scope: ref.ToolScope, prefix: buildPrefix}
+				validationTasks[ref.Name] = buildPlan{
+					scope: ref.ToolScope, prefix: buildPrefix, initialEvidenceHeader: initialEvidenceHeader,
+				}
 				task := orka.BuildAITask(orka.AITaskSpec{
 					Name:         ref.Name,
 					Namespace:    *namespace,
@@ -418,6 +424,9 @@ func main() {
 		httpCfg := clone["spec"].(map[string]any)["http"].(map[string]any)
 		headers := httpCfg["headers"].(map[string]any)
 		headers[orka.ValidationTaskHeader] = taskName
+		if build.initialEvidenceHeader != "" {
+			headers[skills.InitialEvidenceHeader] = build.initialEvidenceHeader
+		}
 		writeYAML(filepath.Join(*toolsOut, toolName+".yaml"), clone)
 		toolObjs = append(toolObjs, namedObj{toolName, clone})
 	}
@@ -610,11 +619,15 @@ revise if any applies:
 Call submit_analysis with the final fields. Do not return a separate final answer.`
 }
 
-func initialEvidencePlan(set *skills.Set, tc models.TestCase, artifactPaths []string, treeTruncated bool) (string, bool) {
-	return orka.RenderEvidencePlan(
-		set.Plan(orka.FailureEvidenceSignal(tc), artifactPaths, evidencePlanCandidatePathLimit),
-		treeTruncated,
-	)
+func initialEvidencePlan(set *skills.Set, tc models.TestCase, artifactPaths []string, treeTruncated bool) (string, bool, string, error) {
+	signal := orka.FailureEvidenceSignal(tc)
+	planned := set.Plan(signal, artifactPaths, evidencePlanCandidatePathLimit)
+	prompt, complete := orka.RenderEvidencePlan(planned, treeTruncated)
+	header, err := skills.InitialEvidenceHeaderValue(planned)
+	if err != nil {
+		return "", false, "", err
+	}
+	return prompt, complete, header, nil
 }
 
 func loadConsecutiveFailures(dataDir string, manifest *orka.AnalysisManifest) error {

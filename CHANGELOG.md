@@ -75,8 +75,10 @@ for how to pin a release.
   recipes against each bounded failure-evidence signal and prepends a bounded checklist with
   ranked exact artifact candidates. `required_evidence` and rejected final
   submissions return the same candidate paths, helping weaker models follow
-  required evidence without broad artifact searches. Complete plans satisfy the
-  recipe-lookup gate, while incomplete plans retain the mandatory Tool call.
+  required evidence without broad artifact searches. `submit_analysis` validates
+  the union of initially planned and final-diagnosis groups. Complete plans
+  satisfy the recipe-lookup gate, while incomplete plans retain the mandatory
+  Tool call.
 
 - **Orka weak-model final repair.** The compatibility worker keeps
   `relevant_files` required, while finalization prompts, the Tool schema, and

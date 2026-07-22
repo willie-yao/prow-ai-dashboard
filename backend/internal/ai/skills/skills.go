@@ -31,13 +31,17 @@ import (
 // defaultPriority is assigned to any recipe that doesn't set its own
 // priority. Higher priority is preferred on ties.
 const (
-	defaultPriority             = 100
-	maxSkillContractBytes       = 256 << 10
-	maxSkillContractHeaderBytes = 48 << 10
+	defaultPriority               = 100
+	maxSkillContractBytes         = 256 << 10
+	maxSkillContractHeaderBytes   = 48 << 10
+	maxInitialEvidenceHeaderBytes = 8 << 10
 )
 
 // ContractHeader carries a serialized merged skill set to external tools.
 const ContractHeader = "X-Prow-AI-Skills"
+
+// InitialEvidenceHeader carries the Task's precomputed evidence requirements.
+const InitialEvidenceHeader = "X-Prow-AI-Initial-Evidence"
 
 // Profile identifies one engine-owned diagnostic recipe pack.
 type Profile string
@@ -181,6 +185,17 @@ type EvidenceGroup struct {
 	anyOfREs []*regexp.Regexp
 }
 
+// InitialEvidenceRequirement is one initially applicable recipe group.
+type InitialEvidenceRequirement struct {
+	SkillID string        `json:"skill_id"`
+	Group   EvidenceGroup `json:"group"`
+}
+
+// InitialEvidenceContract binds a failure signal to its precomputed groups.
+type InitialEvidenceContract struct {
+	Requirements []InitialEvidenceRequirement `json:"requirements"`
+}
+
 // Set is a loaded, validated, and ordered collection of recipes.
 type Set struct {
 	skills []Skill
@@ -246,6 +261,94 @@ func (s *Set) HeaderValue() (string, error) {
 		return "", fmt.Errorf("compressed skill contract header is %d bytes, exceeds %d", len(header), maxSkillContractHeaderBytes)
 	}
 	return header, nil
+}
+
+// InitialEvidenceHeaderValue encodes initially applicable groups for a Task.
+func InitialEvidenceHeaderValue(plan []PlannedSkill) (string, error) {
+	contract := InitialEvidenceContract{}
+	for _, plannedSkill := range plan {
+		for _, group := range plannedSkill.RequiredEvidence {
+			contract.Requirements = append(contract.Requirements, InitialEvidenceRequirement{
+				SkillID: plannedSkill.ID,
+				Group: EvidenceGroup{
+					ID: group.ID, Description: group.Description, AnyOf: append([]string(nil), group.AnyOf...),
+				},
+			})
+		}
+	}
+	if len(contract.Requirements) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(contract)
+	if err != nil {
+		return "", fmt.Errorf("marshal initial evidence contract: %w", err)
+	}
+	if len(data) > maxSkillContractBytes {
+		return "", fmt.Errorf("initial evidence contract is %d bytes, exceeds %d", len(data), maxSkillContractBytes)
+	}
+	var compressed bytes.Buffer
+	w := gzip.NewWriter(&compressed)
+	if _, err := w.Write(data); err != nil {
+		return "", fmt.Errorf("compress initial evidence contract: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return "", fmt.Errorf("compress initial evidence contract: %w", err)
+	}
+	header := base64.RawURLEncoding.EncodeToString(compressed.Bytes())
+	if len(header) > maxInitialEvidenceHeaderBytes {
+		return "", fmt.Errorf("compressed initial evidence header is %d bytes, exceeds %d", len(header), maxInitialEvidenceHeaderBytes)
+	}
+	return header, nil
+}
+
+// ParseInitialEvidenceHeader decodes and compiles precomputed evidence groups.
+func ParseInitialEvidenceHeader(value string) (InitialEvidenceContract, error) {
+	if strings.TrimSpace(value) == "" {
+		return InitialEvidenceContract{}, nil
+	}
+	if len(value) > maxInitialEvidenceHeaderBytes {
+		return InitialEvidenceContract{}, fmt.Errorf("initial evidence header exceeds %d bytes", maxInitialEvidenceHeaderBytes)
+	}
+	compressed, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return InitialEvidenceContract{}, fmt.Errorf("decode initial evidence header: %w", err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return InitialEvidenceContract{}, fmt.Errorf("decompress initial evidence header: %w", err)
+	}
+	defer r.Close()
+	data, err := io.ReadAll(io.LimitReader(r, maxSkillContractBytes+1))
+	if err != nil {
+		return InitialEvidenceContract{}, fmt.Errorf("decompress initial evidence header: %w", err)
+	}
+	if len(data) > maxSkillContractBytes {
+		return InitialEvidenceContract{}, fmt.Errorf("initial evidence contract exceeds %d bytes", maxSkillContractBytes)
+	}
+	var contract InitialEvidenceContract
+	if err := json.Unmarshal(data, &contract); err != nil {
+		return InitialEvidenceContract{}, fmt.Errorf("parse initial evidence contract: %w", err)
+	}
+	seen := map[string]bool{}
+	for i := range contract.Requirements {
+		requirement := &contract.Requirements[i]
+		if strings.TrimSpace(requirement.SkillID) == "" {
+			return InitialEvidenceContract{}, fmt.Errorf("initial evidence requirement %d is missing skill_id", i)
+		}
+		key := requirement.SkillID + ":" + requirement.Group.ID
+		if seen[key] {
+			return InitialEvidenceContract{}, fmt.Errorf("duplicate initial evidence requirement %q", key)
+		}
+		seen[key] = true
+		temporary := Skill{
+			ID: requirement.SkillID, Triggers: []string{".*"}, RequiredEvidence: []EvidenceGroup{requirement.Group},
+		}
+		if err := validateAndCompile(&temporary); err != nil {
+			return InitialEvidenceContract{}, fmt.Errorf("initial evidence requirement %d: %w", i, err)
+		}
+		requirement.Group = temporary.RequiredEvidence[0]
+	}
+	return contract, nil
 }
 
 // ParseHeader decodes a skill contract from an HTTP Tool header.

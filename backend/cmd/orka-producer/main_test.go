@@ -34,7 +34,31 @@ func TestInitialEvidencePlanUsesProfileCandidates(t *testing.T) {
 		"artifacts/clusters/bootstrap/resources/capz-e2e-asfxe1/Machine/capz-e2e-asfxe1-flatcar-sysext-md-0-q6m8d.yaml",
 		"artifacts/clusters/capz-e2e-asfxe1-flatcar-sysext/nodes/node-1/node-describe.txt",
 	}
-	plan, complete := initialEvidencePlan(set, tc, paths, true)
+	plan, complete, initialHeader, err := initialEvidencePlan(set, tc, paths, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialHeader == "" {
+		t.Fatal("initial evidence header is empty")
+	}
+	initialContract, err := skills.ParseInitialEvidenceHeader(initialHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialGroups := map[string]bool{}
+	for _, requirement := range initialContract.Requirements {
+		initialGroups[requirement.SkillID+":"+requirement.Group.ID] = true
+	}
+	for _, want := range []string{
+		"engine.kubernetes.machine-node-providerid:machine-state",
+		"engine.kubernetes.machine-node-providerid:node-state",
+		"engine.prow.failure-evidence:build-log",
+		"engine.prow.failure-evidence:junit-failure",
+	} {
+		if !initialGroups[want] {
+			t.Errorf("initial evidence header missing %q: %+v", want, initialGroups)
+		}
+	}
 	if complete {
 		t.Fatal("truncated evidence tree produced a complete plan")
 	}
@@ -52,7 +76,10 @@ func TestInitialEvidencePlanUsesProfileCandidates(t *testing.T) {
 	if matched := set.Match(orka.FailurePrompt("BENCH", "job", "logs/job/1/", tc, 0)); !hasSkill(matched, "engine.prow.run-context") {
 		t.Fatalf("test fixture no longer proves full-prompt boilerplate can match run-context: %+v", matched)
 	}
-	_, complete = initialEvidencePlan(set, tc, paths, false)
+	_, complete, _, err = initialEvidencePlan(set, tc, paths, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !complete {
 		t.Fatal("fully resolved initial evidence plan was marked incomplete")
 	}

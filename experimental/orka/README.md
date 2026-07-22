@@ -65,7 +65,8 @@ also carries the configured Orka retry policy.
   token bound to the exact final
   JSON, and transient timeline evidence before publishing a result. Successful
   artifact content reads return scoped evidence tokens, and `submit_analysis`
-  requires those tokens for every cited path and recipe evidence group.
+  requires those tokens for every cited path plus the union of initially planned
+  and final-diagnosis recipe groups.
   Recurrence, diff, and transient-signature checks are advisory; failures remain
   visible in telemetry without discarding a validated analysis.
 - **Scheduled side effects run in batch mode.** The skeleton fetch disables

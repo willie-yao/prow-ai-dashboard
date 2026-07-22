@@ -160,6 +160,48 @@ func TestValidateAnalysisReturnsMissingEvidenceCandidates(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisEnforcesInitialEvidenceAgainstGenericFinalText(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["(?i)quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillHeader, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal := "resource quota exceeded"
+	paths := []string{"events/workload-quota.log"}
+	initialHeader, err := skills.InitialEvidenceHeaderValue(set.Plan(signal, paths, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{evidence: attestor, browser: validationTreeBrowser{paths: paths}}
+	analysis := orka.AnalysisValidation{
+		Summary: "workload setup failed", RootCause: "the workload could not start", Severity: "High",
+		SuggestedFix: "correct the environment", RelevantFiles: []string{"build-log.txt"},
+	}
+	missing := runValidationWithInitialEvidence(
+		t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", skillHeader, initialHeader,
+	)
+	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "quota:events") {
+		t.Fatalf("missing initial evidence response = %d %s", missing.Code, missing.Body.String())
+	}
+	valid := runValidationWithInitialEvidence(t, env, analysis, []string{
+		attestor.issue("scope", "build-log.txt"),
+		attestor.issue("scope", "events/workload-quota.log"),
+	}, "scope", skillHeader, initialHeader)
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid initial evidence response = %d %s", valid.Code, valid.Body.String())
+	}
+}
+
 func TestValidateAnalysisEnforcesMergedEngineEvidencePaths(t *testing.T) {
 	set, _, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
 	if err != nil {
@@ -279,6 +321,11 @@ func TestValidateAnalysisPrunesRecipeEvidenceAbsentFromBuild(t *testing.T) {
 
 func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation, tokens []string, scope, skillHeader string) *httptest.ResponseRecorder {
 	t.Helper()
+	return runValidationWithInitialEvidence(t, env, analysis, tokens, scope, skillHeader, "")
+}
+
+func runValidationWithInitialEvidence(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation, tokens []string, scope, skillHeader, initialEvidenceHeader string) *httptest.ResponseRecorder {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{"analysis": analysis, "evidence_tokens": tokens})
 	if err != nil {
 		t.Fatal(err)
@@ -290,6 +337,9 @@ func runValidation(t *testing.T, env *toolEnv, analysis orka.AnalysisValidation,
 	req.Header.Set(orka.MinGCSBytesHeader, "0")
 	if skillHeader != "" {
 		req.Header.Set(skills.ContractHeader, skillHeader)
+	}
+	if initialEvidenceHeader != "" {
+		req.Header.Set(skills.InitialEvidenceHeader, initialEvidenceHeader)
 	}
 	recorder := httptest.NewRecorder()
 	validateAnalysis(env, recorder, req)

@@ -560,3 +560,40 @@ func TestPlanPreservesMatchedProcedureWithoutApplicableGroups(t *testing.T) {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
+
+func TestInitialEvidenceHeaderRoundTrip(t *testing.T) {
+	plan := []PlannedSkill{{
+		ID: "quota",
+		RequiredEvidence: []PlannedEvidenceGroup{{
+			ID: "events", Description: "quota events", AnyOf: []string{"events/.*quota"},
+		}},
+	}}
+	header, err := InitialEvidenceHeaderValue(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header == "" {
+		t.Fatal("initial evidence header is empty")
+	}
+	contract, err := ParseInitialEvidenceHeader(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contract.Requirements) != 1 {
+		t.Fatalf("contract = %+v", contract)
+	}
+	requirement := contract.Requirements[0]
+	if requirement.SkillID != "quota" || requirement.Group.ID != "events" || !requirement.Group.Satisfied(map[string]bool{"events/workload-quota.log": true}) {
+		t.Fatalf("requirement = %+v", requirement)
+	}
+}
+
+func TestInitialEvidenceHeaderOmitsProcedureOnlyPlan(t *testing.T) {
+	header, err := InitialEvidenceHeaderValue([]PlannedSkill{{ID: "conditional", Procedure: "inspect"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header != "" {
+		t.Fatalf("header = %q, want empty", header)
+	}
+}

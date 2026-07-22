@@ -283,13 +283,16 @@ prepends that bounded evidence plan to the Task prompt. `required_evidence`
 returns the same candidate shape when the diagnosis changes or a group was not
 resolved in the initial bounded tree. A complete initial plan satisfies the
 recipe-lookup acceptance gate; truncated, omitted, unmatched, and no-candidate
-plans retain the mandatory `required_evidence` call.
+plans retain the mandatory `required_evidence` call. The per-Task submit Tool
+receives the initially applicable groups through a hidden header, so final
+validation requires their evidence tokens even if the model's final wording no
+longer matches the initial recipe.
 
 The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
 edits, profile-selection changes, and a materially different candidate plan
 therefore invalidate the affected Task. Final Orka validation checks the same
-evidence-path groups as the in-process critique gate and includes candidate
-paths when rejecting a submission with missing evidence.
+union of initially planned and final-diagnosis evidence groups and includes
+candidate paths when rejecting a submission with missing evidence.
 
 ## Observability
 

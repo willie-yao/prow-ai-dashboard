@@ -32,6 +32,12 @@ type analysisRequest struct {
 	RelevantFiles []string `json:"relevant_files"`
 }
 
+type evidenceRequirement struct {
+	key    string
+	signal string
+	group  skills.EvidenceGroup
+}
+
 type validationRequest struct {
 	Analysis       analysisRequest `json:"analysis"`
 	EvidenceTokens []string        `json:"evidence_tokens"`
@@ -117,6 +123,11 @@ func validateSubmission(
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	initialEvidence, err := skills.ParseInitialEvidenceHeader(r.Header.Get(skills.InitialEvidenceHeader))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if env.evidence == nil {
 		writeToolError(w, http.StatusInternalServerError, "artifact evidence validation is unavailable")
 		return
@@ -179,25 +190,47 @@ func validateSubmission(
 	missingEvidenceCandidates := map[string][]string{}
 	evidenceText := analysis.EvidenceText()
 	matchedSkills := set.Match(evidenceText)
-	var tree artifactTreeEvidence
-	treeChecked := false
+	requirements := make([]evidenceRequirement, 0)
+	seenRequirements := map[string]bool{}
+	initialEvidenceKeys := make([]string, 0, len(initialEvidence.Requirements))
+	for _, initial := range initialEvidence.Requirements {
+		key := initial.SkillID + ":" + initial.Group.ID
+		if seenRequirements[key] {
+			continue
+		}
+		seenRequirements[key] = true
+		initialEvidenceKeys = append(initialEvidenceKeys, key)
+		requirements = append(requirements, evidenceRequirement{key: key, signal: evidenceText, group: initial.Group})
+	}
 	for _, skill := range matchedSkills {
 		for _, group := range skill.RequiredEvidence {
-			if !group.Applies(evidenceText) || group.Satisfied(readPaths) {
-				continue
-			}
-			if !treeChecked {
-				tree = loadArtifactTreeEvidence(r.Context(), env.browser)
-				treeChecked = true
-			}
-			if tree.completePaths != nil && !group.Satisfied(tree.completePaths) {
+			if !group.Applies(evidenceText) {
 				continue
 			}
 			key := skill.ID + ":" + group.ID
-			missingEvidence = append(missingEvidence, key)
-			if candidates := group.CandidatePaths(evidenceText, tree.paths, evidenceCandidatePathLimit); len(candidates) > 0 {
-				missingEvidenceCandidates[key] = candidates
+			if seenRequirements[key] {
+				continue
 			}
+			seenRequirements[key] = true
+			requirements = append(requirements, evidenceRequirement{key: key, signal: evidenceText, group: group})
+		}
+	}
+	var tree artifactTreeEvidence
+	treeChecked := false
+	for _, requirement := range requirements {
+		if requirement.group.Satisfied(readPaths) {
+			continue
+		}
+		if !treeChecked {
+			tree = loadArtifactTreeEvidence(r.Context(), env.browser)
+			treeChecked = true
+		}
+		if tree.completePaths != nil && !requirement.group.Satisfied(tree.completePaths) {
+			continue
+		}
+		missingEvidence = append(missingEvidence, requirement.key)
+		if candidates := requirement.group.CandidatePaths(requirement.signal, tree.paths, evidenceCandidatePathLimit); len(candidates) > 0 {
+			missingEvidenceCandidates[requirement.key] = candidates
 		}
 	}
 	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0 && gcsBytes >= minGCSBytes
@@ -210,6 +243,7 @@ func validateSubmission(
 		"gcs_bytes":               gcsBytes,
 		"min_gcs_bytes":           minGCSBytes,
 		"matched_skills":          skillIDs(matchedSkills),
+		"initial_evidence":        initialEvidenceKeys,
 		"missing_evidence":        missingEvidence,
 		"all_present":             valid,
 	}
