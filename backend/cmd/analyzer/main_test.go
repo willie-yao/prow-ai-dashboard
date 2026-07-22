@@ -126,6 +126,7 @@ func TestRunRejectsMalformedOrMismatchedRequest(t *testing.T) {
 	}
 	for _, values := range []map[string]string{
 		{analysisruntime.InlineRequestEnv: "not json"},
+		{analysisruntime.InlineRequestEnv: string(mustRequestJSON(t, analyzerTestRequest()))},
 		{analysisruntime.InlineRequestEnv: string(mustRequestJSON(t, analyzerTestRequest())), analysisruntime.InlineRequestDigestEnv: strings.Repeat("0", 64)},
 	} {
 		var stdout, stderr bytes.Buffer

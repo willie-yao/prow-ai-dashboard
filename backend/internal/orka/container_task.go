@@ -229,6 +229,9 @@ func ParseContainerAnalysisResult(raw string) (ai.FailureAnalysisResult, error) 
 		if result.Summary == nil {
 			return result, fmt.Errorf("container analysis result has no ai_summary")
 		}
+		if strings.TrimSpace(result.Summary.Summary) == "" {
+			return result, fmt.Errorf("container analysis result has an empty ai_summary.summary")
+		}
 		return result, nil
 	}
 	return result, fmt.Errorf("container analysis result is empty")
@@ -241,6 +244,9 @@ func ApplyContainerAnalysisResult(tc *models.TestCase, result ai.FailureAnalysis
 	}
 	if result.Summary == nil {
 		return fmt.Errorf("container analysis result has no ai_summary")
+	}
+	if strings.TrimSpace(result.Summary.Summary) == "" {
+		return fmt.Errorf("container analysis result has an empty ai_summary.summary")
 	}
 	tc.AISummary = result.Summary
 	tc.AIAnalysis = result.Analysis

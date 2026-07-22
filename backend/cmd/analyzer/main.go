@@ -73,10 +73,12 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	if err != nil {
 		return err
 	}
-	if expected := strings.TrimSpace(getenv(analysisruntime.InlineRequestDigestEnv)); expected != "" {
-		if len(expected) != len(digest) || subtle.ConstantTimeCompare([]byte(strings.ToLower(expected)), []byte(digest)) != 1 {
-			return fmt.Errorf("failure analysis request digest mismatch")
-		}
+	expected := strings.TrimSpace(getenv(analysisruntime.InlineRequestDigestEnv))
+	if expected == "" {
+		return fmt.Errorf("%s is required", analysisruntime.InlineRequestDigestEnv)
+	}
+	if len(expected) != len(digest) || subtle.ConstantTimeCompare([]byte(strings.ToLower(expected)), []byte(digest)) != 1 {
+		return fmt.Errorf("failure analysis request digest mismatch")
 	}
 
 	runtime, err := factory(ctx, opts, getenv)

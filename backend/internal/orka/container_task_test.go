@@ -167,6 +167,8 @@ func TestParseContainerAnalysisResultRejectsMalformedOrAbsentResult(t *testing.T
 		"",
 		"runtime log only\n",
 		`{"ai_summary":null}`,
+		`{"ai_summary":{}}`,
+		`{"ai_summary":{"summary":"   "}}`,
 		`{"ai_summary":{"summary":"ok"}} trailing`,
 	} {
 		if _, err := ParseContainerAnalysisResult(raw); err == nil {
@@ -180,5 +182,13 @@ func TestBuildContainerAnalysisTaskRequiresSecretReferencesForCredentials(t *tes
 	spec.Environment = map[string]string{"AI_TOKEN": "inline-secret"}
 	if _, err := BuildContainerAnalysisTask(spec); err == nil || !strings.Contains(err.Error(), "Secret reference") {
 		t.Fatalf("BuildContainerAnalysisTask error = %v", err)
+	}
+}
+
+func TestApplyContainerAnalysisResultRejectsBlankSummary(t *testing.T) {
+	tc := models.TestCase{Name: "Test A", Status: "failed"}
+	err := ApplyContainerAnalysisResult(&tc, ai.FailureAnalysisResult{Summary: &models.AISummary{Summary: "  "}})
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("ApplyContainerAnalysisResult error = %v", err)
 	}
 }

@@ -36,16 +36,16 @@ semantic judge, cache implementation, and private trace implementation.
 
 ## Adapter size
 
-Production code added by the spike is 721 lines before later review changes:
+Production code added by the spike is 729 lines:
 
 | Area | Lines |
 | --- | ---: |
-| Analyzer command | 156 |
+| Analyzer command | 158 |
 | Shared runtime wiring | 219 |
 | Bounded request transport | 98 |
-| Orka container Task and result adapter | 248 |
+| Orka container Task and result adapter | 254 |
 
-The Orka-specific adapter is 248 lines. The shared runtime extraction replaces
+The Orka-specific adapter is 254 lines. The shared runtime extraction replaces
 about 150 lines of fetcher-local setup rather than copying the agentic loop or
 policy.
 
@@ -109,7 +109,7 @@ the final-line convention without weakening token policy.
 ## Honest failure behavior
 
 - malformed or oversized requests fail before runtime initialization
-- request digest mismatch fails the process
+- missing or mismatched request digest fails the process
 - `AnalyzeFailure` errors produce no stdout result and a nonzero process exit
 - cache or trace persistence errors also fail before result publication
 - Orka retries the failed process according to `retryPolicy`

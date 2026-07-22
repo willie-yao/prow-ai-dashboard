@@ -11,9 +11,12 @@ controller_image=orka-controller:container-analyzer-pinned
 base_image=dashboard-analyzer-base:container-analyzer-spike
 analyzer_image=dashboard-analyzer:container-analyzer-spike
 model_image=orka-script-model:container-analyzer-spike
+cluster_owned=false
 
 cleanup() {
-  kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  if [[ $cluster_owned == true ]]; then
+    kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -21,6 +24,11 @@ trap cleanup EXIT
 for command in docker kind kubectl helm git curl tar go; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
+
+if kind get clusters | grep -Fxq "$cluster"; then
+  echo "kind cluster $cluster already exists; choose a different ORKA_CONTAINER_CLUSTER" >&2
+  exit 1
+fi
 
 echo "Creating isolated kind cluster $cluster"
 cat > "$tmp/kind.yaml" <<'KIND'
@@ -31,6 +39,8 @@ nodes:
 - role: worker
 - role: worker
 KIND
+# Claim cleanup ownership before creation so a partial failed create is removed.
+cluster_owned=true
 kind create cluster --name "$cluster" --config "$tmp/kind.yaml"
 kubectl --context "$context" label node "$cluster-worker" agentpool=nodepool1 --overwrite
 kubectl --context "$context" label node "$cluster-worker2" agentpool=h100 --overwrite

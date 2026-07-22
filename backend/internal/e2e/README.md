@@ -189,4 +189,10 @@ Run it from the repository root:
 experimental/orka/run-container-analyzer-kind.sh
 ```
 
+The cluster ownership regression check is available separately:
+
+```bash
+experimental/orka/test-container-analyzer-kind.sh
+```
+
 The test does not call a live model and does not touch H100 or Ray resources.
