@@ -218,9 +218,12 @@ func TestBuiltinEvidencePaths(t *testing.T) {
 			"kube-proxy":                "artifacts/clusters/workload/kube-system/kube-proxy-node-1/kube-proxy.log",
 		},
 		"engine.kubernetes.pod-container-startup": {
-			"pod-state-events":  "artifacts/clusters/workload/default/example-pod/pod-describe.txt",
-			"kubelet":           "artifacts/clusters/workload/machines/node-1/kubelet.log",
-			"startup-subsystem": "artifacts/clusters/workload/kube-system/csi-node-1/plugin.log",
+			"pod-state-events": "artifacts/clusters/workload/default/example-pod/pod-describe.txt",
+			"kubelet":          "artifacts/clusters/workload/machines/node-1/kubelet.log",
+			"device-plugin":    "artifacts/clusters/workload/kube-system/nvidia-device-plugin-node-1/plugin.log",
+			"network-plugin":   "artifacts/clusters/workload/kube-system/calico-node-1/calico.log",
+			"storage-plugin":   "artifacts/clusters/workload/kube-system/csi-node-1/plugin.log",
+			"image-runtime":    "artifacts/clusters/workload/machines/node-1/containerd.log",
 		},
 		"engine.kubernetes.cluster-control-plane-provisioning": {
 			"provisioning-object-state": "artifacts/clusters/bootstrap/resources/ns/KubeadmControlPlane/cp.yaml",
@@ -244,6 +247,56 @@ func TestBuiltinEvidencePaths(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := findSkill(t, set, "engine.kubernetes.machine-node-providerid")
+	cloud := findGroup(t, skill, "cloud-provider-controller")
+	proxy := findGroup(t, skill, "kube-proxy")
+
+	bootDraft := "The worker Machine timed out during bootstrap before the Node registered"
+	if cloud.Applies(bootDraft) || proxy.Applies(bootDraft) {
+		t.Fatalf("boot draft applicability: cloud=%v proxy=%v", cloud.Applies(bootDraft), proxy.Applies(bootDraft))
+	}
+	providerDraft := "The worker Node registered but providerID is missing and the cloud-provider taint remains"
+	if !cloud.Applies(providerDraft) || proxy.Applies(providerDraft) {
+		t.Fatalf("providerID draft applicability: cloud=%v proxy=%v", cloud.Applies(providerDraft), proxy.Applies(providerDraft))
+	}
+	serviceDraft := "cloud-node-manager cannot reach the Kubernetes API Service ClusterIP"
+	if !cloud.Applies(serviceDraft) || !proxy.Applies(serviceDraft) {
+		t.Fatalf("API reachability draft applicability: cloud=%v proxy=%v", cloud.Applies(serviceDraft), proxy.Applies(serviceDraft))
+	}
+}
+
+func TestPodEvidenceGroupsApplyByFailureClass(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := findSkill(t, set, "engine.kubernetes.pod-container-startup")
+	kubelet := findGroup(t, skill, "kubelet")
+	device := findGroup(t, skill, "device-plugin")
+	network := findGroup(t, skill, "network-plugin")
+	storage := findGroup(t, skill, "storage-plugin")
+	image := findGroup(t, skill, "image-runtime")
+
+	unscheduled := "Pod is Unschedulable after FailedScheduling due to insufficient CPU"
+	for name, group := range map[string]EvidenceGroup{"kubelet": kubelet, "device": device, "network": network, "storage": storage, "image": image} {
+		if group.Applies(unscheduled) {
+			t.Errorf("unscheduled Pod unexpectedly required %s evidence", name)
+		}
+	}
+	csiDraft := "Assigned Pod is ContainerCreating because the CSI volume mount failed"
+	if !kubelet.Applies(csiDraft) || !storage.Applies(csiDraft) {
+		t.Fatalf("CSI draft applicability: kubelet=%v storage=%v", kubelet.Applies(csiDraft), storage.Applies(csiDraft))
+	}
+	if device.Applies(csiDraft) || network.Applies(csiDraft) || image.Applies(csiDraft) {
+		t.Fatalf("CSI draft required unrelated subsystem evidence")
 	}
 }
 

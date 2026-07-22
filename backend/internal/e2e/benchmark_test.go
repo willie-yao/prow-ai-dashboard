@@ -226,9 +226,13 @@ func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
 	if machineSkill == nil {
 		t.Fatalf("matched skills = %+v", matched)
 	}
+	benchmarkDraft := "The worker Node existed and is Ready but has no providerID; cloud-node-manager cannot reach the API Service ClusterIP"
 	groups := map[string]bool{}
 	for _, group := range machineSkill.RequiredEvidence {
 		groups[group.ID] = true
+		if !group.Applies(benchmarkDraft) {
+			t.Errorf("benchmark evidence group %q did not apply to the providerID/API chain", group.ID)
+		}
 	}
 	for _, want := range []string{"machine-state", "node-state", "cloud-provider-controller", "kube-proxy"} {
 		if !groups[want] {

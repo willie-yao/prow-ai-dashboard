@@ -16,11 +16,18 @@ required_evidence:
       - '(?i)^artifacts/clusters/[^/]+/resources/[^/]+/node/.*\.ya?ml$'
   - id: cloud-provider-controller
     description: external cloud-provider node controller state
+    when:
+      - '(?i)\b(provider.?id|cloud.?provider.{0,80}uninitialized|uninitialized.{0,80}cloud.?provider)\b'
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:cloud-node-manager|cloud-controller-manager)-[^/]+/(?:cloud-node-manager|cloud-controller-manager|manager)\.log$'
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:cloud-node-manager|cloud-controller-manager)-[^/]+/pod-describe\.txt$'
   - id: kube-proxy
     description: kube-proxy API and Service synchronization on the affected node
+    when:
+      - '(?i)\b(cloud-node-manager|cloud-controller-manager)\b.{0,160}\b(api|cluster.?ip|service|reach|connect|timeout|refused|unreachable)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(sync|watch|list|api|service|dns|lookup|resolve|failed|error)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|timeout|timed out|refused|connect|dial|no route)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
 procedure: |

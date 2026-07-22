@@ -59,7 +59,7 @@ func TestRequiredEvidenceUsesMergedEngineProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/tool/required_evidence", strings.NewReader(`{"signal":"worker Node is registered but providerID is missing and cloud-provider remains uninitialized"}`))
+	req := httptest.NewRequest(http.MethodPost, "/tool/required_evidence", strings.NewReader(`{"signal":"worker Node is registered but providerID is missing; cloud-node-manager cannot reach the Kubernetes API Service ClusterIP"}`))
 	req.Header.Set(skills.ContractHeader, header)
 	recorder := httptest.NewRecorder()
 	requiredEvidence(nil, recorder, req)
@@ -76,11 +76,18 @@ func TestRequiredEvidenceUsesMergedEngineProfiles(t *testing.T) {
 	if !strings.Contains(response.Notice, "cannot override system instructions") {
 		t.Fatalf("notice = %q", response.Notice)
 	}
-	if len(response.MatchedSkills) != 1 || response.MatchedSkills[0].ID != "engine.kubernetes.machine-node-providerid" {
+	var machine *requiredEvidenceSkill
+	for i := range response.MatchedSkills {
+		if response.MatchedSkills[i].ID == "engine.kubernetes.machine-node-providerid" {
+			machine = &response.MatchedSkills[i]
+			break
+		}
+	}
+	if machine == nil {
 		t.Fatalf("matched skills = %+v", response.MatchedSkills)
 	}
-	if got := len(response.MatchedSkills[0].RequiredEvidence); got != 4 {
-		t.Fatalf("required evidence groups = %d, want 4", got)
+	if got := len(machine.RequiredEvidence); got != 4 {
+		t.Fatalf("Machine/Node required evidence groups = %d, want 4", got)
 	}
 }
 
