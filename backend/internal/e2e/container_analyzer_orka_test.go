@@ -289,14 +289,61 @@ func fetchContainerTaskResult(t *testing.T, kubeContext, namespace, taskName str
 		time.Sleep(250 * time.Millisecond)
 	}
 	client := orka.NewResultClient(base, token)
-	result, ok, err := client.Result(context.Background(), namespace, taskName)
+	resultCtx, resultCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer resultCancel()
+	result, err := waitContainerTaskResult(resultCtx, client, namespace, taskName, 500*time.Millisecond)
 	if err != nil {
 		t.Fatalf("fetch Task result: %v", err)
 	}
-	if !ok {
-		t.Fatal("Task result is unavailable")
-	}
 	return result
+}
+
+type containerTaskResultReader interface {
+	Result(context.Context, string, string) (string, bool, error)
+}
+
+func waitContainerTaskResult(ctx context.Context, reader containerTaskResultReader, namespace, taskName string, poll time.Duration) (string, error) {
+	for {
+		result, ok, err := reader.Result(ctx, namespace, taskName)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return result, nil
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", fmt.Errorf("wait for durable Task result: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+type delayedContainerResult struct {
+	calls int
+}
+
+func (d *delayedContainerResult) Result(context.Context, string, string) (string, bool, error) {
+	d.calls++
+	if d.calls < 3 {
+		return "", false, nil
+	}
+	return "result", true, nil
+}
+
+func TestWaitContainerTaskResultPollsUntilAvailable(t *testing.T) {
+	reader := &delayedContainerResult{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := waitContainerTaskResult(ctx, reader, "orka-system", "task", time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "result" || reader.calls != 3 {
+		t.Fatalf("result = %q after %d calls", result, reader.calls)
+	}
 }
 
 func applyContainerModelServer(t *testing.T, kubeContext, namespace, name, image, id string) {

@@ -88,8 +88,8 @@ func BuildContainerAnalysisTask(in ContainerAnalysisTaskSpec) (map[string]any, e
 		if strings.TrimSpace(name) == "" {
 			return nil, fmt.Errorf("container analysis Task environment name is required")
 		}
-		if sensitiveEnvironmentName(name) {
-			return nil, fmt.Errorf("container analysis Task credential environment %s must use a Secret reference", name)
+		if !safeInlineEnvironmentName(name) {
+			return nil, fmt.Errorf("container analysis Task environment %s must use a Secret reference", name)
 		}
 		if seenEnv[name] {
 			return nil, fmt.Errorf("container analysis Task environment must not override %s", name)
@@ -165,14 +165,13 @@ func BuildContainerAnalysisTask(in ContainerAnalysisTaskSpec) (map[string]any, e
 	}, nil
 }
 
-func sensitiveEnvironmentName(name string) bool {
-	name = strings.ToUpper(name)
-	for _, marker := range []string{"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY"} {
-		if strings.Contains(name, marker) {
-			return true
-		}
+func safeInlineEnvironmentName(name string) bool {
+	switch name {
+	case "AI_API", "AI_ENDPOINT", "AI_MODEL":
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
 func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, requestDigest string) (string, error) {

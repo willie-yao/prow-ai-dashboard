@@ -36,16 +36,16 @@ semantic judge, cache implementation, and private trace implementation.
 
 ## Adapter size
 
-Production code added by the spike is 729 lines:
+Production code added by the spike is 728 lines:
 
 | Area | Lines |
 | --- | ---: |
 | Analyzer command | 158 |
 | Shared runtime wiring | 219 |
 | Bounded request transport | 98 |
-| Orka container Task and result adapter | 254 |
+| Orka container Task and result adapter | 253 |
 
-The Orka-specific adapter is 254 lines. The shared runtime extraction replaces
+The Orka-specific adapter is 253 lines. The shared runtime extraction replaces
 about 150 lines of fetcher-local setup rather than copying the agentic loop or
 policy.
 

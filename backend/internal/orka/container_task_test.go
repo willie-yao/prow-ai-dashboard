@@ -177,11 +177,20 @@ func TestParseContainerAnalysisResultRejectsMalformedOrAbsentResult(t *testing.T
 	}
 }
 
-func TestBuildContainerAnalysisTaskRequiresSecretReferencesForCredentials(t *testing.T) {
+func TestBuildContainerAnalysisTaskAllowsOnlyKnownSafeInlineEnvironment(t *testing.T) {
 	spec := containerTaskSpec()
-	spec.Environment = map[string]string{"AI_TOKEN": "inline-secret"}
-	if _, err := BuildContainerAnalysisTask(spec); err == nil || !strings.Contains(err.Error(), "Secret reference") {
-		t.Fatalf("BuildContainerAnalysisTask error = %v", err)
+	spec.Environment = map[string]string{
+		"AI_API": "chat_completions", "AI_ENDPOINT": "http://model.invalid/v1/chat/completions", "AI_MODEL": "model",
+	}
+	if _, err := BuildContainerAnalysisTask(spec); err != nil {
+		t.Fatalf("safe inline environment rejected: %v", err)
+	}
+	for _, name := range []string{"AI_TOKEN", "GITHUB_PAT", "PRIVATE_KEY", "OPENAI_APIKEY"} {
+		spec := containerTaskSpec()
+		spec.Environment = map[string]string{name: "inline-secret"}
+		if _, err := BuildContainerAnalysisTask(spec); err == nil || !strings.Contains(err.Error(), "Secret reference") {
+			t.Fatalf("BuildContainerAnalysisTask(%s) error = %v", name, err)
+		}
 	}
 }
 
