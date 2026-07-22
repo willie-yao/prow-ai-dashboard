@@ -103,6 +103,35 @@ func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	if len(got.Traces) != analysisTraceMaxTraces || got.DroppedTraces != 2 {
 		t.Fatalf("traces=%d dropped=%d", len(got.Traces), got.DroppedTraces)
 	}
+	builds := map[string]bool{}
+	for _, trace := range got.Traces {
+		builds[trace.BuildID] = true
+	}
+	if builds["0"] || builds["1"] || !builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)] {
+		t.Fatalf("rolling trace window kept wrong builds: first=%v second=%v newest=%v", builds["0"], builds["1"], builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)])
+	}
+}
+
+func TestTraceStoreRejectsStaleTaskReplacement(t *testing.T) {
+	store := NewTraceStore()
+	current := AnalysisTrace{
+		Backend: "orka", TaskNamespace: "orka-system", TaskName: "task", Outcome: "succeeded", ElapsedMs: 2000,
+		Events: []TraceEvent{{Kind: "task", Outcome: "started"}, {Kind: "model_request", Outcome: "success", ResponseID: "resp"}, {Kind: "task", Outcome: "succeeded", ElapsedMs: 2000}},
+	}
+	if !store.Upsert(current) {
+		t.Fatal("initial trace was not stored")
+	}
+	stale := AnalysisTrace{
+		Backend: "orka", TaskNamespace: "orka-system", TaskName: "task", Outcome: "unknown", ElapsedMs: 1000,
+		Events: []TraceEvent{{Kind: "task", Outcome: "started"}, {Kind: "model_request", Outcome: "success"}},
+	}
+	if store.Upsert(stale) {
+		t.Fatal("stale Task trace replaced a terminal trace")
+	}
+	got := store.Snapshot().Traces[0]
+	if got.Outcome != "succeeded" || got.Events[1].ResponseID != "resp" || len(got.Events) != 3 {
+		t.Fatalf("stored trace regressed: %+v", got)
+	}
 }
 
 func TestTraceStoreLoadAndUpsertOrkaTask(t *testing.T) {

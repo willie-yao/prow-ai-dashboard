@@ -325,7 +325,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 				}
 				builds[ref.ToolScope] = true
 				if analysisCurrent(tc.AIAnalysis, manifest.ContractHash, ref.Name) {
-					if traceStore.HasTask(namespace, ref.Name) || traceStore.Full() {
+					if traceStore.HasTask(namespace, ref.Name) {
 						continue // result and trace were already ingested
 					}
 					pending = append(pending, pendingTest{
@@ -358,8 +358,11 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 				defer func() { <-sem }()
 				if item.traceOnly {
 					telemetry, err := client.analysisTelemetry(context.Background(), namespace, item.name)
-					if err == nil && telemetry.EventCount > 0 {
-						traceStore.Upsert(buildOrkaAnalysisTrace(item.traceIdentity, telemetry))
+					if err != nil || telemetry.EventCount == 0 || telemetry.TaskOutcome == "" {
+						missingCount.Add(1)
+						return
+					}
+					if traceStore.Upsert(buildOrkaAnalysisTrace(item.traceIdentity, telemetry)) {
 						tracesChanged.Store(true)
 					}
 					return
@@ -371,8 +374,9 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 						trace.Outcome = "rejected"
 						trace.ErrorCode = "analysis_rejected"
 					}
-					traceStore.Upsert(trace)
-					tracesChanged.Store(true)
+					if traceStore.Upsert(trace) {
+						tracesChanged.Store(true)
+					}
 				}
 				if accepted {
 					patchedCount.Add(1)
@@ -657,7 +661,13 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	}
 	if p.Phase != "Succeeded" || (p.ResultRef != nil && !p.ResultRef.Available) {
 		patch.reason = "analysis Task " + strings.ToLower(p.Phase)
-		patch.telemetry, _ = s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
+		telemetry, err := s.completeTraceTelemetry(p.TaskName)
+		if err != nil {
+			patch.reason = rejectionReason("analysis Task telemetry unavailable: ", err)
+			patch.retry = true
+			return patch
+		}
+		patch.telemetry = telemetry
 		return patch
 	}
 	result, ok := s.client.result(s.namespace, p.TaskName)
@@ -669,10 +679,16 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	parsed, err := parseAnalysis(result)
 	if err != nil {
 		patch.reason = rejectionReason("analysis Task produced an invalid result: ", err)
-		patch.telemetry, _ = s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
+		telemetry, telemetryErr := s.completeTraceTelemetry(p.TaskName)
+		if telemetryErr != nil {
+			patch.reason = rejectionReason("analysis Task telemetry unavailable: ", telemetryErr)
+			patch.retry = true
+			return patch
+		}
+		patch.telemetry = telemetry
 		return patch
 	}
-	telemetry, err := s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
+	telemetry, err := s.completeTraceTelemetry(p.TaskName)
 	if err != nil {
 		patch.reason = rejectionReason("analysis Task telemetry unavailable: ", err)
 		patch.retry = true
@@ -686,6 +702,17 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	}
 	patch.analysis = &parsed
 	return patch
+}
+
+func (s *webhookServer) completeTraceTelemetry(taskName string) (analysisTelemetry, error) {
+	telemetry, err := s.client.analysisTelemetry(context.Background(), s.namespace, taskName)
+	if err != nil {
+		return analysisTelemetry{}, err
+	}
+	if telemetry.EventCount == 0 || telemetry.TaskOutcome == "" {
+		return analysisTelemetry{}, fmt.Errorf("%w: no terminal Task event", errTaskEventsNotReadableYet)
+	}
+	return telemetry, nil
 }
 
 func (s *webhookServer) rebuildIndex() bool {

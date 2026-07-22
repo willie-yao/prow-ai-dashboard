@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 const analysisTraceMaxFileBytes = 64 << 20
@@ -60,16 +61,6 @@ func (s *TraceStore) HasTask(namespace, taskName string) bool {
 	return false
 }
 
-// Full reports whether the store cannot accept another distinct trace.
-func (s *TraceStore) Full() bool {
-	if s == nil {
-		return true
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.traces) >= analysisTraceMaxTraces
-}
-
 // Upsert adds or replaces one completed trace using its backend identity.
 func (s *TraceStore) Upsert(trace AnalysisTrace) bool {
 	if s == nil {
@@ -84,16 +75,99 @@ func (s *TraceStore) Upsert(trace AnalysisTrace) bool {
 	defer s.mu.Unlock()
 	for i := range s.traces {
 		if analysisTraceIdentity(s.traces[i]) == key {
+			if !traceAdvances(s.traces[i], trace) {
+				return false
+			}
 			s.traces[i] = trace
 			return true
 		}
 	}
 	if len(s.traces) >= analysisTraceMaxTraces {
+		oldest := 0
+		for i := 1; i < len(s.traces); i++ {
+			if traceBefore(s.traces[i], s.traces[oldest]) {
+				oldest = i
+			}
+		}
+		s.traces = append(s.traces[:oldest], s.traces[oldest+1:]...)
 		s.dropped++
-		return false
 	}
 	s.traces = append(s.traces, trace)
 	return true
+}
+
+func traceAdvances(current, next AnalysisTrace) bool {
+	currentTerminal := terminalTraceOutcome(current.Outcome)
+	nextTerminal := terminalTraceOutcome(next.Outcome)
+	if currentTerminal && !nextTerminal {
+		return false
+	}
+	if nextTerminal && !currentTerminal {
+		return true
+	}
+	if len(next.Events) != len(current.Events) {
+		return len(next.Events) > len(current.Events)
+	}
+	currentElapsed := traceLastElapsed(current)
+	nextElapsed := traceLastElapsed(next)
+	if nextElapsed != currentElapsed {
+		return nextElapsed > currentElapsed
+	}
+	return traceInformation(next) >= traceInformation(current)
+}
+
+func terminalTraceOutcome(outcome string) bool {
+	switch outcome {
+	case "success", "succeeded", "failed", "cancelled", "rejected", "error", "unavailable", "ai_cache_hit", "build_cache_hit":
+		return true
+	}
+	return false
+}
+
+func traceLastElapsed(trace AnalysisTrace) int {
+	last := trace.ElapsedMs
+	for _, event := range trace.Events {
+		if event.ElapsedMs > last {
+			last = event.ElapsedMs
+		}
+	}
+	return last
+}
+
+func traceInformation(trace AnalysisTrace) int {
+	score := 0
+	if trace.ErrorCode != "" {
+		score++
+	}
+	for _, event := range trace.Events {
+		if event.ResponseID != "" {
+			score += 4
+		}
+		if event.ErrorCode != "" {
+			score += 2
+		}
+		if event.InputTokens > 0 || event.OutputTokens > 0 || event.Bytes > 0 || event.FinishReason != "" {
+			score++
+		}
+	}
+	return score
+}
+
+func traceBefore(a, b AnalysisTrace) bool {
+	aTime, aOK := traceStartTime(a.StartedAt)
+	bTime, bOK := traceStartTime(b.StartedAt)
+	switch {
+	case aOK && bOK && !aTime.Equal(bTime):
+		return aTime.Before(bTime)
+	case aOK != bOK:
+		return !aOK
+	}
+	return analysisTraceIdentity(a) < analysisTraceIdentity(b)
+}
+
+func traceStartTime(value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	return parsed, err == nil
 }
 
 func analysisTraceIdentity(trace AnalysisTrace) string {

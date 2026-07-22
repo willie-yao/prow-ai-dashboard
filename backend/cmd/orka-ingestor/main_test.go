@@ -684,8 +684,9 @@ func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 		contractHash: manifest.ContractHash,
 	})
 	traceStore, err = ai.LoadTraceStore(filepath.Join(dir, output.AITraceFilename))
-	if err != nil || len(traceStore.Snapshot().Traces) != 1 {
-		t.Fatalf("duplicate webhook traces = %+v, err=%v", traceStore.Snapshot().Traces, err)
+	traces = traceStore.Snapshot().Traces
+	if err != nil || len(traces) != 1 || len(traces[0].Events) != 3 || traces[0].Events[1].ResponseID != "resp-webhook" {
+		t.Fatalf("duplicate webhook traces = %+v, err=%v", traces, err)
 	}
 }
 
@@ -832,7 +833,7 @@ func TestIngestRefreshesMismatchedTaskIdentity(t *testing.T) {
 	}
 }
 
-func TestIngestKeepsMatchingTaskIdentity(t *testing.T) {
+func TestIngestRetriesMissingTraceForMatchingTaskIdentity(t *testing.T) {
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
 	manifest.ValidationKey = testValidationKey
 	tc := models.TestCase{
@@ -855,7 +856,7 @@ func TestIngestKeepsMatchingTaskIdentity(t *testing.T) {
 	}
 	client := &orkaClient{base: "http://127.0.0.1:1", http: &http.Client{}}
 	patched, failed, missing := ingestPass(client, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
-	if patched != 0 || failed != 1 || missing != 0 {
+	if patched != 0 || failed != 1 || missing != 1 {
 		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
 	}
 }
@@ -908,6 +909,37 @@ func TestWebhookMissingTerminalEventIsRetryable(t *testing.T) {
 	patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: "Succeeded"}, manifest)
 	if !patch.retry || !strings.Contains(patch.reason, "no terminal") {
 		t.Fatalf("patch = %+v, want retryable terminal-event lag", patch)
+	}
+}
+
+func TestWebhookRetriesWhenRejectedTaskTelemetryIsUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		phase   string
+		result  string
+		wantErr string
+	}{
+		{name: "failed Task", phase: "Failed", wantErr: "telemetry unavailable"},
+		{name: "invalid result", phase: "Succeeded", result: "not JSON", wantErr: "telemetry unavailable"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/events") {
+					http.Error(w, "events not ready", http.StatusServiceUnavailable)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"result": tc.result})
+			}))
+			defer server.Close()
+			manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+			manifest.ValidationKey = testValidationKey
+			s := &webhookServer{client: &orkaClient{base: server.URL, http: server.Client()}, namespace: "orka-system"}
+			patch := s.preparePatch(webhookPayload{TaskName: "task", Phase: tc.phase}, manifest)
+			if !patch.retry || !strings.Contains(patch.reason, tc.wantErr) {
+				t.Fatalf("patch = %+v, want retryable telemetry failure", patch)
+			}
+		})
 	}
 }
 
