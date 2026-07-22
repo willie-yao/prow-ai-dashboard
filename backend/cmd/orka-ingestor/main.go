@@ -314,7 +314,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 					continue
 				}
 				builds[ref.ToolScope] = true
-				if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == manifest.ContractHash {
+				if analysisCurrent(tc.AIAnalysis, manifest.ContractHash, ref.Name) {
 					continue // already patched by an earlier pass
 				}
 				pending = append(pending, pendingTest{
@@ -400,11 +400,11 @@ func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, m
 	if err := validateAnalysisAcceptance(a, telemetry, taskName, apiMode, minToolCalls, minGCSBytes, skillSetHash, evidencePlanComplete, validationKey); err != nil {
 		return false, rejectionReason("analysis Task failed acceptance: ", err)
 	}
-	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash)
+	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash, taskName)
 	return true, ""
 }
 
-func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash string) {
+func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash, taskName string) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	gcsBytes := 0
 	if a.GCSBytes != nil {
@@ -423,6 +423,7 @@ func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTele
 		RelevantFiles:          a.RelevantFiles,
 		Mode:                   "agentic",
 		ContractHash:           contractHash,
+		TaskName:               taskName,
 		ToolCalls:              telemetry.ToolCalls,
 		ToolFailures:           telemetry.ToolFailures,
 		ModelRequests:          telemetry.ModelRequests,
@@ -582,6 +583,7 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 
 type preparedPatch struct {
 	analysis     *analysis
+	taskName     string
 	telemetry    analysisTelemetry
 	model        string
 	contractHash string
@@ -650,6 +652,7 @@ func (s *webhookServer) rebuildIndex() {
 }
 
 func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
+	patch.taskName = p.TaskName
 	jf := s.index[p.TaskName]
 	if jf == "" {
 		s.rebuildIndex()
@@ -690,16 +693,20 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 }
 
 func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) bool {
-	if tc.AIAnalysis != nil && tc.AIAnalysis.ContractHash == patch.contractHash {
+	if analysisCurrent(tc.AIAnalysis, patch.contractHash, patch.taskName) {
 		return false
 	}
 	if patch.analysis != nil {
-		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash, patch.skillSetHash)
+		applyParsedAnalysis(tc, *patch.analysis, patch.telemetry, patch.model, patch.contractHash, patch.skillSetHash, patch.taskName)
 		return true
 	}
 	tc.AISummary = nil
 	tc.AIAnalysis = nil
 	return setUnavailable(tc, patch.reason)
+}
+
+func analysisCurrent(a *models.AIAnalysis, contractHash, taskName string) bool {
+	return a != nil && a.ContractHash == contractHash && a.TaskName == taskName
 }
 
 // analysis is the model's output JSON shape.

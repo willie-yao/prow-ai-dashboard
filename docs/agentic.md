@@ -654,9 +654,9 @@ provider/model, timeout/retry, and Tool definitions.
 Re-applying an unchanged Task is a no-op. `-version` remains a manual override
 for semantic changes outside that fingerprint. There is no on-disk response cache file; a
 private `orka_analysis.json` manifest carries the producer identity contract to
-the ingestor and is never served or published. Ingested analyses store that
-contract hash, so cached job JSON is refreshed whenever the current contract
-changes. Tool resources use a contract-versioned scope as well, preventing an
+the ingestor and is never served or published. Ingested analyses store both the
+contract hash and exact Task name, so cached job JSON is refreshed whenever the
+contract or per-test evidence plan changes. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Producer waves bound
 per-test submissions, and `Task.spec.execution` places both per-test and pattern
 worker pods without changing semantic cache identity. Successful Tasks keep their

@@ -290,8 +290,10 @@ longer matches the initial recipe.
 
 The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
 edits, profile-selection changes, and a materially different candidate plan
-therefore invalidate the affected Task. Final Orka validation checks the same
-union of initially planned and final-diagnosis evidence groups and includes
+therefore invalidate the affected Task. The ingested analysis records that exact
+Task name so a changed plan cannot retain an older result with the same broader
+contract hash. Final Orka validation checks the union of initially planned and
+final-diagnosis evidence groups and includes
 candidate paths when rejecting a submission with missing evidence.
 
 ## Observability
