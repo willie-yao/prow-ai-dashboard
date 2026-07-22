@@ -542,3 +542,21 @@ func TestPlanKeepsGroupsWithoutCandidatePaths(t *testing.T) {
 		t.Fatalf("plan = %+v", plan)
 	}
 }
+
+func TestPlanPreservesMatchedProcedureWithoutApplicableGroups(t *testing.T) {
+	set, err := ParseContract([]byte(`{
+		"skills":[{
+			"id":"connectivity",
+			"triggers":["connectivity"],
+			"required_evidence":[{"id":"dns","when":["dns"],"any_of":["resolv\\.conf"]}],
+			"procedure":"Inspect the relevant connectivity layer."
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := set.Plan("service connectivity failed", []string{"resolv.conf"}, 3)
+	if len(plan) != 1 || plan[0].ID != "connectivity" || plan[0].Procedure == "" || len(plan[0].RequiredEvidence) != 0 {
+		t.Fatalf("plan = %+v", plan)
+	}
+}

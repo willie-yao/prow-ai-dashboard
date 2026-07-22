@@ -100,7 +100,12 @@ func EvidencePlanPrompt(plan []skills.PlannedSkill, treeTruncated bool) string {
 			section.WriteString(procedure)
 			section.WriteByte('\n')
 		}
-		section.WriteString("Required evidence:\n")
+		if len(plannedSkill.RequiredEvidence) == 0 {
+			section.WriteString("Required evidence: no conditional groups apply to the current failure signal.\n")
+		}
+		if len(plannedSkill.RequiredEvidence) > 0 {
+			section.WriteString("Required evidence:\n")
+		}
 		for _, group := range plannedSkill.RequiredEvidence {
 			description := strings.TrimSpace(group.Description)
 			if description == "" {
@@ -117,7 +122,7 @@ func EvidencePlanPrompt(plan []skills.PlannedSkill, treeTruncated bool) string {
 			}
 		}
 		if out.Len()+section.Len() > evidencePlanMaxBytes {
-			out.WriteString("\n... [additional matched evidence plans omitted by prompt budget]\n")
+			out.WriteString("\n... [additional matched evidence plans omitted by prompt budget; before submit_analysis, call required_evidence with the original failure signal from this Task prompt]\n")
 			break
 		}
 		out.WriteString(section.String())

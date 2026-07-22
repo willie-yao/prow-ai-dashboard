@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +9,19 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
+
+type requiredEvidenceTreeBrowser struct {
+	artifacts.Browser
+	calls *int
+	paths []string
+}
+
+func (b requiredEvidenceTreeBrowser) ListTree(context.Context, int) ([]string, bool, error) {
+	(*b.calls)++
+	return b.paths, false, nil
+}
 
 func TestRequiredEvidenceUsesConsumerSkills(t *testing.T) {
 	contract, err := skills.ParseContract([]byte(`{
@@ -160,6 +173,34 @@ func TestRequiredEvidenceFiltersConditionalGroups(t *testing.T) {
 	groups := response.MatchedSkills[0].RequiredEvidence
 	if len(groups) != 1 || groups[0].ID != "dns" {
 		t.Fatalf("conditional groups = %+v, want only dns", groups)
+	}
+}
+
+func TestRequiredEvidenceSkipsTreeForUnmatchedSignal(t *testing.T) {
+	contract, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := contract.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	req := httptest.NewRequest(http.MethodPost, "/tool/required_evidence", strings.NewReader(`{"signal":"unrelated failure"}`))
+	req.Header.Set(skills.ContractHeader, header)
+	recorder := httptest.NewRecorder()
+	requiredEvidence(&toolEnv{browser: requiredEvidenceTreeBrowser{calls: &calls}}, recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if calls != 0 {
+		t.Fatalf("artifact tree calls = %d, want 0", calls)
 	}
 }
 

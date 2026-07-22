@@ -101,3 +101,27 @@ func TestWithEvidencePlan(t *testing.T) {
 		t.Fatalf("planned prompt = %q", got)
 	}
 }
+
+func TestEvidencePlanPromptRequiresLookupAfterBudgetTruncation(t *testing.T) {
+	plan := []skills.PlannedSkill{
+		{ID: "oversized", Procedure: strings.Repeat("x", evidencePlanMaxBytes)},
+		{ID: "later", RequiredEvidence: []skills.PlannedEvidenceGroup{{ID: "logs"}}},
+	}
+	prompt := EvidencePlanPrompt(plan, false)
+	for _, want := range []string{"plans omitted", "before submit_analysis", "call required_evidence", "original failure signal"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("truncation prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestEvidencePlanPromptKeepsProcedureWithoutApplicableGroups(t *testing.T) {
+	prompt := EvidencePlanPrompt([]skills.PlannedSkill{{
+		ID: "conditional", Procedure: "Inspect the matching subtype.",
+	}}, false)
+	for _, want := range []string{"conditional", "Inspect the matching subtype", "no conditional groups apply"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("conditional plan missing %q: %s", want, prompt)
+		}
+	}
+}

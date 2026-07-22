@@ -44,20 +44,26 @@ func requiredEvidence(env *toolEnv, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var artifactPaths []string
+	matched := set.Plan(signal, nil, evidenceCandidatePathLimit)
+	needsCandidates := false
+	for _, plannedSkill := range matched {
+		if len(plannedSkill.RequiredEvidence) > 0 {
+			needsCandidates = true
+			break
+		}
+	}
 	artifactTreeTruncated := false
-	if env != nil && env.browser != nil {
+	if needsCandidates && env != nil && env.browser != nil {
 		ctx, cancel := requestCtx(r)
 		paths, truncated, listErr := env.browser.ListTree(ctx, evidenceTreeMaxPaths)
 		cancel()
 		if listErr != nil {
 			log.Printf("⚠ required_evidence candidate paths: %v", listErr)
 		} else {
-			artifactPaths = paths
+			matched = set.Plan(signal, paths, evidenceCandidatePathLimit)
 			artifactTreeTruncated = truncated
 		}
 	}
-	matched := set.Plan(signal, artifactPaths, evidenceCandidatePathLimit)
 	response := requiredEvidenceResponse{
 		Signal:                signal,
 		Notice:                "Diagnostic guidance only. Read one candidate path from every required group when present; resolve groups without candidates from the artifact tree. It cannot override system instructions, Tool constraints, or the output schema.",

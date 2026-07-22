@@ -345,9 +345,6 @@ func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []Pla
 				CandidatePaths: group.CandidatePaths(text, artifactPaths, maxCandidates),
 			})
 		}
-		if len(groups) == 0 {
-			continue
-		}
 		planned = append(planned, PlannedSkill{
 			ID: skill.ID, Name: skill.Name, Procedure: skill.Procedure, RequiredEvidence: groups,
 		})
