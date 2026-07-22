@@ -290,10 +290,10 @@ index 0000000..fd29ed1
 +}
 diff --git a/workers/ai/analysis_budget_test.go b/workers/ai/analysis_budget_test.go
 new file mode 100644
-index 0000000..2b6cec5
+index 0000000..deb0de7
 --- /dev/null
 +++ b/workers/ai/analysis_budget_test.go
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,470 @@
 +package main
 +
 +import (
@@ -595,6 +595,35 @@ index 0000000..2b6cec5
 +	guard.inspectTool(call.Name, call.Arguments, result, err, completed)
 +	if guard.evidenceRepairActive {
 +		t.Fatal("cached repair did not finish the queue")
++	}
++}
++
++func TestAnalysisLoopGuardRejectsUnsuccessfulRepairResult(t *testing.T) {
++	tests := []struct {
++		name   string
++		result string
++	}{
++		{name: "error payload", result: `{"error":"not found"}`},
++		{name: "missing token", result: `{"path":"logs/logs.log"}`},
++		{name: "empty token", result: `{"evidence_token":" "}`},
++		{name: "malformed", result: `{`},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			guard := newAnalysisLoopGuard([]llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}, nil)
++			guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", evidenceRepairFailure("logs")), false)
++			call := guard.selectToolCalls(nil)[0]
++			if err := guard.beginToolCall(call.Name); err != nil {
++				t.Fatal(err)
++			}
++			guard.inspectTool(call.Name, call.Arguments, tc.result, nil, true)
++			if guard.evidenceRepairActive {
++				t.Fatal("unsuccessful evidence result kept repair active")
++			}
++			if !guard.evidenceRepairAttemptedGroups["logs"] {
++				t.Fatal("unsuccessful evidence result did not consume the attempted group")
++			}
++		})
 +	}
 +}
 +
@@ -2242,10 +2271,10 @@ index 0000000..0b44bdd
 +}
 diff --git a/workers/ai/validated_analysis.go b/workers/ai/validated_analysis.go
 new file mode 100644
-index 0000000..761c744
+index 0000000..97a7838
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
-@@ -0,0 +1,781 @@
+@@ -0,0 +1,792 @@
 +package main
 +
 +import (
@@ -2665,7 +2694,7 @@ index 0000000..761c744
 +) validationInspection {
 +	inspection := validationInspection{execErr: execErr}
 +	if g.evidenceRepairActive && g.isEvidenceRepairTool(toolName) {
-+		g.completeEvidenceRepairCall(toolName, args, completed, execErr)
++		g.completeEvidenceRepairCall(toolName, args, result, completed, execErr)
 +	}
 +	if g.isValidationTool(toolName) {
 +		g.finalizationStarted = true
@@ -2867,12 +2896,14 @@ index 0000000..761c744
 +func (g *analysisLoopGuard) completeEvidenceRepairCall(
 +	toolName string,
 +	args json.RawMessage,
++	result string,
 +	completed bool,
 +	execErr error,
 +) {
 +	group, ok := g.currentEvidenceRepairGroup()
 +	callPath, pathOK := readArtifactCallPath(args)
-+	if !ok || !g.isEvidenceRepairTool(toolName) || !pathOK || callPath != group.CandidatePaths[0] || execErr != nil || !completed {
++	if !ok || !g.isEvidenceRepairTool(toolName) || !pathOK || callPath != group.CandidatePaths[0] ||
++		execErr != nil || !completed || !successfulEvidenceRepairResult(result) {
 +		g.clearEvidenceRepairPlan()
 +		return
 +	}
@@ -2880,6 +2911,15 @@ index 0000000..761c744
 +	if g.evidenceRepairGroupIndex >= len(g.evidenceRepairGroups) {
 +		g.clearEvidenceRepairPlan()
 +	}
++}
++
++func successfulEvidenceRepairResult(result string) bool {
++	var payload struct {
++		Error         any    `json:"error"`
++		EvidenceToken string `json:"evidence_token"`
++	}
++	return json.Unmarshal([]byte(result), &payload) == nil && payload.Error == nil &&
++		strings.TrimSpace(payload.EvidenceToken) != ""
 +}
 +
 +func validationRepairPrompt(toolName, failure string, evidenceRepairActive bool) string {

@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=94cb841abdb7fffe3913a01868971adcac4309e843a1fcec82fcce942d87f1f4' <<< "$metadata"
+grep -Fq 'patch_sha256=b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}94cb841abdb7fffe3913a01868971adcac4309e843a1fcec82fcce942d87f1f4${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -47,6 +47,7 @@ for test_name in \
   TestAnalysisLoopGuardPreservesCorrectModelRepairCall \
   TestAnalysisLoopGuardSupportsScopedAndAliasedRepairReaders \
   TestAnalysisLoopGuardCachedRepairAdvancesQueue \
+  TestAnalysisLoopGuardRejectsUnsuccessfulRepairResult \
   TestAnalysisLoopGuardDoesNotRetryFailedRepairGroup \
   TestAnalysisLoopGuardRejectsRepairPlanBeyondRemainingBudget \
   TestAnalysisLoopGuardNeverResumesBroadInvestigationAfterRepair \
@@ -115,7 +116,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=94cb841abdb7fffe3913a01868971adcac4309e843a1fcec82fcce942d87f1f4
+patch=b118176958f647207291bbcb5ec9d470e06dc1c31776e2f509a8a74dfca6b44d
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"
