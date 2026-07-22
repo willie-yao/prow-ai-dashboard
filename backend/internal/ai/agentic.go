@@ -561,7 +561,16 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 			elided++
 		}
 	}
-	// Stage 4: remove older Responses assistant turns and their paired tool
+	// Stage 4: replace tools-free Responses turns with replayable text.
+	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; i++ {
+		m := &messages[i]
+		if m.Role != "assistant" || len(m.ProviderItems) == 0 || len(m.ToolCalls) > 0 || m.Content == nil {
+			continue
+		}
+		m.ProviderItems = nil
+		elided++
+	}
+	// Stage 5: remove older Responses assistant turns and their paired tool
 	// outputs atomically when continuation state keeps the request over budget.
 	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; {
 		m := messages[i]

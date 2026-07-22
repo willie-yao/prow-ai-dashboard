@@ -189,3 +189,18 @@ func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactMessagesDropsNoToolResponsesState(t *testing.T) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
+		{Role: "assistant", Content: strPtr("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "user", Content: strPtr("revise")},
+	}
+	got, elided := compactMessages(messages, 0, 600)
+	if elided != 1 {
+		t.Fatalf("elided = %d, want 1", elided)
+	}
+	if len(got[2].ProviderItems) != 0 || got[2].Content == nil || *got[2].Content != "draft" {
+		t.Fatalf("tools-free Responses turn was not reduced to text: %+v", got[2])
+	}
+}
