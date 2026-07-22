@@ -16,7 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 )
 
-const skillAbsenceTreeCap = 5000
+const evidenceTreeMaxPaths = 5000
 
 func init() {
 	registerQTool("/tool/validate_analysis", validateAnalysis)
@@ -176,26 +176,28 @@ func validateSubmission(
 		}
 	}
 	missingEvidence := []string{}
+	missingEvidenceCandidates := map[string][]string{}
 	evidenceText := analysis.EvidenceText()
 	matchedSkills := set.Match(evidenceText)
-	var treePaths map[string]bool
+	var tree artifactTreeEvidence
 	treeChecked := false
 	for _, skill := range matchedSkills {
 		for _, group := range skill.RequiredEvidence {
-			if !group.Applies(evidenceText) {
-				continue
-			}
-			if group.Satisfied(readPaths) {
+			if !group.Applies(evidenceText) || group.Satisfied(readPaths) {
 				continue
 			}
 			if !treeChecked {
-				treePaths = artifactTreeEvidenceSet(r.Context(), env.browser)
+				tree = loadArtifactTreeEvidence(r.Context(), env.browser)
 				treeChecked = true
 			}
-			if treePaths != nil && !group.Satisfied(treePaths) {
+			if tree.completePaths != nil && !group.Satisfied(tree.completePaths) {
 				continue
 			}
-			missingEvidence = append(missingEvidence, skill.ID+":"+group.ID)
+			key := skill.ID + ":" + group.ID
+			missingEvidence = append(missingEvidence, key)
+			if candidates := group.CandidatePaths(evidenceText, tree.paths, evidenceCandidatePathLimit); len(candidates) > 0 {
+				missingEvidenceCandidates[key] = candidates
+			}
 		}
 	}
 	valid := invalidTokens == 0 && len(missing) == 0 && len(missingEvidence) == 0 && gcsBytes >= minGCSBytes
@@ -211,6 +213,12 @@ func validateSubmission(
 		"missing_evidence":        missingEvidence,
 		"all_present":             valid,
 	}
+	if len(missingEvidenceCandidates) > 0 {
+		result["missing_evidence_candidates"] = missingEvidenceCandidates
+	}
+	if treeChecked && tree.truncated {
+		result["artifact_tree_truncated"] = true
+	}
 	if !valid {
 		log.Printf("⚠ %s paths=%d read=%d missing=%d invalid_tokens=%d evidence_missing=%d", toolName, len(analysis.RelevantFiles), len(readPaths), len(missing), invalidTokens, len(missingEvidence))
 		writeJSONStatus(w, http.StatusUnprocessableEntity, result)
@@ -221,21 +229,31 @@ func validateSubmission(
 	writeJSON(w, result)
 }
 
-func artifactTreeEvidenceSet(ctx context.Context, browser artifacts.Browser) map[string]bool {
+type artifactTreeEvidence struct {
+	paths         []string
+	completePaths map[string]bool
+	truncated     bool
+}
+
+func loadArtifactTreeEvidence(ctx context.Context, browser artifacts.Browser) artifactTreeEvidence {
 	if browser == nil {
-		return nil
+		return artifactTreeEvidence{}
 	}
-	paths, truncated, err := browser.ListTree(ctx, skillAbsenceTreeCap)
-	if err != nil || truncated {
-		return nil
+	paths, truncated, err := browser.ListTree(ctx, evidenceTreeMaxPaths)
+	if err != nil {
+		return artifactTreeEvidence{}
 	}
-	set := make(map[string]bool, len(paths))
-	for _, path := range paths {
-		if normalized := normalizeEvidencePath(path); normalized != "" {
-			set[normalized] = true
+	tree := artifactTreeEvidence{paths: paths, truncated: truncated}
+	if truncated {
+		return tree
+	}
+	tree.completePaths = make(map[string]bool, len(paths))
+	for _, artifactPath := range paths {
+		if normalized := normalizeEvidencePath(artifactPath); normalized != "" {
+			tree.completePaths[normalized] = true
 		}
 	}
-	return set
+	return tree
 }
 
 func normalizeEvidencePath(p string) string {

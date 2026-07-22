@@ -123,6 +123,43 @@ func TestValidateAnalysisEnforcesMatchedSkillReadEvidence(t *testing.T) {
 	}
 }
 
+func TestValidateAnalysisReturnsMissingEvidenceCandidates(t *testing.T) {
+	set, err := skills.ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["(?i)quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, err := set.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attestor := newEvidenceAttestor("secret")
+	env := &toolEnv{
+		evidence: attestor,
+		browser: validationTreeBrowser{
+			paths: []string{"events/other.log", "events/workload-quota.log"}, truncated: true,
+		},
+	}
+	analysis := orka.AnalysisValidation{
+		Summary: "summary", RootCause: "resource quota exceeded", Severity: "High",
+		SuggestedFix: "increase quota", RelevantFiles: []string{"build-log.txt"},
+	}
+	response := runValidation(t, env, analysis, []string{attestor.issue("scope", "build-log.txt")}, "scope", header)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	for _, want := range []string{"quota:events", "missing_evidence_candidates", "events/workload-quota.log", "artifact_tree_truncated"} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Errorf("response missing %q: %s", want, response.Body.String())
+		}
+	}
+}
+
 func TestValidateAnalysisEnforcesMergedEngineEvidencePaths(t *testing.T) {
 	set, _, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
 	if err != nil {

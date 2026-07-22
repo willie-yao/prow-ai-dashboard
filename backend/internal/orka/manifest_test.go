@@ -14,6 +14,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	manifest.MinGCSBytes = 123
 	manifest.SetConsecutiveFailures("job", "test", 7)
 	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "")
+	manifest.SetEvidencePlan("job", "1", 0, "plan")
 	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
 	tc := models.TestCase{Name: "test", JUnitFile: "junit.xml", FailureMessage: "boom"}
 	first, err := manifest.TaskRef("job", run, 0, tc)
@@ -43,7 +44,7 @@ func TestAnalysisManifestRoundTripAndTaskIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != first || loaded.ConsecutiveFailures["job::test"] != persistentFailurePromptFloor || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
+	if got != first || loaded.ConsecutiveFailures["job::test"] != persistentFailurePromptFloor || loaded.EvidencePlanHashes[analysisTaskKey("job", "1", 0)] == "" || !loaded.Jobs["job"] || loaded.MinToolCalls != 2 || loaded.MinGCSBytes != 123 || loaded.APIMode != APIModeAuto || loaded.SkillSetHash != "skills-hash" || loaded.ValidationKey != "validation-key" {
 		t.Fatalf("loaded task ref = %+v, jobs = %+v, min_tool_calls = %d", got, loaded.Jobs, loaded.MinToolCalls)
 	}
 }
@@ -72,6 +73,41 @@ func TestAnalysisManifestRecurrenceIdentityStabilizesAtPersistenceFloor(t *testi
 	}
 	if atFloor != aboveFloor {
 		t.Fatalf("persistent recurrence changed Task identity: at floor=%+v above floor=%+v", atFloor, aboveFloor)
+	}
+}
+
+func TestAnalysisManifestEvidencePlanChangesTaskIdentity(t *testing.T) {
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1"}}
+	tc := models.TestCase{Name: "test", FailureBody: "failure"}
+	manifest := NewAnalysisManifest("project", "Project", "contract", "models", "model", APIModeAuto, "v1", 2)
+	manifest.SetBuild("job", "1", "build-scope", "tool-scope", "logs/job/1/", "")
+	withoutPlan, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetEvidencePlan("job", "1", 0, "plan-a")
+	withPlan, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetEvidencePlan("job", "1", 0, "plan-a")
+	samePlan, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SetEvidencePlan("job", "1", 0, "plan-b")
+	differentPlan, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutPlan.Name == withPlan.Name {
+		t.Fatalf("evidence plan did not change Task identity %q", withoutPlan.Name)
+	}
+	if withPlan != samePlan {
+		t.Fatalf("identical evidence plan changed Task ref: first=%+v second=%+v", withPlan, samePlan)
+	}
+	if withPlan.Name == differentPlan.Name {
+		t.Fatalf("different evidence plans produced Task %q", withPlan.Name)
 	}
 }
 

@@ -275,13 +275,17 @@ Before merging a new recipe:
 
 The Orka producer loads the same merged set as the in-process fetcher and sends
 the complete contract to the scoped `required_evidence` and `submit_analysis`
-Tools. `required_evidence` matches the supplied failure signal and returns every
-matched engine or consumer procedure plus its evidence groups.
+Tools. Before creating each Task, it matches the initial failure prompt, resolves
+ranked exact artifact candidates for every applicable evidence group, and
+prepends that bounded evidence plan to the Task prompt. `required_evidence`
+returns the same candidate shape when the diagnosis changes or a group was not
+resolved in the initial bounded tree.
 
-The merged hash participates in the Orka analysis contract. Recipe edits and
-profile-selection changes therefore invalidate both in-process cache entries
-and Orka Tasks. Final Orka validation checks the same evidence-path groups as
-the in-process critique gate.
+The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
+edits, profile-selection changes, and a materially different candidate plan
+therefore invalidate the affected Task. Final Orka validation checks the same
+evidence-path groups as the in-process critique gate and includes candidate
+paths when rejecting a submission with missing evidence.
 
 ## Observability
 

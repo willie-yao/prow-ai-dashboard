@@ -16,6 +16,31 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+func TestInitialEvidencePlanUsesProfileCandidates(t *testing.T) {
+	set, selection, err := skills.LoadForTools(t.TempDir(), []string{"filesystem", "k8s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !selection.Kubernetes {
+		t.Fatal("Kubernetes profile was not selected")
+	}
+	failurePrompt := `Failed test: Creating a Flatcar sysext cluster with worker nodes
+Failure message: Timed out waiting for nodes to be created for MachineDeployment capz-e2e-asfxe1-flatcar-sysext-md-0`
+	paths := []string{
+		"artifacts/clusters/bootstrap/resources/capz-e2e-asfxe1/Machine/capz-e2e-asfxe1-flatcar-sysext-md-0-q6m8d.yaml",
+		"artifacts/clusters/capz-e2e-asfxe1-flatcar-sysext/nodes/node-1/node-describe.txt",
+	}
+	plan := initialEvidencePlan(set, failurePrompt, paths, true)
+	for _, want := range []string{
+		"Required evidence plan", "engine.kubernetes.machine-node-providerid",
+		"machine-state", paths[0], "node-state", paths[1], "scan was truncated",
+	} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("evidence plan missing %q: %s", want, plan)
+		}
+	}
+}
+
 func TestLoadConsecutiveFailures(t *testing.T) {
 	dir := t.TempDir()
 	report := models.FlakinessReport{PersistentFailures: []models.TestFlakiness{{

@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -136,6 +137,23 @@ type Skill struct {
 
 	// compiled triggers. Not serialized.
 	triggerREs []*regexp.Regexp
+}
+
+// PlannedSkill is one matched recipe with artifact candidates resolved for its
+// applicable evidence groups.
+type PlannedSkill struct {
+	ID               string                 `json:"id"`
+	Name             string                 `json:"name,omitempty"`
+	Procedure        string                 `json:"procedure,omitempty"`
+	RequiredEvidence []PlannedEvidenceGroup `json:"required_evidence,omitempty"`
+}
+
+// PlannedEvidenceGroup is one evidence requirement plus matching build paths.
+type PlannedEvidenceGroup struct {
+	ID             string   `json:"id"`
+	Description    string   `json:"description,omitempty"`
+	AnyOf          []string `json:"any_of"`
+	CandidatePaths []string `json:"candidate_paths,omitempty"`
 }
 
 // EvidenceGroup is one OR'd cluster of artifact-path regex patterns. A
@@ -304,6 +322,116 @@ func (s *Set) Match(text string) []Skill {
 		}
 	}
 	return out
+}
+
+// Plan matches recipes against text and resolves bounded artifact candidates for
+// every applicable evidence group.
+func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []PlannedSkill {
+	matched := s.Match(text)
+	if len(matched) == 0 {
+		return nil
+	}
+	planned := make([]PlannedSkill, 0, len(matched))
+	for _, skill := range matched {
+		groups := make([]PlannedEvidenceGroup, 0, len(skill.RequiredEvidence))
+		for _, group := range skill.RequiredEvidence {
+			if !group.Applies(text) {
+				continue
+			}
+			groups = append(groups, PlannedEvidenceGroup{
+				ID:             group.ID,
+				Description:    group.Description,
+				AnyOf:          append([]string(nil), group.AnyOf...),
+				CandidatePaths: group.CandidatePaths(text, artifactPaths, maxCandidates),
+			})
+		}
+		if len(groups) == 0 {
+			continue
+		}
+		planned = append(planned, PlannedSkill{
+			ID: skill.ID, Name: skill.Name, Procedure: skill.Procedure, RequiredEvidence: groups,
+		})
+	}
+	return planned
+}
+
+// CandidatePaths returns the highest-signal artifact paths matching this group.
+func (g EvidenceGroup) CandidatePaths(signal string, artifactPaths []string, limit int) []string {
+	if len(g.anyOfREs) == 0 || len(artifactPaths) == 0 || limit <= 0 {
+		return nil
+	}
+	tokens := evidenceSignalTokens(signal)
+	type candidate struct {
+		path  string
+		score int
+	}
+	seen := map[string]bool{}
+	candidates := make([]candidate, 0)
+	for _, artifactPath := range artifactPaths {
+		normalized := normalizeEvidencePath(artifactPath)
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		matched := false
+		for _, re := range g.anyOfREs {
+			if re.MatchString(normalized) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		seen[normalized] = true
+		score := 0
+		for _, token := range tokens {
+			if strings.Contains(normalized, token) {
+				score += len(token)
+			}
+		}
+		candidates = append(candidates, candidate{path: strings.TrimPrefix(strings.TrimPrefix(artifactPath, "./"), "/"), score: score})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].path < candidates[j].path
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]string, len(candidates))
+	for i := range candidates {
+		out[i] = candidates[i].path
+	}
+	return out
+}
+
+func evidenceSignalTokens(signal string) []string {
+	seen := map[string]bool{}
+	tokens := []string{}
+	for _, token := range strings.FieldsFunc(strings.ToLower(signal), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if len(token) < 4 || seen[token] {
+			continue
+		}
+		seen[token] = true
+		tokens = append(tokens, token)
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		if len(tokens[i]) != len(tokens[j]) {
+			return len(tokens[i]) > len(tokens[j])
+		}
+		return tokens[i] < tokens[j]
+	})
+	return tokens
+}
+
+func normalizeEvidencePath(artifactPath string) string {
+	artifactPath = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(artifactPath), "\\", "/"))
+	artifactPath = strings.TrimPrefix(artifactPath, "./")
+	return strings.TrimPrefix(artifactPath, "/")
 }
 
 // Applies reports whether this evidence group applies to the supplied draft.

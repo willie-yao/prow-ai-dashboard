@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
@@ -69,5 +70,34 @@ func TestWithArtifactTreeSeed(t *testing.T) {
 	got := WithArtifactTreeSeed("failure", "tree")
 	if !strings.HasPrefix(got, "tree\n\n---\n\n") || !strings.HasSuffix(got, "failure") {
 		t.Fatalf("seeded prompt = %q", got)
+	}
+}
+
+func TestEvidencePlanPromptIncludesCandidateChecklist(t *testing.T) {
+	plan := []skills.PlannedSkill{{
+		ID: "providerid", Name: "Provider initialization", Procedure: "Compare Machine and Node.",
+		RequiredEvidence: []skills.PlannedEvidenceGroup{
+			{ID: "machine-state", Description: "Machine state", CandidatePaths: []string{"artifacts/machine.yaml"}},
+			{ID: "node-state", Description: "Node state"},
+		},
+	}}
+	prompt := EvidencePlanPrompt(plan, true)
+	for _, want := range []string{
+		"Required evidence plan", "Provider initialization", "Compare Machine and Node",
+		"machine-state", "artifacts/machine.yaml", "node-state", "none found", "scan was truncated",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("plan prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestWithEvidencePlan(t *testing.T) {
+	if got := WithEvidencePlan("failure", ""); got != "failure" {
+		t.Fatalf("empty plan changed prompt: %q", got)
+	}
+	got := WithEvidencePlan("failure", "plan")
+	if !strings.HasPrefix(got, "plan\n\n---\n\n") || !strings.HasSuffix(got, "failure") {
+		t.Fatalf("planned prompt = %q", got)
 	}
 }

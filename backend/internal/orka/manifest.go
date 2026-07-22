@@ -13,7 +13,7 @@ import (
 // AnalysisManifestFile is the private producer-to-ingestor identity contract.
 const AnalysisManifestFile = "orka_analysis.json"
 
-const analysisManifestVersion = 6
+const analysisManifestVersion = 7
 
 // AnalysisManifest records the exact Task identity contract for one fetch pass.
 type AnalysisManifest struct {
@@ -30,6 +30,7 @@ type AnalysisManifest struct {
 	SkillSetHash        string                   `json:"skill_set_hash,omitempty"`
 	ValidationKey       string                   `json:"validation_key"`
 	ConsecutiveFailures map[string]int           `json:"consecutive_failures"`
+	EvidencePlanHashes  map[string]string        `json:"evidence_plan_hashes"`
 	Jobs                map[string]bool          `json:"jobs"`
 	Builds              map[string]AnalysisBuild `json:"builds"`
 }
@@ -62,6 +63,7 @@ func NewAnalysisManifest(projectScope, projectLabel, contractHash, provider, mod
 		Version:             version,
 		MinToolCalls:        minToolCalls,
 		ConsecutiveFailures: map[string]int{},
+		EvidencePlanHashes:  map[string]string{},
 		Jobs:                map[string]bool{},
 		Builds:              map[string]AnalysisBuild{},
 	}
@@ -93,6 +95,23 @@ func (m *AnalysisManifest) SetConsecutiveFailures(jobID, testName string, count 
 	m.ConsecutiveFailures[jobID+"::"+testName] = count
 }
 
+// SetEvidencePlan records the model-visible evidence-plan identity for one test.
+func (m *AnalysisManifest) SetEvidencePlan(jobID, buildID string, testIndex int, plan string) {
+	if m.EvidencePlanHashes == nil {
+		m.EvidencePlanHashes = map[string]string{}
+	}
+	key := analysisTaskKey(jobID, buildID, testIndex)
+	if plan == "" {
+		delete(m.EvidencePlanHashes, key)
+		return
+	}
+	m.EvidencePlanHashes[key] = digest(plan)
+}
+
+func analysisTaskKey(jobID, buildID string, testIndex int) string {
+	return fmt.Sprintf("%s::%d", BuildKey(jobID, buildID), testIndex)
+}
+
 // TaskRef re-derives the exact Task name emitted by the producer.
 func (m *AnalysisManifest) TaskRef(jobID string, run models.BuildResult, testIndex int, tc models.TestCase) (AnalysisTaskRef, error) {
 	build, ok := m.Builds[BuildKey(jobID, run.BuildID)]
@@ -104,6 +123,9 @@ func (m *AnalysisManifest) TaskRef(jobID string, run models.BuildResult, testInd
 	identityPrompt := prompt
 	if build.PromptSeedHash != "" {
 		identityPrompt += "\nartifact-tree-seed:" + build.PromptSeedHash
+	}
+	if planHash := m.EvidencePlanHashes[analysisTaskKey(jobID, run.BuildID, testIndex)]; planHash != "" {
+		identityPrompt += "\nevidence-plan:" + planHash
 	}
 	return AnalysisTaskRef{
 		Name:      AnalysisTaskName(m.ProjectScope, build.BuildScope, m.ContractHash, testIndex, identityPrompt),
@@ -148,7 +170,7 @@ func (m *AnalysisManifest) Validate() error {
 	if _, err := NormalizeAPIMode(m.APIMode); err != nil {
 		return err
 	}
-	if m.ConsecutiveFailures == nil || m.Jobs == nil || m.Builds == nil {
+	if m.ConsecutiveFailures == nil || m.EvidencePlanHashes == nil || m.Jobs == nil || m.Builds == nil {
 		return fmt.Errorf("orka analysis manifest has incomplete identity maps")
 	}
 	for key, count := range m.ConsecutiveFailures {

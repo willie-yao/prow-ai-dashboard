@@ -476,3 +476,69 @@ func TestParseHeaderRejectsOversizedValue(t *testing.T) {
 		t.Fatal("oversized skill header was accepted")
 	}
 }
+
+func TestPlanResolvesRankedCandidatePaths(t *testing.T) {
+	set, err := ParseContract([]byte(`{
+		"skills":[{
+			"id":"flatcar",
+			"name":"Flatcar provider initialization",
+			"priority":200,
+			"triggers":["(?i)flatcar|provider.?id"],
+			"required_evidence":[
+				{"id":"machine-state","description":"Machine state","any_of":["(?i)^artifacts/clusters/bootstrap/resources/[^/]+/machine/.*\\.yaml$"]},
+				{"id":"node-state","description":"Node state","when":["(?i)provider.?id"],"any_of":["(?i)^artifacts/clusters/[^/]+/nodes/[^/]+/node-describe\\.txt$"]},
+				{"id":"dns","description":"DNS state","when":["(?i)dns"],"any_of":["(?i)resolv\\.conf$"]}
+			],
+			"procedure":"Compare the Machine and Node."
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal := "Flatcar sysext worker capz-e2e-asfxe1 has no providerID"
+	paths := []string{
+		"artifacts/clusters/bootstrap/resources/other/Machine/unrelated.yaml",
+		"artifacts/clusters/bootstrap/resources/capz-e2e-asfxe1/Machine/capz-e2e-asfxe1-flatcar-sysext-md-0.yaml",
+		"artifacts/clusters/other/nodes/node-0/node-describe.txt",
+		"artifacts/clusters/capz-e2e-asfxe1-flatcar-sysext/nodes/node-1/node-describe.txt",
+		"artifacts/clusters/capz-e2e-asfxe1-flatcar-sysext/nodes/node-1/resolv.conf",
+	}
+
+	plan := set.Plan(signal, paths, 1)
+	if len(plan) != 1 || plan[0].ID != "flatcar" || plan[0].Procedure == "" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if len(plan[0].RequiredEvidence) != 2 {
+		t.Fatalf("groups = %+v, want machine and node only", plan[0].RequiredEvidence)
+	}
+	groups := map[string]PlannedEvidenceGroup{}
+	for _, group := range plan[0].RequiredEvidence {
+		groups[group.ID] = group
+	}
+	if got := groups["machine-state"].CandidatePaths; len(got) != 1 || !strings.Contains(got[0], "flatcar-sysext") {
+		t.Fatalf("machine candidates = %v", got)
+	}
+	if got := groups["node-state"].CandidatePaths; len(got) != 1 || !strings.Contains(got[0], "flatcar-sysext") {
+		t.Fatalf("node candidates = %v", got)
+	}
+	if _, ok := groups["dns"]; ok {
+		t.Fatalf("conditional DNS group unexpectedly applied: %+v", groups["dns"])
+	}
+}
+
+func TestPlanKeepsGroupsWithoutCandidatePaths(t *testing.T) {
+	set, err := ParseContract([]byte(`{
+		"skills":[{
+			"id":"quota",
+			"triggers":["quota"],
+			"required_evidence":[{"id":"events","any_of":["events/.*quota"]}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := set.Plan("quota exceeded", []string{"build-log.txt"}, 3)
+	if len(plan) != 1 || len(plan[0].RequiredEvidence) != 1 || len(plan[0].RequiredEvidence[0].CandidatePaths) != 0 {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
