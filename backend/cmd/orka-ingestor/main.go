@@ -559,9 +559,14 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if orka.TerminalPhase(p.Phase) {
-		manifest, indexed := s.manifestForTask(p.TaskName)
-		if manifest == nil || !indexed {
-			http.Error(w, "analysis Task is not present in the current manifest", http.StatusServiceUnavailable)
+		manifest, indexed, loaded := s.manifestForTask(p.TaskName)
+		if !loaded || manifest == nil {
+			http.Error(w, "analysis manifest unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !indexed {
+			log.Printf("ⓘ ignoring superseded analysis Task webhook %s", p.TaskName)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		patch := s.preparePatch(p, manifest)
@@ -587,13 +592,14 @@ type preparedPatch struct {
 	retry        bool
 }
 
-func (s *webhookServer) manifestForTask(taskName string) (*orka.AnalysisManifest, bool) {
+func (s *webhookServer) manifestForTask(taskName string) (*orka.AnalysisManifest, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	loaded := true
 	if s.manifest == nil || s.index[taskName] == "" {
-		s.rebuildIndex()
+		loaded = s.rebuildIndex()
 	}
-	return s.manifest, s.index[taskName] != ""
+	return s.manifest, s.index[taskName] != "", loaded
 }
 
 func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisManifest) preparedPatch {
@@ -619,11 +625,11 @@ func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisMa
 	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash}
 }
 
-func (s *webhookServer) rebuildIndex() {
+func (s *webhookServer) rebuildIndex() bool {
 	manifest, err := orka.LoadAnalysisManifest(s.dataDir)
 	if err != nil {
 		log.Printf("load analysis manifest for webhook index: %v", err)
-		return
+		return false
 	}
 	s.manifest = manifest
 	s.index = map[string]string{}
@@ -653,6 +659,7 @@ func (s *webhookServer) rebuildIndex() {
 			}
 		}
 	}
+	return true
 }
 
 func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {

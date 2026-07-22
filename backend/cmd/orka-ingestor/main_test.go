@@ -549,12 +549,41 @@ func TestWebhookManifestForTaskReloadsUnknownTask(t *testing.T) {
 	if err := currentManifest.Write(dir); err != nil {
 		t.Fatal(err)
 	}
-	loaded, indexed := s.manifestForTask(currentRef.Name)
-	if !indexed || loaded == nil || !loaded.TaskEvidencePlanComplete(currentRef.Name) {
-		t.Fatalf("reloaded manifest = %+v indexed=%t", loaded, indexed)
+	loaded, indexed, loadSucceeded := s.manifestForTask(currentRef.Name)
+	if !loadSucceeded || !indexed || loaded == nil || !loaded.TaskEvidencePlanComplete(currentRef.Name) {
+		t.Fatalf("reloaded manifest = %+v indexed=%t loaded=%t", loaded, indexed, loadSucceeded)
 	}
 	if s.index[oldRef.Name] != "" {
 		t.Fatalf("stale task %q remained indexed", oldRef.Name)
+	}
+}
+
+func TestWebhookAcknowledgesSupersededTask(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "current-tree")
+	if err := manifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
+	s.rebuildIndex()
+	body, err := json.Marshal(webhookPayload{TaskName: "superseded-task", Phase: "Succeeded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	s.handle(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 
