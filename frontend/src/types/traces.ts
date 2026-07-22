@@ -41,6 +41,7 @@ export interface AnalysisTrace {
 export interface AnalysisTraceFile {
   version: number;
   generated_at: string;
+  retained_since?: string;
   dropped_traces?: number;
   traces: AnalysisTrace[];
 }

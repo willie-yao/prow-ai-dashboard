@@ -636,7 +636,8 @@ bodies. Identifiers are URL- and credential-redacted and byte-capped. A trace
 keeps at most 128 events, and the private store keeps a rolling window of up to
 500 completed failure traces. It admits only entries newer than the retained
 oldest trace and evicts oldest-first as needed to keep the saved file within the
-64 MiB loader limit.
+64 MiB loader limit. The persisted `retained_since` watermark prevents polling
+from reconstructing Task traces that were intentionally aged out.
 
 `ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
 404 for it under `/data`, and the Pages workflow removes it before publication.

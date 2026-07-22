@@ -62,6 +62,25 @@ func (s *TraceStore) HasTerminalTask(namespace, taskName, contractHash string) b
 	return false
 }
 
+// BeforeRetention reports whether a completed analysis is older than the
+// persisted rolling-window boundary and should not be restored.
+func (s *TraceStore) BeforeRetention(generatedAt string) bool {
+	if s == nil || strings.TrimSpace(generatedAt) == "" {
+		return false
+	}
+	analysisTime, err := time.Parse(time.RFC3339Nano, generatedAt)
+	if err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dropped == 0 || len(s.traces) == 0 {
+		return false
+	}
+	boundary, ok := traceOrderTime(s.traces[oldestTraceIndex(s.traces)])
+	return ok && !analysisTime.After(boundary)
+}
+
 // Upsert adds or replaces one completed trace using its backend identity.
 func (s *TraceStore) Upsert(trace AnalysisTrace) bool {
 	if s == nil {
@@ -189,8 +208,8 @@ func traceInformation(trace AnalysisTrace) int {
 }
 
 func traceBefore(a, b AnalysisTrace) bool {
-	aTime, aOK := traceStartTime(a.StartedAt)
-	bTime, bOK := traceStartTime(b.StartedAt)
+	aTime, aOK := traceOrderTime(a)
+	bTime, bOK := traceOrderTime(b)
 	switch {
 	case aOK && bOK && !aTime.Equal(bTime):
 		return aTime.Before(bTime)
@@ -201,8 +220,8 @@ func traceBefore(a, b AnalysisTrace) bool {
 }
 
 func traceAfter(a, b AnalysisTrace) bool {
-	aTime, aOK := traceStartTime(a.StartedAt)
-	bTime, bOK := traceStartTime(b.StartedAt)
+	aTime, aOK := traceOrderTime(a)
+	bTime, bOK := traceOrderTime(b)
 	switch {
 	case aOK && bOK:
 		return aTime.After(bTime)
@@ -216,6 +235,13 @@ func traceAfter(a, b AnalysisTrace) bool {
 func traceStartTime(value string) (time.Time, bool) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	return parsed, err == nil
+}
+
+func traceOrderTime(trace AnalysisTrace) (time.Time, bool) {
+	if parsed, ok := traceStartTime(trace.RecordedAt); ok {
+		return parsed, true
+	}
+	return traceStartTime(trace.StartedAt)
 }
 
 func analysisTraceIdentity(trace AnalysisTrace) string {
@@ -241,6 +267,10 @@ func normalizeAnalysisTrace(trace AnalysisTrace) AnalysisTrace {
 	trace.TestName = traceText(trace.TestName)
 	trace.APIMode = traceText(trace.APIMode)
 	trace.StartedAt = traceText(trace.StartedAt)
+	trace.RecordedAt = traceText(trace.RecordedAt)
+	if trace.RecordedAt == "" {
+		trace.RecordedAt = trace.StartedAt
+	}
 	trace.Outcome = traceCode(trace.Outcome)
 	if trace.ErrorCode != "" {
 		trace.ErrorCode = traceCode(trace.ErrorCode)

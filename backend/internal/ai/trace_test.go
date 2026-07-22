@@ -152,6 +152,23 @@ func TestTraceStoreSnapshotWithinLimitEvictsOldest(t *testing.T) {
 	}
 }
 
+func TestTraceStoreRetentionBoundary(t *testing.T) {
+	store := NewTraceStore()
+	store.traces = []AnalysisTrace{{
+		Backend: "orka", TaskName: "newest-window-start", RecordedAt: "2026-07-22T09:00:00Z", Outcome: "succeeded",
+	}}
+	store.dropped = 3
+	if !store.BeforeRetention("2026-07-22T08:59:59Z") {
+		t.Fatal("analysis older than the retention boundary was not recognized")
+	}
+	if store.BeforeRetention("2026-07-22T09:00:01Z") {
+		t.Fatal("analysis newer than the retention boundary was treated as evicted")
+	}
+	if got := store.Snapshot().RetainedSince; got != "2026-07-22T09:00:00Z" {
+		t.Fatalf("retained_since = %q", got)
+	}
+}
+
 func TestTraceStoreRejectsStaleTaskReplacement(t *testing.T) {
 	store := NewTraceStore()
 	current := AnalysisTrace{

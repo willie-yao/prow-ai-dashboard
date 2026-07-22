@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	orkaapi "github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -955,6 +956,43 @@ func TestIngestRetriesMissingTraceForMatchingTaskIdentity(t *testing.T) {
 	client := &orkaClient{base: "http://127.0.0.1:1", http: &http.Client{}}
 	patched, failed, missing := ingestPass(client, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
 	if patched != 0 || failed != 1 || missing != 1 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+}
+
+func TestIngestSkipsTraceBeforeRetentionBoundary(t *testing.T) {
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	manifest.ValidationKey = testValidationKey
+	tc := models.TestCase{
+		Name: "test", Status: "failed", FailureMessage: "boom",
+		AISummary: &models.AISummary{Summary: "current"},
+		AIAnalysis: &models.AIAnalysis{
+			GeneratedAt: "2026-07-22T08:00:00Z", RootCause: "current root", Mode: "agentic", ContractHash: manifest.ContractHash,
+		},
+	}
+	run := models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"}, TestCases: []models.TestCase{tc}}
+	detail := models.JobDetail{Name: "job", JobID: "job", Runs: []models.BuildResult{run}}
+	manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", "")
+	ref, err := manifest.TaskRef("job", run, 0, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis.TaskName = ref.Name
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	if err := statefile.WriteJSON(filepath.Join(dir, output.AITraceFilename), ai.AnalysisTraceFile{
+		Version: 1, DroppedTraces: 1, Traces: []ai.AnalysisTrace{{
+			Backend: "orka", TaskNamespace: "orka-system", TaskName: "new-task", ContractHash: "contract",
+			RecordedAt: "2026-07-22T09:00:00Z", Outcome: "succeeded",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &orkaClient{base: "http://127.0.0.1:1", http: &http.Client{}}
+	patched, failed, missing := ingestPass(client, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
+	if patched != 0 || failed != 1 || missing != 0 {
 		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
 	}
 }

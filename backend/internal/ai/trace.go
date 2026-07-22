@@ -26,6 +26,7 @@ const (
 type AnalysisTraceFile struct {
 	Version       int             `json:"version"`
 	GeneratedAt   string          `json:"generated_at"`
+	RetainedSince string          `json:"retained_since,omitempty"`
 	DroppedTraces int             `json:"dropped_traces,omitempty"`
 	Traces        []AnalysisTrace `json:"traces"`
 }
@@ -41,6 +42,7 @@ type AnalysisTrace struct {
 	TestName      string       `json:"test_name"`
 	APIMode       string       `json:"api_mode"`
 	StartedAt     string       `json:"started_at"`
+	RecordedAt    string       `json:"recorded_at,omitempty"`
 	ElapsedMs     int          `json:"elapsed_ms"`
 	Outcome       string       `json:"outcome"`
 	ErrorCode     string       `json:"error_code,omitempty"`
@@ -132,6 +134,9 @@ func (s *TraceStore) Snapshot() AnalysisTraceFile {
 	out.DroppedTraces = s.dropped
 	out.Traces = append(out.Traces, s.traces...)
 	s.mu.Unlock()
+	if out.DroppedTraces > 0 && len(out.Traces) > 0 {
+		out.RetainedSince = out.Traces[oldestTraceIndex(out.Traces)].RecordedAt
+	}
 	sort.Slice(out.Traces, func(i, j int) bool {
 		a, b := out.Traces[i], out.Traces[j]
 		if a.StartedAt != b.StartedAt {
@@ -204,6 +209,7 @@ func (s *TraceSession) Finish(outcome string, err error) {
 	}
 	s.finished = true
 	s.trace.ElapsedMs = int(time.Since(s.start) / time.Millisecond)
+	s.trace.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.trace.Outcome = traceText(outcome)
 	if err != nil {
 		s.trace.ErrorCode = traceErrorCode(err)

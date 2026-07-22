@@ -52,6 +52,9 @@ func buildOrkaAnalysisTrace(identity orkaTraceIdentity, telemetry analysisTeleme
 	if !origin.IsZero() {
 		trace.StartedAt = origin.UTC().Format(time.RFC3339Nano)
 	}
+	if latest := traceLatest(events); !latest.IsZero() {
+		trace.RecordedAt = latest.UTC().Format(time.RFC3339Nano)
+	}
 	switch outcome {
 	case "failed":
 		trace.ErrorCode = "task_failed"
@@ -59,6 +62,16 @@ func buildOrkaAnalysisTrace(identity orkaTraceIdentity, telemetry analysisTeleme
 		trace.ErrorCode = "task_cancelled"
 	}
 	return trace
+}
+
+func traceLatest(events []executionEvent) time.Time {
+	var latest time.Time
+	for _, event := range events {
+		if !event.CreatedAt.IsZero() && event.CreatedAt.After(latest) {
+			latest = event.CreatedAt
+		}
+	}
+	return latest
 }
 
 func traceOrigin(events []executionEvent) time.Time {

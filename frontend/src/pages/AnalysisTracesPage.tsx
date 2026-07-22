@@ -484,6 +484,9 @@ export function AnalysisTracesPage() {
       {data?.dropped_traces ? (
         <Alert severity="warning">
           {data.dropped_traces} traces were dropped by the bounded recorder.
+          {data.retained_since
+            ? ` Entries recorded before ${new Date(data.retained_since).toLocaleString()} are outside the retained window.`
+            : ""}
         </Alert>
       ) : null}
       {error && <Alert severity="error">Failed to load traces: {error}</Alert>}

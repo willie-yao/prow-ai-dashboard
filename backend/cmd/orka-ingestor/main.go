@@ -332,6 +332,9 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 					if traceStore.HasTerminalTask(namespace, ref.Name, manifest.ContractHash) {
 						continue // result and trace were already ingested
 					}
+					if traceStore.BeforeRetention(tc.AIAnalysis.GeneratedAt) {
+						continue // trace intentionally aged out of the rolling window
+					}
 					pending = append(pending, pendingTest{
 						tc: tc, name: ref.Name, traceOnly: true,
 						traceIdentity: orkaTraceIdentity{
@@ -366,7 +369,9 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 						missingCount.Add(1)
 						return
 					}
-					if traceStore.Upsert(buildOrkaAnalysisTrace(item.traceIdentity, telemetry)) {
+					trace := buildOrkaAnalysisTrace(item.traceIdentity, telemetry)
+					trace.RecordedAt = item.tc.AIAnalysis.GeneratedAt
+					if traceStore.Upsert(trace) {
 						tracesChanged.Store(true)
 					}
 					return
@@ -374,6 +379,9 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 				accepted, rejection, telemetry := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, item.evidencePlanComplete, manifest.ValidationKey)
 				if telemetry.EventCount > 0 {
 					trace := buildOrkaAnalysisTrace(item.traceIdentity, telemetry)
+					if accepted && item.tc.AIAnalysis != nil {
+						trace.RecordedAt = item.tc.AIAnalysis.GeneratedAt
+					}
 					if !accepted && rejection != "" && trace.Outcome == "succeeded" {
 						trace.Outcome = "rejected"
 						trace.ErrorCode = "analysis_rejected"
@@ -810,6 +818,9 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) error {
 				if patch.analysis == nil && trace.Outcome == "succeeded" {
 					trace.Outcome = "rejected"
 					trace.ErrorCode = "analysis_rejected"
+				}
+				if tc.AIAnalysis != nil && analysisCurrent(tc.AIAnalysis, patch.contractHash, p.TaskName) {
+					trace.RecordedAt = tc.AIAnalysis.GeneratedAt
 				}
 				writer := s.saveTrace
 				if writer == nil {
