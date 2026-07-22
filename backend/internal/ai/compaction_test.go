@@ -174,3 +174,18 @@ func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 		t.Fatal("compaction dropped provider state")
 	}
 }
+
+func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
+		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call-1"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "tool", ToolCallID: "call-1", Content: strPtr(strings.Repeat("y", 1000))},
+		{Role: "user", Content: strPtr("continue")},
+	}
+	got, _ := compactMessages(messages, 0, 300)
+	for _, message := range got {
+		if message.ToolCallID == "call-1" || (message.Role == "assistant" && len(message.ProviderItems) > 0) {
+			t.Fatalf("orphaned Responses round: %+v", got)
+		}
+	}
+}
