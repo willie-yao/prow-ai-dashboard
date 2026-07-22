@@ -672,16 +672,18 @@ content read. The final token is keyed by a producer-generated secret carried
 only in the private manifest and a per-Task submit Tool's hidden headers, so it cannot be recomputed for a different final object or replayed by another Task. Recipe groups absent from a complete bounded
 artifact-tree listing are treated as inapplicable, matching the in-process
 critique path. Signed evidence tokens carry the successful artifact-read byte count, which is enforced and published as `AIAnalysis.GCSBytes`. Acceptance also requires a completed `verify_timeline` call for
-every transient verdict. `submit_analysis`, conditional timeline verification,
-and matched-skill `required_evidence` are required quality gates. Failures from
+every transient verdict. `submit_analysis` and conditional timeline verification
+are required quality gates. `required_evidence` remains required when the initial
+evidence plan is truncated, omitted, unmatched, or lacks a candidate. Failures from
 `recurrence`, `diff_last_passing`, and `check_transient_signatures` remain visible
 in telemetry but are advisory and do not discard an otherwise valid analysis.
 Accepted analyses publish Tool/model failures, retry
 count, context truncations, duration, provider token usage, stop reason, and
 quality-tool evidence alongside the result. The complete merged skill contract
 is compiled into the scoped `required_evidence` Tool, and its hash participates
-in the Task fingerprint. Acceptance requires a completed recipe lookup before
-publishing the result. The Orka tool set also
+in the Task fingerprint. A complete precomputed plan satisfies recipe lookup; an
+incomplete plan requires a completed Tool call before publishing the result. The
+Orka tool set also
 includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
 the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
 stage as the in-process fetcher.

@@ -200,7 +200,7 @@ reconstructed out of Kubernetes objects and deterministic tool endpoints:
 | Investigation floor | The producer fingerprints `ai.min_tool_calls`; the ingestor counts `ToolCallStarted` events and rejects shallower results. | `AnalysisManifest.MinToolCalls`, Task events API |
 | Per-test recurrence evidence | `recurrence` reports whether one test recurs across recent builds. | `orka-artifact-tool/recurrence.go` |
 | Job-level cross-build correlation | After per-test ingestion, one content-addressed pattern Task correlates representative failures and writes `PatternAnalysis` + recurring patterns. | `orka-ingestor` + `orka.FinalizePatterns` |
-| Skill-driven required evidence | The producer prepends initially matched evidence groups and ranked candidates to each Task. The scoped `required_evidence` Tool resolves the same candidate shape when the diagnosis changes, and final validation returns candidates for missing groups. | `ai/skills`, `orka-producer`, `orka-artifact-tool/requiredevidence.go`, `validate.go` |
+| Skill-driven required evidence | The producer prepends initially matched evidence groups and ranked candidates to each Task. A complete plan satisfies recipe lookup; truncated, omitted, unmatched, or no-candidate plans require the scoped `required_evidence` Tool. Final validation returns candidates for missing groups. | `ai/skills`, `orka-producer`, `orka-artifact-tool/requiredevidence.go`, `validate.go` |
 | Transient-signature background-noise filter | `check_transient_signatures` tool tails build logs for known-noise patterns. | `orka-artifact-tool/transient.go` |
 
 The engine enforces these *in code*; Orka enforces them as *tools the agent must

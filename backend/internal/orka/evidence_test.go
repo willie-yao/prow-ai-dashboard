@@ -81,7 +81,10 @@ func TestEvidencePlanPromptIncludesCandidateChecklist(t *testing.T) {
 			{ID: "node-state", Description: "Node state"},
 		},
 	}}
-	prompt := EvidencePlanPrompt(plan, true)
+	prompt, complete := RenderEvidencePlan(plan, true)
+	if complete {
+		t.Fatal("truncated plan was marked complete")
+	}
 	for _, want := range []string{
 		"Required evidence plan", "Provider initialization", "Compare Machine and Node",
 		"machine-state", "artifacts/machine.yaml", "node-state", "none found", "scan was truncated",
@@ -107,7 +110,10 @@ func TestEvidencePlanPromptRequiresLookupAfterBudgetTruncation(t *testing.T) {
 		{ID: "oversized", Procedure: strings.Repeat("x", evidencePlanMaxBytes)},
 		{ID: "later", RequiredEvidence: []skills.PlannedEvidenceGroup{{ID: "logs"}}},
 	}
-	prompt := EvidencePlanPrompt(plan, false)
+	prompt, complete := RenderEvidencePlan(plan, false)
+	if complete {
+		t.Fatal("budget-truncated plan was marked complete")
+	}
 	for _, want := range []string{"plans omitted", "before submit_analysis", "call required_evidence", "original failure signal"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("truncation prompt missing %q: %s", want, prompt)
@@ -116,12 +122,29 @@ func TestEvidencePlanPromptRequiresLookupAfterBudgetTruncation(t *testing.T) {
 }
 
 func TestEvidencePlanPromptKeepsProcedureWithoutApplicableGroups(t *testing.T) {
-	prompt := EvidencePlanPrompt([]skills.PlannedSkill{{
+	prompt, complete := RenderEvidencePlan([]skills.PlannedSkill{{
 		ID: "conditional", Procedure: "Inspect the matching subtype.",
 	}}, false)
+	if !complete {
+		t.Fatal("matched procedure without applicable groups was marked incomplete")
+	}
 	for _, want := range []string{"conditional", "Inspect the matching subtype", "no conditional groups apply"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("conditional plan missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestRenderEvidencePlanMarksCandidateCoverageComplete(t *testing.T) {
+	plan := []skills.PlannedSkill{{
+		ID: "complete",
+		RequiredEvidence: []skills.PlannedEvidenceGroup{
+			{ID: "one", CandidatePaths: []string{"one.log"}},
+			{ID: "two", CandidatePaths: []string{"two.log"}},
+		},
+	}}
+	_, complete := RenderEvidencePlan(plan, false)
+	if !complete {
+		t.Fatal("fully resolved evidence plan was marked incomplete")
 	}
 }

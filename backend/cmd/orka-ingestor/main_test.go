@@ -288,7 +288,7 @@ func TestApplyResultRedactsTelemetryURL(t *testing.T) {
 
 	tc := models.TestCase{Name: "test", Status: "failed"}
 	accepted, rejection := applyResult(
-		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", orkaapi.APIModeAuto, 0, 0, "", testValidationKey,
+		&tc, &orkaClient{base: server.URL, http: server.Client()}, "orka-system", "task", "model", "contract", orkaapi.APIModeAuto, 0, 0, "", false, testValidationKey,
 	)
 	if accepted {
 		t.Fatal("applyResult accepted analysis without telemetry")

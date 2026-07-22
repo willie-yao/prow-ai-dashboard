@@ -79,9 +79,16 @@ func ArtifactTreeSeedFromPaths(raw []string, rawTruncated bool) string {
 
 // EvidencePlanPrompt renders matched recipes and exact artifact candidates.
 func EvidencePlanPrompt(plan []skills.PlannedSkill, treeTruncated bool) string {
+	prompt, _ := RenderEvidencePlan(plan, treeTruncated)
+	return prompt
+}
+
+// RenderEvidencePlan returns the prompt plus whether it fully covers the initial matches.
+func RenderEvidencePlan(plan []skills.PlannedSkill, treeTruncated bool) (string, bool) {
 	if len(plan) == 0 {
-		return ""
+		return "", false
 	}
+	complete := !treeTruncated
 	var out strings.Builder
 	out.WriteString("## Required evidence plan\n\n")
 	out.WriteString("The dashboard matched these diagnostic recipes from the failure signal. Before broad searches or submit_analysis, read at least one candidate path from every listed evidence group. Keep every returned evidence_token. Use required_evidence if the diagnosis changes or a group has no candidate.\n")
@@ -113,6 +120,7 @@ func EvidencePlanPrompt(plan []skills.PlannedSkill, treeTruncated bool) string {
 			}
 			fmt.Fprintf(&section, "- %s: %s\n", group.ID, description)
 			if len(group.CandidatePaths) == 0 {
+				complete = false
 				section.WriteString("  Candidate paths: none found in the bounded tree; use required_evidence and list the relevant subtree.\n")
 				continue
 			}
@@ -122,12 +130,13 @@ func EvidencePlanPrompt(plan []skills.PlannedSkill, treeTruncated bool) string {
 			}
 		}
 		if out.Len()+section.Len() > evidencePlanMaxBytes {
+			complete = false
 			out.WriteString("\n... [additional matched evidence plans omitted by prompt budget; before submit_analysis, call required_evidence with the original failure signal from this Task prompt]\n")
 			break
 		}
 		out.WriteString(section.String())
 	}
-	return strings.TrimSpace(out.String())
+	return strings.TrimSpace(out.String()), complete
 }
 
 // WithEvidencePlan prepends the deterministic evidence checklist to a Task prompt.

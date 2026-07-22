@@ -61,7 +61,8 @@ also carries the configured Orka retry policy.
 
 - **Execution events are required.** The ingestor reads each Task's event stream
   to enforce the tool-call floor, terminal outcome, successful required quality tools,
-  consumer recipe lookup, a `submit_analysis` token bound to the exact final
+  recipe lookup when the initial evidence plan is incomplete, a `submit_analysis`
+  token bound to the exact final
   JSON, and transient timeline evidence before publishing a result. Successful
   artifact content reads return scoped evidence tokens, and `submit_analysis`
   requires those tokens for every cited path and recipe evidence group.

@@ -47,8 +47,10 @@ wraps procedures with this boundary, and Orka returns the same boundary from
 `required_evidence`.
 
 When a recipe matches and evidence is missing, the in-process gate re-prompts
-the model with the missing groups. Orka requires `required_evidence` lookup and
-validates the same groups again in `submit_analysis`.
+the model with the missing groups. Orka prepends a complete initial evidence plan
+when every matched group has a candidate. Truncated, unmatched, or no-candidate
+plans still require `required_evidence`, and `submit_analysis` validates the same
+groups in either path.
 
 ## When to author a skill
 
@@ -279,7 +281,9 @@ Tools. Before creating each Task, it matches the initial failure prompt, resolve
 ranked exact artifact candidates for every applicable evidence group, and
 prepends that bounded evidence plan to the Task prompt. `required_evidence`
 returns the same candidate shape when the diagnosis changes or a group was not
-resolved in the initial bounded tree.
+resolved in the initial bounded tree. A complete initial plan satisfies the
+recipe-lookup acceptance gate; truncated, omitted, unmatched, and no-candidate
+plans retain the mandatory `required_evidence` call.
 
 The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
 edits, profile-selection changes, and a materially different candidate plan

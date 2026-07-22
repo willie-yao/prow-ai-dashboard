@@ -362,12 +362,13 @@ func main() {
 				if err != nil {
 					log.Fatalf("task identity: %v", err)
 				}
-				evidencePlan := initialEvidencePlan(skillSet, baseRef.Prompt, artifactPaths, artifactTreeTruncated)
-				manifest.SetEvidencePlan(detail.JobID, run.BuildID, ti, evidencePlan)
+				evidencePlan, evidencePlanComplete := initialEvidencePlan(skillSet, baseRef.Prompt, artifactPaths, artifactTreeTruncated)
+				manifest.SetEvidencePlan(detail.JobID, run.BuildID, ti, evidencePlan, evidencePlanComplete)
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
 				if err != nil {
 					log.Fatalf("planned task identity: %v", err)
 				}
+				manifest.SetTaskEvidencePlanComplete(ref.Name, evidencePlanComplete)
 				if evidencePlan != "" {
 					evidencePlanCount++
 				}
@@ -613,8 +614,8 @@ revise if any applies:
 Call submit_analysis with the final fields. Do not return a separate final answer.`
 }
 
-func initialEvidencePlan(set *skills.Set, failurePrompt string, artifactPaths []string, treeTruncated bool) string {
-	return orka.EvidencePlanPrompt(
+func initialEvidencePlan(set *skills.Set, failurePrompt string, artifactPaths []string, treeTruncated bool) (string, bool) {
+	return orka.RenderEvidencePlan(
 		set.Plan(failurePrompt, artifactPaths, evidencePlanCandidatePathLimit),
 		treeTruncated,
 	)
