@@ -24,15 +24,17 @@ func TestInitialEvidencePlanUsesProfileCandidates(t *testing.T) {
 	if !selection.Kubernetes {
 		t.Fatal("Kubernetes profile was not selected")
 	}
-	failurePrompt := `Failed test: Creating a Flatcar sysext cluster with worker nodes
-Failure message: Timed out waiting for nodes to be created for MachineDeployment capz-e2e-asfxe1-flatcar-sysext-md-0`
+	tc := models.TestCase{
+		Name:           "Creating a Flatcar sysext cluster with worker nodes",
+		FailureMessage: "Timed out waiting for nodes to be created for MachineDeployment capz-e2e-asfxe1-flatcar-sysext-md-0",
+	}
 	paths := []string{
 		"build-log.txt",
 		"artifacts/junit.e2e_suite.1.xml",
 		"artifacts/clusters/bootstrap/resources/capz-e2e-asfxe1/Machine/capz-e2e-asfxe1-flatcar-sysext-md-0-q6m8d.yaml",
 		"artifacts/clusters/capz-e2e-asfxe1-flatcar-sysext/nodes/node-1/node-describe.txt",
 	}
-	plan, complete := initialEvidencePlan(set, failurePrompt, paths, true)
+	plan, complete := initialEvidencePlan(set, tc, paths, true)
 	if complete {
 		t.Fatal("truncated evidence tree produced a complete plan")
 	}
@@ -44,10 +46,25 @@ Failure message: Timed out waiting for nodes to be created for MachineDeployment
 			t.Errorf("evidence plan missing %q: %s", want, plan)
 		}
 	}
-	_, complete = initialEvidencePlan(set, failurePrompt, paths, false)
+	if strings.Contains(plan, "engine.prow.run-context") {
+		t.Fatalf("producer boilerplate selected run-context profile: %s", plan)
+	}
+	if matched := set.Match(orka.FailurePrompt("BENCH", "job", "logs/job/1/", tc, 0)); !hasSkill(matched, "engine.prow.run-context") {
+		t.Fatalf("test fixture no longer proves full-prompt boilerplate can match run-context: %+v", matched)
+	}
+	_, complete = initialEvidencePlan(set, tc, paths, false)
 	if !complete {
 		t.Fatal("fully resolved initial evidence plan was marked incomplete")
 	}
+}
+
+func hasSkill(matched []skills.Skill, id string) bool {
+	for _, skill := range matched {
+		if skill.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadConsecutiveFailures(t *testing.T) {

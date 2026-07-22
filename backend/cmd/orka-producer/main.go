@@ -358,11 +358,7 @@ func main() {
 					manifest.SetBuild(detail.JobID, run.BuildID, buildScope, toolScope, buildPrefix, artifactSeed)
 					builds[orka.BuildKey(detail.JobID, run.BuildID)] = buildPlan{scope: toolScope, prefix: buildPrefix}
 				}
-				baseRef, err := manifest.TaskRef(detail.JobID, run, ti, tc)
-				if err != nil {
-					log.Fatalf("task identity: %v", err)
-				}
-				evidencePlan, evidencePlanComplete := initialEvidencePlan(skillSet, baseRef.Prompt, artifactPaths, artifactTreeTruncated)
+				evidencePlan, evidencePlanComplete := initialEvidencePlan(skillSet, tc, artifactPaths, artifactTreeTruncated)
 				manifest.SetEvidencePlan(detail.JobID, run.BuildID, ti, evidencePlan, evidencePlanComplete)
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)
 				if err != nil {
@@ -614,9 +610,9 @@ revise if any applies:
 Call submit_analysis with the final fields. Do not return a separate final answer.`
 }
 
-func initialEvidencePlan(set *skills.Set, failurePrompt string, artifactPaths []string, treeTruncated bool) (string, bool) {
+func initialEvidencePlan(set *skills.Set, tc models.TestCase, artifactPaths []string, treeTruncated bool) (string, bool) {
 	return orka.RenderEvidencePlan(
-		set.Plan(failurePrompt, artifactPaths, evidencePlanCandidatePathLimit),
+		set.Plan(orka.FailureEvidenceSignal(tc), artifactPaths, evidencePlanCandidatePathLimit),
 		treeTruncated,
 	)
 }

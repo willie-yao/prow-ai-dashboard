@@ -277,7 +277,7 @@ Before merging a new recipe:
 
 The Orka producer loads the same merged set as the in-process fetcher and sends
 the complete contract to the scoped `required_evidence` and `submit_analysis`
-Tools. Before creating each Task, it matches the initial failure prompt, resolves
+Tools. Before creating each Task, it matches a bounded failure-evidence signal without producer instructions, resolves
 ranked exact artifact candidates for every applicable evidence group, and
 prepends that bounded evidence plan to the Task prompt. `required_evidence`
 returns the same candidate shape when the diagnosis changes or a group was not

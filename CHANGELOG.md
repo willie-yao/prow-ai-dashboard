@@ -72,7 +72,7 @@ for how to pin a release.
 ### Changed
 
 - **Deterministic Orka evidence plans.** The producer now matches diagnostic
-  recipes against each initial failure and prepends a bounded checklist with
+  recipes against each bounded failure-evidence signal and prepends a bounded checklist with
   ranked exact artifact candidates. `required_evidence` and rejected final
   submissions return the same candidate paths, helping weaker models follow
   required evidence without broad artifact searches. Complete plans satisfy the

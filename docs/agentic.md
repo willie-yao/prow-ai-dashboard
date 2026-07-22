@@ -638,7 +638,7 @@ builds gets two separate agentic analyses.
 On the Orka backend the cache is the Kubernetes object store itself. Before a
 Task is created, the producer includes the bounded JUnit failure message and
 failure body and prepends a filtered, byte-capped artifact path tree. It also
-matches diagnostic recipes against the initial failure and prepends a bounded
+matches diagnostic recipes against bounded failure evidence without producer instructions and prepends a bounded
 required-evidence plan with ranked exact artifact candidates. This gives weaker
 models a direct investigation checklist instead of relying on a voluntary first
 `required_evidence` call. Each artifact listing is capped at 10 seconds, and the
