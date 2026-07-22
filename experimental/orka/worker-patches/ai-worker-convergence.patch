@@ -281,10 +281,10 @@ index 0000000..1360127
 +}
 diff --git a/workers/ai/analysis_budget_test.go b/workers/ai/analysis_budget_test.go
 new file mode 100644
-index 0000000..ecdbb3a
+index 0000000..7329c0f
 --- /dev/null
 +++ b/workers/ai/analysis_budget_test.go
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,279 @@
 +package main
 +
 +import (
@@ -409,25 +409,37 @@ index 0000000..ecdbb3a
 +	}
 +}
 +
-+func TestAnalysisLoopGuardFocusLeavesFinalSubmissionRound(t *testing.T) {
++func TestAnalysisLoopGuardFocusLeavesTimelineRepairAndSubmissionRounds(t *testing.T) {
 +	guard := newAnalysisLoopGuard([]llm.Tool{
 +		{Name: "read_artifact"},
++		{Name: "verify_timeline"},
 +		{Name: testSubmissionToolName},
 +	}, nil)
 +	firstFocusIteration := analysisLoopMaxIterations - analysisValidationFocusRounds
 +	req := &llm.CompletionRequest{Tools: []llm.Tool{
 +		{Name: "read_artifact"},
++		{Name: "verify_timeline"},
 +		{Name: testSubmissionToolName},
 +	}}
 +	guard.prepareRequest(req, nil, firstFocusIteration, analysisLoopMaxIterations)
++	allowed := advertisedToolNames(req.Tools)
++	if _, ok := allowed["verify_timeline"]; !ok {
++		t.Fatalf("first focus tools = %+v, missing timeline", req.Tools)
++	}
++	if _, ok := allowed[testSubmissionToolName]; !ok {
++		t.Fatalf("first focus tools = %+v, missing submission", req.Tools)
++	}
++	guard.inspectTool("verify_timeline", nil, "verified", nil, true)
++	req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: "verify_timeline"}, {Name: testSubmissionToolName}}
++	guard.prepareRequest(req, nil, firstFocusIteration+1, analysisLoopMaxIterations)
 +	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
-+		t.Fatalf("first focus tools = %+v", req.Tools)
++		t.Fatalf("post-timeline tools = %+v", req.Tools)
 +	}
 +	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
 +	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", failure), false)
 +	for repair := range analysisMaxEvidenceRepairToolCalls {
 +		req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}
-+		guard.prepareRequest(req, nil, firstFocusIteration+1+repair, analysisLoopMaxIterations)
++		guard.prepareRequest(req, nil, firstFocusIteration+2+repair, analysisLoopMaxIterations)
 +		if _, ok := advertisedToolNames(req.Tools)["read_artifact"]; !ok {
 +			t.Fatalf("repair round %d tools = %+v", repair+1, req.Tools)
 +		}
@@ -436,7 +448,7 @@ index 0000000..ecdbb3a
 +		}
 +	}
 +	req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}
-+	finalIteration := firstFocusIteration + 1 + analysisMaxEvidenceRepairToolCalls
++	finalIteration := firstFocusIteration + 2 + analysisMaxEvidenceRepairToolCalls
 +	if finalIteration != analysisLoopMaxIterations-1 {
 +		t.Fatalf("final iteration = %d, want %d", finalIteration, analysisLoopMaxIterations-1)
 +	}
@@ -2059,7 +2071,7 @@ index 0000000..0b44bdd
 +}
 diff --git a/workers/ai/validated_analysis.go b/workers/ai/validated_analysis.go
 new file mode 100644
-index 0000000..16bb4a3
+index 0000000..a8d6cb2
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
 @@ -0,0 +1,611 @@
@@ -2229,7 +2241,7 @@ index 0000000..16bb4a3
 +
 +const (
 +	analysisLoopMaxIterations     = 25
-+	analysisValidationFocusRounds = analysisMaxEvidenceRepairToolCalls + 2
++	analysisValidationFocusRounds = analysisMaxEvidenceRepairToolCalls + 3
 +	maxValidationFailures         = 3
 +	maxValidationFinalRetries     = 2
 +	maxTransientCritiqueRetries   = 2

@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975' <<< "$metadata"
+grep -Fq 'patch_sha256=9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -41,7 +41,7 @@ for test_name in \
   TestExecuteAgentLoopAllowsToolCallsAfterPrematureFinals \
   TestAnalysisLoopGuardReservesEvidenceRepairBudget \
   TestAnalysisLoopGuardSelectsRepairBeforeSubmission \
-  TestAnalysisLoopGuardFocusLeavesFinalSubmissionRound \
+  TestAnalysisLoopGuardFocusLeavesTimelineRepairAndSubmissionRounds \
   TestValidationRepairPromptTargetsMissingEvidenceCandidates \
   TestValidationRepairPromptUsesLedgerAfterRepairBudget \
   TestValidationNeedsEvidenceRepairRequiresCandidatesForEveryGroup \
@@ -104,7 +104,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975
+patch=9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"

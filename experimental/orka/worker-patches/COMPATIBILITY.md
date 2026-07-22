@@ -12,7 +12,7 @@ commit. Moving tags are not published.
 | Orka commit | `1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254` |
 | Orka Go version | `1.26.2` |
 | Patch | `ai-worker-convergence.patch` |
-| Patch SHA-256 | `b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975` |
+| Patch SHA-256 | `9d614316bb518ed5204052bedfd1c27e8b7e03af742cf381e1624a97f223bc8d` |
 | Worker Dockerfile | `workers/ai/Dockerfile` from the pinned Orka commit |
 | Published platform | `linux/amd64` |
 | Workflow | `.github/workflows/orka-compat-image.yml` |
@@ -26,8 +26,8 @@ strict final schema, and premature-final retry reset from v4. It splits the
 reserved for validation repair. A validation response activates repair only when
 every missing evidence group has exact candidates; the worker then exposes the
 artifact readers with finalization Tools and prioritizes reading over a repeated
-submission. Once finalization begins, broad investigation never resumes. The focus window
-leaves one final submission turn after all four repair calls; once they are
+submission. Once finalization begins, broad investigation never resumes. The focus window leaves room for pending timeline verification plus one final
+submission turn after all four repair calls; once they are
 exhausted, the repair prompt directs the model to use ledger tokens because only
 finalization Tools remain.
 
