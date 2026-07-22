@@ -561,6 +561,29 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 			elided++
 		}
 	}
+	// Stage 4: remove older Responses assistant turns and their paired tool
+	// outputs atomically when continuation state keeps the request over budget.
+	for i := 2; i < len(messages) && requestSizeEstimate(messages, schemaBytes) > target; {
+		m := messages[i]
+		if m.Role != "assistant" || len(m.ProviderItems) == 0 || len(m.ToolCalls) == 0 {
+			i++
+			continue
+		}
+		ids := map[string]bool{}
+		for _, call := range m.ToolCalls {
+			ids[call.ID] = true
+		}
+		end := i + 1
+		for end < len(messages) && messages[end].Role == "tool" && ids[messages[end].ToolCallID] {
+			end++
+		}
+		if end == i+1 {
+			i++
+			continue
+		}
+		elided += end - i
+		messages = append(messages[:i], messages[end:]...)
+	}
 	return messages, elided
 }
 
