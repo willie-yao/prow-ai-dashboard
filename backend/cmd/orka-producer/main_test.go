@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +85,31 @@ func TestInitialEvidencePlanUsesProfileCandidates(t *testing.T) {
 	}
 	if !complete {
 		t.Fatal("fully resolved initial evidence plan was marked incomplete")
+	}
+}
+
+func TestInitialEvidencePlanFallsBackWhenHeaderIsOversized(t *testing.T) {
+	patterns := make([]string, 600)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("path/%x", sha256.Sum256([]byte(fmt.Sprintf("pattern-%d", i))))
+	}
+	data, err := json.Marshal(skills.Contract{Skills: []skills.Skill{{
+		ID: "large", Triggers: []string{"Failed test"},
+		RequiredEvidence: []skills.EvidenceGroup{{ID: "logs", AnyOf: patterns}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := skills.ParseContract(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, complete, header, err := initialEvidencePlan(set, models.TestCase{Name: "test"}, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("initial evidence error = %v", err)
+	}
+	if prompt != "" || complete || header != "" {
+		t.Fatalf("failed plan = prompt %q complete %t header %q", prompt, complete, header)
 	}
 }
 

@@ -684,7 +684,9 @@ is compiled into the scoped `required_evidence` Tool, and its hash participates
 in the Task fingerprint. A complete precomputed plan satisfies recipe lookup; an
 incomplete plan requires a completed Tool call before publishing the result.
 Regardless of lookup, `submit_analysis` validates the initially planned groups
-together with groups matched from the final diagnosis. The Orka tool set also
+together with groups matched from the final diagnosis and preserves their
+original ranked candidates in rejection responses. An oversized per-Task header
+falls back to mandatory lookup rather than blocking Task production. The Orka tool set also
 includes `diff_last_passing` for targeted regression comparisons. After batch pattern finalization,
 the Orka ingestor runs the same notification, issue, and fix-PR reconciliation
 stage as the in-process fetcher.

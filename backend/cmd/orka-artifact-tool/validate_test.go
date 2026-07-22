@@ -176,13 +176,15 @@ func TestValidateAnalysisEnforcesInitialEvidenceAgainstGenericFinalText(t *testi
 		t.Fatal(err)
 	}
 	signal := "resource quota exceeded"
-	paths := []string{"events/workload-quota.log"}
-	initialHeader, err := skills.InitialEvidenceHeaderValue(set.Plan(signal, paths, 3))
+	plannedPaths := []string{"events/workload-quota.log"}
+	initialHeader, err := skills.InitialEvidenceHeaderValue(set.Plan(signal, plannedPaths, 3))
 	if err != nil {
 		t.Fatal(err)
 	}
 	attestor := newEvidenceAttestor("secret")
-	env := &toolEnv{evidence: attestor, browser: validationTreeBrowser{paths: paths}}
+	env := &toolEnv{evidence: attestor, browser: validationTreeBrowser{
+		paths: []string{"events/aaa-quota.log", "events/workload-quota.log"},
+	}}
 	analysis := orka.AnalysisValidation{
 		Summary: "workload setup failed", RootCause: "the workload could not start", Severity: "High",
 		SuggestedFix: "correct the environment", RelevantFiles: []string{"build-log.txt"},
@@ -192,6 +194,9 @@ func TestValidateAnalysisEnforcesInitialEvidenceAgainstGenericFinalText(t *testi
 	)
 	if missing.Code != http.StatusUnprocessableEntity || !strings.Contains(missing.Body.String(), "quota:events") {
 		t.Fatalf("missing initial evidence response = %d %s", missing.Code, missing.Body.String())
+	}
+	if !strings.Contains(missing.Body.String(), "events/workload-quota.log") || strings.Contains(missing.Body.String(), "events/aaa-quota.log") {
+		t.Fatalf("initial candidate paths changed during validation: %s", missing.Body.String())
 	}
 	valid := runValidationWithInitialEvidence(t, env, analysis, []string{
 		attestor.issue("scope", "build-log.txt"),

@@ -284,9 +284,11 @@ returns the same candidate shape when the diagnosis changes or a group was not
 resolved in the initial bounded tree. A complete initial plan satisfies the
 recipe-lookup acceptance gate; truncated, omitted, unmatched, and no-candidate
 plans retain the mandatory `required_evidence` call. The per-Task submit Tool
-receives the initially applicable groups through a hidden header, so final
-validation requires their evidence tokens even if the model's final wording no
-longer matches the initial recipe.
+receives the initially applicable groups and their ranked candidates through a
+hidden bounded header, so final validation requires their evidence tokens and
+returns the same candidate paths even if the model's final wording no longer
+matches the initial recipe. If that header cannot fit, the producer omits the
+plan and retains the mandatory lookup path instead of aborting the run.
 
 The merged hash and evidence-plan hash participate in Orka Task identity. Recipe
 edits, profile-selection changes, and a materially different candidate plan

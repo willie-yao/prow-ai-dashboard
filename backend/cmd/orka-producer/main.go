@@ -361,7 +361,8 @@ func main() {
 				}
 				evidencePlan, evidencePlanComplete, initialEvidenceHeader, planErr := initialEvidencePlan(skillSet, tc, artifactPaths, artifactTreeTruncated)
 				if planErr != nil {
-					log.Fatalf("initial evidence plan: %v", planErr)
+					log.Printf("⚠ initial evidence plan skipped for %s/%s test %d: %v", detail.JobID, run.BuildID, ti, planErr)
+					evidencePlan, evidencePlanComplete, initialEvidenceHeader = "", false, ""
 				}
 				manifest.SetEvidencePlan(detail.JobID, run.BuildID, ti, evidencePlan, evidencePlanComplete)
 				ref, err := manifest.TaskRef(detail.JobID, run, ti, tc)

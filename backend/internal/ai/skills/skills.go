@@ -187,8 +187,9 @@ type EvidenceGroup struct {
 
 // InitialEvidenceRequirement is one initially applicable recipe group.
 type InitialEvidenceRequirement struct {
-	SkillID string        `json:"skill_id"`
-	Group   EvidenceGroup `json:"group"`
+	SkillID        string        `json:"skill_id"`
+	Group          EvidenceGroup `json:"group"`
+	CandidatePaths []string      `json:"candidate_paths,omitempty"`
 }
 
 // InitialEvidenceContract binds a failure signal to its precomputed groups.
@@ -269,7 +270,8 @@ func InitialEvidenceHeaderValue(plan []PlannedSkill) (string, error) {
 	for _, plannedSkill := range plan {
 		for _, group := range plannedSkill.RequiredEvidence {
 			contract.Requirements = append(contract.Requirements, InitialEvidenceRequirement{
-				SkillID: plannedSkill.ID,
+				SkillID:        plannedSkill.ID,
+				CandidatePaths: append([]string(nil), group.CandidatePaths...),
 				Group: EvidenceGroup{
 					ID: group.ID, Description: group.Description, AnyOf: append([]string(nil), group.AnyOf...),
 				},

@@ -1,6 +1,8 @@
 package skills
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -583,7 +585,7 @@ func TestInitialEvidenceHeaderRoundTrip(t *testing.T) {
 		t.Fatalf("contract = %+v", contract)
 	}
 	requirement := contract.Requirements[0]
-	if requirement.SkillID != "quota" || requirement.Group.ID != "events" || !requirement.Group.Satisfied(map[string]bool{"events/workload-quota.log": true}) {
+	if requirement.SkillID != "quota" || requirement.Group.ID != "events" || len(requirement.CandidatePaths) != 0 || !requirement.Group.Satisfied(map[string]bool{"events/workload-quota.log": true}) {
 		t.Fatalf("requirement = %+v", requirement)
 	}
 }
@@ -595,5 +597,19 @@ func TestInitialEvidenceHeaderOmitsProcedureOnlyPlan(t *testing.T) {
 	}
 	if header != "" {
 		t.Fatalf("header = %q, want empty", header)
+	}
+}
+
+func TestInitialEvidenceHeaderRejectsOversizedValue(t *testing.T) {
+	patterns := make([]string, 600)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("path/%x", sha256.Sum256([]byte(fmt.Sprintf("pattern-%d", i))))
+	}
+	_, err := InitialEvidenceHeaderValue([]PlannedSkill{{
+		ID:               "large",
+		RequiredEvidence: []PlannedEvidenceGroup{{ID: "logs", AnyOf: patterns}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized header error = %v", err)
 	}
 }

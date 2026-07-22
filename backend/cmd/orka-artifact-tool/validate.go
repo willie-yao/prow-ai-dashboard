@@ -33,9 +33,10 @@ type analysisRequest struct {
 }
 
 type evidenceRequirement struct {
-	key    string
-	signal string
-	group  skills.EvidenceGroup
+	key            string
+	signal         string
+	group          skills.EvidenceGroup
+	candidatePaths []string
 }
 
 type validationRequest struct {
@@ -200,7 +201,9 @@ func validateSubmission(
 		}
 		seenRequirements[key] = true
 		initialEvidenceKeys = append(initialEvidenceKeys, key)
-		requirements = append(requirements, evidenceRequirement{key: key, signal: evidenceText, group: initial.Group})
+		requirements = append(requirements, evidenceRequirement{
+			key: key, signal: evidenceText, group: initial.Group, candidatePaths: initial.CandidatePaths,
+		})
 	}
 	for _, skill := range matchedSkills {
 		for _, group := range skill.RequiredEvidence {
@@ -229,7 +232,11 @@ func validateSubmission(
 			continue
 		}
 		missingEvidence = append(missingEvidence, requirement.key)
-		if candidates := requirement.group.CandidatePaths(requirement.signal, tree.paths, evidenceCandidatePathLimit); len(candidates) > 0 {
+		candidates := requirement.candidatePaths
+		if len(candidates) == 0 {
+			candidates = requirement.group.CandidatePaths(requirement.signal, tree.paths, evidenceCandidatePathLimit)
+		}
+		if len(candidates) > 0 {
 			missingEvidenceCandidates[requirement.key] = candidates
 		}
 	}
