@@ -510,6 +510,54 @@ func TestPatternTaskAnalyzerPreservesEventLagAtDeadline(t *testing.T) {
 	}
 }
 
+func TestWebhookManifestForTaskReloadsUnknownTask(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{
+		BuildInfo: models.BuildInfo{BuildID: "1"},
+		TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "boom"}},
+	}}}
+	if err := output.WriteJobDetail(dir, detail); err != nil {
+		t.Fatal(err)
+	}
+	newManifest := func(seed string) *orkaapi.AnalysisManifest {
+		manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "m", orkaapi.APIModeAuto, "v1", 2)
+		manifest.ValidationKey = testValidationKey
+		manifest.SetBuild("job", "1", "build-1", "tool-1", "logs/job/1/", seed)
+		return manifest
+	}
+	oldManifest := newManifest("old-tree")
+	if err := oldManifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	s := &webhookServer{dataDir: dir, namespace: "orka-system"}
+	s.rebuildIndex()
+	oldRef, err := oldManifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.index[oldRef.Name] == "" {
+		t.Fatalf("old task %q was not indexed", oldRef.Name)
+	}
+
+	currentManifest := newManifest("new-tree")
+	currentManifest.SetEvidencePlan("job", "1", 0, "plan", true)
+	currentRef, err := currentManifest.TaskRef("job", detail.Runs[0], 0, detail.Runs[0].TestCases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentManifest.SetTaskEvidencePlanComplete(currentRef.Name, true)
+	if err := currentManifest.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	loaded, indexed := s.manifestForTask(currentRef.Name)
+	if !indexed || loaded == nil || !loaded.TaskEvidencePlanComplete(currentRef.Name) {
+		t.Fatalf("reloaded manifest = %+v indexed=%t", loaded, indexed)
+	}
+	if s.index[oldRef.Name] != "" {
+		t.Fatalf("stale task %q remained indexed", oldRef.Name)
+	}
+}
+
 func TestWebhookIndexTargetsOneJobFile(t *testing.T) {
 	dir := t.TempDir()
 	detail := models.JobDetail{JobID: "job", Runs: []models.BuildResult{{

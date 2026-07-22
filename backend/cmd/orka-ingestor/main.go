@@ -559,14 +559,9 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if orka.TerminalPhase(p.Phase) {
-		s.mu.Lock()
-		if s.manifest == nil {
-			s.rebuildIndex()
-		}
-		manifest := s.manifest
-		s.mu.Unlock()
-		if manifest == nil {
-			http.Error(w, "analysis manifest unavailable", http.StatusServiceUnavailable)
+		manifest, indexed := s.manifestForTask(p.TaskName)
+		if manifest == nil || !indexed {
+			http.Error(w, "analysis Task is not present in the current manifest", http.StatusServiceUnavailable)
 			return
 		}
 		patch := s.preparePatch(p, manifest)
@@ -590,6 +585,15 @@ type preparedPatch struct {
 	skillSetHash string
 	reason       string
 	retry        bool
+}
+
+func (s *webhookServer) manifestForTask(taskName string) (*orka.AnalysisManifest, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.manifest == nil || s.index[taskName] == "" {
+		s.rebuildIndex()
+	}
+	return s.manifest, s.index[taskName] != ""
 }
 
 func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisManifest) preparedPatch {

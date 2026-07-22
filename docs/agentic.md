@@ -656,7 +656,9 @@ for semantic changes outside that fingerprint. There is no on-disk response cach
 private `orka_analysis.json` manifest carries the producer identity contract to
 the ingestor and is never served or published. Ingested analyses store both the
 contract hash and exact Task name, so cached job JSON is refreshed whenever the
-contract or per-test evidence plan changes. Tool resources use a contract-versioned scope as well, preventing an
+contract or per-test evidence plan changes. Event-driven ingestion reloads the
+private manifest before validating a Task absent from its current index and
+returns 503 until the producer entry is visible. Tool resources use a contract-versioned scope as well, preventing an
 old Task from observing a newly applied Tool definition. Producer waves bound
 per-test submissions, and `Task.spec.execution` places both per-test and pattern
 worker pods without changing semantic cache identity. Successful Tasks keep their
