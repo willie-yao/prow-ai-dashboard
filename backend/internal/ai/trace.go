@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"errors"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -36,7 +38,7 @@ type AnalysisTrace struct {
 	StartedAt string       `json:"started_at"`
 	ElapsedMs int          `json:"elapsed_ms"`
 	Outcome   string       `json:"outcome"`
-	Error     string       `json:"error,omitempty"`
+	ErrorCode string       `json:"error_code,omitempty"`
 	Truncated bool         `json:"truncated,omitempty"`
 	Events    []TraceEvent `json:"events"`
 }
@@ -62,7 +64,7 @@ type TraceEvent struct {
 	Elided        int    `json:"elided,omitempty"`
 	Retry         int    `json:"retry,omitempty"`
 	IssueCount    int    `json:"issue_count,omitempty"`
-	Error         string `json:"error,omitempty"`
+	ErrorCode     string `json:"error_code,omitempty"`
 }
 
 // TraceMetadata identifies one analysis without model or endpoint details.
@@ -165,7 +167,7 @@ func (s *TraceSession) Record(event TraceEvent) {
 	event.Status = traceText(event.Status)
 	event.FinishReason = traceText(event.FinishReason)
 	event.Tool = traceText(event.Tool)
-	event.Error = traceText(event.Error)
+	event.ErrorCode = traceCode(event.ErrorCode)
 	s.trace.Events = append(s.trace.Events, event)
 }
 
@@ -183,7 +185,7 @@ func (s *TraceSession) Finish(outcome string, err error) {
 	s.trace.ElapsedMs = int(time.Since(s.start) / time.Millisecond)
 	s.trace.Outcome = traceText(outcome)
 	if err != nil {
-		s.trace.Error = traceText(err.Error())
+		s.trace.ErrorCode = traceErrorCode(err)
 	}
 	completed := s.trace
 	s.mu.Unlock()
@@ -217,4 +219,49 @@ func recordTrace(ctx context.Context, event TraceEvent) {
 func traceText(s string) string {
 	s = strings.TrimSpace(redact.Credentials(redact.URLs(s)))
 	return textutil.Truncate(s, analysisTraceMaxText)
+}
+
+var traceCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+func traceCode(code string) string {
+	code = strings.ToLower(strings.TrimSpace(code))
+	if traceCodePattern.MatchString(code) {
+		return code
+	}
+	return "analysis_error"
+}
+
+func traceErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "unsupported ai api"):
+		return "unsupported_api"
+	case strings.Contains(message, "function-calling support"), strings.Contains(message, "does not support function calling"):
+		return "tools_unsupported"
+	case strings.Contains(message, "marshal request"):
+		return "request_marshal"
+	case strings.Contains(message, "build request"):
+		return "request_build"
+	case strings.Contains(message, "post:"):
+		return "request_transport"
+	case strings.Contains(message, "decode response"):
+		return "response_decode"
+	case strings.Contains(message, "responses status"):
+		return "provider_status"
+	case strings.Contains(message, "chat returned"), strings.Contains(message, "responses returned"):
+		return "http_error"
+	case strings.Contains(message, "empty"):
+		return "empty_response"
+	default:
+		return "analysis_error"
+	}
 }

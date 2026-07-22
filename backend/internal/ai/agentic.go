@@ -818,7 +818,7 @@ func (c *Client) doAnalyzeAgentic(
 						objs, err := c.semanticCritique(loopCtx, parsed, state.readPathList())
 						switch {
 						case err != nil:
-							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", Error: err.Error()})
+							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
 							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
 						case len(objs) > 0:
 							recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Outcome: "objected", IssueCount: len(objs)})
@@ -1248,7 +1248,7 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
 	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {
-		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", Error: err.Error()})
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
 		return "", nil
 	}

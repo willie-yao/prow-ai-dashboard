@@ -629,9 +629,11 @@ forced finalization. Model events include response IDs, finish status, retry
 count, duration, and provider-reported token usage when available.
 
 The trace intentionally excludes prompts, assistant text, reasoning items, tool
-arguments, tool output, and configured endpoint or model fields. Error text is
-URL- and credential-redacted and byte-capped. A trace keeps at most 128 events,
-and one fetch keeps at most 500 completed failure traces.
+arguments, tool output, and configured endpoint or model fields. Provider and
+harness failures are stored as fixed error codes, never free-form response
+bodies. Identifiers are URL- and credential-redacted and byte-capped. A trace
+keeps at most 128 events, and one fetch keeps at most 500 completed failure
+traces.
 
 `ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
 404 for it under `/data`, and the Pages workflow removes it before publication.

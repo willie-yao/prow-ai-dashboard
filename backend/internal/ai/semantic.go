@@ -122,7 +122,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	state.judgeRan = true
 	objs, err := c.semanticCritique(ctx, parsed, state.readPathList())
 	if err != nil {
-		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "error", Error: err.Error()})
+		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Outcome: "error", ErrorCode: "semantic_judge_error"})
 		log.Printf("  ⓘ semantic judge (post-loop): skipped (%v)", err)
 		return parsed
 	}

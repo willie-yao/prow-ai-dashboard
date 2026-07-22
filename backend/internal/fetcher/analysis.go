@@ -47,9 +47,6 @@ const (
 // case. The agentic tool-calling loop is the only analysis path.
 func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) {
 	tracePath := filepath.Join(p.opts.OutDir, output.AITraceFilename)
-	if err := os.Remove(tracePath); err != nil && !os.IsNotExist(err) {
-		log.Printf("Warning: failed to clear stale AI traces: %v", err)
-	}
 	runtime, err := p.ensureAnalysisRuntime(ctx)
 	if err != nil {
 		log.Printf("⚠ AI runtime setup failed: %v", err)

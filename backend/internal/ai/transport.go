@@ -45,7 +45,7 @@ func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDef
 	}
 	if err != nil {
 		event.Outcome = "error"
-		event.Error = err.Error()
+		event.ErrorCode = traceErrorCode(err)
 	} else {
 		event.Outcome = "success"
 	}
