@@ -28,6 +28,9 @@ The patch keeps dashboard analysis policy inside the dashboard-owned worker:
 - when final validation reports complete `missing_evidence_candidates`, restores
   only the artifact readers plus finalization Tools, prioritizes a reader over a
   repeated submission, and allows up to four targeted evidence-repair calls;
+- starts finalization early enough to leave one submission turn after all four
+  repair calls, then directs the model to use ledger tokens instead of readers
+  that are no longer advertised;
 - tells weak models to preserve applicable source paths and use
   `"relevant_files": []` only when that required array has no entries, without
   weakening deterministic validation;

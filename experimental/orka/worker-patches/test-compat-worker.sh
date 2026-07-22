@@ -11,10 +11,10 @@ bash -n "$script"
 "$script" verify
 metadata=$("$script" metadata 0123456789abcdef0123456789abcdef01234567)
 grep -Fq 'orka_commit=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254' <<< "$metadata"
-grep -Fq 'patch_sha256=b975a076e17c8a12ca58ddfca6c52a779cc390bcbeec485037897534fe74a966' <<< "$metadata"
+grep -Fq 'patch_sha256=b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975' <<< "$metadata"
 backtick='`'
 grep -Fq "${backtick}1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254${backtick}" "$script_dir/COMPATIBILITY.md"
-grep -Fq "${backtick}b975a076e17c8a12ca58ddfca6c52a779cc390bcbeec485037897534fe74a966${backtick}" "$script_dir/COMPATIBILITY.md"
+grep -Fq "${backtick}b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975${backtick}" "$script_dir/COMPATIBILITY.md"
 for patch_file in \
   analysis_budget.go \
   analysis_context.go \
@@ -41,7 +41,9 @@ for test_name in \
   TestExecuteAgentLoopAllowsToolCallsAfterPrematureFinals \
   TestAnalysisLoopGuardReservesEvidenceRepairBudget \
   TestAnalysisLoopGuardSelectsRepairBeforeSubmission \
+  TestAnalysisLoopGuardFocusLeavesFinalSubmissionRound \
   TestValidationRepairPromptTargetsMissingEvidenceCandidates \
+  TestValidationRepairPromptUsesLedgerAfterRepairBudget \
   TestValidationNeedsEvidenceRepairRequiresCandidatesForEveryGroup \
   TestRequestApprovalCanonicalizesAliasedTarget; do
   grep -Fq "func $test_name" "$script_dir/ai-worker-convergence.patch"
@@ -102,7 +104,7 @@ chmod +x "$tmp/bin/docker"
 
 dashboard=0123456789abcdef0123456789abcdef01234567
 orka=1b6f6f74c8cdf5e3ccfe92d0a7ed03a571670254
-patch=b975a076e17c8a12ca58ddfca6c52a779cc390bcbeec485037897534fe74a966
+patch=b43ea02e4af9f455b88ee2a70096128daaff9ff56fb7d17d921b2da9d235f975
 published=$(FAKE_REGISTRY_RESULT=exact EXPECTED_DASHBOARD=$dashboard EXPECTED_ORKA=$orka EXPECTED_PATCH=$patch PATH="$tmp/bin:$PATH"   "$script" inspect-published ghcr.io/example/worker:test "$dashboard")
 grep -Fq '"digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' <<< "$published"
 grep -Fq '"recovered": true' <<< "$published"

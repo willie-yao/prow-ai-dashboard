@@ -89,7 +89,8 @@ for how to pin a release.
   existing 20 evidence Tool calls for validation repair. A rejected submission
   with complete missing-evidence candidates re-enables only artifact readers and
   finalization Tools, prioritizing targeted reads before another submission.
-  Broad investigation does not resume after finalization starts.
+  Broad investigation does not resume after finalization starts, and the focus
+  window preserves one final submission turn after all four repair calls.
 
 - **Deterministic Orka evidence plans.** The producer now matches diagnostic
   recipes against each bounded failure-evidence signal and prepends a bounded checklist with

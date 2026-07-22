@@ -281,10 +281,10 @@ index 0000000..1360127
 +}
 diff --git a/workers/ai/analysis_budget_test.go b/workers/ai/analysis_budget_test.go
 new file mode 100644
-index 0000000..55089f8
+index 0000000..ecdbb3a
 --- /dev/null
 +++ b/workers/ai/analysis_budget_test.go
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,267 @@
 +package main
 +
 +import (
@@ -406,6 +406,43 @@ index 0000000..55089f8
 +	guard.prepareRequest(req, nil, 1, analysisLoopMaxIterations)
 +	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
 +		t.Fatalf("post-repair tools = %+v", req.Tools)
++	}
++}
++
++func TestAnalysisLoopGuardFocusLeavesFinalSubmissionRound(t *testing.T) {
++	guard := newAnalysisLoopGuard([]llm.Tool{
++		{Name: "read_artifact"},
++		{Name: testSubmissionToolName},
++	}, nil)
++	firstFocusIteration := analysisLoopMaxIterations - analysisValidationFocusRounds
++	req := &llm.CompletionRequest{Tools: []llm.Tool{
++		{Name: "read_artifact"},
++		{Name: testSubmissionToolName},
++	}}
++	guard.prepareRequest(req, nil, firstFocusIteration, analysisLoopMaxIterations)
++	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
++		t.Fatalf("first focus tools = %+v", req.Tools)
++	}
++	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
++	guard.inspectTool(testSubmissionToolName, nil, "", fmt.Errorf("%s", failure), false)
++	for repair := range analysisMaxEvidenceRepairToolCalls {
++		req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}
++		guard.prepareRequest(req, nil, firstFocusIteration+1+repair, analysisLoopMaxIterations)
++		if _, ok := advertisedToolNames(req.Tools)["read_artifact"]; !ok {
++			t.Fatalf("repair round %d tools = %+v", repair+1, req.Tools)
++		}
++		if err := guard.beginToolCall("read_artifact"); err != nil {
++			t.Fatal(err)
++		}
++	}
++	req.Tools = []llm.Tool{{Name: "read_artifact"}, {Name: testSubmissionToolName}}
++	finalIteration := firstFocusIteration + 1 + analysisMaxEvidenceRepairToolCalls
++	if finalIteration != analysisLoopMaxIterations-1 {
++		t.Fatalf("final iteration = %d, want %d", finalIteration, analysisLoopMaxIterations-1)
++	}
++	guard.prepareRequest(req, nil, finalIteration, analysisLoopMaxIterations)
++	if len(req.Tools) != 1 || req.Tools[0].Name != testSubmissionToolName {
++		t.Fatalf("final submission tools = %+v", req.Tools)
 +	}
 +}
 +
@@ -2022,10 +2059,10 @@ index 0000000..0b44bdd
 +}
 diff --git a/workers/ai/validated_analysis.go b/workers/ai/validated_analysis.go
 new file mode 100644
-index 0000000..5e870b5
+index 0000000..16bb4a3
 --- /dev/null
 +++ b/workers/ai/validated_analysis.go
-@@ -0,0 +1,606 @@
+@@ -0,0 +1,611 @@
 +package main
 +
 +import (
@@ -2192,7 +2229,7 @@ index 0000000..5e870b5
 +
 +const (
 +	analysisLoopMaxIterations     = 25
-+	analysisValidationFocusRounds = 5
++	analysisValidationFocusRounds = analysisMaxEvidenceRepairToolCalls + 2
 +	maxValidationFailures         = 3
 +	maxValidationFinalRetries     = 2
 +	maxTransientCritiqueRetries   = 2
@@ -2218,8 +2255,9 @@ index 0000000..5e870b5
 +	transientValidationPrompt = "The validated analysis sets is_transient=true " +
 +		"without a successful verify_timeline call. " +
 +		"Call verify_timeline for the specific failing operation, then call validate_analysis again."
-+	evidenceRepairPrompt  = "Validation found required evidence that has not been read. Use the exact missing_evidence_candidates paths with read_artifact, tail_artifact, or grep_artifact. Preserve every prior evidence token, add the new tokens, then retry validate_analysis. Do not resubmit before reading the missing groups."
-+	invalidAnalysisPrompt = "The final analysis JSON is malformed. Correct the JSON syntax and required field types, " +
++	evidenceRepairPrompt          = "Validation found required evidence that has not been read. Use the exact missing_evidence_candidates paths with read_artifact, tail_artifact, or grep_artifact. Preserve every prior evidence token and add the new tokens. Do not resubmit before reading the missing groups."
++	evidenceRepairExhaustedPrompt = "The reserved evidence-reader calls are exhausted. Do not call artifact readers. Use the evidence tokens already preserved in the Engine evidence ledger, correct evidence_tokens and relevant_files, then retry the validation Tool."
++	invalidAnalysisPrompt         = "The final analysis JSON is malformed. Correct the JSON syntax and required field types, " +
 +		"then return the complete final JSON object."
 +)
 +
@@ -2452,7 +2490,7 @@ index 0000000..5e870b5
 +		len(g.evidenceRepairTools) > 0 &&
 +		g.evidenceRepairToolCalls < analysisMaxEvidenceRepairToolCalls
 +	g.validationFailures[failure]++
-+	inspection.repair = validationRepairPrompt(toolName, failure)
++	inspection.repair = validationRepairPrompt(toolName, failure, g.evidenceRepairActive)
 +	if g.validationFailures[failure] >= maxValidationFailures {
 +		inspection.fatal = fmt.Errorf(
 +			"validate_analysis repeated the same failure %d times: %s",
@@ -2485,11 +2523,15 @@ index 0000000..5e870b5
 +	return true
 +}
 +
-+func validationRepairPrompt(toolName, failure string) string {
++func validationRepairPrompt(toolName, failure string, evidenceRepairActive bool) string {
 +	prompt := toolName + " failed: " + failure +
 +		". Correct the exact missing or invalid field and retry with changed arguments. Do not repeat the same call."
 +	if validationNeedsEvidenceRepair(failure) {
-+		prompt += " " + evidenceRepairPrompt
++		if evidenceRepairActive {
++			prompt += " " + evidenceRepairPrompt
++		} else {
++			prompt += " " + evidenceRepairExhaustedPrompt
++		}
 +	}
 +	lower := strings.ToLower(failure)
 +	if strings.Contains(lower, "relevant_files") && strings.Contains(lower, "required") {
@@ -2634,10 +2676,10 @@ index 0000000..5e870b5
 +}
 diff --git a/workers/ai/validated_analysis_test.go b/workers/ai/validated_analysis_test.go
 new file mode 100644
-index 0000000..e6d9d3d
+index 0000000..d8578c9
 --- /dev/null
 +++ b/workers/ai/validated_analysis_test.go
-@@ -0,0 +1,464 @@
+@@ -0,0 +1,478 @@
 +package main
 +
 +import (
@@ -2750,6 +2792,7 @@ index 0000000..e6d9d3d
 +	prompt := validationRepairPrompt(
 +		testSubmissionToolName,
 +		"tool returned HTTP 400: relevant_files array is required",
++		false,
 +	)
 +	for _, want := range []string{`"relevant_files" as an array`, "Preserve every applicable source path", `"relevant_files": [] only when no source files apply`, "Never omit the field", "never use null"} {
 +		if !strings.Contains(prompt, want) {
@@ -2760,7 +2803,7 @@ index 0000000..e6d9d3d
 +
 +func TestValidationRepairPromptTargetsMissingEvidenceCandidates(t *testing.T) {
 +	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
-+	prompt := validationRepairPrompt(testSubmissionToolName, failure)
++	prompt := validationRepairPrompt(testSubmissionToolName, failure, true)
 +	for _, want := range []string{"missing_evidence_candidates", "read_artifact", "Preserve every prior evidence token", "Do not resubmit"} {
 +		if !strings.Contains(prompt, want) {
 +			t.Errorf("repair prompt missing %q: %s", want, prompt)
@@ -2782,8 +2825,21 @@ index 0000000..e6d9d3d
 +	}
 +}
 +
++func TestValidationRepairPromptUsesLedgerAfterRepairBudget(t *testing.T) {
++	failure := `tool returned HTTP 422: {"missing_evidence":["skill:logs"],"missing_evidence_candidates":{"skill:logs":["logs/controller.log"]}}`
++	prompt := validationRepairPrompt(testSubmissionToolName, failure, false)
++	for _, want := range []string{"reserved evidence-reader calls are exhausted", "Engine evidence ledger", "Do not call artifact readers"} {
++		if !strings.Contains(prompt, want) {
++			t.Errorf("exhausted repair prompt missing %q: %s", want, prompt)
++		}
++	}
++	if strings.Contains(prompt, "Do not resubmit before reading") {
++		t.Fatalf("exhausted prompt still requests readers: %s", prompt)
++	}
++}
++
 +func TestValidationRepairPromptKeepsGenericFailuresFocused(t *testing.T) {
-+	prompt := validationRepairPrompt(testSubmissionToolName, "analysis.root_cause is required")
++	prompt := validationRepairPrompt(testSubmissionToolName, "analysis.root_cause is required", false)
 +	if !strings.Contains(prompt, "root_cause") || strings.Contains(prompt, "relevant_files") {
 +		t.Fatalf("repair prompt = %q", prompt)
 +	}
