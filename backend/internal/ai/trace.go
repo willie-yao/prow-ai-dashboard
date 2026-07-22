@@ -150,7 +150,11 @@ func (s *TraceStore) Snapshot() AnalysisTraceFile {
 
 // Save writes the private trace snapshot atomically.
 func (s *TraceStore) Save(path string) error {
-	return statefile.WriteJSON(path, s.Snapshot())
+	snapshot, err := s.snapshotWithinLimit(analysisTraceMaxFileBytes)
+	if err != nil {
+		return err
+	}
+	return statefile.WriteJSON(path, snapshot)
 }
 
 // TraceSession records one analysis until Finish is called.

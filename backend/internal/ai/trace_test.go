@@ -110,6 +110,46 @@ func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	if builds["0"] || builds["1"] || !builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)] {
 		t.Fatalf("rolling trace window kept wrong builds: first=%v second=%v newest=%v", builds["0"], builds["1"], builds[fmt.Sprintf("%d", analysisTraceMaxTraces+1)])
 	}
+	old := AnalysisTrace{Backend: "inprocess", JobID: "old", BuildID: "old", TestName: "old", StartedAt: "2000-01-01T00:00:00Z", Outcome: "success"}
+	if store.Upsert(old) {
+		t.Fatal("delayed old trace displaced the rolling window")
+	}
+	got = store.Snapshot()
+	if len(got.Traces) != analysisTraceMaxTraces || got.DroppedTraces != 3 {
+		t.Fatalf("after delayed trace: traces=%d dropped=%d", len(got.Traces), got.DroppedTraces)
+	}
+}
+
+func TestTraceStoreSnapshotWithinLimitEvictsOldest(t *testing.T) {
+	older := AnalysisTrace{
+		Backend: "inprocess", JobID: "old", BuildID: "1", TestName: "test", StartedAt: "2026-07-22T08:00:00Z", Outcome: "success",
+		Events: []TraceEvent{{Kind: "model_request", ResponseID: strings.Repeat("a", 1000)}},
+	}
+	newer := AnalysisTrace{
+		Backend: "inprocess", JobID: "new", BuildID: "2", TestName: "test", StartedAt: "2026-07-22T08:01:00Z", Outcome: "success",
+		Events: []TraceEvent{{Kind: "model_request", ResponseID: strings.Repeat("b", 1000)}},
+	}
+	one := NewTraceStore()
+	one.Upsert(newer)
+	oneEncoded, err := json.MarshalIndent(one.Snapshot(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewTraceStore()
+	store.Upsert(older)
+	store.Upsert(newer)
+	limit := len(oneEncoded) + 256
+	snapshot, err := store.snapshotWithinLimit(limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > limit || len(snapshot.Traces) != 1 || snapshot.Traces[0].JobID != "new" || snapshot.DroppedTraces != 1 {
+		t.Fatalf("bounded snapshot = traces:%+v dropped:%d bytes:%d limit:%d", snapshot.Traces, snapshot.DroppedTraces, len(encoded), limit)
+	}
 }
 
 func TestTraceStoreRejectsStaleTaskReplacement(t *testing.T) {

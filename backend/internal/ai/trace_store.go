@@ -84,17 +84,51 @@ func (s *TraceStore) Upsert(trace AnalysisTrace) bool {
 		}
 	}
 	if len(s.traces) >= analysisTraceMaxTraces {
-		oldest := 0
-		for i := 1; i < len(s.traces); i++ {
-			if traceBefore(s.traces[i], s.traces[oldest]) {
-				oldest = i
-			}
+		oldest := oldestTraceIndex(s.traces)
+		if !traceAfter(trace, s.traces[oldest]) {
+			s.dropped++
+			return false
 		}
 		s.traces = append(s.traces[:oldest], s.traces[oldest+1:]...)
 		s.dropped++
 	}
 	s.traces = append(s.traces, trace)
 	return true
+}
+
+func (s *TraceStore) snapshotWithinLimit(limit int) (AnalysisTraceFile, error) {
+	if limit <= 0 {
+		return AnalysisTraceFile{}, fmt.Errorf("trace file limit must be positive")
+	}
+	for {
+		snapshot := s.Snapshot()
+		encoded, err := json.MarshalIndent(snapshot, "", "  ")
+		if err != nil {
+			return AnalysisTraceFile{}, err
+		}
+		if len(encoded) <= limit {
+			return snapshot, nil
+		}
+		s.mu.Lock()
+		if len(s.traces) == 0 {
+			s.mu.Unlock()
+			return AnalysisTraceFile{}, fmt.Errorf("empty trace snapshot exceeds %d bytes", limit)
+		}
+		oldest := oldestTraceIndex(s.traces)
+		s.traces = append(s.traces[:oldest], s.traces[oldest+1:]...)
+		s.dropped++
+		s.mu.Unlock()
+	}
+}
+
+func oldestTraceIndex(traces []AnalysisTrace) int {
+	oldest := 0
+	for i := 1; i < len(traces); i++ {
+		if traceBefore(traces[i], traces[oldest]) {
+			oldest = i
+		}
+	}
+	return oldest
 }
 
 func traceAdvances(current, next AnalysisTrace) bool {
@@ -164,6 +198,19 @@ func traceBefore(a, b AnalysisTrace) bool {
 		return !aOK
 	}
 	return analysisTraceIdentity(a) < analysisTraceIdentity(b)
+}
+
+func traceAfter(a, b AnalysisTrace) bool {
+	aTime, aOK := traceStartTime(a.StartedAt)
+	bTime, bOK := traceStartTime(b.StartedAt)
+	switch {
+	case aOK && bOK:
+		return aTime.After(bTime)
+	case aOK != bOK:
+		return aOK
+	default:
+		return false
+	}
 }
 
 func traceStartTime(value string) (time.Time, bool) {
