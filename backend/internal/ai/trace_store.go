@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -119,25 +120,55 @@ func (s *TraceStore) snapshotWithinLimit(limit int) (AnalysisTraceFile, error) {
 	if limit <= 0 {
 		return AnalysisTraceFile{}, fmt.Errorf("trace file limit must be positive")
 	}
-	for {
-		snapshot := s.Snapshot()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ordered := append([]AnalysisTrace(nil), s.traces...)
+	sort.Slice(ordered, func(i, j int) bool { return traceBefore(ordered[i], ordered[j]) })
+	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	candidate := func(drop int) (AnalysisTraceFile, []byte, error) {
+		traces := append([]AnalysisTrace(nil), ordered[drop:]...)
+		snapshot := AnalysisTraceFile{
+			Version: analysisTraceVersion, GeneratedAt: generatedAt,
+			DroppedTraces: s.dropped + drop, Traces: traces,
+		}
+		if snapshot.DroppedTraces > 0 && len(traces) > 0 {
+			snapshot.RetainedSince = traces[0].RecordedAt
+		}
 		encoded, err := json.MarshalIndent(snapshot, "", "  ")
+		return snapshot, encoded, err
+	}
+
+	snapshot, encoded, err := candidate(0)
+	if err != nil {
+		return AnalysisTraceFile{}, err
+	}
+	if len(encoded) <= limit {
+		return snapshot, nil
+	}
+
+	low, high := 1, len(ordered)
+	var best AnalysisTraceFile
+	bestDrop := -1
+	for low <= high {
+		mid := low + (high-low)/2
+		trial, data, err := candidate(mid)
 		if err != nil {
 			return AnalysisTraceFile{}, err
 		}
-		if len(encoded) <= limit {
-			return snapshot, nil
+		if len(data) <= limit {
+			best, bestDrop = trial, mid
+			high = mid - 1
+		} else {
+			low = mid + 1
 		}
-		s.mu.Lock()
-		if len(s.traces) == 0 {
-			s.mu.Unlock()
-			return AnalysisTraceFile{}, fmt.Errorf("empty trace snapshot exceeds %d bytes", limit)
-		}
-		oldest := oldestTraceIndex(s.traces)
-		s.traces = append(s.traces[:oldest], s.traces[oldest+1:]...)
-		s.dropped++
-		s.mu.Unlock()
 	}
+	if bestDrop < 0 {
+		return AnalysisTraceFile{}, fmt.Errorf("empty trace snapshot exceeds %d bytes", limit)
+	}
+	s.traces = append([]AnalysisTrace(nil), ordered[bestDrop:]...)
+	s.dropped += bestDrop
+	return best, nil
 }
 
 func oldestTraceIndex(traces []AnalysisTrace) int {

@@ -64,6 +64,7 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	store.mu.Lock()
 	for i := range store.traces {
 		store.traces[i].StartedAt = "2026-07-22T00:00:00Z"
+		store.traces[i].RecordedAt = "2026-07-22T00:00:00Z"
 	}
 	store.mu.Unlock()
 

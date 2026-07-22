@@ -137,19 +137,7 @@ func (s *TraceStore) Snapshot() AnalysisTraceFile {
 	if out.DroppedTraces > 0 && len(out.Traces) > 0 {
 		out.RetainedSince = out.Traces[oldestTraceIndex(out.Traces)].RecordedAt
 	}
-	sort.Slice(out.Traces, func(i, j int) bool {
-		a, b := out.Traces[i], out.Traces[j]
-		if a.StartedAt != b.StartedAt {
-			return a.StartedAt < b.StartedAt
-		}
-		if a.JobID != b.JobID {
-			return a.JobID < b.JobID
-		}
-		if a.BuildID != b.BuildID {
-			return a.BuildID < b.BuildID
-		}
-		return a.TestName < b.TestName
-	})
+	sort.Slice(out.Traces, func(i, j int) bool { return traceBefore(out.Traces[i], out.Traces[j]) })
 	return out
 }
 
@@ -193,7 +181,9 @@ func (s *TraceSession) Record(event TraceEvent) {
 	event.Status = traceText(event.Status)
 	event.FinishReason = traceText(event.FinishReason)
 	event.Tool = traceText(event.Tool)
-	event.ErrorCode = traceCode(event.ErrorCode)
+	if event.ErrorCode != "" {
+		event.ErrorCode = traceCode(event.ErrorCode)
+	}
 	s.trace.Events = append(s.trace.Events, event)
 }
 

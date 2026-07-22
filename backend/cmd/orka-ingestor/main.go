@@ -274,8 +274,8 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 	tracePath := filepath.Join(dataDir, output.AITraceFilename)
 	traceStore, err := ai.LoadTraceStore(tracePath)
 	if err != nil {
-		log.Printf("load Orka traces: %v; starting fresh", err)
-		traceStore = ai.NewTraceStore()
+		log.Printf("load Orka traces: %v", err)
+		return 0, 0, 1
 	}
 	var tracesChanged atomic.Bool
 	rejectionCounts := map[string]int{}

@@ -264,6 +264,27 @@ func TestIngestCountsTraceWriteFailureAsMissing(t *testing.T) {
 	}
 }
 
+func TestIngestPreservesUnreadableTraceSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, output.AITraceFilename)
+	want := []byte(`{"version":999,"traces":[]}`)
+	if err := os.WriteFile(path, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "model", orkaapi.APIModeAuto, "v1", 2)
+	patched, failed, missing := ingestPass(nil, nil, "orka-system", dir, manifest, "model", false, map[string]bool{})
+	if patched != 0 || failed != 0 || missing != 1 {
+		t.Fatalf("ingest = patched %d, failed %d, missing %d", patched, failed, missing)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("unreadable trace snapshot was overwritten: %s", got)
+	}
+}
+
 func TestIngestLogsSortedRejectionSummary(t *testing.T) {
 	const namespace = "orka-system"
 	manifest := orkaapi.NewAnalysisManifest("project", "test", "contract", "models", "test-model", orkaapi.APIModeAuto, "v1", 2)
