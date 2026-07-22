@@ -3,6 +3,7 @@ name: Machine, Node, and providerID initialization
 priority: 240
 triggers:
   - '(?i)\b(machine(?:deployment)?|worker|node)\b.{0,160}\b(timeout|timed out|not ready|unready|boot|bootstrap|register|provider.?id|uninitialized|provision)\b'
+  - '(?i)\b(timeout|timed out|not ready|unready|boot|bootstrap|register|provision)\b.{0,240}\b(machine(?:deployment)?|worker|node)\b'
   - '(?i)\b(provider.?id|cloud.?provider.{0,40}uninitialized|uninitialized.{0,40}cloud.?provider)\b'
 required_evidence:
   - id: machine-state

@@ -215,7 +215,17 @@ func TestFlatcarBenchmarkSkillRequiresProviderIDChain(t *testing.T) {
 	if !selection.Kubernetes {
 		t.Fatal("Kubernetes profile was not selected")
 	}
-	matched := set.Match("MachineDeployment timed out while the Flatcar worker Node lacked providerID")
+	var flatcar *benchCase
+	for i := range benchCases {
+		if benchCases[i].name == "flatcar-worker-dns-providerid" {
+			flatcar = &benchCases[i]
+			break
+		}
+	}
+	if flatcar == nil {
+		t.Fatal("Flatcar benchmark case is missing")
+	}
+	matched := set.Match(flatcar.failureMsg)
 	var machineSkill *skills.Skill
 	for i := range matched {
 		if matched[i].ID == "engine.kubernetes.machine-node-providerid" {
