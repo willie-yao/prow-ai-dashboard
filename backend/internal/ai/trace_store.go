@@ -44,8 +44,8 @@ func LoadTraceStore(path string) (*TraceStore, error) {
 	return store, nil
 }
 
-// HasTask reports whether an Orka Task already has a persisted trace.
-func (s *TraceStore) HasTask(namespace, taskName string) bool {
+// HasTerminalTask reports whether an Orka Task has a completed persisted trace.
+func (s *TraceStore) HasTerminalTask(namespace, taskName, contractHash string) bool {
 	if s == nil || strings.TrimSpace(taskName) == "" {
 		return false
 	}
@@ -54,7 +54,8 @@ func (s *TraceStore) HasTask(namespace, taskName string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, trace := range s.traces {
-		if trace.Backend == "orka" && trace.TaskNamespace == namespace && trace.TaskName == taskName {
+		if trace.Backend == "orka" && trace.TaskNamespace == namespace && trace.TaskName == taskName &&
+			(contractHash == "" || trace.ContractHash == contractHash) && terminalTraceOutcome(trace.Outcome) {
 			return true
 		}
 	}
@@ -177,7 +178,7 @@ func analysisTraceIdentity(trace AnalysisTrace) string {
 	if trace.JobID == "" && trace.BuildID == "" && trace.TestName == "" {
 		return ""
 	}
-	return trace.Backend + "\x00" + trace.JobID + "\x00" + trace.BuildID + "\x00" + trace.TestName
+	return trace.Backend + "\x00" + trace.JobID + "\x00" + trace.BuildID + "\x00" + trace.TestName + "\x00" + trace.StartedAt
 }
 
 func normalizeAnalysisTrace(trace AnalysisTrace) AnalysisTrace {

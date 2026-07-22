@@ -261,6 +261,10 @@ const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 // could not complete and has no model result (internal/ai/service.go).
 const unavailablePrefix = "AI analysis unavailable: "
 
+var saveTraceSnapshot = func(store *ai.TraceStore, path string) error {
+	return store.Save(path)
+}
+
 // ingestPass patches every available result into the skeleton once. When final
 // is set, still-missing failing tests are marked unavailable (with a Task-phase
 // reason when a kube client is present). Distinct scoped builds are recorded
@@ -325,7 +329,7 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 				}
 				builds[ref.ToolScope] = true
 				if analysisCurrent(tc.AIAnalysis, manifest.ContractHash, ref.Name) {
-					if traceStore.HasTask(namespace, ref.Name) {
+					if traceStore.HasTerminalTask(namespace, ref.Name, manifest.ContractHash) {
 						continue // result and trace were already ingested
 					}
 					pending = append(pending, pendingTest{
@@ -415,8 +419,9 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 		}
 	}
 	if tracesChanged.Load() {
-		if err := traceStore.Save(tracePath); err != nil {
+		if err := saveTraceSnapshot(traceStore, tracePath); err != nil {
 			log.Printf("write Orka traces: %v", err)
+			missing++
 		}
 	}
 	if final && len(rejectionCounts) > 0 {
@@ -598,6 +603,7 @@ type webhookServer struct {
 	namespace string
 	manifest  *orka.AnalysisManifest
 	index     map[string]string
+	saveTrace func(string, ai.AnalysisTrace) error
 }
 
 func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -627,8 +633,13 @@ func (s *webhookServer) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.mu.Lock()
-		s.patchTask(p, patch)
+		err := s.patchTask(p, patch)
 		s.mu.Unlock()
+		if err != nil {
+			log.Printf("patch webhook Task %s: %v", p.TaskName, err)
+			http.Error(w, "analysis patch unavailable", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -752,7 +763,7 @@ func (s *webhookServer) rebuildIndex() bool {
 	return true
 }
 
-func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
+func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) error {
 	patch.taskName = p.TaskName
 	jf := s.index[p.TaskName]
 	if jf == "" {
@@ -760,15 +771,15 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 		jf = s.index[p.TaskName]
 	}
 	if jf == "" {
-		return
+		return fmt.Errorf("task %s is not indexed", p.TaskName)
 	}
 	raw, err := os.ReadFile(jf)
 	if err != nil {
-		return
+		return fmt.Errorf("read %s: %w", jf, err)
 	}
 	var detail models.JobDetail
-	if json.Unmarshal(raw, &detail) != nil {
-		return
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return fmt.Errorf("decode %s: %w", jf, err)
 	}
 	for ri := range detail.Runs {
 		run := &detail.Runs[ri]
@@ -785,7 +796,7 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 			written := !changed
 			if changed {
 				if err := statefile.WriteJSON(jf, detail); err != nil {
-					log.Printf("write %s: %v", jf, err)
+					return fmt.Errorf("write %s: %w", jf, err)
 				} else {
 					written = true
 					log.Printf("🔔 patched %s (phase=%s)", p.TaskName, p.Phase)
@@ -800,13 +811,18 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 					trace.Outcome = "rejected"
 					trace.ErrorCode = "analysis_rejected"
 				}
-				if err := saveOrkaAnalysisTrace(s.dataDir, trace); err != nil {
-					log.Printf("write Orka trace for %s: %v", p.TaskName, err)
+				writer := s.saveTrace
+				if writer == nil {
+					writer = saveOrkaAnalysisTrace
+				}
+				if err := writer(s.dataDir, trace); err != nil {
+					return fmt.Errorf("write Orka trace for %s: %w", p.TaskName, err)
 				}
 			}
-			return
+			return nil
 		}
 	}
+	return fmt.Errorf("task %s test case is not present", p.TaskName)
 }
 
 func (s *webhookServer) applyPrepared(tc *models.TestCase, patch preparedPatch) bool {

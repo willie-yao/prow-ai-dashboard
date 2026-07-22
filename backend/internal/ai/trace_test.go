@@ -147,13 +147,23 @@ func TestTraceStoreLoadAndUpsertOrkaTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.HasTask("", "task-a") {
+	if !loaded.HasTerminalTask("", "task-a", "contract") {
 		t.Fatal("loaded store lost task identity")
 	}
 	loaded.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-new"}}})
 	got := loaded.Snapshot()
 	if len(got.Traces) != 1 || got.Traces[0].Events[0].ResponseID != "resp-new" || got.Traces[0].Events[0].Sequence != 1 {
 		t.Fatalf("upserted traces = %+v", got.Traces)
+	}
+}
+
+func TestTraceStoreKeepsDistinctInProcessSessions(t *testing.T) {
+	store := NewTraceStore()
+	for _, startedAt := range []string{"2026-07-22T08:00:00Z", "2026-07-22T08:01:00Z"} {
+		store.Upsert(AnalysisTrace{Backend: "inprocess", JobID: "job", BuildID: "1", TestName: "same", StartedAt: startedAt, Outcome: "success"})
+	}
+	if got := len(store.Snapshot().Traces); got != 2 {
+		t.Fatalf("in-process sessions = %d, want 2", got)
 	}
 }
 
