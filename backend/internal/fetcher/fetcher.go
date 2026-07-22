@@ -618,6 +618,9 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 
 	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	if err := project.ValidateAIAPI(provider.API); err != nil {
+		return false, fmt.Errorf("fix PRs: %w", err)
+	}
 	if eff.AgentRuntime.Type != "orka" && provider.API == project.AIAPIResponses {
 		return false, fmt.Errorf("fix PRs: local runtime requires chat_completions or an Orka fix runtime")
 	}
