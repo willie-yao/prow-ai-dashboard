@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,11 +96,46 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	store := NewTraceStore()
 	for i := 0; i < analysisTraceMaxTraces+2; i++ {
-		trace := store.Start(TraceMetadata{JobID: "job"})
+		trace := store.Start(TraceMetadata{JobID: "job", BuildID: fmt.Sprintf("%d", i)})
 		trace.Finish("success", nil)
 	}
 	got := store.Snapshot()
 	if len(got.Traces) != analysisTraceMaxTraces || got.DroppedTraces != 2 {
 		t.Fatalf("traces=%d dropped=%d", len(got.Traces), got.DroppedTraces)
+	}
+}
+
+func TestTraceStoreLoadAndUpsertOrkaTask(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ai_traces.json")
+	store := NewTraceStore()
+	if !store.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", ContractHash: "contract", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-old"}}}) {
+		t.Fatal("initial upsert failed")
+	}
+	if err := store.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadTraceStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.HasTask("", "task-a") {
+		t.Fatal("loaded store lost task identity")
+	}
+	loaded.Upsert(AnalysisTrace{Backend: "orka", TaskName: "task-a", JobID: "job", BuildID: "1", TestName: "test", Outcome: "succeeded", Events: []TraceEvent{{Kind: "model_request", ResponseID: "resp-new"}}})
+	got := loaded.Snapshot()
+	if len(got.Traces) != 1 || got.Traces[0].Events[0].ResponseID != "resp-new" || got.Traces[0].Events[0].Sequence != 1 {
+		t.Fatalf("upserted traces = %+v", got.Traces)
+	}
+}
+
+func TestTraceStorePreservesLongResponseID(t *testing.T) {
+	responseID := strings.Repeat("Ab+/", 300)
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job"})
+	trace.Record(TraceEvent{Kind: "model_request", ResponseID: responseID})
+	trace.Finish("success", nil)
+	got := store.Snapshot().Traces[0].Events[0].ResponseID
+	if got != responseID {
+		t.Fatalf("response ID length = %d, want exact %d-byte value", len(got), len(responseID))
 	}
 }

@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	analysisTraceVersion   = 1
-	analysisTraceMaxEvents = 128
-	analysisTraceMaxTraces = 500
-	analysisTraceMaxText   = 256
+	analysisTraceVersion       = 1
+	analysisTraceMaxEvents     = 128
+	analysisTraceMaxTraces     = 500
+	analysisTraceMaxText       = 256
+	analysisTraceMaxResponseID = 2048
 )
 
 // AnalysisTraceFile is the private, bounded trace snapshot for one fetch run.
@@ -31,17 +32,20 @@ type AnalysisTraceFile struct {
 
 // AnalysisTrace records sanitized control-flow metadata for one failure.
 type AnalysisTrace struct {
-	Backend   string       `json:"backend"`
-	JobID     string       `json:"job_id"`
-	BuildID   string       `json:"build_id"`
-	TestName  string       `json:"test_name"`
-	APIMode   string       `json:"api_mode"`
-	StartedAt string       `json:"started_at"`
-	ElapsedMs int          `json:"elapsed_ms"`
-	Outcome   string       `json:"outcome"`
-	ErrorCode string       `json:"error_code,omitempty"`
-	Truncated bool         `json:"truncated,omitempty"`
-	Events    []TraceEvent `json:"events"`
+	Backend       string       `json:"backend"`
+	TaskNamespace string       `json:"task_namespace,omitempty"`
+	TaskName      string       `json:"task_name,omitempty"`
+	ContractHash  string       `json:"contract_hash,omitempty"`
+	JobID         string       `json:"job_id"`
+	BuildID       string       `json:"build_id"`
+	TestName      string       `json:"test_name"`
+	APIMode       string       `json:"api_mode"`
+	StartedAt     string       `json:"started_at"`
+	ElapsedMs     int          `json:"elapsed_ms"`
+	Outcome       string       `json:"outcome"`
+	ErrorCode     string       `json:"error_code,omitempty"`
+	Truncated     bool         `json:"truncated,omitempty"`
+	Events        []TraceEvent `json:"events"`
 }
 
 // TraceEvent is one bounded, content-free analysis event.
@@ -70,11 +74,14 @@ type TraceEvent struct {
 
 // TraceMetadata identifies one analysis without model or endpoint details.
 type TraceMetadata struct {
-	Backend  string
-	JobID    string
-	BuildID  string
-	TestName string
-	APIMode  string
+	Backend       string
+	TaskNamespace string
+	TaskName      string
+	ContractHash  string
+	JobID         string
+	BuildID       string
+	TestName      string
+	APIMode       string
 }
 
 // TraceStore collects completed traces for one fetch run.
@@ -101,13 +108,16 @@ func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
 		store: s,
 		start: now,
 		trace: AnalysisTrace{
-			Backend:   traceText(backend),
-			JobID:     traceText(meta.JobID),
-			BuildID:   traceText(meta.BuildID),
-			TestName:  traceText(meta.TestName),
-			APIMode:   traceText(meta.APIMode),
-			StartedAt: now.Format(time.RFC3339Nano),
-			Events:    []TraceEvent{},
+			Backend:       traceText(backend),
+			TaskNamespace: traceText(meta.TaskNamespace),
+			TaskName:      traceText(meta.TaskName),
+			ContractHash:  traceText(meta.ContractHash),
+			JobID:         traceText(meta.JobID),
+			BuildID:       traceText(meta.BuildID),
+			TestName:      traceText(meta.TestName),
+			APIMode:       traceText(meta.APIMode),
+			StartedAt:     now.Format(time.RFC3339Nano),
+			Events:        []TraceEvent{},
 		},
 	}
 }
@@ -170,7 +180,7 @@ func (s *TraceSession) Record(event TraceEvent) {
 	event.ElapsedMs = int(time.Since(s.start) / time.Millisecond)
 	event.Kind = traceText(event.Kind)
 	event.Outcome = traceText(event.Outcome)
-	event.ResponseID = traceText(event.ResponseID)
+	event.ResponseID = traceResponseID(event.ResponseID)
 	event.Status = traceText(event.Status)
 	event.FinishReason = traceText(event.FinishReason)
 	event.Tool = traceText(event.Tool)
@@ -197,13 +207,7 @@ func (s *TraceSession) Finish(outcome string, err error) {
 	completed := s.trace
 	s.mu.Unlock()
 
-	s.store.mu.Lock()
-	defer s.store.mu.Unlock()
-	if len(s.store.traces) >= analysisTraceMaxTraces {
-		s.store.dropped++
-		return
-	}
-	s.store.traces = append(s.store.traces, completed)
+	s.store.Upsert(completed)
 }
 
 type analysisTraceContextKey struct{}
@@ -226,6 +230,11 @@ func recordTrace(ctx context.Context, event TraceEvent) {
 func traceText(s string) string {
 	s = strings.TrimSpace(redact.Credentials(redact.URLs(s)))
 	return textutil.Truncate(s, analysisTraceMaxText)
+}
+
+func traceResponseID(s string) string {
+	s = strings.TrimSpace(redact.Credentials(redact.URLs(s)))
+	return textutil.Truncate(s, analysisTraceMaxResponseID)
 }
 
 var traceCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)

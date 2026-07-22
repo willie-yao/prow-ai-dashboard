@@ -32,6 +32,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
@@ -266,6 +267,13 @@ const unavailablePrefix = "AI analysis unavailable: "
 // for Tool garbage collection. Returns patched, seen, and unresolved counts.
 func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir string, manifest *orka.AnalysisManifest, model string, final bool, builds map[string]bool) (patched, failedTests, missing int) {
 	jobFiles, _ := filepath.Glob(filepath.Join(dataDir, "jobs", "*.json"))
+	tracePath := filepath.Join(dataDir, output.AITraceFilename)
+	traceStore, err := ai.LoadTraceStore(tracePath)
+	if err != nil {
+		log.Printf("load Orka traces: %v; starting fresh", err)
+		traceStore = ai.NewTraceStore()
+	}
+	var tracesChanged atomic.Bool
 	rejectionCounts := map[string]int{}
 	var rejectionMu sync.Mutex
 	recordRejection := func(reason string) {
@@ -292,6 +300,8 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			tc                   *models.TestCase
 			name                 string
 			stale                bool
+			traceOnly            bool
+			traceIdentity        orkaTraceIdentity
 			evidencePlanComplete bool
 		}
 		var pending []pendingTest
@@ -315,10 +325,24 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 				}
 				builds[ref.ToolScope] = true
 				if analysisCurrent(tc.AIAnalysis, manifest.ContractHash, ref.Name) {
-					continue // already patched by an earlier pass
+					if traceStore.HasTask(namespace, ref.Name) || traceStore.Full() {
+						continue // result and trace were already ingested
+					}
+					pending = append(pending, pendingTest{
+						tc: tc, name: ref.Name, traceOnly: true,
+						traceIdentity: orkaTraceIdentity{
+							Namespace: namespace, TaskName: ref.Name, ContractHash: manifest.ContractHash,
+							JobID: detail.JobID, BuildID: run.BuildID, TestName: tc.Name,
+						},
+					})
+					continue
 				}
 				pending = append(pending, pendingTest{
 					tc: tc, name: ref.Name, stale: tc.AIAnalysis != nil,
+					traceIdentity: orkaTraceIdentity{
+						Namespace: namespace, TaskName: ref.Name, ContractHash: manifest.ContractHash,
+						JobID: detail.JobID, BuildID: run.BuildID, TestName: tc.Name,
+					},
 					evidencePlanComplete: manifest.TaskEvidencePlanComplete(ref.Name),
 				})
 			}
@@ -332,7 +356,24 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			go func(item pendingTest) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				accepted, rejection := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, item.evidencePlanComplete, manifest.ValidationKey)
+				if item.traceOnly {
+					telemetry, err := client.analysisTelemetry(context.Background(), namespace, item.name)
+					if err == nil && telemetry.EventCount > 0 {
+						traceStore.Upsert(buildOrkaAnalysisTrace(item.traceIdentity, telemetry))
+						tracesChanged.Store(true)
+					}
+					return
+				}
+				accepted, rejection, telemetry := applyResult(item.tc, client, namespace, item.name, model, manifest.ContractHash, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, item.evidencePlanComplete, manifest.ValidationKey)
+				if telemetry.EventCount > 0 {
+					trace := buildOrkaAnalysisTrace(item.traceIdentity, telemetry)
+					if !accepted && rejection != "" && trace.Outcome == "succeeded" {
+						trace.Outcome = "rejected"
+						trace.ErrorCode = "analysis_rejected"
+					}
+					traceStore.Upsert(trace)
+					tracesChanged.Store(true)
+				}
 				if accepted {
 					patchedCount.Add(1)
 					changed.Store(true)
@@ -369,6 +410,11 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 			}
 		}
 	}
+	if tracesChanged.Load() {
+		if err := traceStore.Save(tracePath); err != nil {
+			log.Printf("write Orka traces: %v", err)
+		}
+	}
 	if final && len(rejectionCounts) > 0 {
 		reasons := make([]string, 0, len(rejectionCounts))
 		for reason := range rejectionCounts {
@@ -383,25 +429,27 @@ func ingestPass(client *orkaClient, kube *orka.KubeClient, namespace, dataDir st
 }
 
 // applyResult fetches taskName's result, parses the analysis, and patches it
-// onto tc. Returns true if it patched (result available and parseable).
-func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash, apiMode string, minToolCalls, minGCSBytes int, skillSetHash string, evidencePlanComplete bool, validationKey string) (bool, string) {
+// onto tc. Returns the accepted telemetry for private trace persistence.
+func applyResult(tc *models.TestCase, client *orkaClient, namespace, taskName, model, contractHash, apiMode string, minToolCalls, minGCSBytes int, skillSetHash string, evidencePlanComplete bool, validationKey string) (bool, string, analysisTelemetry) {
 	result, ok := client.result(namespace, taskName)
 	if !ok {
-		return false, ""
+		telemetry, _ := client.analysisTelemetry(context.Background(), namespace, taskName)
+		return false, "", telemetry
 	}
 	a, err := parseAnalysis(result)
 	if err != nil {
-		return false, rejectionReason("analysis Task produced an invalid result: ", err)
+		telemetry, _ := client.analysisTelemetry(context.Background(), namespace, taskName)
+		return false, rejectionReason("analysis Task produced an invalid result: ", err), telemetry
 	}
 	telemetry, err := client.analysisTelemetry(context.Background(), namespace, taskName)
 	if err != nil {
-		return false, rejectionReason("analysis Task telemetry unavailable: ", err)
+		return false, rejectionReason("analysis Task telemetry unavailable: ", err), analysisTelemetry{}
 	}
 	if err := validateAnalysisAcceptance(a, telemetry, taskName, apiMode, minToolCalls, minGCSBytes, skillSetHash, evidencePlanComplete, validationKey); err != nil {
-		return false, rejectionReason("analysis Task failed acceptance: ", err)
+		return false, rejectionReason("analysis Task failed acceptance: ", err), telemetry
 	}
 	applyParsedAnalysis(tc, a, telemetry, model, contractHash, skillSetHash, taskName)
-	return true, ""
+	return true, "", telemetry
 }
 
 func applyParsedAnalysis(tc *models.TestCase, a analysis, telemetry analysisTelemetry, model, contractHash, skillSetHash, taskName string) {
@@ -603,26 +651,41 @@ func (s *webhookServer) manifestForTask(taskName string) (*orka.AnalysisManifest
 }
 
 func (s *webhookServer) preparePatch(p webhookPayload, manifest *orka.AnalysisManifest) preparedPatch {
+	patch := preparedPatch{
+		taskName: p.TaskName, model: manifest.Model,
+		contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash,
+	}
 	if p.Phase != "Succeeded" || (p.ResultRef != nil && !p.ResultRef.Available) {
-		return preparedPatch{reason: "analysis Task " + strings.ToLower(p.Phase)}
+		patch.reason = "analysis Task " + strings.ToLower(p.Phase)
+		patch.telemetry, _ = s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
+		return patch
 	}
 	result, ok := s.client.result(s.namespace, p.TaskName)
 	if !ok {
-		return preparedPatch{reason: "analysis Task result is not readable yet", retry: true}
+		patch.reason = "analysis Task result is not readable yet"
+		patch.retry = true
+		return patch
 	}
 	parsed, err := parseAnalysis(result)
 	if err != nil {
-		return preparedPatch{reason: rejectionReason("analysis Task produced an invalid result: ", err)}
+		patch.reason = rejectionReason("analysis Task produced an invalid result: ", err)
+		patch.telemetry, _ = s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
+		return patch
 	}
 	telemetry, err := s.client.analysisTelemetry(context.Background(), s.namespace, p.TaskName)
 	if err != nil {
-		return preparedPatch{reason: rejectionReason("analysis Task telemetry unavailable: ", err), retry: true}
+		patch.reason = rejectionReason("analysis Task telemetry unavailable: ", err)
+		patch.retry = true
+		return patch
 	}
+	patch.telemetry = telemetry
 	if err := validateAnalysisAcceptance(parsed, telemetry, p.TaskName, manifest.APIMode, manifest.MinToolCalls, manifest.MinGCSBytes, manifest.SkillSetHash, manifest.TaskEvidencePlanComplete(p.TaskName), manifest.ValidationKey); err != nil {
-		retry := telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
-		return preparedPatch{reason: rejectionReason("analysis Task failed acceptance: ", err), retry: retry}
+		patch.reason = rejectionReason("analysis Task failed acceptance: ", err)
+		patch.retry = telemetry.EventCount == 0 || telemetry.TaskOutcome == ""
+		return patch
 	}
-	return preparedPatch{analysis: &parsed, telemetry: telemetry, model: manifest.Model, contractHash: manifest.ContractHash, skillSetHash: manifest.SkillSetHash}
+	patch.analysis = &parsed
+	return patch
 }
 
 func (s *webhookServer) rebuildIndex() bool {
@@ -691,11 +754,27 @@ func (s *webhookServer) patchTask(p webhookPayload, patch preparedPatch) {
 			if err != nil || ref.Name != p.TaskName {
 				continue
 			}
-			if s.applyPrepared(tc, patch) {
+			changed := s.applyPrepared(tc, patch)
+			written := !changed
+			if changed {
 				if err := statefile.WriteJSON(jf, detail); err != nil {
 					log.Printf("write %s: %v", jf, err)
 				} else {
+					written = true
 					log.Printf("🔔 patched %s (phase=%s)", p.TaskName, p.Phase)
+				}
+			}
+			if written && patch.telemetry.EventCount > 0 {
+				trace := buildOrkaAnalysisTrace(orkaTraceIdentity{
+					Namespace: s.namespace, TaskName: p.TaskName, ContractHash: patch.contractHash,
+					JobID: detail.JobID, BuildID: run.BuildID, TestName: tc.Name,
+				}, patch.telemetry)
+				if patch.analysis == nil && trace.Outcome == "succeeded" {
+					trace.Outcome = "rejected"
+					trace.ErrorCode = "analysis_rejected"
+				}
+				if err := saveOrkaAnalysisTrace(s.dataDir, trace); err != nil {
+					log.Printf("write Orka trace for %s: %v", p.TaskName, err)
 				}
 			}
 			return
