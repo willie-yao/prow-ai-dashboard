@@ -402,8 +402,9 @@ ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 						"nodeSelector": map[string]any{"agentpool": "nodepool1"},
 						"containers": []any{map[string]any{
 							"name": "model", "image": image, "command": []string{"python", "/script/server.py"},
-							"ports":        []any{map[string]any{"containerPort": 8080}},
-							"volumeMounts": []any{map[string]any{"name": "script", "mountPath": "/script"}},
+							"ports":          []any{map[string]any{"containerPort": 8080}},
+							"readinessProbe": containerModelReadinessProbe(),
+							"volumeMounts":   []any{map[string]any{"name": "script", "mountPath": "/script"}},
 						}},
 						"volumes": []any{map[string]any{"name": "script", "configMap": map[string]any{"name": name}}},
 					},
@@ -422,6 +423,23 @@ ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 			t.Fatal(err)
 		}
 		containerKubectl(t, kubeContext, data, "apply", "-f", "-")
+	}
+}
+
+func containerModelReadinessProbe() map[string]any {
+	return map[string]any{
+		"tcpSocket":           map[string]any{"port": 8080},
+		"periodSeconds":       1,
+		"failureThreshold":    30,
+		"initialDelaySeconds": 0,
+	}
+}
+
+func TestContainerModelReadinessProbeUsesTCPPort(t *testing.T) {
+	probe := containerModelReadinessProbe()
+	tcp := probe["tcpSocket"].(map[string]any)
+	if tcp["port"] != 8080 || probe["periodSeconds"] != 1 || probe["failureThreshold"] != 30 {
+		t.Fatalf("readiness probe = %+v", probe)
 	}
 }
 

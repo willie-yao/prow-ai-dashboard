@@ -7,15 +7,28 @@ source "$repo_root/experimental/orka/worker-patches/compatibility.env"
 cluster=${ORKA_CONTAINER_CLUSTER:-orka-container-analyzer}
 context="kind-$cluster"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/orka-container-analyzer.XXXXXX")
-controller_image=orka-controller:container-analyzer-pinned
-base_image=dashboard-analyzer-base:container-analyzer-spike
-analyzer_image=dashboard-analyzer:container-analyzer-spike
-model_image=orka-script-model:container-analyzer-spike
+run_id=$(date -u +%Y%m%d%H%M%S)-$$
+controller_repository=orka-controller
+controller_tag="container-analyzer-$run_id"
+controller_image="$controller_repository:$controller_tag"
+base_image="dashboard-analyzer-base:$run_id"
+analyzer_image="dashboard-analyzer:$run_id"
+model_image="orka-script-model:$run_id"
 cluster_owned=false
+lock_owned=false
+lock_name=${cluster//[^a-zA-Z0-9_.-]/_}
+lock_dir="${TMPDIR:-/tmp}/prow-ai-dashboard-orka-container-$lock_name.lock"
+owned_images=()
 
 cleanup() {
   if [[ $cluster_owned == true ]]; then
     kind delete cluster --name "$cluster" >/dev/null 2>&1 || true
+  fi
+  if (( ${#owned_images[@]} > 0 )); then
+    docker image rm -f "${owned_images[@]}" >/dev/null 2>&1 || true
+  fi
+  if [[ $lock_owned == true ]]; then
+    rmdir "$lock_dir" >/dev/null 2>&1 || true
   fi
   rm -rf "$tmp"
 }
@@ -24,6 +37,12 @@ trap cleanup EXIT
 for command in docker kind kubectl helm git curl tar go; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
+
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  echo "another container analyzer run owns cluster name $cluster" >&2
+  exit 1
+fi
+lock_owned=true
 
 if kind get clusters | grep -Fxq "$cluster"; then
   echo "kind cluster $cluster already exists; choose a different ORKA_CONTAINER_CLUSTER" >&2
@@ -54,6 +73,7 @@ actual=$(git -C "$orka_source" rev-parse HEAD)
 
 echo "Building pinned Orka controller $ORKA_COMMIT"
 docker build -q -t "$controller_image" "$orka_source" >/dev/null
+owned_images+=("$controller_image")
 
 echo "Building dashboard analyzer"
 docker build -q \
@@ -61,9 +81,10 @@ docker build -q \
   --build-arg CMD=analyzer \
   -t "$base_image" \
   "$repo_root/backend" >/dev/null
+owned_images+=("$base_image")
 
 fixture=flatcar-sysext-dns-providerid.tar.gz
-fixture_sha=8ed886395742d145c014be4b6a2dc38b3ddf3db0ad6e7a5740da10eea80a1945
+fixture_sha=${ORKA_CONTAINER_FIXTURE_SHA:-8ed886395742d145c014be4b6a2dc38b3ddf3db0ad6e7a5740da10eea80a1945}
 mkdir -p "$tmp/image/project/prompts" "$tmp/image/fixtures"
 curl -fsSL "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/$fixture" -o "$tmp/$fixture"
 if command -v sha256sum >/dev/null; then
@@ -103,11 +124,13 @@ COPY project /project
 COPY fixtures /fixtures
 EOF_IMAGE
 docker build -q -t "$analyzer_image" "$tmp/image" >/dev/null
+owned_images+=("$analyzer_image")
 
 cat > "$tmp/model.Dockerfile" <<'MODEL_IMAGE'
 FROM python:3.12-alpine
 MODEL_IMAGE
 docker build -q -t "$model_image" -f "$tmp/model.Dockerfile" "$tmp" >/dev/null
+owned_images+=("$model_image")
 kind load docker-image --name "$cluster" "$controller_image" "$analyzer_image" "$model_image"
 
 kubectl --context "$context" create namespace orka-system
@@ -116,8 +139,8 @@ kubectl --context "$context" apply -f "$repo_root/experimental/orka/manifests/00
 helm upgrade --install orka "$orka_source/charts/orka" \
   --kube-context "$context" \
   --namespace orka-system \
-  --set controller.image.repository=orka-controller \
-  --set controller.image.tag=container-analyzer-pinned \
+  --set controller.image.repository="$controller_repository" \
+  --set controller.image.tag="$controller_tag" \
   --set controller.image.pullPolicy=Never \
   --set nodeSelector.agentpool=nodepool1 \
   --set crds.install=false

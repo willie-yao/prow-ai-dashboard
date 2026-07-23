@@ -189,7 +189,7 @@ Run it from the repository root:
 experimental/orka/run-container-analyzer-kind.sh
 ```
 
-The cluster ownership regression check is available separately:
+The cluster ownership and image cleanup regression check is available separately:
 
 ```bash
 experimental/orka/test-container-analyzer-kind.sh
