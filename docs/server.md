@@ -64,8 +64,6 @@ endpoints require the same admin identity used by actions. A missing trace file
 returns 404 and the page renders an empty state. Static Pages deployments never
 advertise the feature and continue stripping `ai_traces.json` before publication.
 
-
-
 ## Admin-gated actions
 
 The write endpoints let an admin file an issue or draft a fix PR for a specific

@@ -51,7 +51,7 @@ func NewKubeClient(cfg *rest.Config) (*KubeClient, error) {
 }
 
 // Apply server-side applies an unstructured object (create or update).
-// It is idempotent for content-addressed Tasks and immutable bundle ownership.
+// It is idempotent for content-addressed Tasks.
 func (k *KubeClient) Apply(ctx context.Context, gvr schema.GroupVersionResource, ns string, obj map[string]any) error {
 	u := &unstructured.Unstructured{Object: obj}
 	data, err := json.Marshal(obj)
