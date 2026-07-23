@@ -22,6 +22,12 @@ for how to pin a release.
 
 ### Added
 
+- **Immutable container analysis bundles.** The experimental dashboard-owned
+  analyzer now receives its failure request, sanitized project config, prompt,
+  and consumer skills from an immutable content-addressed ConfigMap. Tasks use a
+  ConfigMap key reference, verify the full digest before materializing private
+  temporary files, keep credentials in Secret references, and reject bundles
+  that exceed the bounded environment transport.
 - **Dashboard container result framing.** The experimental dashboard-owned
   analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task
   logs are parsed for the last valid marker instead of treating the final line

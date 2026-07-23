@@ -16,7 +16,7 @@ import (
 
 const (
 	// ContainerAnalysisContractVersion identifies the experimental adapter contract.
-	ContainerAnalysisContractVersion = "dashboard-failure-analyzer-v2"
+	ContainerAnalysisContractVersion = "dashboard-failure-analyzer-v3"
 )
 
 var invalidTaskNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -38,36 +38,47 @@ type ContainerAnalysisTaskSpec struct {
 	Timeout         string
 	MaxRetries      int
 	ContractVersion string
+	ProjectDir      string
 	Request         ai.FailureAnalysisRequest
 	Environment     map[string]string
 	SecretEnv       []SecretEnvVar
 	Labels          map[string]string
 }
 
-// BuildContainerAnalysisTask builds one content-addressed Orka container Task.
-func BuildContainerAnalysisTask(in ContainerAnalysisTaskSpec) (map[string]any, error) {
+// ContainerAnalysisResources are the immutable bundle and its Orka Task.
+type ContainerAnalysisResources struct {
+	BundleConfigMap map[string]any
+	Task            map[string]any
+}
+
+// BuildContainerAnalysisResources builds one content-addressed bundle and Task.
+func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAnalysisResources, error) {
 	if strings.TrimSpace(in.Namespace) == "" {
-		return nil, fmt.Errorf("container analysis Task namespace is required")
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task namespace is required")
 	}
 	if strings.TrimSpace(in.Image) == "" {
-		return nil, fmt.Errorf("container analysis Task image is required")
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task image is required")
 	}
 	if len(in.Command) == 0 {
-		return nil, fmt.Errorf("container analysis Task command is required")
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task command is required")
 	}
 	if strings.TrimSpace(in.Timeout) == "" {
-		return nil, fmt.Errorf("container analysis Task timeout is required")
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task timeout is required")
 	}
 	if in.MaxRetries < 0 {
-		return nil, fmt.Errorf("container analysis Task retries must not be negative")
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task retries must not be negative")
 	}
 	if in.ContractVersion == "" {
 		in.ContractVersion = ContainerAnalysisContractVersion
 	}
-	requestJSON, requestDigest, err := analysisruntime.EncodeInlineRequest(in.Request)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(in.ProjectDir) == "" {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
 	}
+	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundle(in.ProjectDir, in.ContractVersion, in.Request)
+	if err != nil {
+		return ContainerAnalysisResources{}, err
+	}
+	bundleName := containerAnalysisBundleName(in.NamePrefix, bundleDigest)
 	secretEnv := append([]SecretEnvVar(nil), in.SecretEnv...)
 	sort.Slice(secretEnv, func(i, j int) bool {
 		if secretEnv[i].Name != secretEnv[j].Name {
@@ -79,39 +90,44 @@ func BuildContainerAnalysisTask(in ContainerAnalysisTaskSpec) (map[string]any, e
 		return secretEnv[i].SecretKey < secretEnv[j].SecretKey
 	})
 	seenEnv := map[string]bool{
-		analysisruntime.InlineRequestEnv:       true,
-		analysisruntime.InlineRequestDigestEnv: true,
+		analysisruntime.ProjectBundleEnv:       true,
+		analysisruntime.ProjectBundleDigestEnv: true,
 	}
 	for name := range in.Environment {
 		if strings.TrimSpace(name) == "" {
-			return nil, fmt.Errorf("container analysis Task environment name is required")
+			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment name is required")
 		}
 		if !safeInlineEnvironmentName(name) {
-			return nil, fmt.Errorf("container analysis Task environment %s must use a Secret reference", name)
+			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment %s must use a Secret reference", name)
 		}
 		if seenEnv[name] {
-			return nil, fmt.Errorf("container analysis Task environment must not override %s", name)
+			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment must not override %s", name)
 		}
 		seenEnv[name] = true
 	}
 	for _, secret := range secretEnv {
 		if strings.TrimSpace(secret.Name) == "" || strings.TrimSpace(secret.SecretName) == "" || strings.TrimSpace(secret.SecretKey) == "" {
-			return nil, fmt.Errorf("container analysis Task secret environment references require name, Secret name, and key")
+			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task secret environment references require name, Secret name, and key")
 		}
 		if seenEnv[secret.Name] {
-			return nil, fmt.Errorf("container analysis Task environment contains duplicate %s", secret.Name)
+			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment contains duplicate %s", secret.Name)
 		}
 		seenEnv[secret.Name] = true
 	}
 	in.SecretEnv = secretEnv
 
-	name, err := containerAnalysisTaskName(in, requestDigest)
+	name, err := containerAnalysisTaskName(in, bundleDigest)
 	if err != nil {
-		return nil, err
+		return ContainerAnalysisResources{}, err
 	}
 	env := []any{
-		map[string]any{"name": analysisruntime.InlineRequestEnv, "value": string(requestJSON)},
-		map[string]any{"name": analysisruntime.InlineRequestDigestEnv, "value": requestDigest},
+		map[string]any{
+			"name": analysisruntime.ProjectBundleEnv,
+			"valueFrom": map[string]any{
+				"configMapKeyRef": map[string]any{"name": bundleName, "key": analysisruntime.ProjectBundleConfigMapKey},
+			},
+		},
+		map[string]any{"name": analysisruntime.ProjectBundleDigestEnv, "value": bundleDigest},
 	}
 	environmentNames := make([]string, 0, len(in.Environment))
 	for name := range in.Environment {
@@ -129,38 +145,66 @@ func BuildContainerAnalysisTask(in ContainerAnalysisTaskSpec) (map[string]any, e
 			},
 		})
 	}
-	labels := map[string]any{
-		"app.kubernetes.io/managed-by": "prow-ai-dashboard",
-		"prow-ai-dashboard/adapter":    "container-analyzer",
-	}
-	for key, value := range in.Labels {
-		labels[key] = value
-	}
-	return map[string]any{
-		"apiVersion": "core.orka.ai/v1alpha1",
-		"kind":       "Task",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": in.Namespace,
-			"labels":    labels,
-			"annotations": map[string]any{
-				"prow-ai-dashboard/request-digest":   requestDigest,
-				"prow-ai-dashboard/contract-version": in.ContractVersion,
+	bundleLabels := containerAnalysisLabels(in.Labels)
+	taskLabels := containerAnalysisLabels(in.Labels)
+	return ContainerAnalysisResources{
+		BundleConfigMap: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name": bundleName, "namespace": in.Namespace, "labels": bundleLabels, "annotations": containerAnalysisAnnotations(in.ContractVersion, bundleDigest),
 			},
+			"immutable": true,
+			"data":      map[string]any{analysisruntime.ProjectBundleConfigMapKey: string(bundleJSON)},
 		},
-		"spec": map[string]any{
-			"type":        "container",
-			"image":       in.Image,
-			"command":     append([]string(nil), in.Command...),
-			"args":        append([]string(nil), in.Args...),
-			"env":         env,
-			"timeout":     in.Timeout,
-			"retryPolicy": map[string]any{"maxRetries": in.MaxRetries},
-			"execution": map[string]any{
-				"nodeSelector": map[string]any{"agentpool": "nodepool1"},
+		Task: map[string]any{
+			"apiVersion": "core.orka.ai/v1alpha1",
+			"kind":       "Task",
+			"metadata": map[string]any{
+				"name": name, "namespace": in.Namespace, "labels": taskLabels, "annotations": containerAnalysisAnnotations(in.ContractVersion, bundleDigest),
+			},
+			"spec": map[string]any{
+				"type":        "container",
+				"image":       in.Image,
+				"command":     append([]string(nil), in.Command...),
+				"args":        append([]string(nil), in.Args...),
+				"env":         env,
+				"timeout":     in.Timeout,
+				"retryPolicy": map[string]any{"maxRetries": in.MaxRetries},
+				"execution": map[string]any{
+					"nodeSelector": map[string]any{"agentpool": "nodepool1"},
+				},
 			},
 		},
 	}, nil
+}
+
+func containerAnalysisAnnotations(contractVersion, bundleDigest string) map[string]any {
+	return map[string]any{
+		"prow-ai-dashboard/bundle-digest":    bundleDigest,
+		"prow-ai-dashboard/contract-version": contractVersion,
+	}
+}
+
+func containerAnalysisLabels(extra map[string]string) map[string]any {
+	labels := make(map[string]any, len(extra)+2)
+	for key, value := range extra {
+		labels[key] = value
+	}
+	labels["app.kubernetes.io/managed-by"] = "prow-ai-dashboard"
+	labels["prow-ai-dashboard/adapter"] = "container-analyzer"
+	return labels
+}
+
+func containerAnalysisBundleName(namePrefix, digest string) string {
+	prefix := strings.Trim(invalidTaskNameChars.ReplaceAllString(strings.ToLower(namePrefix), "-"), "-")
+	if prefix == "" {
+		prefix = "dashboard-analyzer"
+	}
+	if len(prefix) > 38 {
+		prefix = strings.TrimRight(prefix[:38], "-")
+	}
+	return prefix + "-bundle-" + digest[:16]
 }
 
 func safeInlineEnvironmentName(name string) bool {
@@ -172,9 +216,9 @@ func safeInlineEnvironmentName(name string) bool {
 	}
 }
 
-func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, requestDigest string) (string, error) {
+func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, bundleDigest string) (string, error) {
 	identity := struct {
-		RequestDigest   string
+		BundleDigest    string
 		Image           string
 		Command         []string
 		Args            []string
@@ -183,7 +227,7 @@ func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, requestDigest strin
 		ContractVersion string
 		Environment     map[string]string
 		SecretEnv       []SecretEnvVar
-	}{requestDigest, in.Image, in.Command, in.Args, in.Timeout, in.MaxRetries, in.ContractVersion, in.Environment, in.SecretEnv}
+	}{bundleDigest, in.Image, in.Command, in.Args, in.Timeout, in.MaxRetries, in.ContractVersion, in.Environment, in.SecretEnv}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("marshal container analysis Task identity: %w", err)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,13 +55,13 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	endpoint := "http://" + modelName + "." + namespace + ".svc.cluster.local/v1/chat/completions"
 
 	t.Run("scripted-flatcar-result", func(t *testing.T) {
-		task := buildKindContainerTask(t, namespace, image, id+"-flatcar", endpoint, "script-success", secretName, request, labels)
-		name := applyContainerTask(t, kubeContext, task)
+		resources := buildKindContainerTask(t, namespace, image, id+"-flatcar", endpoint, "script-success", secretName, request, labels)
+		name := applyContainerResources(t, kubeContext, resources)
 		status := waitContainerTask(t, kubeContext, namespace, name, 4*time.Minute)
 		if status.Phase != "Succeeded" || status.Attempts != 1 || status.JobName == "" {
 			t.Fatalf("Task status = %+v", status)
 		}
-		assertContainerJobPlacement(t, kubeContext, namespace, status.JobName)
+		assertContainerJobPlacement(t, kubeContext, namespace, status.JobName, resources)
 		raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
 		t.Logf("raw Task result:\n%s", raw)
 		result, err := orka.ParseContainerAnalysisResult(raw)
@@ -81,14 +82,14 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	})
 
 	t.Run("retry-after-analyzer-failure", func(t *testing.T) {
-		task := buildKindContainerTask(t, namespace, image, id+"-retry", endpoint, "script-retry", secretName, request, labels)
-		name := applyContainerTask(t, kubeContext, task)
+		resources := buildKindContainerTask(t, namespace, image, id+"-retry", endpoint, "script-retry", secretName, request, labels)
+		name := applyContainerResources(t, kubeContext, resources)
 		status := waitContainerTask(t, kubeContext, namespace, name, 5*time.Minute)
 		if status.Phase != "Succeeded" || status.Attempts < 2 {
 			raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
 			t.Fatalf("Task status = %+v, want succeeded after retry\nraw result:\n%s", status, raw)
 		}
-		assertContainerJobPlacement(t, kubeContext, namespace, status.JobName)
+		assertContainerJobPlacement(t, kubeContext, namespace, status.JobName, resources)
 		raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
 		if _, err := orka.ParseContainerAnalysisResult(raw); err != nil {
 			t.Fatalf("parse retried Task result: %v\n%s", err, raw)
@@ -126,29 +127,68 @@ func flatcarFailureRequest(bc benchCase) ai.FailureAnalysisRequest {
 	}
 }
 
-func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string) map[string]any {
+func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string) orka.ContainerAnalysisResources {
 	t.Helper()
-	task, err := orka.BuildContainerAnalysisTask(orka.ContainerAnalysisTaskSpec{
+	resources, err := orka.BuildContainerAnalysisResources(orka.ContainerAnalysisTaskSpec{
 		Namespace: namespace, NamePrefix: prefix, Image: image,
-		Command: []string{"/app"}, Args: []string{"-project-dir=/project", "-data-dir=/tmp/analyzer"},
-		Timeout: "2m", MaxRetries: 1, Request: request, Labels: labels,
+		Command: []string{"/app"}, Args: []string{"-data-dir=/tmp/analyzer"},
+		Timeout: "2m", MaxRetries: 1, ProjectDir: containerAnalyzerProject(t), Request: request, Labels: labels,
 		Environment: map[string]string{"AI_ENDPOINT": endpoint, "AI_MODEL": model},
 		SecretEnv:   []orka.SecretEnvVar{{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return task
+	return resources
 }
 
-func applyContainerTask(t *testing.T, kubeContext string, task map[string]any) string {
+func containerAnalyzerProject(t *testing.T) string {
 	t.Helper()
-	data, err := json.Marshal(task)
-	if err != nil {
+	dir := t.TempDir()
+	config := `id: container-analyzer-spike
+name: Orka Container Analyzer Spike
+testgrid:
+  dashboard: container-analyzer-spike
+storage:
+  provider: local
+  bucket: kubernetes-ci-logs
+  base: /fixtures
+branding:
+  title: Orka Container Analyzer Spike
+  base_path: /container-analyzer-spike
+  site_url: https://example.invalid/container-analyzer-spike
+  source_repo:
+    owner: kubernetes-sigs
+    name: cluster-api-provider-azure
+ai:
+  tools: [filesystem]
+  min_tool_calls: 2
+`
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	containerKubectl(t, kubeContext, data, "apply", "-f", "-")
-	return task["metadata"].(map[string]any)["name"].(string)
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prompt := `You are debugging Kubernetes Cluster API Provider Azure E2E failures.
+Use the build artifacts to distinguish transient bootstrap failures from persistent product defects.
+`
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte(prompt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func applyContainerResources(t *testing.T, kubeContext string, resources orka.ContainerAnalysisResources) string {
+	t.Helper()
+	for _, resource := range []map[string]any{resources.BundleConfigMap, resources.Task} {
+		data, err := json.Marshal(resource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		containerKubectl(t, kubeContext, data, "apply", "-f", "-")
+	}
+	return resources.Task["metadata"].(map[string]any)["name"].(string)
 }
 
 type containerTaskStatus struct {
@@ -177,7 +217,7 @@ func waitContainerTask(t *testing.T, kubeContext, namespace, name string, timeou
 	return status
 }
 
-func assertContainerJobPlacement(t *testing.T, kubeContext, namespace, jobName string) {
+func assertContainerJobPlacement(t *testing.T, kubeContext, namespace, jobName string, resources orka.ContainerAnalysisResources) {
 	t.Helper()
 	out := containerKubectl(t, kubeContext, nil, "get", "job", jobName, "-n", namespace, "-o", "json")
 	var job struct {
@@ -187,6 +227,18 @@ func assertContainerJobPlacement(t *testing.T, kubeContext, namespace, jobName s
 				Spec struct {
 					NodeSelector                 map[string]string `json:"nodeSelector"`
 					AutomountServiceAccountToken *bool             `json:"automountServiceAccountToken"`
+					Containers                   []struct {
+						Env []struct {
+							Name      string `json:"name"`
+							Value     string `json:"value"`
+							ValueFrom struct {
+								ConfigMapKeyRef *struct {
+									Name string `json:"name"`
+									Key  string `json:"key"`
+								} `json:"configMapKeyRef"`
+							} `json:"valueFrom"`
+						} `json:"env"`
+					} `json:"containers"`
 				} `json:"spec"`
 			} `json:"template"`
 		} `json:"spec"`
@@ -202,6 +254,24 @@ func assertContainerJobPlacement(t *testing.T, kubeContext, namespace, jobName s
 	}
 	if job.Spec.Template.Spec.AutomountServiceAccountToken == nil || *job.Spec.Template.Spec.AutomountServiceAccountToken {
 		t.Fatalf("custom container automountServiceAccountToken = %v, want false", job.Spec.Template.Spec.AutomountServiceAccountToken)
+	}
+	expectedBundle := resources.BundleConfigMap["metadata"].(map[string]any)["name"].(string)
+	expectedDigest := resources.Task["metadata"].(map[string]any)["annotations"].(map[string]any)["prow-ai-dashboard/bundle-digest"].(string)
+	bundleRefFound := false
+	digestFound := false
+	if len(job.Spec.Template.Spec.Containers) == 1 {
+		for _, env := range job.Spec.Template.Spec.Containers[0].Env {
+			switch env.Name {
+			case analysisruntime.ProjectBundleEnv:
+				ref := env.ValueFrom.ConfigMapKeyRef
+				bundleRefFound = ref != nil && ref.Name == expectedBundle && ref.Key == analysisruntime.ProjectBundleConfigMapKey
+			case analysisruntime.ProjectBundleDigestEnv:
+				digestFound = env.Value == expectedDigest
+			}
+		}
+	}
+	if !bundleRefFound || !digestFound {
+		t.Fatalf("Job did not preserve the immutable bundle reference")
 	}
 	podNode := strings.TrimSpace(containerKubectl(t, kubeContext, nil, "get", "pod", "-n", namespace, "-l", "job-name="+jobName, "-o", "jsonpath={.items[0].spec.nodeName}"))
 	if podNode == "" {
