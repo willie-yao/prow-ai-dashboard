@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"sort"
@@ -72,19 +73,26 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if strings.TrimSpace(in.ProjectDir) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
 	}
-	api := strings.TrimSpace(in.Environment["AI_API"])
+	environment := maps.Clone(in.Environment)
+	api := strings.ToLower(strings.TrimSpace(environment["AI_API"]))
 	if api == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_API")
 	}
 	if err := project.ValidateAIAPI(api); err != nil {
 		return ContainerAnalysisResources{}, err
 	}
-	if err := validateContainerAnalysisEndpoint(in.Environment["AI_ENDPOINT"]); err != nil {
+	endpoint, err := validateContainerAnalysisEndpoint(environment["AI_ENDPOINT"])
+	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
-	if strings.TrimSpace(in.Environment["AI_MODEL"]) == "" {
+	model := strings.TrimSpace(environment["AI_MODEL"])
+	if model == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_MODEL")
 	}
+	environment["AI_API"] = api
+	environment["AI_ENDPOINT"] = endpoint
+	environment["AI_MODEL"] = model
+	in.Environment = environment
 	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundle(in.ProjectDir, ContainerAnalysisContractVersion, in.Request)
 	if err != nil {
 		return ContainerAnalysisResources{}, err
@@ -221,27 +229,27 @@ func containerAnalysisBundleName(taskName string) string {
 	return taskName + "-input"
 }
 
-func validateContainerAnalysisEndpoint(raw string) error {
+func validateContainerAnalysisEndpoint(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return fmt.Errorf("container analysis Task environment requires AI_ENDPOINT")
+		return "", fmt.Errorf("container analysis Task environment requires AI_ENDPOINT")
 	}
 	endpoint, err := url.Parse(raw)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-		return fmt.Errorf("container analysis Task AI_ENDPOINT must be an absolute http or https URL")
+		return "", fmt.Errorf("container analysis Task AI_ENDPOINT must be an absolute http or https URL")
 	}
 	if endpoint.User != nil {
-		return fmt.Errorf("container analysis Task AI_ENDPOINT must not contain URL credentials")
+		return "", fmt.Errorf("container analysis Task AI_ENDPOINT must not contain URL credentials")
 	}
 	if endpoint.Fragment != "" {
-		return fmt.Errorf("container analysis Task AI_ENDPOINT must not contain a fragment")
+		return "", fmt.Errorf("container analysis Task AI_ENDPOINT must not contain a fragment")
 	}
 	for key, values := range endpoint.Query() {
 		if !strings.EqualFold(key, "api-version") || len(values) != 1 || strings.TrimSpace(values[0]) == "" {
-			return fmt.Errorf("container analysis Task AI_ENDPOINT allows only a non-empty api-version query parameter")
+			return "", fmt.Errorf("container analysis Task AI_ENDPOINT allows only a non-empty api-version query parameter")
 		}
 	}
-	return nil
+	return raw, nil
 }
 
 func safeInlineEnvironmentName(name string) bool {

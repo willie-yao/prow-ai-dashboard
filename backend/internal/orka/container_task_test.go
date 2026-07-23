@@ -257,6 +257,35 @@ func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
 	}
 }
 
+func TestBuildContainerAnalysisResourcesNormalizesProviderEnvironment(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Environment["AI_API"] = " Responses "
+	spec.Environment["AI_ENDPOINT"] = "  https://model.invalid/v1/responses  "
+	spec.Environment["AI_MODEL"] = "  model-name  "
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Environment["AI_ENDPOINT"] != "  https://model.invalid/v1/responses  " {
+		t.Fatal("BuildContainerAnalysisResources mutated the caller environment")
+	}
+	got := map[string]string{}
+	for _, raw := range resources.Task["spec"].(map[string]any)["env"].([]any) {
+		entry := raw.(map[string]any)
+		if value, ok := entry["value"].(string); ok {
+			got[entry["name"].(string)] = value
+		}
+	}
+	want := map[string]string{
+		"AI_API": "responses", "AI_ENDPOINT": "https://model.invalid/v1/responses", "AI_MODEL": "model-name",
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s = %q, want %q", name, got[name], value)
+		}
+	}
+}
+
 func TestBuildContainerAnalysisResourcesRejectsCredentialBearingEndpoints(t *testing.T) {
 	for name, endpoint := range map[string]string{
 		"relative":    "/v1/chat/completions",
