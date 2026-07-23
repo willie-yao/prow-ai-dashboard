@@ -111,7 +111,7 @@ analysis backend. This decision does not remove or constrain
 
 ### Benefits
 
-- One analysis policy implementation
+- One canonical implementation and home for new analysis policy
 - No new dashboard policy in patched Orka internals
 - In-process and container execution share results, cache rules, skills, and
   quality gates
