@@ -30,7 +30,6 @@ type ContainerAnalysisResourceClient interface {
 	CreateIfAbsent(context.Context, schema.GroupVersionResource, string, map[string]any) (bool, error)
 	Get(context.Context, schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error)
 	PatchAnnotations(context.Context, schema.GroupVersionResource, string, string, map[string]string) (string, error)
-	Delete(context.Context, schema.GroupVersionResource, string, string) error
 	DeleteIfResourceVersion(context.Context, schema.GroupVersionResource, string, string, string) (bool, error)
 	ListByLabel(context.Context, schema.GroupVersionResource, string, string) ([]unstructured.Unstructured, error)
 	TaskState(context.Context, string, string) (TaskState, error)
@@ -57,7 +56,7 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 		return fmt.Errorf("read container analysis Task %s: %w", taskName, err)
 	}
 	if state.Exists && TerminalPhase(state.Phase) {
-		return CleanupContainerAnalysisBundle(ctx, client, resources)
+		return CleanupContainerAnalysisBundle(ctx, client, resources, state.UID)
 	}
 	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
 		return err
@@ -165,16 +164,58 @@ func validateExistingContainerAnalysisBundle(existing *unstructured.Unstructured
 	return nil
 }
 
-// CleanupContainerAnalysisBundle deletes private inputs after terminal result handling.
-func CleanupContainerAnalysisBundle(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) error {
+// CleanupContainerAnalysisBundle deletes private inputs for the observed terminal Task UID.
+func CleanupContainerAnalysisBundle(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources, expectedTaskUID string) error {
 	namespace, name, err := containerResourceRef(resources.BundleConfigMap)
 	if err != nil {
 		return err
 	}
-	if err := client.Delete(ctx, configMapsGVR, namespace, name); err != nil {
-		return fmt.Errorf("delete container analysis bundle %s: %w", name, err)
+	taskNamespace, taskName, err := containerResourceRef(resources.Task)
+	if err != nil {
+		return err
+	}
+	if taskNamespace != namespace {
+		return fmt.Errorf("container analysis Task and bundle namespaces differ")
+	}
+	if expectedTaskUID == "" {
+		return fmt.Errorf("container analysis terminal Task UID is required")
+	}
+	state, err := client.TaskState(ctx, taskNamespace, taskName)
+	if err != nil {
+		return fmt.Errorf("read terminal container analysis Task %s: %w", taskName, err)
+	}
+	if !sameTerminalTask(state, expectedTaskUID) {
+		return nil
+	}
+	existing, err := client.Get(ctx, configMapsGVR, namespace, name)
+	if IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read terminal container analysis bundle %s: %w", name, err)
+	}
+	if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
+		return err
+	}
+	resourceVersion := existing.GetResourceVersion()
+	if resourceVersion == "" {
+		return fmt.Errorf("terminal container analysis bundle %s has no resource version", name)
+	}
+	state, err = client.TaskState(ctx, taskNamespace, taskName)
+	if err != nil {
+		return fmt.Errorf("recheck terminal container analysis Task %s: %w", taskName, err)
+	}
+	if !sameTerminalTask(state, expectedTaskUID) {
+		return nil
+	}
+	if _, err := client.DeleteIfResourceVersion(ctx, configMapsGVR, namespace, name, resourceVersion); err != nil {
+		return fmt.Errorf("delete terminal container analysis bundle %s: %w", name, err)
 	}
 	return nil
+}
+
+func sameTerminalTask(state TaskState, expectedUID string) bool {
+	return state.Exists && state.UID == expectedUID && TerminalPhase(state.Phase)
 }
 
 // PruneContainerAnalysisBundles removes orphaned bundles older than the retention window.

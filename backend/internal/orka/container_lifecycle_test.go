@@ -32,6 +32,7 @@ type fakeContainerResourceClient struct {
 	listed                []unstructured.Unstructured
 	existing              *unstructured.Unstructured
 	taskStates            map[string]TaskState
+	taskStateSequences    map[string][]TaskState
 }
 
 func (f *fakeContainerResourceClient) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
@@ -104,6 +105,11 @@ func (f *fakeContainerResourceClient) TaskState(_ context.Context, _, name strin
 	if f.taskErr != nil {
 		return TaskState{}, f.taskErr
 	}
+	if sequence := f.taskStateSequences[name]; len(sequence) > 0 {
+		state := sequence[0]
+		f.taskStateSequences[name] = sequence[1:]
+		return state, nil
+	}
 	return f.taskStates[name], nil
 }
 
@@ -161,17 +167,21 @@ func TestReconcileContainerAnalysisResourcesPrunesAndAppliesInOrder(t *testing.T
 }
 
 func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
+	resources := lifecycleResources()
+	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
+	existing.SetResourceVersion("rv-terminal")
 	client := &fakeContainerResourceClient{
-		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Succeeded"}},
+		existing:   existing,
+		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Succeeded", UID: "uid-task"}},
 	}
-	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources(), time.Now()); err != nil {
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, resources, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.created) != 0 || len(client.claimed) != 0 || len(client.applied) != 0 {
 		t.Fatalf("terminal Task recreated resources: created=%v claimed=%v applied=%v", client.created, client.claimed, client.applied)
 	}
-	if !reflect.DeepEqual(client.deleted, []string{"configmaps/bundle"}) {
-		t.Fatalf("deleted = %v", client.deleted)
+	if !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/bundle@rv-terminal"}) {
+		t.Fatalf("versioned deletes = %v", client.deletedVersion)
 	}
 }
 
@@ -239,13 +249,46 @@ func TestApplyContainerAnalysisResourcesRejectsMismatchedExistingBundle(t *testi
 	}
 }
 
-func TestCleanupContainerAnalysisBundle(t *testing.T) {
-	client := &fakeContainerResourceClient{}
-	if err := CleanupContainerAnalysisBundle(context.Background(), client, lifecycleResources()); err != nil {
+func TestCleanupContainerAnalysisBundleUsesTaskUIDAndResourceVersion(t *testing.T) {
+	resources := lifecycleResources()
+	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
+	existing.SetResourceVersion("rv-terminal")
+	terminal := TaskState{Exists: true, Phase: "Succeeded", UID: "uid-old"}
+	client := &fakeContainerResourceClient{
+		existing:           existing,
+		taskStateSequences: map[string][]TaskState{"task": {terminal, terminal}},
+	}
+	if err := CleanupContainerAnalysisBundle(context.Background(), client, resources, "uid-old"); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(client.deleted, []string{"configmaps/bundle"}) {
-		t.Fatalf("deleted = %v", client.deleted)
+	if !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/bundle@rv-terminal"}) {
+		t.Fatalf("versioned deletes = %v", client.deletedVersion)
+	}
+
+	client = &fakeContainerResourceClient{
+		existing: existing,
+		taskStateSequences: map[string][]TaskState{"task": {
+			terminal,
+			{Exists: true, Phase: "Running", UID: "uid-replacement"},
+		}},
+	}
+	if err := CleanupContainerAnalysisBundle(context.Background(), client, resources, "uid-old"); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deletedVersion) != 0 {
+		t.Fatalf("replacement Task bundle was deleted: %v", client.deletedVersion)
+	}
+
+	client = &fakeContainerResourceClient{
+		existing:              existing,
+		deleteVersionConflict: true,
+		taskStateSequences:    map[string][]TaskState{"task": {terminal, terminal}},
+	}
+	if err := CleanupContainerAnalysisBundle(context.Background(), client, resources, "uid-old"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/bundle@rv-terminal"}) {
+		t.Fatalf("versioned deletes = %v", client.deletedVersion)
 	}
 }
 

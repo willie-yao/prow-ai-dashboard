@@ -33,7 +33,8 @@ for how to pin a release.
   back only newly created bundles, and active reconciliation prunes terminal or
   orphaned bundles after 24 hours under least-privilege ConfigMap RBAC.
   Resource-version claims prevent pruning or rollback from deleting a bundle
-  concurrently adopted by another reconciler.
+  concurrently adopted by another reconciler. Terminal cleanup is bound to the
+  observed Task UID so delayed handling cannot delete a replacement Task input.
 - **Dashboard container result framing.** The experimental dashboard-owned
   analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task
   logs are parsed for the last valid marker instead of treating the final line

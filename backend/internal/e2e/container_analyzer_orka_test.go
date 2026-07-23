@@ -199,7 +199,15 @@ func cleanupContainerBundle(t *testing.T, kubeContext string, resources orka.Con
 	client := containerKubeClient(t, kubeContext)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := orka.CleanupContainerAnalysisBundle(ctx, client, resources); err != nil {
+	taskName := resources.Task["metadata"].(map[string]any)["name"].(string)
+	state, err := client.TaskState(ctx, "orka-system", taskName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Exists || !orka.TerminalPhase(state.Phase) || state.UID == "" {
+		t.Fatalf("terminal Task identity = %+v", state)
+	}
+	if err := orka.CleanupContainerAnalysisBundle(ctx, client, resources, state.UID); err != nil {
 		t.Fatal(err)
 	}
 	assertContainerBundleMissing(t, kubeContext, resources)

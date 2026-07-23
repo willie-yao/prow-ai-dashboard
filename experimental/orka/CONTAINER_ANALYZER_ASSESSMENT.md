@@ -78,9 +78,11 @@ back only a bundle created by the failed application attempt. Each reconciliatio
 writes a unique claim annotation. Pruning and rollback delete with the resource
 version they inspected, so a concurrent claim prevents a stale delete. Existing
 immutable bundles are verified and preserved across reconciliation failures. The
-result handler deletes the Task-scoped bundle immediately after terminal result
-processing, and later reconciliations do not recreate it. Orka Task history and
-durable results remain available without retaining the private input ConfigMap.
+result handler binds cleanup to the Task UID observed with the result, rechecks
+that the same UID is still terminal, and uses a resource-version delete. A late
+cleanup cannot remove a replacement Task's bundle, and later reconciliations do
+not recreate the terminal bundle. Orka Task history and durable results remain
+available without retaining the private input ConfigMap.
 The pipeline ServiceAccount has only create, get, list, patch, and delete access
 to ConfigMaps.
 
