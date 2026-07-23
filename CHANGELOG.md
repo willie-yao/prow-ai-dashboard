@@ -30,7 +30,7 @@ for how to pin a release.
   YAML graphs or bundles that exceed the bounded environment transport. Terminal
   result handling
   deletes private Task-scoped bundles immediately, failed Task application rolls
-  back only newly created bundles, and active reconciliation prunes terminal or
+  back only newly created bundles, and one batch-level GC pass prunes terminal or
   orphaned bundles after 24 hours under least-privilege ConfigMap RBAC.
   Resource-version claims prevent pruning or rollback from deleting a bundle
   concurrently adopted by another reconciler. Terminal cleanup is bound to the

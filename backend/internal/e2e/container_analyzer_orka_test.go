@@ -50,6 +50,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	applyContainerModelServer(t, kubeContext, namespace, modelName, modelImage, id)
 	applyContainerSecret(t, kubeContext, namespace, secretName, id)
 	containerKubectl(t, kubeContext, nil, "wait", "-n", namespace, "--for=condition=Available", "deployment/"+modelName, "--timeout=3m")
+	pruneContainerBundles(t, kubeContext, namespace)
 
 	bc := flatcarBenchCase(t)
 	request := flatcarFailureRequest(bc)
@@ -183,12 +184,22 @@ Use the build artifacts to distinguish transient bootstrap failures from persist
 	return dir
 }
 
+func pruneContainerBundles(t *testing.T, kubeContext, namespace string) {
+	t.Helper()
+	client := containerKubeClient(t, kubeContext)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := orka.PruneContainerAnalysisBundles(ctx, client, namespace, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func applyContainerResources(t *testing.T, kubeContext string, resources orka.ContainerAnalysisResources) string {
 	t.Helper()
 	client := containerKubeClient(t, kubeContext)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := orka.ReconcileContainerAnalysisResources(ctx, client, resources, time.Now()); err != nil {
+	if err := orka.ReconcileContainerAnalysisResources(ctx, client, resources); err != nil {
 		t.Fatal(err)
 	}
 	return resources.Task["metadata"].(map[string]any)["name"].(string)

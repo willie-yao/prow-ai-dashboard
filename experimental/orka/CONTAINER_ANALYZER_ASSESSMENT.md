@@ -72,11 +72,12 @@ keys, anchors, or aliases are rejected until a safe contract exists. The bundle
 is limited to 96 KiB so one ConfigMap value stays below the Linux
 per-environment-value limit.
 
-The lifecycle helper prunes bundles older than 24 hours when their Task is
-terminal or missing, creates the ConfigMap before applying the Task, and rolls
-back only a bundle created by the failed application attempt. Each reconciliation
-writes a unique claim annotation. Pruning and rollback delete with the resource
-version they inspected, so a concurrent claim prevents a stale delete. Existing
+The batch lifecycle prunes bundles older than 24 hours once before a Task wave
+when their Task is terminal or missing. Per-Task reconciliation creates the
+ConfigMap before applying the Task and rolls back only a bundle created by the
+failed application attempt. Each Task reconciliation writes a unique claim
+annotation. Pruning and rollback delete with the resource version they inspected,
+so a concurrent claim prevents a stale delete. Existing
 immutable bundles are verified and preserved across reconciliation failures. The
 result handler binds cleanup to the Task UID observed with the result, rechecks
 that the same UID is still terminal, and uses a resource-version delete. A late

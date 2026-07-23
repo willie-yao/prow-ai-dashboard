@@ -35,8 +35,8 @@ type ContainerAnalysisResourceClient interface {
 	TaskState(context.Context, string, string) (TaskState, error)
 }
 
-// ReconcileContainerAnalysisResources prunes stale bundles, then applies a bundle before its Task.
-func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources, now time.Time) error {
+// ReconcileContainerAnalysisResources applies one bundle and Task without batch GC.
+func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) error {
 	namespace, _, err := containerResourceRef(resources.BundleConfigMap)
 	if err != nil {
 		return err
@@ -47,9 +47,6 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 	}
 	if taskNamespace != namespace {
 		return fmt.Errorf("container analysis Task and bundle namespaces differ")
-	}
-	if _, err := PruneContainerAnalysisBundles(ctx, client, namespace, now); err != nil {
-		return err
 	}
 	state, err := client.TaskState(ctx, taskNamespace, taskName)
 	if err != nil {

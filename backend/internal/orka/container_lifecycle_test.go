@@ -135,7 +135,7 @@ func lifecycleResources() ContainerAnalysisResources {
 	}
 }
 
-func TestReconcileContainerAnalysisResourcesPrunesAndAppliesInOrder(t *testing.T) {
+func TestPruneContainerAnalysisBundlesRemovesOnlyExpiredInactiveBundles(t *testing.T) {
 	now := time.Date(2026, 7, 23, 1, 0, 0, 0, time.UTC)
 	client := &fakeContainerResourceClient{
 		listed: []unstructured.Unstructured{
@@ -151,12 +151,26 @@ func TestReconcileContainerAnalysisResourcesPrunesAndAppliesInOrder(t *testing.T
 			"running-task": {Exists: true, Phase: "Running"},
 		},
 	}
-	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources(), now); err != nil {
+	deleted, err := PruneContainerAnalysisBundles(context.Background(), client, "orka-system", now)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if deleted != 3 {
+		t.Fatalf("deleted = %d, want 3", deleted)
 	}
 	wantDeleted := []string{"configmaps/old@rv-old", "configmaps/missing@rv-missing", "configmaps/legacy@rv-legacy"}
 	if !reflect.DeepEqual(client.deletedVersion, wantDeleted) {
 		t.Fatalf("versioned deletes = %v, want %v", client.deletedVersion, wantDeleted)
+	}
+	if len(client.created) != 0 || len(client.claimed) != 0 || len(client.applied) != 0 {
+		t.Fatalf("prune applied resources: created=%v claimed=%v applied=%v", client.created, client.claimed, client.applied)
+	}
+}
+
+func TestReconcileContainerAnalysisResourcesAppliesOneTaskWithoutListingBundles(t *testing.T) {
+	client := &fakeContainerResourceClient{listErr: errors.New("list must not be called")}
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources()); err != nil {
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(client.created, []string{"configmaps/bundle"}) || !reflect.DeepEqual(client.claimed, []string{"configmaps/bundle"}) {
 		t.Fatalf("created=%v claimed=%v", client.created, client.claimed)
@@ -174,7 +188,7 @@ func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
 		existing:   existing,
 		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Succeeded", UID: "uid-task"}},
 	}
-	if err := ReconcileContainerAnalysisResources(context.Background(), client, resources, time.Now()); err != nil {
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, resources); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.created) != 0 || len(client.claimed) != 0 || len(client.applied) != 0 {
