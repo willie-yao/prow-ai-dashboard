@@ -31,6 +31,7 @@ const (
 	// ContainerContractVersionEnv identifies the analyzer contract.
 	ContainerContractVersionEnv = "PROW_AI_CONTRACT_VERSION"
 	ContainerStateVersion       = 1
+	containerStateAAD           = "prow-ai-container-state-v1"
 	maxContainerStateBytes      = 512 << 10
 	maxContainerCacheSeedBytes  = 48 << 10
 )
@@ -124,7 +125,7 @@ func EncryptContainerAnalysisState(state ContainerAnalysisState, key []byte) (st
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("create container state nonce: %w", err)
 	}
-	sealed := gcm.Seal(nil, nonce, plaintext, []byte(ContainerAnalyzerContractVersion))
+	sealed := gcm.Seal(nil, nonce, plaintext, []byte(containerStateAAD))
 	payload := append(nonce, sealed...)
 	return base64.StdEncoding.EncodeToString(payload), nil
 }
@@ -135,10 +136,6 @@ func DecryptContainerAnalysisState(encoded string, key []byte) (ContainerAnalysi
 	if len(key) != 32 {
 		return state, fmt.Errorf("container state key must be 32 bytes")
 	}
-	payload, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(encoded))
-	if err != nil {
-		return state, fmt.Errorf("decode container analysis state: %w", err)
-	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return state, err
@@ -147,10 +144,22 @@ func DecryptContainerAnalysisState(encoded string, key []byte) (ContainerAnalysi
 	if err != nil {
 		return state, err
 	}
+	encoded = strings.TrimSpace(encoded)
+	maxPayload := maxContainerStateBytes + gcm.NonceSize() + gcm.Overhead()
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxPayload) {
+		return state, fmt.Errorf("container analysis state exceeds %d bytes", maxContainerStateBytes)
+	}
+	payload, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return state, fmt.Errorf("decode container analysis state: %w", err)
+	}
+	if len(payload) > maxPayload {
+		return state, fmt.Errorf("container analysis state exceeds %d bytes", maxContainerStateBytes)
+	}
 	if len(payload) < gcm.NonceSize() {
 		return state, fmt.Errorf("container analysis state ciphertext is truncated")
 	}
-	plaintext, err := gcm.Open(nil, payload[:gcm.NonceSize()], payload[gcm.NonceSize():], []byte(ContainerAnalyzerContractVersion))
+	plaintext, err := gcm.Open(nil, payload[:gcm.NonceSize()], payload[gcm.NonceSize():], []byte(containerStateAAD))
 	if err != nil {
 		return state, fmt.Errorf("decrypt container analysis state: %w", err)
 	}

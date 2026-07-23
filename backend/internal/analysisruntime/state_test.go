@@ -88,7 +88,8 @@ func TestContainerAnalysisStateRejectsWrongKeyTamperAndMalformedKey(t *testing.T
 	if _, err := DecryptContainerAnalysisState(base64.StdEncoding.EncodeToString(payload), stateTestKey()); err == nil {
 		t.Fatal("tampered state decrypted")
 	}
-	for _, raw := range []string{"", "not-base64", base64.StdEncoding.EncodeToString([]byte("short"))} {
+	oversized := strings.Repeat("A", base64.StdEncoding.EncodedLen(maxContainerStateBytes+64)+4)
+	for _, raw := range []string{"", "not-base64", base64.StdEncoding.EncodeToString([]byte("short")), oversized} {
 		if _, err := ParseContainerStateKey(raw); err == nil {
 			t.Fatalf("ParseContainerStateKey(%q) succeeded", raw)
 		}

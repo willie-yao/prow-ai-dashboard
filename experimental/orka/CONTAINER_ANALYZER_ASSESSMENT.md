@@ -125,6 +125,6 @@ private Orka trace through the shared state store.
 
 ## Next evaluation
 
-Add cache and trace persistence before running the Kimi parity and load tests.
-If those steps require several custom services or sidecars, remove Orka analysis
-and keep the in-process path.
+Run the clean in-process and container Kimi comparison, then the bounded
+multi-failure load test. Use those results to decide whether to productize the
+container lifecycle path or remove Orka analysis.
