@@ -112,6 +112,20 @@ func TestContainerAnalysisStateRejectsWrongKeyTamperAndMalformedKey(t *testing.T
 	}
 }
 
+func TestContainerAnalysisStateRejectsMismatchedTraceIdentity(t *testing.T) {
+	request := stateTestRequest()
+	identity := stateTestIdentity(request)
+	trace := stateTestTrace("resp")
+	trace.TaskName = "other-task"
+	state := ContainerAnalysisState{
+		Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName,
+		CacheKey: identity.CacheKey, Traces: []ai.AnalysisTrace{trace},
+	}
+	if _, err := EncryptContainerAnalysisState(state, stateTestKey(), identity); err == nil || !strings.Contains(err.Error(), "trace identity") {
+		t.Fatalf("EncryptContainerAnalysisState error = %v", err)
+	}
+}
+
 func TestContainerStateStorePersistsCacheAndPrivateTrace(t *testing.T) {
 	dir := t.TempDir()
 	request := stateTestRequest()

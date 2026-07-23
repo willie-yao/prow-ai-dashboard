@@ -346,6 +346,11 @@ func validateContainerAnalysisState(state ContainerAnalysisState) error {
 	if len(state.Traces) > 4 {
 		return fmt.Errorf("container analysis state has too many traces")
 	}
+	for _, trace := range state.Traces {
+		if trace.Backend != "orka" || trace.TaskNamespace != state.TaskNamespace || trace.TaskName != state.TaskName {
+			return fmt.Errorf("container analysis state trace identity mismatch")
+		}
+	}
 	return nil
 }
 
