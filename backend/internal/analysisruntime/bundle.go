@@ -357,6 +357,14 @@ func validateProjectBundle(bundle ProjectBundle) error {
 	if strings.TrimSpace(bundleFileContent(bundle.Files, "prompts/system.md")) == "" {
 		return fmt.Errorf("project bundle prompt is empty")
 	}
+	projectYAML := bundleFileContent(bundle.Files, "project.yaml")
+	sanitized, err := sanitizeProjectYAML([]byte(projectYAML))
+	if err != nil {
+		return fmt.Errorf("validate bundled project config: %w", err)
+	}
+	if !bytes.Equal(sanitized, []byte(projectYAML)) {
+		return fmt.Errorf("project bundle config is not in the sanitized v3 form")
+	}
 	if len(bundle.Digest) != sha256.Size*2 {
 		return fmt.Errorf("project bundle digest is invalid")
 	}

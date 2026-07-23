@@ -20,7 +20,7 @@ rules:
   - apiGroups: ["core.orka.ai"]
     resources: ["tasks", "tools"]
     verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
-  # Immutable container analyzer bundles use create/get/list/delete only.
+  # Immutable container analyzer bundles use create/get/list/patch/delete only.
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "get", "list", "patch", "delete"]

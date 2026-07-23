@@ -259,6 +259,34 @@ branding:
 	})
 }
 
+func TestDecodeProjectBundleRejectsUnsanitizedProjectWithValidDigest(t *testing.T) {
+	dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+	data, _, err := BuildProjectBundle(dir, "contract-v3", testBundleRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := DecodeProjectBundle(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range bundle.Files {
+		if bundle.Files[i].Path == "project.yaml" {
+			bundle.Files[i].Content = strings.Replace(bundle.Files[i].Content, "ai:\n", "ai:\n  endpoint: https://private-model.invalid/v1/chat/completions?token=secret\n  model: private-model\n", 1)
+		}
+	}
+	bundle.Digest, err = projectBundleDigest(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeProjectBundle(tampered); err == nil || !strings.Contains(err.Error(), "sanitized v3") {
+		t.Fatalf("DecodeProjectBundle error = %v", err)
+	}
+}
+
 func TestDecodeProjectBundleRejectsMalformedOrTamperedInput(t *testing.T) {
 	dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
 	data, digest, err := BuildProjectBundle(dir, "contract-v3", testBundleRequest())
