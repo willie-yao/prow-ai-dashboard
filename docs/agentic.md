@@ -21,12 +21,11 @@ The agentic loop is one analysis approach, but it runs in one of two backends:
 - **In-process** (default): the fetcher runs the loop itself, as goroutines,
   enforcing every quality gate in Go. This is the backend the rest of this doc
   describes, and the only one the GitHub Actions + Pages path uses.
-- **Orka preview** (Kubernetes-native): the same loop runs as one
-  [Orka](https://github.com/orka-agents/orka) Task per failing test. It is the
-  strategic orchestration backend for retries, per-failure telemetry, and agent
-  runtimes. Today it requires a compatible external Orka installation; the
-  intended product experience is for the dashboard deployment to manage those
-  dependencies. Select it with `analysis: orka` in the Helm chart.
+- **Orka preview** (Kubernetes-native): the current `analysis: orka` mode uses
+  a compatibility v6 `type: ai` worker that is frozen for maintenance. The
+  experimental successor schedules the dashboard-owned analyzer as a
+  `type: container` Task so Orka owns lifecycle while the dashboard owns model
+  policy. See the [analysis runtime ownership decision](architecture-decisions/0001-analysis-runtime-ownership.md).
 
 Both backends run the same loop against the same artifact tools and write the
 same `jobs/*.json` wire shape with `Mode: "agentic"`. What differs is where the

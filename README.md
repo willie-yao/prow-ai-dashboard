@@ -128,6 +128,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 
 ### Orka preview
 
+- [Analysis runtime ownership decision](docs/architecture-decisions/0001-analysis-runtime-ownership.md)
 - [Product status and constraints](experimental/orka/README.md)
 - [Quickstart](experimental/orka/QUICKSTART.md)
 - [Safe evaluation](experimental/orka/EVALUATION.md)
