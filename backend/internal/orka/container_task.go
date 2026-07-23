@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -78,8 +79,8 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if err := project.ValidateAIAPI(api); err != nil {
 		return ContainerAnalysisResources{}, err
 	}
-	if strings.TrimSpace(in.Environment["AI_ENDPOINT"]) == "" {
-		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_ENDPOINT")
+	if err := validateContainerAnalysisEndpoint(in.Environment["AI_ENDPOINT"]); err != nil {
+		return ContainerAnalysisResources{}, err
 	}
 	if strings.TrimSpace(in.Environment["AI_MODEL"]) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_MODEL")
@@ -218,6 +219,29 @@ func containerAnalysisLabels(extra map[string]string) map[string]any {
 
 func containerAnalysisBundleName(taskName string) string {
 	return taskName + "-input"
+}
+
+func validateContainerAnalysisEndpoint(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("container analysis Task environment requires AI_ENDPOINT")
+	}
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		return fmt.Errorf("container analysis Task AI_ENDPOINT must be an absolute http or https URL")
+	}
+	if endpoint.User != nil {
+		return fmt.Errorf("container analysis Task AI_ENDPOINT must not contain URL credentials")
+	}
+	if endpoint.Fragment != "" {
+		return fmt.Errorf("container analysis Task AI_ENDPOINT must not contain a fragment")
+	}
+	for key, values := range endpoint.Query() {
+		if !strings.EqualFold(key, "api-version") || len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return fmt.Errorf("container analysis Task AI_ENDPOINT allows only a non-empty api-version query parameter")
+		}
+	}
+	return nil
 }
 
 func safeInlineEnvironmentName(name string) bool {

@@ -257,6 +257,30 @@ func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
 	}
 }
 
+func TestBuildContainerAnalysisResourcesRejectsCredentialBearingEndpoints(t *testing.T) {
+	for name, endpoint := range map[string]string{
+		"relative":    "/v1/chat/completions",
+		"scheme":      "ftp://model.invalid/v1/chat/completions",
+		"userinfo":    "https://user:secret@model.invalid/v1/chat/completions",
+		"token query": "https://model.invalid/v1/chat/completions?token=secret",
+		"other query": "https://model.invalid/v1/chat/completions?region=west",
+		"fragment":    "https://model.invalid/v1/chat/completions#secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := containerTaskSpec(t)
+			spec.Environment["AI_ENDPOINT"] = endpoint
+			if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "AI_ENDPOINT") {
+				t.Fatalf("BuildContainerAnalysisResources endpoint error = %v", err)
+			}
+		})
+	}
+	spec := containerTaskSpec(t)
+	spec.Environment["AI_ENDPOINT"] = "https://example.openai.azure.com/openai/v1/responses?api-version=2025-03-01-preview"
+	if _, err := BuildContainerAnalysisResources(spec); err != nil {
+		t.Fatalf("Azure API version endpoint rejected: %v", err)
+	}
+}
+
 func TestBuildContainerAnalysisResourcesRejectsOversizedBundle(t *testing.T) {
 	spec := containerTaskSpec(t)
 	if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte(strings.Repeat("x", analysisruntime.MaxProjectBundleBytes)), 0o644); err != nil {

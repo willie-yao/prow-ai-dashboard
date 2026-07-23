@@ -67,7 +67,9 @@ the directory after the analysis attempt.
 
 Provider API, endpoint, model, and headers are removed from bundled
 `project.yaml`. API, endpoint, and model remain ordinary Task environment values.
-Credentials remain Secret references. Bundles with `ai.headers`, YAML merge
+The endpoint must be an absolute HTTP(S) URL without userinfo, fragments, or
+query parameters other than `api-version`. Credentials remain Secret references.
+Bundles with `ai.headers`, YAML merge
 keys, anchors, or aliases are rejected until a safe contract exists. The bundle
 is limited to 96 KiB so one ConfigMap value stays below the Linux
 per-environment-value limit.
