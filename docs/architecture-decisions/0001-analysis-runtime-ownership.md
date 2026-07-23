@@ -28,9 +28,9 @@ Three changes established a cleaner boundary:
 1. `FailureAnalyzer` defines one dashboard-owned single-failure contract.
 2. Ranked evidence planning and deterministic repair run in the in-process
    analyzer.
-3. The container analyzer prototype runs the same `FailureAnalyzer` inside an
+3. The container analyzer prototype ran the same `FailureAnalyzer` inside an
    Orka `type: container` Task without using Orka's AI worker, Provider, or Tool
-   resources.
+   resources. The final evaluation below led to its removal.
 
 ## Decision
 

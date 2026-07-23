@@ -81,11 +81,6 @@ export interface AIAnalysis {
   output_tokens?: number;
   cache_hit?: boolean;
   budget_exhausted?: boolean;
-  task_retries?: number;
-  task_outcome?: string;
-  stop_reason?: string;
-  timeline_verified?: boolean;
-  artifact_paths_validated?: boolean;
 }
 
 export interface ClusterArtifacts {
