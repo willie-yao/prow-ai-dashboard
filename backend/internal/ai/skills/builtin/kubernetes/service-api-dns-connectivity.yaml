@@ -4,6 +4,8 @@ priority: 230
 triggers:
   - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
   - '(?i)\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access|lookup|resolve)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(reached|connected|accessed)\b'
+  - '(?i)\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(resolved|looked up)\b'
   - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
   - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
   - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
@@ -24,6 +26,7 @@ required_evidence:
     when:
       - '(?i)\b(cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
       - '(?i)\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(reached|connected|accessed)\b'
       - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
       - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
       - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
@@ -42,6 +45,7 @@ required_evidence:
       - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(lookup|resolve|resolution|request)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|unreachable|no route)\b'
       - '(?i)\b(dns|resolver|nameserver|resolv\.conf|coredns|node-local-dns)\b.{0,160}\b(never|did not|failed to)\s+(lookup|resolv(?:e[ds]?|ing))\b'
       - '(?i)\b(cannot|could not|failed to|unable to)\s+(lookup|resolve)\b.{0,80}\b(host|hostname|api|server)\b'
+      - '(?i)\b(host|hostname|api hostname|kubernetes api hostname)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(resolved|looked up)\b'
       - '(?i)\b(lookup|resolve|resolution)\b.{0,160}\b(timeout|timed out|refused|failed|failure|error|unreachable|no route)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/(?:coredns|node-local-dns)-[^/]+/.*\.(?:log|txt)$'

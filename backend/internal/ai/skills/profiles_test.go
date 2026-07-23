@@ -299,6 +299,10 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if proxy.Applies(kubeProxyAuthorization) {
 		t.Fatal("kube-proxy authorization error unexpectedly required kube-proxy transport evidence")
 	}
+	passiveReachability := "providerID is missing because cloud-node-manager reports that the Kubernetes API Service could not be reached"
+	if !proxy.Applies(passiveReachability) {
+		t.Fatal("passive API Service reachability failure did not require kube-proxy evidence")
+	}
 }
 
 func TestProviderIDDiagnosisMatchesOnlyRelevantBuiltinRecipes(t *testing.T) {
@@ -471,6 +475,16 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 		t.Fatalf("kube-proxy authorization error matched transport requirements: match=%v service=%v",
 			matchContains(set, kubeProxyAuthorization, skill.ID), service.Applies(kubeProxyAuthorization))
 	}
+	passiveReachability := "The Kubernetes API Service could not be reached"
+	if !matchContains(set, passiveReachability, skill.ID) || !service.Applies(passiveReachability) {
+		t.Fatalf("passive Service reachability did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, passiveReachability, skill.ID), service.Applies(passiveReachability))
+	}
+	passiveDNS := "The Kubernetes API hostname could not be resolved"
+	if !matchContains(set, passiveDNS, skill.ID) || service.Applies(passiveDNS) || !dns.Applies(passiveDNS) {
+		t.Fatalf("passive DNS failure did not match DNS-only evidence: match=%v service=%v dns=%v",
+			matchContains(set, passiveDNS, skill.ID), service.Applies(passiveDNS), dns.Applies(passiveDNS))
+	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
 		t.Fatalf("DNS draft applicability: service=%v dns=%v", service.Applies(dnsDraft), dns.Applies(dnsDraft))
@@ -507,6 +521,13 @@ func TestProwRunContextEvidenceAppliesByClaim(t *testing.T) {
 	}
 	if got, want := applicableEvidenceIDs(skill, prowContext), []string{"prow-context"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Prow context evidence = %v, want %v", got, want)
+	}
+	prowScheduling := "The Prow scheduler selected the wrong pod."
+	if !matchContains(set, prowScheduling, skill.ID) {
+		t.Fatalf("Prow scheduling draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, prowScheduling), []string{"prow-context"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Prow scheduling evidence = %v, want %v", got, want)
 	}
 }
 
