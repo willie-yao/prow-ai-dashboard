@@ -5,6 +5,7 @@ triggers:
   - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b'
   - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b'
   - '(?i)\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b'
+  - '(?i)\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
   - '(?i)\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
   - '(?i)\bbootstrap\b.{0,120}\b(failed|error|timeout|timed out|stalled)\b'
 required_evidence:

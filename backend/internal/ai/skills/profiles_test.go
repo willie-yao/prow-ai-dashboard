@@ -283,6 +283,10 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !proxy.Applies(connectionOrderDraft) {
 		t.Fatal("operation-first API connection did not require kube-proxy evidence")
 	}
+	synchronizationDraft := "providerID is missing and kube-proxy never synchronized"
+	if !proxy.Applies(synchronizationDraft) {
+		t.Fatal("kube-proxy synchronization failure did not require kube-proxy evidence")
+	}
 }
 
 func TestProviderIDDiagnosisMatchesOnlyRelevantBuiltinRecipes(t *testing.T) {
@@ -382,6 +386,10 @@ func TestClusterProvisioningDiagnosisRequiresResponsibleController(t *testing.T)
 	if !matchContains(set, operationFirst, skill.ID) {
 		t.Fatalf("operation-first provisioning draft did not match %q", skill.ID)
 	}
+	operationFailureFirst := "Provisioning failed for the workload Machine."
+	if !matchContains(set, operationFailureFirst, skill.ID) {
+		t.Fatalf("operation-failure provisioning draft did not match %q", skill.ID)
+	}
 }
 
 func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
@@ -425,6 +433,11 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !matchContains(set, requestTimeout, skill.ID) || !service.Applies(requestTimeout) {
 		t.Fatalf("request timeout did not match connectivity requirements: match=%v service=%v",
 			matchContains(set, requestTimeout, skill.ID), service.Applies(requestTimeout))
+	}
+	synchronizationFailure := "kube-proxy never synchronized"
+	if !matchContains(set, synchronizationFailure, skill.ID) || !service.Applies(synchronizationFailure) {
+		t.Fatalf("kube-proxy synchronization failure did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, synchronizationFailure, skill.ID), service.Applies(synchronizationFailure))
 	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
