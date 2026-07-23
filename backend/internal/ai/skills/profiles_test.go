@@ -303,6 +303,10 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !proxy.Applies(passiveReachability) {
 		t.Fatal("passive API Service reachability failure did not require kube-proxy evidence")
 	}
+	failureBeforeConnection := "providerID is missing because cloud-node-manager had a failed connection to the Kubernetes API Service"
+	if !proxy.Applies(failureBeforeConnection) {
+		t.Fatal("failure-before-connection wording did not require kube-proxy evidence")
+	}
 }
 
 func TestProviderIDDiagnosisMatchesOnlyRelevantBuiltinRecipes(t *testing.T) {
@@ -406,6 +410,18 @@ func TestClusterProvisioningDiagnosisRequiresResponsibleController(t *testing.T)
 	if !matchContains(set, operationFailureFirst, skill.ID) {
 		t.Fatalf("operation-failure provisioning draft did not match %q", skill.ID)
 	}
+	for _, draft := range []string{
+		"The workload Machine provisioning failed.",
+		"The workload Machine failed during provisioning.",
+		"Provisioning of the workload Machine failed.",
+		"Provisioning failed for the workload Machine.",
+		"Failed provisioning of the workload Machine.",
+		"Failed workload Machine provisioning.",
+	} {
+		if !matchContains(set, draft, skill.ID) {
+			t.Errorf("provisioning permutation did not match %q: %q", skill.ID, draft)
+		}
+	}
 }
 
 func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
@@ -439,6 +455,19 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !matchContains(set, connectionFailure, skill.ID) || !service.Applies(connectionFailure) {
 		t.Fatalf("connection failure did not match connectivity requirements: match=%v service=%v",
 			matchContains(set, connectionFailure, skill.ID), service.Applies(connectionFailure))
+	}
+	for _, draft := range []string{
+		"The Kubernetes API Service connection failed",
+		"The Kubernetes API Service failed connection",
+		"The connection to the Kubernetes API Service failed",
+		"The connection failed to the Kubernetes API Service",
+		"A failed connection to the Kubernetes API Service blocked startup",
+		"The failed Kubernetes API Service connection blocked startup",
+	} {
+		if !matchContains(set, draft, skill.ID) || !service.Applies(draft) {
+			t.Errorf("connectivity permutation did not match service evidence: draft=%q match=%v service=%v",
+				draft, matchContains(set, draft, skill.ID), service.Applies(draft))
+		}
 	}
 	operationFirst := "The connection to the Kubernetes API Service timed out"
 	if !matchContains(set, operationFirst, skill.ID) || !service.Applies(operationFirst) {
