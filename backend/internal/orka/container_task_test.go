@@ -288,12 +288,13 @@ func TestBuildContainerAnalysisResourcesNormalizesProviderEnvironment(t *testing
 
 func TestBuildContainerAnalysisResourcesRejectsCredentialBearingEndpoints(t *testing.T) {
 	for name, endpoint := range map[string]string{
-		"relative":    "/v1/chat/completions",
-		"scheme":      "ftp://model.invalid/v1/chat/completions",
-		"userinfo":    "https://user:secret@model.invalid/v1/chat/completions",
-		"token query": "https://model.invalid/v1/chat/completions?token=secret",
-		"other query": "https://model.invalid/v1/chat/completions?region=west",
-		"fragment":    "https://model.invalid/v1/chat/completions#secret",
+		"relative":        "/v1/chat/completions",
+		"scheme":          "ftp://model.invalid/v1/chat/completions",
+		"userinfo":        "https://user:secret@model.invalid/v1/chat/completions",
+		"token query":     "https://model.invalid/v1/chat/completions?token=secret",
+		"other query":     "https://model.invalid/v1/chat/completions?region=west",
+		"malformed query": "https://model.invalid/v1/chat/completions?token=secret;foo=bar",
+		"fragment":        "https://model.invalid/v1/chat/completions#secret",
 	} {
 		t.Run(name, func(t *testing.T) {
 			spec := containerTaskSpec(t)

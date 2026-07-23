@@ -244,7 +244,11 @@ func validateContainerAnalysisEndpoint(raw string) (string, error) {
 	if endpoint.Fragment != "" {
 		return "", fmt.Errorf("container analysis Task AI_ENDPOINT must not contain a fragment")
 	}
-	for key, values := range endpoint.Query() {
+	query, err := url.ParseQuery(endpoint.RawQuery)
+	if err != nil {
+		return "", fmt.Errorf("container analysis Task AI_ENDPOINT has an invalid query")
+	}
+	for key, values := range query {
 		if !strings.EqualFold(key, "api-version") || len(values) != 1 || strings.TrimSpace(values[0]) == "" {
 			return "", fmt.Errorf("container analysis Task AI_ENDPOINT allows only a non-empty api-version query parameter")
 		}
