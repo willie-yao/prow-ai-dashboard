@@ -38,10 +38,24 @@ const (
 
 // ContainerAnalysisState is the encrypted Task-to-dashboard state delta.
 type ContainerAnalysisState struct {
-	Version      int                      `json:"version"`
-	CacheKey     string                   `json:"cache_key"`
-	CacheEntries map[string]ai.CacheEntry `json:"cache_entries,omitempty"`
-	Traces       []ai.AnalysisTrace       `json:"traces,omitempty"`
+	Version       int                      `json:"version"`
+	TaskNamespace string                   `json:"task_namespace"`
+	TaskName      string                   `json:"task_name"`
+	CacheKey      string                   `json:"cache_key"`
+	CacheEntries  map[string]ai.CacheEntry `json:"cache_entries,omitempty"`
+	Traces        []ai.AnalysisTrace       `json:"traces,omitempty"`
+}
+
+// ContainerStateIdentity binds encrypted state to one Task and failure.
+type ContainerStateIdentity struct {
+	TaskNamespace string
+	TaskName      string
+	CacheKey      string
+}
+
+// NewContainerStateIdentity builds the expected encrypted-state identity.
+func NewContainerStateIdentity(namespace, taskName string, request ai.FailureAnalysisRequest) ContainerStateIdentity {
+	return ContainerStateIdentity{TaskNamespace: strings.TrimSpace(namespace), TaskName: strings.TrimSpace(taskName), CacheKey: FailureCacheKey(request)}
 }
 
 // FailureCacheKey returns the canonical cache key for one request.
@@ -64,8 +78,7 @@ func RestoreContainerCache(dataDir string, request ai.FailureAnalysisRequest, en
 	if len(entries) == 0 {
 		return nil
 	}
-	state := ContainerAnalysisState{Version: ContainerStateVersion, CacheKey: FailureCacheKey(request), CacheEntries: entries}
-	if err := validateContainerAnalysisState(state); err != nil {
+	if err := validateContainerCacheEntries(FailureCacheKey(request), entries); err != nil {
 		return err
 	}
 	cache := ai.NewCache(dataDir)
@@ -74,9 +87,12 @@ func RestoreContainerCache(dataDir string, request ai.FailureAnalysisRequest, en
 }
 
 // SnapshotContainerAnalysisState captures one Task's cache entry and traces.
-func SnapshotContainerAnalysisState(cache *ai.Cache, traces *ai.TraceStore, request ai.FailureAnalysisRequest) (ContainerAnalysisState, error) {
+func SnapshotContainerAnalysisState(cache *ai.Cache, traces *ai.TraceStore, request ai.FailureAnalysisRequest, identity ContainerStateIdentity) (ContainerAnalysisState, error) {
 	key := FailureCacheKey(request)
-	state := ContainerAnalysisState{Version: ContainerStateVersion, CacheKey: key, CacheEntries: map[string]ai.CacheEntry{}, Traces: []ai.AnalysisTrace{}}
+	if identity.CacheKey != key {
+		return ContainerAnalysisState{}, fmt.Errorf("container state identity cache key mismatch")
+	}
+	state := ContainerAnalysisState{Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: key, CacheEntries: map[string]ai.CacheEntry{}, Traces: []ai.AnalysisTrace{}}
 	if cache != nil {
 		state.CacheEntries = cache.Entries(key)
 	}
@@ -99,11 +115,14 @@ func ParseContainerStateKey(raw string) ([]byte, error) {
 }
 
 // EncryptContainerAnalysisState encrypts one bounded state delta.
-func EncryptContainerAnalysisState(state ContainerAnalysisState, key []byte) (string, error) {
+func EncryptContainerAnalysisState(state ContainerAnalysisState, key []byte, identity ContainerStateIdentity) (string, error) {
 	if len(key) != 32 {
 		return "", fmt.Errorf("container state key must be 32 bytes")
 	}
 	if err := validateContainerAnalysisState(state); err != nil {
+		return "", err
+	}
+	if err := validateContainerStateIdentity(state, identity); err != nil {
 		return "", err
 	}
 	plaintext, err := json.Marshal(state)
@@ -125,13 +144,13 @@ func EncryptContainerAnalysisState(state ContainerAnalysisState, key []byte) (st
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("create container state nonce: %w", err)
 	}
-	sealed := gcm.Seal(nil, nonce, plaintext, []byte(containerStateAAD))
+	sealed := gcm.Seal(nil, nonce, plaintext, containerStateAssociatedData(identity))
 	payload := append(nonce, sealed...)
 	return base64.StdEncoding.EncodeToString(payload), nil
 }
 
 // DecryptContainerAnalysisState decrypts and validates one state payload.
-func DecryptContainerAnalysisState(encoded string, key []byte) (ContainerAnalysisState, error) {
+func DecryptContainerAnalysisState(encoded string, key []byte, identity ContainerStateIdentity) (ContainerAnalysisState, error) {
 	var state ContainerAnalysisState
 	if len(key) != 32 {
 		return state, fmt.Errorf("container state key must be 32 bytes")
@@ -159,7 +178,7 @@ func DecryptContainerAnalysisState(encoded string, key []byte) (ContainerAnalysi
 	if len(payload) < gcm.NonceSize() {
 		return state, fmt.Errorf("container analysis state ciphertext is truncated")
 	}
-	plaintext, err := gcm.Open(nil, payload[:gcm.NonceSize()], payload[gcm.NonceSize():], []byte(containerStateAAD))
+	plaintext, err := gcm.Open(nil, payload[:gcm.NonceSize()], payload[gcm.NonceSize():], containerStateAssociatedData(identity))
 	if err != nil {
 		return state, fmt.Errorf("decrypt container analysis state: %w", err)
 	}
@@ -180,12 +199,15 @@ func DecryptContainerAnalysisState(encoded string, key []byte) (ContainerAnalysi
 	if err := validateContainerAnalysisState(state); err != nil {
 		return state, err
 	}
+	if err := validateContainerStateIdentity(state, identity); err != nil {
+		return state, err
+	}
 	return state, nil
 }
 
 // WriteEncryptedContainerAnalysisState writes one encrypted state marker.
-func WriteEncryptedContainerAnalysisState(w io.Writer, state ContainerAnalysisState, key []byte) error {
-	encoded, err := EncryptContainerAnalysisState(state, key)
+func WriteEncryptedContainerAnalysisState(w io.Writer, state ContainerAnalysisState, key []byte, identity ContainerStateIdentity) error {
+	encoded, err := EncryptContainerAnalysisState(state, key, identity)
 	if err != nil {
 		return err
 	}
@@ -196,7 +218,7 @@ func WriteEncryptedContainerAnalysisState(w io.Writer, state ContainerAnalysisSt
 }
 
 // ParseEncryptedContainerAnalysisState extracts the last valid encrypted marker.
-func ParseEncryptedContainerAnalysisState(raw string, key []byte) (ContainerAnalysisState, error) {
+func ParseEncryptedContainerAnalysisState(raw string, key []byte, identity ContainerStateIdentity) (ContainerAnalysisState, error) {
 	var (
 		state   ContainerAnalysisState
 		found   bool
@@ -213,7 +235,7 @@ func ParseEncryptedContainerAnalysisState(raw string, key []byte) (ContainerAnal
 		if !strings.HasPrefix(line, ContainerStateMarker) {
 			continue
 		}
-		parsed, err := DecryptContainerAnalysisState(strings.TrimSpace(strings.TrimPrefix(line, ContainerStateMarker)), key)
+		parsed, err := DecryptContainerAnalysisState(strings.TrimSpace(strings.TrimPrefix(line, ContainerStateMarker)), key, identity)
 		if err != nil {
 			lastErr = err
 			continue
@@ -282,20 +304,44 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	return errors.Join(s.cache.Save(), s.traces.Save(filepath.Join(s.dataDir, output.AITraceFilename)))
 }
 
+func containerStateAssociatedData(identity ContainerStateIdentity) []byte {
+	return []byte(strings.Join([]string{containerStateAAD, identity.TaskNamespace, identity.TaskName, identity.CacheKey}, "\x00"))
+}
+
+func validateContainerStateIdentity(state ContainerAnalysisState, identity ContainerStateIdentity) error {
+	if identity.TaskNamespace == "" || identity.TaskName == "" || identity.CacheKey == "" {
+		return fmt.Errorf("container state identity is incomplete")
+	}
+	if state.TaskNamespace != identity.TaskNamespace || state.TaskName != identity.TaskName || state.CacheKey != identity.CacheKey {
+		return fmt.Errorf("container analysis state identity mismatch")
+	}
+	return nil
+}
+
+func validateContainerCacheEntries(cacheKey string, entries map[string]ai.CacheEntry) error {
+	if strings.TrimSpace(cacheKey) == "" {
+		return fmt.Errorf("container analysis state cache key is required")
+	}
+	if len(entries) > 1 {
+		return fmt.Errorf("container analysis state has too many cache entries")
+	}
+	for key, entry := range entries {
+		if key != cacheKey || entry.Key != key || entry.CreatedAt.IsZero() || !json.Valid(entry.Data) {
+			return fmt.Errorf("container analysis state has an invalid cache entry")
+		}
+	}
+	return nil
+}
+
 func validateContainerAnalysisState(state ContainerAnalysisState) error {
 	if state.Version != ContainerStateVersion {
 		return fmt.Errorf("unsupported container analysis state version %d", state.Version)
 	}
-	if strings.TrimSpace(state.CacheKey) == "" {
-		return fmt.Errorf("container analysis state cache key is required")
+	if strings.TrimSpace(state.TaskNamespace) == "" || strings.TrimSpace(state.TaskName) == "" {
+		return fmt.Errorf("container analysis state Task identity is required")
 	}
-	if len(state.CacheEntries) > 1 {
-		return fmt.Errorf("container analysis state has too many cache entries")
-	}
-	for key, entry := range state.CacheEntries {
-		if key != state.CacheKey || entry.Key != key || entry.CreatedAt.IsZero() || !json.Valid(entry.Data) {
-			return fmt.Errorf("container analysis state has an invalid cache entry")
-		}
+	if err := validateContainerCacheEntries(state.CacheKey, state.CacheEntries); err != nil {
+		return err
 	}
 	if len(state.Traces) > 4 {
 		return fmt.Errorf("container analysis state has too many traces")

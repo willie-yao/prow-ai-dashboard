@@ -88,7 +88,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if !strings.Contains(raw, analysisruntime.FailureAnalysisResultMarker) {
 			t.Fatal("Task result did not contain the framed dashboard result")
 		}
-		state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey())
+		state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources, request))
 		if err != nil || len(state.Traces) != 1 || state.Traces[0].Backend != "orka" || state.Traces[0].TaskName != name {
 			t.Fatalf("container state = %+v, error = %v", state, err)
 		}
@@ -109,7 +109,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if _, err := orka.ParseContainerAnalysisResult(raw); err != nil {
 			t.Fatalf("parse retried Task result: %v\n%s", err, raw)
 		}
-		if _, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey()); err != nil {
+		if _, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources, request)); err != nil {
 			t.Fatalf("parse retried Task state: %v", err)
 		}
 		cleanupContainerBundle(t, kubeContext, resources)
@@ -127,7 +127,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 			t.Fatalf("first cache Task status = %+v", firstStatus)
 		}
 		firstRaw := fetchContainerTaskResult(t, kubeContext, namespace, firstName)
-		firstState, err := analysisruntime.ParseEncryptedContainerAnalysisState(firstRaw, containerAnalyzerStateKey())
+		firstState, err := analysisruntime.ParseEncryptedContainerAnalysisState(firstRaw, containerAnalyzerStateKey(), containerStateIdentity(first, request))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +151,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if err != nil || result.Analysis == nil || !result.Analysis.CacheHit {
 			t.Fatalf("cached result = %+v, error = %v", result, err)
 		}
-		secondState, err := analysisruntime.ParseEncryptedContainerAnalysisState(secondRaw, containerAnalyzerStateKey())
+		secondState, err := analysisruntime.ParseEncryptedContainerAnalysisState(secondRaw, containerAnalyzerStateKey(), containerStateIdentity(second, request))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,6 +190,11 @@ func flatcarFailureRequest(bc benchCase) ai.FailureAnalysisRequest {
 		TestCase:            *benchTestCase(bc),
 		ConsecutiveFailures: bc.consecutiveFailures,
 	}
+}
+
+func containerStateIdentity(resources orka.ContainerAnalysisResources, request ai.FailureAnalysisRequest) analysisruntime.ContainerStateIdentity {
+	name := resources.Task["metadata"].(map[string]any)["name"].(string)
+	return analysisruntime.NewContainerStateIdentity("orka-system", name, request)
 }
 
 func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string, cacheSeed map[string]ai.CacheEntry) orka.ContainerAnalysisResources {

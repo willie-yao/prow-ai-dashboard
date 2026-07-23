@@ -50,8 +50,9 @@ func analyzerStateKeyEnv() string {
 }
 
 func fakeSnapshot(request ai.FailureAnalysisRequest) (analysisruntime.ContainerAnalysisState, error) {
+	identity := analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request)
 	return analysisruntime.ContainerAnalysisState{
-		Version: analysisruntime.ContainerStateVersion, CacheKey: analysisruntime.FailureCacheKey(request),
+		Version: analysisruntime.ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: analysisruntime.FailureCacheKey(request),
 		CacheEntries: map[string]ai.CacheEntry{}, Traces: []ai.AnalysisTrace{},
 	}, nil
 }
@@ -135,7 +136,7 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 	if !strings.Contains(stdout.String(), analysisruntime.ContainerStateMarker) || !strings.Contains(stdout.String(), analysisruntime.FailureAnalysisResultMarker) {
 		t.Fatalf("stdout is missing framed state or result: %q", stdout.String())
 	}
-	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey())
+	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey(), analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request))
 	if err != nil || state.CacheKey != analysisruntime.FailureCacheKey(request) {
 		t.Fatalf("state = %+v, error = %v", state, err)
 	}
@@ -255,7 +256,7 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey())
+	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey(), analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request))
 	if err != nil || len(state.Traces) != 1 || state.Traces[0].Backend != "orka" || state.Traces[0].TaskName != "test-task" {
 		t.Fatalf("state = %+v, error = %v", state, err)
 	}

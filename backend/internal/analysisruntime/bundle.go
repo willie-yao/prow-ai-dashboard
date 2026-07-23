@@ -355,8 +355,7 @@ func validateProjectBundle(bundle ProjectBundle) error {
 		return err
 	}
 	if len(bundle.CacheSeed) > 0 {
-		state := ContainerAnalysisState{Version: ContainerStateVersion, CacheKey: FailureCacheKey(bundle.Request), CacheEntries: bundle.CacheSeed}
-		if err := validateContainerAnalysisState(state); err != nil {
+		if err := validateContainerCacheEntries(FailureCacheKey(bundle.Request), bundle.CacheSeed); err != nil {
 			return fmt.Errorf("validate project bundle cache seed: %w", err)
 		}
 		data, err := json.Marshal(bundle.CacheSeed)

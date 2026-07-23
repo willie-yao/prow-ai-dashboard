@@ -25,6 +25,10 @@ func stateTestRequest() ai.FailureAnalysisRequest {
 
 func stateTestKey() []byte { return bytes.Repeat([]byte{0x33}, 32) }
 
+func stateTestIdentity(request ai.FailureAnalysisRequest) ContainerStateIdentity {
+	return NewContainerStateIdentity("orka-system", "task", request)
+}
+
 func stateTestEntry(request ai.FailureAnalysisRequest, created time.Time, value string) map[string]ai.CacheEntry {
 	key := FailureCacheKey(request)
 	return map[string]ai.CacheEntry{key: {Key: key, CreatedAt: created, Data: json.RawMessage(value)}}
@@ -41,19 +45,20 @@ func stateTestTrace(responseID string) ai.AnalysisTrace {
 
 func TestContainerAnalysisStateEncryptRoundTripAndMarker(t *testing.T) {
 	request := stateTestRequest()
+	identity := stateTestIdentity(request)
 	state := ContainerAnalysisState{
-		Version: ContainerStateVersion, CacheKey: FailureCacheKey(request),
+		Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: FailureCacheKey(request),
 		CacheEntries: stateTestEntry(request, time.Now().UTC(), `{"summary":"ok"}`),
 		Traces:       []ai.AnalysisTrace{stateTestTrace("resp")},
 	}
-	encoded, err := EncryptContainerAnalysisState(state, stateTestKey())
+	encoded, err := EncryptContainerAnalysisState(state, stateTestKey(), identity)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(encoded, "resp") || strings.Contains(encoded, "summary") {
 		t.Fatal("encrypted state leaked plaintext")
 	}
-	got, err := DecryptContainerAnalysisState(encoded, stateTestKey())
+	got, err := DecryptContainerAnalysisState(encoded, stateTestKey(), identity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,10 +66,10 @@ func TestContainerAnalysisStateEncryptRoundTripAndMarker(t *testing.T) {
 		t.Fatalf("state = %+v, want %+v", got, state)
 	}
 	var out bytes.Buffer
-	if err := WriteEncryptedContainerAnalysisState(&out, state, stateTestKey()); err != nil {
+	if err := WriteEncryptedContainerAnalysisState(&out, state, stateTestKey(), identity); err != nil {
 		t.Fatal(err)
 	}
-	got, err = ParseEncryptedContainerAnalysisState("log before\n"+out.String()+"log after\n", stateTestKey())
+	got, err = ParseEncryptedContainerAnalysisState("log before\n"+out.String()+"log after\n", stateTestKey(), identity)
 	if err != nil || !reflect.DeepEqual(got, state) {
 		t.Fatalf("state = %+v, error = %v", got, err)
 	}
@@ -72,20 +77,26 @@ func TestContainerAnalysisStateEncryptRoundTripAndMarker(t *testing.T) {
 
 func TestContainerAnalysisStateRejectsWrongKeyTamperAndMalformedKey(t *testing.T) {
 	request := stateTestRequest()
-	state := ContainerAnalysisState{Version: ContainerStateVersion, CacheKey: FailureCacheKey(request)}
-	encoded, err := EncryptContainerAnalysisState(state, stateTestKey())
+	identity := stateTestIdentity(request)
+	state := ContainerAnalysisState{Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: FailureCacheKey(request)}
+	encoded, err := EncryptContainerAnalysisState(state, stateTestKey(), identity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DecryptContainerAnalysisState(encoded, bytes.Repeat([]byte{0x44}, 32)); err == nil {
+	if _, err := DecryptContainerAnalysisState(encoded, bytes.Repeat([]byte{0x44}, 32), identity); err == nil {
 		t.Fatal("wrong key decrypted state")
+	}
+	wrongIdentity := identity
+	wrongIdentity.TaskName = "other-task"
+	if _, err := DecryptContainerAnalysisState(encoded, stateTestKey(), wrongIdentity); err == nil {
+		t.Fatal("state replayed under another Task identity")
 	}
 	payload, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
 	payload[len(payload)-1] ^= 1
-	if _, err := DecryptContainerAnalysisState(base64.StdEncoding.EncodeToString(payload), stateTestKey()); err == nil {
+	if _, err := DecryptContainerAnalysisState(base64.StdEncoding.EncodeToString(payload), stateTestKey(), identity); err == nil {
 		t.Fatal("tampered state decrypted")
 	}
 	oversized := strings.Repeat("A", base64.StdEncoding.EncodedLen(maxContainerStateBytes+64)+4)
@@ -105,8 +116,9 @@ func TestContainerStateStorePersistsCacheAndPrivateTrace(t *testing.T) {
 	dir := t.TempDir()
 	request := stateTestRequest()
 	created := time.Now().UTC().Add(-time.Minute)
+	identity := stateTestIdentity(request)
 	state := ContainerAnalysisState{
-		Version: ContainerStateVersion, CacheKey: FailureCacheKey(request),
+		Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: FailureCacheKey(request),
 		CacheEntries: stateTestEntry(request, created, `{"summary":"old"}`),
 		Traces:       []ai.AnalysisTrace{stateTestTrace("resp-old")},
 	}
@@ -156,7 +168,7 @@ func TestRestoreAndSnapshotContainerAnalysisState(t *testing.T) {
 	cache := ai.NewCache(dir)
 	traces := ai.NewTraceStore()
 	traces.Upsert(stateTestTrace("resp"))
-	state, err := SnapshotContainerAnalysisState(cache, traces, request)
+	state, err := SnapshotContainerAnalysisState(cache, traces, request, stateTestIdentity(request))
 	if err != nil {
 		t.Fatal(err)
 	}

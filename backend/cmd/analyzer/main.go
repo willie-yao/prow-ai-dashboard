@@ -124,7 +124,8 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	if stateErr != nil {
 		return fmt.Errorf("snapshot private analysis state: %w", stateErr)
 	}
-	if err := analysisruntime.WriteEncryptedContainerAnalysisState(stdout, state, stateKey); err != nil {
+	identity := analysisruntime.NewContainerStateIdentity(getenv(analysisruntime.ContainerTaskNamespaceEnv), getenv(analysisruntime.ContainerTaskNameEnv), bundle.Request)
+	if err := analysisruntime.WriteEncryptedContainerAnalysisState(stdout, state, stateKey, identity); err != nil {
 		return err
 	}
 	if err := analysisruntime.WriteFailureAnalysisResult(stdout, result); err != nil {
@@ -183,7 +184,8 @@ func loadRuntime(ctx context.Context, opts commandOptions, getenv envGetter) (*a
 			if err := errors.Join(runtime.SaveCache(), traceStore.Save(tracePath)); err != nil {
 				return analysisruntime.ContainerAnalysisState{}, err
 			}
-			return analysisruntime.SnapshotContainerAnalysisState(runtime.Client.Cache(), traceStore, request)
+			identity := analysisruntime.NewContainerStateIdentity(getenv(analysisruntime.ContainerTaskNamespaceEnv), getenv(analysisruntime.ContainerTaskNameEnv), request)
+			return analysisruntime.SnapshotContainerAnalysisState(runtime.Client.Cache(), traceStore, request, identity)
 		},
 	}, nil
 }
