@@ -70,6 +70,10 @@ func containerTaskSpec(t *testing.T) ContainerAnalysisTaskSpec {
 		MaxRetries: 1,
 		ProjectDir: containerTaskProject(t),
 		Request:    containerTaskRequest(),
+		Environment: map[string]string{
+			"AI_ENDPOINT": "https://model.invalid/v1/chat/completions",
+			"AI_MODEL":    "script-model",
+		},
 		Labels: map[string]string{
 			"prow-ai-dashboard/test":    "bundle",
 			"prow-ai-dashboard/adapter": "wrong",
@@ -230,6 +234,22 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 	}
 }
 
+func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
+	for name, mutate := range map[string]func(*ContainerAnalysisTaskSpec){
+		"endpoint": func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_ENDPOINT") },
+		"model":    func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_MODEL") },
+		"token":    func(spec *ContainerAnalysisTaskSpec) { spec.SecretEnv = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := containerTaskSpec(t)
+			mutate(&spec)
+			if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "requires") {
+				t.Fatalf("BuildContainerAnalysisResources error = %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildContainerAnalysisResourcesRejectsOversizedBundle(t *testing.T) {
 	spec := containerTaskSpec(t)
 	if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte(strings.Repeat("x", analysisruntime.MaxProjectBundleBytes)), 0o644); err != nil {
@@ -288,7 +308,7 @@ func TestBuildContainerAnalysisResourcesAllowsOnlyKnownSafeInlineEnvironment(t *
 	}
 	for _, name := range []string{"AI_TOKEN", "GITHUB_PAT", "PRIVATE_KEY", "OPENAI_APIKEY"} {
 		spec := containerTaskSpec(t)
-		spec.Environment = map[string]string{name: "inline-secret"}
+		spec.Environment[name] = "inline-secret"
 		if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "Secret reference") {
 			t.Fatalf("BuildContainerAnalysisResources(%s) error = %v", name, err)
 		}

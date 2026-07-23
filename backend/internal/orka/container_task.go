@@ -70,6 +70,12 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if strings.TrimSpace(in.ProjectDir) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
 	}
+	if strings.TrimSpace(in.Environment["AI_ENDPOINT"]) == "" {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_ENDPOINT")
+	}
+	if strings.TrimSpace(in.Environment["AI_MODEL"]) == "" {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_MODEL")
+	}
 	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundle(in.ProjectDir, ContainerAnalysisContractVersion, in.Request)
 	if err != nil {
 		return ContainerAnalysisResources{}, err
@@ -100,6 +106,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 		}
 		seenEnv[name] = true
 	}
+	tokenSecretFound := false
 	for _, secret := range secretEnv {
 		if strings.TrimSpace(secret.Name) == "" || strings.TrimSpace(secret.SecretName) == "" || strings.TrimSpace(secret.SecretKey) == "" {
 			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task secret environment references require name, Secret name, and key")
@@ -108,6 +115,12 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 			return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment contains duplicate %s", secret.Name)
 		}
 		seenEnv[secret.Name] = true
+		if secret.Name == "AI_TOKEN" {
+			tokenSecretFound = true
+		}
+	}
+	if !tokenSecretFound {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task requires an AI_TOKEN Secret reference")
 	}
 	in.SecretEnv = secretEnv
 
