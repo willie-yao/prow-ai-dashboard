@@ -110,6 +110,21 @@ func BuildProjectBundleWithCache(projectDir, contractVersion string, request ai.
 	if err != nil {
 		return nil, "", fmt.Errorf("marshal project bundle: %w", err)
 	}
+	if len(data) > MaxProjectBundleBytes && len(bundle.CacheSeed) > 0 {
+		bundle.CacheSeed = nil
+		digest, err = projectBundleDigest(bundle)
+		if err != nil {
+			return nil, "", err
+		}
+		bundle.Digest = digest
+		if err := validateProjectBundle(bundle); err != nil {
+			return nil, "", err
+		}
+		data, err = json.Marshal(bundle)
+		if err != nil {
+			return nil, "", fmt.Errorf("marshal project bundle without cache seed: %w", err)
+		}
+	}
 	if len(data) > MaxProjectBundleBytes {
 		return nil, "", fmt.Errorf("project bundle is %d bytes, exceeds %d-byte ConfigMap environment limit", len(data), MaxProjectBundleBytes)
 	}

@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	cacheMaxAge = 30 * 24 * time.Hour
+	cacheMaxAge        = 30 * 24 * time.Hour
+	cacheMaxFutureSkew = 5 * time.Minute
 	// CacheFilename is the private persisted analysis cache.
 	CacheFilename = "ai_cache.json"
 )
@@ -63,7 +64,8 @@ func (c *Cache) Get(key string) (json.RawMessage, bool) {
 	if !ok {
 		return nil, false
 	}
-	if time.Since(entry.CreatedAt) > cacheMaxAge {
+	now := time.Now()
+	if !validCacheEntryTime(now, entry.CreatedAt) {
 		delete(c.entries, key)
 		c.dirty = true
 		return nil, false
@@ -99,7 +101,7 @@ func (c *Cache) Entries(keys ...string) map[string]CacheEntry {
 	now := time.Now()
 	for _, key := range keys {
 		entry, ok := c.entries[key]
-		if !ok || now.Sub(entry.CreatedAt) > cacheMaxAge {
+		if !ok || !validCacheEntryTime(now, entry.CreatedAt) {
 			continue
 		}
 		entry.Data = append(json.RawMessage(nil), entry.Data...)
@@ -118,7 +120,7 @@ func (c *Cache) Merge(entries map[string]CacheEntry) bool {
 	now := time.Now()
 	changed := false
 	for key, entry := range entries {
-		if key == "" || entry.Key != key || entry.CreatedAt.IsZero() || now.Sub(entry.CreatedAt) > cacheMaxAge || !json.Valid(entry.Data) {
+		if key == "" || entry.Key != key || !validCacheEntryTime(now, entry.CreatedAt) || !json.Valid(entry.Data) {
 			continue
 		}
 		current, ok := c.entries[key]
@@ -155,10 +157,14 @@ func (c *Cache) Save() error {
 	return nil
 }
 
+func validCacheEntryTime(now, created time.Time) bool {
+	return !created.IsZero() && !created.After(now.Add(cacheMaxFutureSkew)) && now.Sub(created) <= cacheMaxAge
+}
+
 func (c *Cache) pruneExpiredLocked(now time.Time) bool {
 	changed := false
 	for key, entry := range c.entries {
-		if now.Sub(entry.CreatedAt) > cacheMaxAge {
+		if !validCacheEntryTime(now, entry.CreatedAt) {
 			delete(c.entries, key)
 			changed = true
 		}
