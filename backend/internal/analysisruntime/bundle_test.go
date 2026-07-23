@@ -213,6 +213,32 @@ func TestProjectBundleRejectsCredentialsSymlinksAndOversize(t *testing.T) {
 			t.Fatalf("BuildProjectBundle error = %v", err)
 		}
 	})
+	t.Run("yaml anchor", func(t *testing.T) {
+		dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+		config := `id: analyzer-test
+name: Analyzer Test
+testgrid:
+  dashboard: analyzer-test
+storage:
+  provider: local
+  base: /fixtures
+ai:
+  endpoint: &provider https://model.invalid/v1/chat/completions?token=secret
+  model: model
+  tools: [filesystem]
+branding:
+  title: *provider
+  base_path: /analyzer-test
+  site_url: https://example.invalid/analyzer-test
+  source_repo:
+    owner: example
+    name: project
+`
+		writeBundleTestFile(t, filepath.Join(dir, "project.yaml"), config)
+		if _, _, err := BuildProjectBundle(dir, "contract-v3", testBundleRequest()); err == nil || !strings.Contains(err.Error(), "anchors or aliases") {
+			t.Fatalf("BuildProjectBundle error = %v", err)
+		}
+	})
 	t.Run("symlink", func(t *testing.T) {
 		dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
 		target := filepath.Join(t.TempDir(), "outside.yaml")

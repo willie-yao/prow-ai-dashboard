@@ -67,9 +67,10 @@ the directory after the analysis attempt.
 
 Provider API, endpoint, model, and headers are removed from bundled
 `project.yaml`. API, endpoint, and model remain ordinary Task environment values.
-Credentials remain Secret references. Bundles with `ai.headers` are rejected
-until a Secret-backed custom-header contract exists. The bundle is limited to 96
-KiB so one ConfigMap value stays below the Linux per-environment-value limit.
+Credentials remain Secret references. Bundles with `ai.headers`, YAML merge
+keys, anchors, or aliases are rejected until a safe contract exists. The bundle
+is limited to 96 KiB so one ConfigMap value stays below the Linux
+per-environment-value limit.
 
 The lifecycle helper prunes bundles older than 24 hours when their Task is
 terminal or missing, creates the ConfigMap before applying the Task, and rolls

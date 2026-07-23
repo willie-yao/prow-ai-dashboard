@@ -240,6 +240,9 @@ func sanitizeProjectYAML(data []byte) ([]byte, error) {
 	if hasYAMLMergeKey(&document) {
 		return nil, fmt.Errorf("project bundle config does not support YAML merge keys")
 	}
+	if hasYAMLAnchorOrAlias(&document) {
+		return nil, fmt.Errorf("project bundle config does not support YAML anchors or aliases")
+	}
 	root := document.Content[0]
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value != "ai" {
@@ -287,6 +290,21 @@ func hasYAMLMergeKey(node *yaml.Node) bool {
 	}
 	for _, child := range node.Content {
 		if hasYAMLMergeKey(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasYAMLAnchorOrAlias(node *yaml.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Anchor != "" || node.Kind == yaml.AliasNode || node.Alias != nil {
+		return true
+	}
+	for _, child := range node.Content {
+		if hasYAMLAnchorOrAlias(child) {
 			return true
 		}
 	}

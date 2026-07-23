@@ -81,6 +81,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 			t.Fatal("Task result did not contain the framed dashboard result")
 		}
 		cleanupContainerBundle(t, kubeContext, resources)
+		assertTerminalReconcileDoesNotRecreateBundle(t, kubeContext, resources)
 	})
 
 	t.Run("retry-after-analyzer-failure", func(t *testing.T) {
@@ -201,6 +202,17 @@ func cleanupContainerBundle(t *testing.T, kubeContext string, resources orka.Con
 	if err := orka.CleanupContainerAnalysisBundle(ctx, client, resources); err != nil {
 		t.Fatal(err)
 	}
+	assertContainerBundleMissing(t, kubeContext, resources)
+}
+
+func assertTerminalReconcileDoesNotRecreateBundle(t *testing.T, kubeContext string, resources orka.ContainerAnalysisResources) {
+	t.Helper()
+	applyContainerResources(t, kubeContext, resources)
+	assertContainerBundleMissing(t, kubeContext, resources)
+}
+
+func assertContainerBundleMissing(t *testing.T, kubeContext string, resources orka.ContainerAnalysisResources) {
+	t.Helper()
 	name := resources.BundleConfigMap["metadata"].(map[string]any)["name"].(string)
 	cmd := exec.Command("kubectl", "--context", kubeContext, "get", "configmap", name, "-n", "orka-system", "-o", "name")
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "NotFound") {

@@ -122,6 +122,21 @@ func TestReconcileContainerAnalysisResourcesPrunesAndAppliesInOrder(t *testing.T
 	}
 }
 
+func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
+	client := &fakeContainerResourceClient{
+		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Succeeded"}},
+	}
+	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.created) != 0 || len(client.applied) != 0 {
+		t.Fatalf("terminal Task recreated resources: created=%v applied=%v", client.created, client.applied)
+	}
+	if !reflect.DeepEqual(client.deleted, []string{"configmaps/bundle"}) {
+		t.Fatalf("deleted = %v", client.deleted)
+	}
+}
+
 func TestApplyContainerAnalysisResourcesRollsBackOnlyNewBundle(t *testing.T) {
 	resources := lifecycleResources()
 	client := &fakeContainerResourceClient{applyErrAt: 1}

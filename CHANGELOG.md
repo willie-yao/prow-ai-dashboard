@@ -26,8 +26,9 @@ for how to pin a release.
   analyzer now receives its failure request, sanitized project config, prompt,
   and consumer skills from an immutable content-addressed ConfigMap. Tasks use a
   ConfigMap key reference, verify the full digest before materializing private
-  temporary files, keep credentials in Secret references, and reject bundles
-  that exceed the bounded environment transport. Terminal result handling
+  temporary files, keep credentials in Secret references, and reject unsafe
+  YAML graphs or bundles that exceed the bounded environment transport. Terminal
+  result handling
   deletes private Task-scoped bundles immediately, failed Task application rolls
   back only newly created bundles, and active reconciliation prunes terminal or
   orphaned bundles after 24 hours under least-privilege ConfigMap RBAC.

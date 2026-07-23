@@ -37,8 +37,22 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 	if err != nil {
 		return err
 	}
+	taskNamespace, taskName, err := containerResourceRef(resources.Task)
+	if err != nil {
+		return err
+	}
+	if taskNamespace != namespace {
+		return fmt.Errorf("container analysis Task and bundle namespaces differ")
+	}
 	if _, err := PruneContainerAnalysisBundles(ctx, client, namespace, now); err != nil {
 		return err
+	}
+	state, err := client.TaskState(ctx, taskNamespace, taskName)
+	if err != nil {
+		return fmt.Errorf("read container analysis Task %s: %w", taskName, err)
+	}
+	if state.Exists && TerminalPhase(state.Phase) {
+		return CleanupContainerAnalysisBundle(ctx, client, resources)
 	}
 	if err := ApplyContainerAnalysisResources(ctx, client, resources); err != nil {
 		return err
