@@ -72,7 +72,8 @@ for how to pin a release.
 
 - **Frozen Orka AI analysis backend.** The patched `type: ai` worker, Helm
   analysis selector, producer, ingestor, artifact Tool service, Provider proxy,
-  compatibility workflow, manifests, and private analysis manifest are removed.
+  manifests and private analysis manifest are removed. The now-unreferenced
+  worker compatibility assets are removed separately.
   Failure analysis now always uses the dashboard-owned in-process analyzer. Orka
   fix generation and the isolated container lifecycle experiment remain.
 

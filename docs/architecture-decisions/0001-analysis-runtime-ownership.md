@@ -66,9 +66,10 @@ reimplement analysis policy.
 
 ### Patched Orka AI worker
 
-The patched `type: ai` compatibility worker and its Helm mode have been removed
-without a compatibility period. They duplicated dashboard analysis policy and
-were not part of the retained Orka lifecycle experiment.
+The patched `type: ai` runtime and its Helm mode have been removed without a
+compatibility period. They duplicated dashboard analysis policy and were not
+part of the retained Orka lifecycle experiment. The unreferenced compatibility
+build assets are removed separately.
 
 The project will not add compatibility v7 or restore configuration fields that
 existed only for the patched worker.
