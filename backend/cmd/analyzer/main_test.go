@@ -42,10 +42,15 @@ func analyzerTestRequest() ai.FailureAnalysisRequest {
 
 func bundleValues(t *testing.T, request ai.FailureAnalysisRequest, projectDir string) map[string]string {
 	t.Helper()
+	return bundleValuesForContract(t, request, projectDir, analysisruntime.ContainerAnalyzerContractVersion)
+}
+
+func bundleValuesForContract(t *testing.T, request ai.FailureAnalysisRequest, projectDir, contractVersion string) map[string]string {
+	t.Helper()
 	if projectDir == "" {
 		projectDir = writeAnalyzerProject(t, t.TempDir(), "https://model.invalid/v1/chat/completions")
 	}
-	data, digest, err := analysisruntime.BuildProjectBundle(projectDir, "analyzer-test-v3", request)
+	data, digest, err := analysisruntime.BuildProjectBundle(projectDir, contractVersion, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,10 +178,12 @@ func TestRunRejectsMalformedOrMismatchedBundle(t *testing.T) {
 		return nil, nil
 	}
 	valid := bundleValues(t, analyzerTestRequest(), "")
+	future := bundleValuesForContract(t, analyzerTestRequest(), "", "dashboard-failure-analyzer-v4")
 	for _, values := range []map[string]string{
 		{analysisruntime.ProjectBundleEnv: "not json", analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
 		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv]},
 		{analysisruntime.ProjectBundleEnv: valid[analysisruntime.ProjectBundleEnv], analysisruntime.ProjectBundleDigestEnv: strings.Repeat("0", 64)},
+		future,
 	} {
 		var stdout, stderr bytes.Buffer
 		err := run(context.Background(), nil, func(name string) string { return values[name] }, &stdout, &stderr, factory)

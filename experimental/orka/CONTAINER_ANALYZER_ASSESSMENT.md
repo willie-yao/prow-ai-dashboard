@@ -71,6 +71,12 @@ Credentials remain Secret references. Bundles with `ai.headers` are rejected
 until a Secret-backed custom-header contract exists. The bundle is limited to 96
 KiB so one ConfigMap value stays below the Linux per-environment-value limit.
 
+The lifecycle helper prunes bundles older than 24 hours when their Task is
+terminal or missing, applies the ConfigMap before the Task, and rolls the bundle
+back if Task application fails. The result handler deletes the bundle
+immediately after terminal result processing. Orka Task history and durable
+results remain available without retaining the private input ConfigMap.
+
 ## Remaining design risks
 
 - Consumers whose request, prompt, and skills exceed 96 KiB need an immutable

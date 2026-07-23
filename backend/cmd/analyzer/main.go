@@ -88,6 +88,9 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	if err := analysisruntime.VerifyProjectBundleDigest(bundle, getenv(analysisruntime.ProjectBundleDigestEnv)); err != nil {
 		return err
 	}
+	if err := analysisruntime.VerifyProjectBundleContract(bundle); err != nil {
+		return err
+	}
 	projectDir, cleanup, err := analysisruntime.MaterializeProjectBundle(bundle)
 	if err != nil {
 		return err

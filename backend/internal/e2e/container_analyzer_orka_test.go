@@ -79,6 +79,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if !strings.Contains(raw, analysisruntime.FailureAnalysisResultMarker) {
 			t.Fatal("Task result did not contain the framed dashboard result")
 		}
+		cleanupContainerBundle(t, kubeContext, resources)
 	})
 
 	t.Run("retry-after-analyzer-failure", func(t *testing.T) {
@@ -94,6 +95,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if _, err := orka.ParseContainerAnalysisResult(raw); err != nil {
 			t.Fatalf("parse retried Task result: %v\n%s", err, raw)
 		}
+		cleanupContainerBundle(t, kubeContext, resources)
 	})
 	assertNoPodsOnGPUNode(t, kubeContext, namespace)
 	cleanup()
@@ -181,14 +183,42 @@ Use the build artifacts to distinguish transient bootstrap failures from persist
 
 func applyContainerResources(t *testing.T, kubeContext string, resources orka.ContainerAnalysisResources) string {
 	t.Helper()
-	for _, resource := range []map[string]any{resources.BundleConfigMap, resources.Task} {
-		data, err := json.Marshal(resource)
-		if err != nil {
-			t.Fatal(err)
-		}
-		containerKubectl(t, kubeContext, data, "apply", "-f", "-")
+	client := containerKubeClient(t, kubeContext)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := orka.ReconcileContainerAnalysisResources(ctx, client, resources, time.Now()); err != nil {
+		t.Fatal(err)
 	}
 	return resources.Task["metadata"].(map[string]any)["name"].(string)
+}
+
+func cleanupContainerBundle(t *testing.T, kubeContext string, resources orka.ContainerAnalysisResources) {
+	t.Helper()
+	client := containerKubeClient(t, kubeContext)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := orka.CleanupContainerAnalysisBundle(ctx, client, resources); err != nil {
+		t.Fatal(err)
+	}
+	name := resources.BundleConfigMap["metadata"].(map[string]any)["name"].(string)
+	cmd := exec.Command("kubectl", "--context", kubeContext, "get", "configmap", name, "-n", "orka-system", "-o", "name")
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "NotFound") {
+		t.Fatalf("bundle ConfigMap %s still exists or cleanup check failed: %v\n%s", name, err, out)
+	}
+}
+
+func containerKubeClient(t *testing.T, kubeContext string) *orka.KubeClient {
+	t.Helper()
+	config, err := orka.RESTConfig(kubeContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := orka.NewKubeClient(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Manager = "container-analyzer-smoke"
+	return client
 }
 
 type containerTaskStatus struct {

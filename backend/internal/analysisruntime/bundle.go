@@ -27,6 +27,8 @@ const (
 	ProjectBundleConfigMapKey = "bundle.json"
 	// ProjectBundleSchemaVersion identifies the JSON bundle schema.
 	ProjectBundleSchemaVersion = 1
+	// ContainerAnalyzerContractVersion is implemented by the analyzer binary.
+	ContainerAnalyzerContractVersion = "dashboard-failure-analyzer-v3"
 	// MaxProjectBundleBytes stays below the Linux per-environment-value limit.
 	MaxProjectBundleBytes = 96 << 10
 )
@@ -146,6 +148,14 @@ func VerifyProjectBundleDigest(bundle ProjectBundle, expected string) error {
 	return nil
 }
 
+// VerifyProjectBundleContract rejects bundles for another analyzer version.
+func VerifyProjectBundleContract(bundle ProjectBundle) error {
+	if bundle.ContractVersion != ContainerAnalyzerContractVersion {
+		return fmt.Errorf("unsupported container analyzer contract %q, want %q", bundle.ContractVersion, ContainerAnalyzerContractVersion)
+	}
+	return nil
+}
+
 // MaterializeProjectBundle writes the verified project files to a private directory.
 func MaterializeProjectBundle(bundle ProjectBundle) (string, func(), error) {
 	if err := validateProjectBundle(bundle); err != nil {
@@ -227,6 +237,9 @@ func sanitizeProjectYAML(data []byte) ([]byte, error) {
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("project bundle config must be a YAML mapping")
 	}
+	if hasYAMLMergeKey(&document) {
+		return nil, fmt.Errorf("project bundle config does not support YAML merge keys")
+	}
 	root := document.Content[0]
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value != "ai" {
@@ -259,6 +272,25 @@ func sanitizeProjectYAML(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("close project bundle config encoder: %w", err)
 	}
 	return out.Bytes(), nil
+}
+
+func hasYAMLMergeKey(node *yaml.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == "<<" || node.Content[i].Tag == "!!merge" {
+				return true
+			}
+		}
+	}
+	for _, child := range node.Content {
+		if hasYAMLMergeKey(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func stripYAMLComments(node *yaml.Node) {

@@ -105,10 +105,18 @@ func TestBuildContainerAnalysisResources(t *testing.T) {
 	if !strings.HasPrefix(configMetadata["name"].(string), "flatcar-analyzer-bundle-") || configMetadata["namespace"] != "orka-system" {
 		t.Fatalf("bundle ConfigMap metadata = %+v", configMetadata)
 	}
-	for _, labels := range []map[string]any{configMetadata["labels"].(map[string]any), metadata["labels"].(map[string]any)} {
+	bundleLabels := configMetadata["labels"].(map[string]any)
+	taskLabels := metadata["labels"].(map[string]any)
+	for _, labels := range []map[string]any{bundleLabels, taskLabels} {
 		if labels["prow-ai-dashboard/test"] != "bundle" || labels["prow-ai-dashboard/adapter"] != "container-analyzer" {
 			t.Fatalf("resource labels = %+v", labels)
 		}
+	}
+	if bundleLabels[containerAnalysisBundleLabel] != "true" {
+		t.Fatalf("bundle labels = %+v", bundleLabels)
+	}
+	if _, ok := taskLabels[containerAnalysisBundleLabel]; ok {
+		t.Fatalf("Task labels include bundle retention selector: %+v", taskLabels)
 	}
 	bundleJSON := configMap["data"].(map[string]any)[analysisruntime.ProjectBundleConfigMapKey].(string)
 	bundle, err := analysisruntime.DecodeProjectBundle([]byte(bundleJSON))
@@ -195,7 +203,6 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 	}{
 		{name: "request", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Request.TestCase.FailureMessage = "changed" }},
 		{name: "image", mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
-		{name: "contract", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.ContractVersion = "v4" }},
 		{name: "prompt", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
 			if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte("Changed prompt.\n"), 0o644); err != nil {
 				t.Fatal(err)

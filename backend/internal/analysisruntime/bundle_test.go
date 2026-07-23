@@ -198,6 +198,21 @@ func TestProjectBundleRejectsCredentialsSymlinksAndOversize(t *testing.T) {
 			t.Fatalf("BuildProjectBundle error = %v", err)
 		}
 	})
+	t.Run("yaml merge", func(t *testing.T) {
+		dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
+		path := filepath.Join(dir, "project.yaml")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = bytes.Replace(data, []byte("ai:\n  api: responses\n  endpoint: https://model.invalid/v1/chat/completions\n  model: model\n"), []byte("ai:\n  <<: {endpoint: 'https://model.invalid/v1/chat/completions?token=secret', model: private-model}\n"), 1)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := BuildProjectBundle(dir, "contract-v3", testBundleRequest()); err == nil || !strings.Contains(err.Error(), "merge keys") {
+			t.Fatalf("BuildProjectBundle error = %v", err)
+		}
+	})
 	t.Run("symlink", func(t *testing.T) {
 		dir := writeBundleProject(t, "https://model.invalid/v1/chat/completions", "model")
 		target := filepath.Join(t.TempDir(), "outside.yaml")
@@ -268,5 +283,8 @@ func TestDecodeProjectBundleRejectsMalformedOrTamperedInput(t *testing.T) {
 	}
 	if err := VerifyProjectBundleDigest(bundle, strings.Repeat("0", len(digest))); err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("VerifyProjectBundleDigest error = %v", err)
+	}
+	if err := VerifyProjectBundleContract(bundle); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("VerifyProjectBundleContract error = %v", err)
 	}
 }

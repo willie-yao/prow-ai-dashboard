@@ -16,7 +16,7 @@ import (
 
 const (
 	// ContainerAnalysisContractVersion identifies the experimental adapter contract.
-	ContainerAnalysisContractVersion = "dashboard-failure-analyzer-v3"
+	ContainerAnalysisContractVersion = analysisruntime.ContainerAnalyzerContractVersion
 )
 
 var invalidTaskNameChars = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -30,19 +30,18 @@ type SecretEnvVar struct {
 
 // ContainerAnalysisTaskSpec is the dashboard-owned container Task contract.
 type ContainerAnalysisTaskSpec struct {
-	Namespace       string
-	NamePrefix      string
-	Image           string
-	Command         []string
-	Args            []string
-	Timeout         string
-	MaxRetries      int
-	ContractVersion string
-	ProjectDir      string
-	Request         ai.FailureAnalysisRequest
-	Environment     map[string]string
-	SecretEnv       []SecretEnvVar
-	Labels          map[string]string
+	Namespace   string
+	NamePrefix  string
+	Image       string
+	Command     []string
+	Args        []string
+	Timeout     string
+	MaxRetries  int
+	ProjectDir  string
+	Request     ai.FailureAnalysisRequest
+	Environment map[string]string
+	SecretEnv   []SecretEnvVar
+	Labels      map[string]string
 }
 
 // ContainerAnalysisResources are the immutable bundle and its Orka Task.
@@ -68,13 +67,10 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if in.MaxRetries < 0 {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task retries must not be negative")
 	}
-	if in.ContractVersion == "" {
-		in.ContractVersion = ContainerAnalysisContractVersion
-	}
 	if strings.TrimSpace(in.ProjectDir) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
 	}
-	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundle(in.ProjectDir, in.ContractVersion, in.Request)
+	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundle(in.ProjectDir, ContainerAnalysisContractVersion, in.Request)
 	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
@@ -146,13 +142,16 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 		})
 	}
 	bundleLabels := containerAnalysisLabels(in.Labels)
+	bundleLabels[containerAnalysisBundleLabel] = "true"
+	bundleAnnotations := containerAnalysisAnnotations(ContainerAnalysisContractVersion, bundleDigest)
+	bundleAnnotations[containerAnalysisTaskNameAnnotation] = name
 	taskLabels := containerAnalysisLabels(in.Labels)
 	return ContainerAnalysisResources{
 		BundleConfigMap: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata": map[string]any{
-				"name": bundleName, "namespace": in.Namespace, "labels": bundleLabels, "annotations": containerAnalysisAnnotations(in.ContractVersion, bundleDigest),
+				"name": bundleName, "namespace": in.Namespace, "labels": bundleLabels, "annotations": bundleAnnotations,
 			},
 			"immutable": true,
 			"data":      map[string]any{analysisruntime.ProjectBundleConfigMapKey: string(bundleJSON)},
@@ -161,7 +160,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 			"apiVersion": "core.orka.ai/v1alpha1",
 			"kind":       "Task",
 			"metadata": map[string]any{
-				"name": name, "namespace": in.Namespace, "labels": taskLabels, "annotations": containerAnalysisAnnotations(in.ContractVersion, bundleDigest),
+				"name": name, "namespace": in.Namespace, "labels": taskLabels, "annotations": containerAnalysisAnnotations(ContainerAnalysisContractVersion, bundleDigest),
 			},
 			"spec": map[string]any{
 				"type":        "container",
@@ -218,16 +217,15 @@ func safeInlineEnvironmentName(name string) bool {
 
 func containerAnalysisTaskName(in ContainerAnalysisTaskSpec, bundleDigest string) (string, error) {
 	identity := struct {
-		BundleDigest    string
-		Image           string
-		Command         []string
-		Args            []string
-		Timeout         string
-		MaxRetries      int
-		ContractVersion string
-		Environment     map[string]string
-		SecretEnv       []SecretEnvVar
-	}{bundleDigest, in.Image, in.Command, in.Args, in.Timeout, in.MaxRetries, in.ContractVersion, in.Environment, in.SecretEnv}
+		BundleDigest string
+		Image        string
+		Command      []string
+		Args         []string
+		Timeout      string
+		MaxRetries   int
+		Environment  map[string]string
+		SecretEnv    []SecretEnvVar
+	}{bundleDigest, in.Image, in.Command, in.Args, in.Timeout, in.MaxRetries, in.Environment, in.SecretEnv}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("marshal container analysis Task identity: %w", err)
