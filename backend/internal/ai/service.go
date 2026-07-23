@@ -135,7 +135,7 @@ func (s *Service) SetTraceStore(store *TraceStore) {
 	s.traceStore = store
 }
 
-// SetTraceMetadata sets backend-owned identity fields for every analysis trace.
+// SetTraceMetadata sets identity fields for every analysis trace.
 func (s *Service) SetTraceMetadata(meta TraceMetadata) {
 	s.traceMetadata = meta
 }
