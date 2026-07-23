@@ -1,5 +1,5 @@
 .PHONY: all build build-server build-worker serve dev-actions image fixer-image test test-v e2e lint fmt tidy helm-check \
-       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick orka-ops-check orka-compat-check orka-compat-image \
+       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-lint \
        dist dist-ai clean clean-cache clean-all help
 
@@ -11,7 +11,6 @@ PROJECT_DIR ?= configs/example
 # Container image coordinates for `make image`.
 IMAGE ?= ghcr.io/willie-yao/prow-ai-dashboard
 VERSION ?= dev
-ORKA_COMPAT_IMAGE ?= ghcr.io/willie-yao/prow-ai-dashboard/orka-ai-worker:local
 
 # Default target
 all: build
@@ -69,7 +68,7 @@ test-v:
 # Run the hermetic pipeline and email-remediation end-to-end tests.
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
-	cd backend && go test ./internal/fetcher -run '^(TestEmailRemediationLoopE2E|TestOrkaFinalizationTriggersEmailSideEffects)$$' -count=1 -v
+	cd backend && go test ./internal/fetcher -run '^TestEmailRemediationLoopE2E$$' -count=1 -v
 
 # Run Go linter (requires golangci-lint)
 lint:
@@ -83,23 +82,10 @@ fmt:
 tidy:
 	cd backend && go mod tidy
 
-# Validate the Orka operator helper.
-orka-ops-check:
-	bash experimental/orka/test-orka-ops.sh
-
-# Lint and render the Helm chart, including the owned Orka resources.
-helm-check: orka-ops-check
+# Lint and render the Helm chart.
+helm-check:
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
-
-# Validate compatibility metadata and local helper behavior without cloning Orka.
-orka-compat-check:
-	bash experimental/orka/worker-patches/test-compat-worker.sh
-	shellcheck -x experimental/orka/worker-patches/*.sh
-
-# Clone the pinned Orka source, apply and test the patch, then build the worker.
-orka-compat-image:
-	bash experimental/orka/worker-patches/compat-worker.sh build $(ORKA_COMPAT_IMAGE)
 
 ## ─── Data Fetching ────────────────────────────────────────────
 
@@ -153,7 +139,7 @@ dist-ai: fetch-data-ai fe-build
 
 # Clean build artifacts and generated data
 clean:
-	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json frontend/public/data/orka_analysis.json frontend/public/data/ai_traces.json
+	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json frontend/public/data/ai_traces.json
 
 # Clean AI analysis cache (forces re-analysis on next fetch)
 clean-cache:
@@ -177,9 +163,6 @@ help:
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
 	@echo "  helm-check         Lint and validate Helm chart renders"
-	@echo "  orka-ops-check     Validate the Orka operator helper"
-	@echo "  orka-compat-check  Validate Orka compatibility metadata and scripts"
-	@echo "  orka-compat-image  Test and build the pinned patched Orka AI worker"
 	@echo ""
 	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"
