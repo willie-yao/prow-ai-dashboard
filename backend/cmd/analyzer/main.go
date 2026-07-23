@@ -26,7 +26,7 @@ type envGetter func(string) string
 type analyzerRuntime struct {
 	analyzer   ai.FailureAnalyzer
 	httpClient *http.Client
-	save       func() error
+	snapshot   func(ai.FailureAnalysisRequest) (analysisruntime.ContainerAnalysisState, error)
 }
 
 type runtimeFactory func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error)
@@ -91,6 +91,19 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	if err := analysisruntime.VerifyProjectBundleContract(bundle); err != nil {
 		return err
 	}
+	stateKey, err := analysisruntime.ParseContainerStateKey(getenv(analysisruntime.ContainerStateKeyEnv))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(opts.dataDir, 0o700); err != nil {
+		return fmt.Errorf("create private data directory: %w", err)
+	}
+	if err := analysisruntime.RemoveContainerLocalState(opts.dataDir); err != nil {
+		return fmt.Errorf("clear private container state: %w", err)
+	}
+	if err := analysisruntime.RestoreContainerCache(opts.dataDir, bundle.Request, bundle.CacheSeed); err != nil {
+		return fmt.Errorf("restore private container cache: %w", err)
+	}
 	projectDir, cleanup, err := analysisruntime.MaterializeProjectBundle(bundle)
 	if err != nil {
 		return err
@@ -104,15 +117,15 @@ func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io
 	}
 	log.Printf("starting failure analysis bundle=%s", bundle.Digest[:12])
 	result, analyzeErr := runtime.analyzer.AnalyzeFailure(ctx, runtime.httpClient, bundle.Request)
-	saveErr := runtime.save()
+	state, stateErr := runtime.snapshot(bundle.Request)
 	if analyzeErr != nil {
-		if saveErr != nil {
-			return errors.Join(fmt.Errorf("AnalyzeFailure: %w", analyzeErr), fmt.Errorf("save private analysis state: %w", saveErr))
-		}
-		return fmt.Errorf("AnalyzeFailure: %w", analyzeErr)
+		return errors.Join(fmt.Errorf("AnalyzeFailure: %w", analyzeErr), stateErr)
 	}
-	if saveErr != nil {
-		return fmt.Errorf("save private analysis state: %w", saveErr)
+	if stateErr != nil {
+		return fmt.Errorf("snapshot private analysis state: %w", stateErr)
+	}
+	if err := analysisruntime.WriteEncryptedContainerAnalysisState(stdout, state, stateKey); err != nil {
+		return err
 	}
 	if err := analysisruntime.WriteFailureAnalysisResult(stdout, result); err != nil {
 		return err
@@ -151,7 +164,12 @@ func loadRuntime(ctx context.Context, opts commandOptions, getenv envGetter) (*a
 	}
 	traceStore := ai.NewTraceStore()
 	service, err := runtime.NewService(analysisruntime.ServiceOptions{
-		Backend: backend, TraceStore: traceStore,
+		Backend:    backend,
+		TraceStore: traceStore,
+		TraceMetadata: ai.TraceMetadata{
+			Backend: "orka", TaskNamespace: getenv(analysisruntime.ContainerTaskNamespaceEnv),
+			TaskName: getenv(analysisruntime.ContainerTaskNameEnv), ContractHash: getenv(analysisruntime.ContainerContractVersionEnv),
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -161,8 +179,11 @@ func loadRuntime(ctx context.Context, opts commandOptions, getenv envGetter) (*a
 	return &analyzerRuntime{
 		analyzer:   service,
 		httpClient: httpClient,
-		save: func() error {
-			return errors.Join(runtime.SaveCache(), traceStore.Save(tracePath))
+		snapshot: func(request ai.FailureAnalysisRequest) (analysisruntime.ContainerAnalysisState, error) {
+			if err := errors.Join(runtime.SaveCache(), traceStore.Save(tracePath)); err != nil {
+				return analysisruntime.ContainerAnalysisState{}, err
+			}
+			return analysisruntime.SnapshotContainerAnalysisState(runtime.Client.Cache(), traceStore, request)
 		},
 	}, nil
 }

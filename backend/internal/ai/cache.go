@@ -11,7 +11,11 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
-const cacheMaxAge = 30 * 24 * time.Hour
+const (
+	cacheMaxAge = 30 * 24 * time.Hour
+	// CacheFilename is the private persisted analysis cache.
+	CacheFilename = "ai_cache.json"
+)
 
 // CacheEntry holds a single cached AI response.
 type CacheEntry struct {
@@ -37,7 +41,7 @@ func NewCache(dir string) *Cache {
 	if dir == "" {
 		return c
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "ai_cache.json"))
+	data, err := os.ReadFile(filepath.Join(dir, CacheFilename))
 	if err == nil {
 		var entries map[string]CacheEntry
 		if err := json.Unmarshal(data, &entries); err == nil {
@@ -84,6 +88,53 @@ func (c *Cache) Set(key string, data any) error {
 	return nil
 }
 
+// Entries returns copies of selected unexpired cache entries.
+func (c *Cache) Entries(keys ...string) map[string]CacheEntry {
+	out := map[string]CacheEntry{}
+	if c == nil {
+		return out
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for _, key := range keys {
+		entry, ok := c.entries[key]
+		if !ok || now.Sub(entry.CreatedAt) > cacheMaxAge {
+			continue
+		}
+		entry.Data = append(json.RawMessage(nil), entry.Data...)
+		out[key] = entry
+	}
+	return out
+}
+
+// Merge adds newer valid entries and reports whether the cache changed.
+func (c *Cache) Merge(entries map[string]CacheEntry) bool {
+	if c == nil || len(entries) == 0 {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	changed := false
+	for key, entry := range entries {
+		if key == "" || entry.Key != key || entry.CreatedAt.IsZero() || now.Sub(entry.CreatedAt) > cacheMaxAge || !json.Valid(entry.Data) {
+			continue
+		}
+		current, ok := c.entries[key]
+		if ok && !entry.CreatedAt.After(current.CreatedAt) {
+			continue
+		}
+		entry.Data = append(json.RawMessage(nil), entry.Data...)
+		c.entries[key] = entry
+		changed = true
+	}
+	if changed {
+		c.dirty = true
+	}
+	return changed
+}
+
 // Save writes the cache to dir/ai_cache.json.
 func (c *Cache) Save() error {
 	c.mu.Lock()
@@ -97,7 +148,7 @@ func (c *Cache) Save() error {
 	if !c.dirty {
 		return nil
 	}
-	if err := statefile.WriteJSON(filepath.Join(c.dir, "ai_cache.json"), c.entries); err != nil {
+	if err := statefile.WriteJSON(filepath.Join(c.dir, CacheFilename), c.entries); err != nil {
 		return err
 	}
 	c.dirty = false
