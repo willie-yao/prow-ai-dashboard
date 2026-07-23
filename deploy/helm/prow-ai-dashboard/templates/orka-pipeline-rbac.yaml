@@ -1,6 +1,7 @@
 {{- include "prow-ai-dashboard.validateAnalysis" . -}}
 {{- if and (or (eq .Values.analysis "orka") .Values.orka.fixRuntime.enabled) .Values.orka.rbac.create }}
-# The pipeline pod runs in the release namespace but creates Tasks/Tools in the
+# The pipeline pod runs in the release namespace but creates Tasks, Tools, and
+# private analyzer bundle ConfigMaps in the Orka namespace.
 # Orka namespace, so the ServiceAccount lives here (release ns) and the
 # Role/RoleBinding grant it access in the Orka namespace cross-namespace.
 apiVersion: v1
@@ -26,6 +27,10 @@ rules:
   - apiGroups: ["core.orka.ai"]
     resources: ["tasks", "tools"]
     verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+  # Container analyzer bundles are immutable and deleted after result handling.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "delete"]
   {{- else }}
   # Fix generation only creates and polls Tasks.
   - apiGroups: ["core.orka.ai"]

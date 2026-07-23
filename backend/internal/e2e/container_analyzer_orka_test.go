@@ -20,6 +20,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"k8s.io/client-go/rest"
 )
 
 func TestOrkaContainerAnalyzerKind(t *testing.T) {
@@ -209,10 +210,26 @@ func cleanupContainerBundle(t *testing.T, kubeContext string, resources orka.Con
 
 func containerKubeClient(t *testing.T, kubeContext string) *orka.KubeClient {
 	t.Helper()
-	config, err := orka.RESTConfig(kubeContext)
+	base, err := orka.RESTConfig(kubeContext)
 	if err != nil {
 		t.Fatal(err)
 	}
+	token := strings.TrimSpace(containerKubectl(t, kubeContext, nil, "create", "token", "orka-pipeline", "-n", "orka-system", "--duration=10m"))
+	if token == "" {
+		t.Fatal("empty Orka pipeline token")
+	}
+	config := rest.CopyConfig(base)
+	config.BearerToken = token
+	config.BearerTokenFile = ""
+	config.Username = ""
+	config.Password = ""
+	config.ExecProvider = nil
+	config.AuthProvider = nil
+	config.Impersonate = rest.ImpersonationConfig{}
+	config.TLSClientConfig.CertFile = ""
+	config.TLSClientConfig.KeyFile = ""
+	config.TLSClientConfig.CertData = nil
+	config.TLSClientConfig.KeyData = nil
 	client, err := orka.NewKubeClient(config)
 	if err != nil {
 		t.Fatal(err)

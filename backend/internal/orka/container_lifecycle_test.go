@@ -14,14 +14,19 @@ import (
 )
 
 type fakeContainerResourceClient struct {
-	applyErrAt int
-	deleteErr  error
-	listErr    error
-	taskErr    error
-	applied    []string
-	deleted    []string
-	listed     []unstructured.Unstructured
-	taskStates map[string]TaskState
+	applyErrAt   int
+	createExists bool
+	createErr    error
+	getErr       error
+	deleteErr    error
+	listErr      error
+	taskErr      error
+	applied      []string
+	created      []string
+	deleted      []string
+	listed       []unstructured.Unstructured
+	existing     *unstructured.Unstructured
+	taskStates   map[string]TaskState
 }
 
 func (f *fakeContainerResourceClient) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
@@ -31,6 +36,19 @@ func (f *fakeContainerResourceClient) Apply(_ context.Context, gvr schema.GroupV
 		return errors.New("apply failed")
 	}
 	return nil
+}
+
+func (f *fakeContainerResourceClient) CreateIfAbsent(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) (bool, error) {
+	name := (&unstructured.Unstructured{Object: obj}).GetName()
+	f.created = append(f.created, gvr.Resource+"/"+name)
+	if f.createErr != nil {
+		return false, f.createErr
+	}
+	return !f.createExists, nil
+}
+
+func (f *fakeContainerResourceClient) Get(context.Context, schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error) {
+	return f.existing, f.getErr
 }
 
 func (f *fakeContainerResourceClient) Delete(_ context.Context, gvr schema.GroupVersionResource, _ string, name string) error {
@@ -55,8 +73,17 @@ func (f *fakeContainerResourceClient) TaskState(_ context.Context, _, name strin
 func lifecycleResources() ContainerAnalysisResources {
 	return ContainerAnalysisResources{
 		BundleConfigMap: map[string]any{
-			"apiVersion": "v1", "kind": "ConfigMap",
-			"metadata": map[string]any{"name": "bundle", "namespace": "orka-system"},
+			"apiVersion": "v1", "kind": "ConfigMap", "immutable": true,
+			"metadata": map[string]any{
+				"name": "bundle", "namespace": "orka-system",
+				"labels": map[string]any{containerAnalysisBundleLabel: "true"},
+				"annotations": map[string]any{
+					"prow-ai-dashboard/bundle-digest":    "digest",
+					"prow-ai-dashboard/contract-version": ContainerAnalysisContractVersion,
+					containerAnalysisTaskNameAnnotation:  "task",
+				},
+			},
+			"data": map[string]any{"bundle.json": "{}"},
 		},
 		Task: map[string]any{
 			"apiVersion": "core.orka.ai/v1alpha1", "kind": "Task",
@@ -87,19 +114,50 @@ func TestReconcileContainerAnalysisResourcesPrunesAndAppliesInOrder(t *testing.T
 	if !reflect.DeepEqual(client.deleted, []string{"configmaps/old", "configmaps/missing", "configmaps/legacy"}) {
 		t.Fatalf("deleted = %v", client.deleted)
 	}
-	if !reflect.DeepEqual(client.applied, []string{"configmaps/bundle", "tasks/task"}) {
+	if !reflect.DeepEqual(client.created, []string{"configmaps/bundle"}) {
+		t.Fatalf("created = %v", client.created)
+	}
+	if !reflect.DeepEqual(client.applied, []string{"tasks/task"}) {
 		t.Fatalf("applied = %v", client.applied)
 	}
 }
 
-func TestApplyContainerAnalysisResourcesRollsBackBundle(t *testing.T) {
-	client := &fakeContainerResourceClient{applyErrAt: 2}
-	err := ApplyContainerAnalysisResources(context.Background(), client, lifecycleResources())
+func TestApplyContainerAnalysisResourcesRollsBackOnlyNewBundle(t *testing.T) {
+	resources := lifecycleResources()
+	client := &fakeContainerResourceClient{applyErrAt: 1}
+	err := ApplyContainerAnalysisResources(context.Background(), client, resources)
 	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
 		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
 	}
 	if !reflect.DeepEqual(client.deleted, []string{"configmaps/bundle"}) {
 		t.Fatalf("deleted = %v", client.deleted)
+	}
+
+	client = &fakeContainerResourceClient{
+		applyErrAt:   1,
+		createExists: true,
+		existing:     &unstructured.Unstructured{Object: resources.BundleConfigMap},
+	}
+	err = ApplyContainerAnalysisResources(context.Background(), client, resources)
+	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
+		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
+	}
+	if len(client.deleted) != 0 {
+		t.Fatalf("existing bundle was deleted: %v", client.deleted)
+	}
+}
+
+func TestApplyContainerAnalysisResourcesRejectsMismatchedExistingBundle(t *testing.T) {
+	resources := lifecycleResources()
+	existing := &unstructured.Unstructured{Object: map[string]any{}}
+	existing.Object = deepCopyMap(resources.BundleConfigMap)
+	existing.Object["data"].(map[string]any)["bundle.json"] = "different"
+	client := &fakeContainerResourceClient{createExists: true, existing: existing}
+	if err := ApplyContainerAnalysisResources(context.Background(), client, resources); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
+	}
+	if len(client.applied) != 0 || len(client.deleted) != 0 {
+		t.Fatalf("mismatched existing bundle changed resources: applied=%v deleted=%v", client.applied, client.deleted)
 	}
 }
 
@@ -147,4 +205,8 @@ func bundleObject(name, taskName string, created time.Time) unstructured.Unstruc
 		object.SetCreationTimestamp(metav1.NewTime(created))
 	}
 	return object
+}
+
+func deepCopyMap(in map[string]any) map[string]any {
+	return (&unstructured.Unstructured{Object: in}).DeepCopy().Object
 }

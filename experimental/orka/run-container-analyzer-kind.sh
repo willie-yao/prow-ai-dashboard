@@ -111,6 +111,7 @@ kind load docker-image --name "$cluster" "$controller_image" "$analyzer_image" "
 kubectl --context "$context" create namespace orka-system
 kubectl --context "$context" apply -f "$orka_source/config/crd/bases/"
 kubectl --context "$context" apply -f "$repo_root/experimental/orka/manifests/00-rbac.yaml"
+kubectl --context "$context" apply -f "$repo_root/experimental/orka/manifests/60-pipeline-rbac.yaml"
 helm upgrade --install orka "$orka_source/charts/orka" \
   --kube-context "$context" \
   --namespace orka-system \

@@ -75,6 +75,27 @@ func (k *KubeClient) Apply(ctx context.Context, gvr schema.GroupVersionResource,
 	return nil
 }
 
+// CreateIfAbsent creates an object and reports whether this call created it.
+func (k *KubeClient) CreateIfAbsent(ctx context.Context, gvr schema.GroupVersionResource, ns string, obj map[string]any) (bool, error) {
+	u := &unstructured.Unstructured{Object: obj}
+	if _, err := k.dyn.Resource(gvr).Namespace(ns).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("create %s/%s: %w", gvr.Resource, u.GetName(), err)
+	}
+	return true, nil
+}
+
+// Get returns one unstructured object.
+func (k *KubeClient) Get(ctx context.Context, gvr schema.GroupVersionResource, ns, name string) (*unstructured.Unstructured, error) {
+	u, err := k.dyn.Resource(gvr).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
 // TaskState is the existing execution state needed before reapplying a Task.
 type TaskState struct {
 	Exists          bool

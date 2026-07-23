@@ -102,7 +102,8 @@ func TestBuildContainerAnalysisResources(t *testing.T) {
 	if configMap["apiVersion"] != "v1" || configMap["kind"] != "ConfigMap" || configMap["immutable"] != true {
 		t.Fatalf("bundle ConfigMap = %+v", configMap)
 	}
-	if !strings.HasPrefix(configMetadata["name"].(string), "flatcar-analyzer-bundle-") || configMetadata["namespace"] != "orka-system" {
+	bundleName := configMetadata["name"].(string)
+	if bundleName != metadata["name"].(string)+"-input" || len(bundleName) > 63 || configMetadata["namespace"] != "orka-system" {
 		t.Fatalf("bundle ConfigMap metadata = %+v", configMetadata)
 	}
 	bundleLabels := configMetadata["labels"].(map[string]any)
@@ -202,7 +203,7 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 		mutate       func(*ContainerAnalysisTaskSpec)
 	}{
 		{name: "request", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Request.TestCase.FailureMessage = "changed" }},
-		{name: "image", mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
+		{name: "image", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
 		{name: "prompt", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
 			if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte("Changed prompt.\n"), 0o644); err != nil {
 				t.Fatal(err)

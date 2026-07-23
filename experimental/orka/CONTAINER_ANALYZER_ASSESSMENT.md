@@ -51,8 +51,8 @@ combined pod logs without becoming the owner of the dashboard result schema.
 
 ## Bundle contract
 
-Contract v3 creates one immutable content-addressed ConfigMap per unique request
-and consumer project bundle. The bundle contains:
+Contract v3 creates one immutable Task-scoped ConfigMap whose identity includes
+the content-addressed request and consumer project bundle. The bundle contains:
 
 - `FailureAnalysisRequest`
 - Sanitized `project.yaml`
@@ -72,10 +72,13 @@ until a Secret-backed custom-header contract exists. The bundle is limited to 96
 KiB so one ConfigMap value stays below the Linux per-environment-value limit.
 
 The lifecycle helper prunes bundles older than 24 hours when their Task is
-terminal or missing, applies the ConfigMap before the Task, and rolls the bundle
-back if Task application fails. The result handler deletes the bundle
-immediately after terminal result processing. Orka Task history and durable
-results remain available without retaining the private input ConfigMap.
+terminal or missing, creates the ConfigMap before applying the Task, and rolls
+back only a bundle created by the failed application attempt. Existing immutable
+bundles are verified and preserved across reconciliation failures. The result
+handler deletes the Task-scoped bundle immediately after terminal result
+processing. Orka Task history and durable results remain available without
+retaining the private input ConfigMap. The pipeline ServiceAccount has only
+create, get, list, and delete access to ConfigMaps.
 
 ## Remaining design risks
 

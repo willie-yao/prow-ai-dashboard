@@ -74,7 +74,6 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
-	bundleName := containerAnalysisBundleName(in.NamePrefix, bundleDigest)
 	secretEnv := append([]SecretEnvVar(nil), in.SecretEnv...)
 	sort.Slice(secretEnv, func(i, j int) bool {
 		if secretEnv[i].Name != secretEnv[j].Name {
@@ -116,6 +115,7 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	if err != nil {
 		return ContainerAnalysisResources{}, err
 	}
+	bundleName := containerAnalysisBundleName(name)
 	env := []any{
 		map[string]any{
 			"name": analysisruntime.ProjectBundleEnv,
@@ -195,15 +195,8 @@ func containerAnalysisLabels(extra map[string]string) map[string]any {
 	return labels
 }
 
-func containerAnalysisBundleName(namePrefix, digest string) string {
-	prefix := strings.Trim(invalidTaskNameChars.ReplaceAllString(strings.ToLower(namePrefix), "-"), "-")
-	if prefix == "" {
-		prefix = "dashboard-analyzer"
-	}
-	if len(prefix) > 38 {
-		prefix = strings.TrimRight(prefix[:38], "-")
-	}
-	return prefix + "-bundle-" + digest[:16]
+func containerAnalysisBundleName(taskName string) string {
+	return taskName + "-input"
 }
 
 func safeInlineEnvironmentName(name string) bool {

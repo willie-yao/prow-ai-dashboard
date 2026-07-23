@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,6 +24,8 @@ const (
 // ContainerAnalysisResourceClient applies and removes analyzer resources.
 type ContainerAnalysisResourceClient interface {
 	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
+	CreateIfAbsent(context.Context, schema.GroupVersionResource, string, map[string]any) (bool, error)
+	Get(context.Context, schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error)
 	Delete(context.Context, schema.GroupVersionResource, string, string) error
 	ListByLabel(context.Context, schema.GroupVersionResource, string, string) ([]unstructured.Unstructured, error)
 	TaskState(context.Context, string, string) (TaskState, error)
@@ -56,15 +59,56 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 	if taskNamespace != bundleNamespace {
 		return fmt.Errorf("container analysis Task and bundle namespaces differ")
 	}
-	if err := client.Apply(ctx, configMapsGVR, bundleNamespace, resources.BundleConfigMap); err != nil {
-		return fmt.Errorf("apply container analysis bundle %s: %w", bundleName, err)
+	created, err := client.CreateIfAbsent(ctx, configMapsGVR, bundleNamespace, resources.BundleConfigMap)
+	if err != nil {
+		return fmt.Errorf("create container analysis bundle %s: %w", bundleName, err)
+	}
+	if !created {
+		existing, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
+		if err != nil {
+			return fmt.Errorf("read existing container analysis bundle %s: %w", bundleName, err)
+		}
+		if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
+			return err
+		}
 	}
 	if err := client.Apply(ctx, TasksGVR, taskNamespace, resources.Task); err != nil {
 		applyErr := fmt.Errorf("apply container analysis Task: %w", err)
+		if !created {
+			return applyErr
+		}
 		if cleanupErr := client.Delete(ctx, configMapsGVR, bundleNamespace, bundleName); cleanupErr != nil {
 			return errors.Join(applyErr, fmt.Errorf("roll back container analysis bundle %s: %w", bundleName, cleanupErr))
 		}
 		return applyErr
+	}
+	return nil
+}
+
+func validateExistingContainerAnalysisBundle(existing *unstructured.Unstructured, expected map[string]any) error {
+	if existing == nil {
+		return fmt.Errorf("existing container analysis bundle is missing")
+	}
+	expectedObject := &unstructured.Unstructured{Object: expected}
+	immutable, found, err := unstructured.NestedBool(existing.Object, "immutable")
+	if err != nil || !found || !immutable {
+		return fmt.Errorf("existing container analysis bundle %s is not immutable", existing.GetName())
+	}
+	existingData, found, err := unstructured.NestedStringMap(existing.Object, "data")
+	if err != nil || !found {
+		return fmt.Errorf("existing container analysis bundle %s has invalid data", existing.GetName())
+	}
+	expectedData, found, err := unstructured.NestedStringMap(expectedObject.Object, "data")
+	if err != nil || !found || !maps.Equal(existingData, expectedData) {
+		return fmt.Errorf("existing container analysis bundle %s does not match the requested content", existing.GetName())
+	}
+	for _, key := range []string{"prow-ai-dashboard/bundle-digest", "prow-ai-dashboard/contract-version", containerAnalysisTaskNameAnnotation} {
+		if existing.GetAnnotations()[key] != expectedObject.GetAnnotations()[key] {
+			return fmt.Errorf("existing container analysis bundle %s has mismatched identity", existing.GetName())
+		}
+	}
+	if existing.GetLabels()[containerAnalysisBundleLabel] != "true" {
+		return fmt.Errorf("existing container analysis bundle %s is missing the retention label", existing.GetName())
 	}
 	return nil
 }
