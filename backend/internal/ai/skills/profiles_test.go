@@ -417,6 +417,8 @@ func TestClusterProvisioningDiagnosisRequiresResponsibleController(t *testing.T)
 		"Provisioning failed for the workload Machine.",
 		"Failed provisioning of the workload Machine.",
 		"Failed workload Machine provisioning.",
+		"The workload Machine could not be provisioned.",
+		"Unable to provision the workload Machine.",
 	} {
 		if !matchContains(set, draft, skill.ID) {
 			t.Errorf("provisioning permutation did not match %q: %q", skill.ID, draft)
@@ -514,6 +516,19 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 		t.Fatalf("passive DNS failure did not match DNS-only evidence: match=%v service=%v dns=%v",
 			matchContains(set, passiveDNS, skill.ID), service.Applies(passiveDNS), dns.Applies(passiveDNS))
 	}
+	for _, draft := range []string{
+		"The Kubernetes API hostname lookup failed",
+		"The Kubernetes API hostname failed lookup",
+		"Lookup for the Kubernetes API hostname failed",
+		"Lookup failed for the Kubernetes API hostname",
+		"A failed lookup of the Kubernetes API hostname blocked startup",
+		"The failed Kubernetes API hostname lookup blocked startup",
+	} {
+		if !matchContains(set, draft, skill.ID) || service.Applies(draft) || !dns.Applies(draft) {
+			t.Errorf("DNS permutation did not match DNS-only evidence: draft=%q match=%v service=%v dns=%v",
+				draft, matchContains(set, draft, skill.ID), service.Applies(draft), dns.Applies(draft))
+		}
+	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
 		t.Fatalf("DNS draft applicability: service=%v dns=%v", service.Applies(dnsDraft), dns.Applies(dnsDraft))
@@ -534,6 +549,13 @@ func TestProwRunContextEvidenceAppliesByClaim(t *testing.T) {
 	workloadCleanup := "The Kubernetes Job failed during controller cleanup."
 	if matchContains(set, workloadCleanup, skill.ID) {
 		t.Fatalf("workload cleanup unexpectedly matched %q", skill.ID)
+	}
+	unrelatedCommit := "Artifact collection failed; the database transaction commit was rolled back."
+	if !matchContains(set, unrelatedCommit, skill.ID) {
+		t.Fatalf("artifact collection draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, unrelatedCommit), []string{"run-start", "run-finish"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("artifact collection evidence = %v, want %v", got, want)
 	}
 
 	runLifecycle := "The Prow run finished during teardown, so the diagnosis depends on cleanup timing and duration."
