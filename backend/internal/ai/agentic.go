@@ -1533,16 +1533,41 @@ func toolResultHasContent(name string, payload map[string]interface{}) bool {
 		switch matches := payload["matches"].(type) {
 		case []map[string]interface{}:
 			for _, match := range matches {
-				if nonEmptyContent(match["context"]) {
+				if nonEmptyGrepContext(match["context"]) {
 					return true
 				}
 			}
 		case []interface{}:
 			for _, raw := range matches {
 				match, _ := raw.(map[string]interface{})
-				if nonEmptyContent(match["context"]) {
+				if nonEmptyGrepContext(match["context"]) {
 					return true
 				}
+			}
+		}
+	}
+	return false
+}
+
+var grepContextLineRE = regexp.MustCompile(`^[> ]\s*\d+:\s?(.*)$`)
+
+func nonEmptyGrepContext(value interface{}) bool {
+	switch context := value.(type) {
+	case string:
+		if match := grepContextLineRE.FindStringSubmatch(context); len(match) == 2 {
+			return strings.TrimSpace(match[1]) != ""
+		}
+		return strings.TrimSpace(context) != ""
+	case []string:
+		for _, line := range context {
+			if nonEmptyGrepContext(line) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range context {
+			if nonEmptyGrepContext(item) {
+				return true
 			}
 		}
 	}

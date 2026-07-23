@@ -903,6 +903,7 @@ func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 		"logs/empty.log":      {},
 		"logs/whitespace.log": []byte(" \n\t"),
 		"logs/grep.log":       []byte("healthy\n"),
+		"logs/blank.log":      []byte("\n"),
 	}}
 	cases := []struct {
 		name string
@@ -916,6 +917,7 @@ func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 		{name: "failed read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/missing.log"}},
 		{name: "grep with matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "healthy"}, want: true},
 		{name: "grep without matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "failure"}},
+		{name: "grep blank match", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/blank.log", "pattern": "^$", "context_lines": 0}},
 		{name: "listing only", tool: "list_artifacts", args: map[string]interface{}{"path": ""}},
 	}
 	for _, tc := range cases {
