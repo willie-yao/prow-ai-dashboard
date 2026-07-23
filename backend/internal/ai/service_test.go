@@ -459,17 +459,17 @@ type simpleErr struct{ s string }
 
 func (e *simpleErr) Error() string { return e.s }
 
-func TestService_ShouldReanalyze_PreEvidenceCoverageContract(t *testing.T) {
+func TestService_ShouldReanalyze_PreRankedEvidencePlanContract(t *testing.T) {
 	s := &Service{systemPrompt: "sys"}
 	analysis := &models.AIAnalysis{
 		Mode: AgenticMode, PromptHash: PromptFingerprint("sys"),
 		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion - 1,
 	}
 	if !s.shouldReanalyze(&models.TestCase{AIAnalysis: analysis}) {
-		t.Fatal("pre-evidence-coverage analysis should be re-analyzed")
+		t.Fatal("pre-ranked-plan analysis should be re-analyzed")
 	}
 	analysis.CritiqueVersion = currentCritiqueVersion
 	if s.shouldReanalyze(&models.TestCase{AIAnalysis: analysis}) {
-		t.Fatal("current evidence-coverage analysis should be reusable")
+		t.Fatal("current ranked-plan analysis should be reusable")
 	}
 }

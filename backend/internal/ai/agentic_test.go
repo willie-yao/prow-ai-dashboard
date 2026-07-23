@@ -914,6 +914,7 @@ func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 		{name: "empty read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/empty.log"}},
 		{name: "whitespace read", tool: "tail_artifact", args: map[string]interface{}{"path": "logs/whitespace.log"}},
 		{name: "failed read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/missing.log"}},
+		{name: "grep with matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "healthy"}, want: true},
 		{name: "grep without matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "failure"}},
 		{name: "listing only", tool: "list_artifacts", args: map[string]interface{}{"path": ""}},
 	}
@@ -1386,7 +1387,7 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 }
 
 // TestAgentic_CacheInvalidatedByCritiqueVersionBump verifies entries accepted
-// before the current evidence-coverage contract are re-analyzed.
+// before ranked planning and candidate-directed repair are re-analyzed.
 func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

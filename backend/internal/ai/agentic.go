@@ -1528,24 +1528,41 @@ func extractToolPathArg(raw string) string {
 func toolResultHasContent(name string, payload map[string]interface{}) bool {
 	switch name {
 	case "read_artifact", "tail_artifact":
-		content, _ := payload["content"].(string)
-		return strings.TrimSpace(content) != ""
+		return nonEmptyContent(payload["content"])
 	case "grep_artifact":
 		switch matches := payload["matches"].(type) {
 		case []map[string]interface{}:
 			for _, match := range matches {
-				context, _ := match["context"].(string)
-				if strings.TrimSpace(context) != "" {
+				if nonEmptyContent(match["context"]) {
 					return true
 				}
 			}
 		case []interface{}:
 			for _, raw := range matches {
 				match, _ := raw.(map[string]interface{})
-				context, _ := match["context"].(string)
-				if strings.TrimSpace(context) != "" {
+				if nonEmptyContent(match["context"]) {
 					return true
 				}
+			}
+		}
+	}
+	return false
+}
+
+func nonEmptyContent(value interface{}) bool {
+	switch content := value.(type) {
+	case string:
+		return strings.TrimSpace(content) != ""
+	case []string:
+		for _, line := range content {
+			if strings.TrimSpace(line) != "" {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range content {
+			if nonEmptyContent(item) {
+				return true
 			}
 		}
 	}
