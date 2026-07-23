@@ -254,7 +254,7 @@ func activeContainerAnalysisClaim(annotations map[string]string, now time.Time) 
 	}
 	claimedAt, err := time.Parse(time.RFC3339Nano, annotations[containerAnalysisClaimTimeAnnotation])
 	if err != nil {
-		return true
+		return false
 	}
 	return now.Before(claimedAt.Add(ContainerAnalysisClaimTTL))
 }

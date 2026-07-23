@@ -267,6 +267,17 @@ func TestPruneContainerAnalysisBundlesSkipsActiveMissingTaskClaim(t *testing.T) 
 	if deleted != 1 {
 		t.Fatalf("expired claim deleted = %d, want 1", deleted)
 	}
+
+	annotations[containerAnalysisClaimTimeAnnotation] = "not-a-time"
+	active.SetAnnotations(annotations)
+	client = &fakeContainerResourceClient{listed: []unstructured.Unstructured{active}}
+	deleted, err = PruneContainerAnalysisBundles(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("malformed claim deleted = %d, want 1", deleted)
+	}
 }
 
 func TestPruneContainerAnalysisBundlesSkipsConcurrentClaim(t *testing.T) {
