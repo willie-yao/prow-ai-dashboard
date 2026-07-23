@@ -44,6 +44,7 @@ cluster_owned=true
 kind create cluster --name "$cluster" --config "$tmp/kind.yaml"
 kubectl --context "$context" label node "$cluster-worker" agentpool=nodepool1 --overwrite
 kubectl --context "$context" label node "$cluster-worker2" agentpool=h100 --overwrite
+kubectl --context "$context" taint node "$cluster-worker2" nvidia.com/gpu=true:NoSchedule --overwrite
 
 orka_source="$tmp/orka"
 git clone --quiet "$ORKA_REPOSITORY" "$orka_source"

@@ -168,16 +168,49 @@ The retry case intentionally failed the first analyzer process at the model
 endpoint and then succeeded with `status.attempts >= 2`. The Job used
 `backoffLimit: 0`, so retry ownership remained in Orka.
 
-The cluster had `agentpool=nodepool1` and a mock `agentpool=h100` node. Analyzer
-Tasks, the scripted model, and the Orka controller were constrained to the CPU
-pool. The unused AgentRuntime harness wrapper was scaled to zero. The smoke test
-asserted that no remaining Orka namespace pod scheduled on the mock GPU node.
+The cluster had `agentpool=nodepool1` and a tainted mock `agentpool=h100`
+node. Analyzer Tasks, the scripted model, and the Orka controller were
+constrained to the CPU pool. The unused AgentRuntime harness wrapper was scaled
+to zero. The GPU taint prevents helper pods without an explicit toleration from
+scheduling there, and the smoke test asserted that no Orka namespace pod used
+the mock GPU node.
 The test removed its labeled Tasks, Jobs, Pods, Deployment, Service, ConfigMap,
 and Secret. The wrapper script deleted the kind cluster and temporary image
 context.
 
-No H100, RayService, Ray pod, live dashboard deployment, or live Kimi endpoint
-was touched.
+The scripted smoke test did not touch H100, RayService, Ray pods, a live
+dashboard deployment, or a live model endpoint.
+
+
+## Live H100 Kimi result
+
+A separate read-only evaluation tested the initial spike commit
+`bc6ff974d6c4ecf6b54b2cecc7d01bcb96248993` against the existing H100 Kimi
+RayService. Later branch commits only hardened transport validation, cleanup,
+result polling, and error redaction; they did not change analysis policy.
+
+The live endpoint and function-calling probes returned HTTP 200 for model
+`moonshotai/Kimi-K2-Instruct-0905`. The container Task succeeded in one attempt
+in about 5 minutes 25 seconds. Orka stored a parseable result, the Job kept
+`backoffLimit: 0`, the custom container kept its ServiceAccount token unmounted,
+and the analyzer ran on `agentpool=nodepool1`.
+
+Kimi used 15 Tool calls, read 33,622,058 artifact bytes, and added 125,738
+context bytes. Critique passed. The semantic judge ran and objected, but its
+revision failed deterministic run-context evidence validation, so the original
+draft remained authoritative.
+
+The model diagnosis scored 0 of 5 Flatcar benchmark signals. It treated the
+failure as a control-plane endpoint latency problem and missed that the worker
+Node existed, lacked `providerID`, and was blocked by cloud-node-manager API
+Service reachability following kube-proxy and loopback DNS failure. The
+orchestration and analyzer transport succeeded; model reasoning quality was the
+failure.
+
+The evaluation deleted its Task, Job, Pod, Secret, RoleBindings, disposable kind
+cluster, temporary images, and endpoint bridges. The H100 RayService remained
+Running with three endpoints. All three Ray pod UIDs were unchanged with zero
+restarts. No H100 or Ray resource was modified.
 
 ## Operational dependencies
 
