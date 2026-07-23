@@ -197,4 +197,7 @@ The cluster ownership and image cleanup regression check is available separately
 experimental/orka/test-container-analyzer-kind.sh
 ```
 
-The test does not call a live model and does not touch H100 or Ray resources.
+The default test does not call a live model and does not touch H100 or Ray
+resources. Set `ORKA_CONTAINER_LIVE_ENDPOINT` and `ORKA_CONTAINER_LIVE_MODEL` to
+add the matching live Flatcar benchmark. The scripted run also applies a
+five-Task load wave and verifies state merging, CPU placement, and cleanup.

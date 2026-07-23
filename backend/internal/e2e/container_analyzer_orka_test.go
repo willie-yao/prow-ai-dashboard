@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,7 +65,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	endpoint := "http://" + modelName + "." + namespace + ".svc.cluster.local/v1/chat/completions"
 
 	t.Run("scripted-flatcar-result", func(t *testing.T) {
-		resources := buildKindContainerTask(t, namespace, image, id+"-flatcar", endpoint, "script-success", secretName, request, labels, nil)
+		resources := buildKindContainerTask(t, namespace, image, id+"-flatcar", endpoint, "script-success", secretName, request, labels, nil, "2m", false)
 		name := applyContainerResources(t, kubeContext, resources)
 		status := waitContainerTask(t, kubeContext, namespace, name, 4*time.Minute)
 		if status.Phase != "Succeeded" || status.Attempts != 1 || status.JobName == "" {
@@ -97,7 +98,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	})
 
 	t.Run("retry-after-analyzer-failure", func(t *testing.T) {
-		resources := buildKindContainerTask(t, namespace, image, id+"-retry", endpoint, "script-retry", secretName, request, labels, nil)
+		resources := buildKindContainerTask(t, namespace, image, id+"-retry", endpoint, "script-retry", secretName, request, labels, nil, "2m", false)
 		name := applyContainerResources(t, kubeContext, resources)
 		status := waitContainerTask(t, kubeContext, namespace, name, 5*time.Minute)
 		if status.Phase != "Succeeded" || status.Attempts < 2 {
@@ -120,7 +121,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		first := buildKindContainerTask(t, namespace, image, id+"-cache-a", endpoint, "script-cache", secretName, request, labels, store.CacheSeed(request))
+		first := buildKindContainerTask(t, namespace, image, id+"-cache-a", endpoint, "script-cache", secretName, request, labels, store.CacheSeed(request), "2m", false)
 		firstName := applyContainerResources(t, kubeContext, first)
 		firstStatus := waitContainerTask(t, kubeContext, namespace, firstName, 4*time.Minute)
 		if firstStatus.Phase != "Succeeded" {
@@ -139,7 +140,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		if len(seed) != 1 {
 			t.Fatalf("cache seed entries = %d, want 1", len(seed))
 		}
-		second := buildKindContainerTask(t, namespace, image, id+"-cache-b", endpoint, "script-cache", secretName, request, labels, seed)
+		second := buildKindContainerTask(t, namespace, image, id+"-cache-b", endpoint, "script-cache", secretName, request, labels, seed, "2m", false)
 		secondName := applyContainerResources(t, kubeContext, second)
 		secondStatus := waitContainerTask(t, kubeContext, namespace, secondName, 4*time.Minute)
 		if secondStatus.Phase != "Succeeded" {
@@ -160,6 +161,89 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		}
 		cleanupContainerBundle(t, kubeContext, second)
 	})
+	t.Run("five-task-load-wave", func(t *testing.T) {
+		const taskCount = 5
+		store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		resources := make([]orka.ContainerAnalysisResources, 0, taskCount)
+		names := make([]string, 0, taskCount)
+		start := time.Now()
+		for i := 0; i < taskCount; i++ {
+			r := buildKindContainerTask(t, namespace, image, fmt.Sprintf("%s-load-%d", id, i), endpoint, fmt.Sprintf("script-load-%d", i), secretName, request, labels, nil, "2m", false)
+			resources = append(resources, r)
+			names = append(names, applyContainerResources(t, kubeContext, r))
+		}
+		applyElapsed := time.Since(start)
+		states := make([]analysisruntime.ContainerAnalysisState, 0, taskCount)
+		for i, name := range names {
+			status := waitContainerTask(t, kubeContext, namespace, name, 5*time.Minute)
+			if status.Phase != "Succeeded" || status.Attempts != 1 {
+				t.Fatalf("load Task %s status = %+v", name, status)
+			}
+			assertContainerJobPlacement(t, kubeContext, namespace, status.JobName, resources[i])
+			raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
+			if _, err := orka.ParseContainerAnalysisResult(raw); err != nil {
+				t.Fatalf("load Task %s result: %v", name, err)
+			}
+			state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources[i], request))
+			if err != nil {
+				t.Fatalf("load Task %s state: %v", name, err)
+			}
+			states = append(states, state)
+		}
+		var wg sync.WaitGroup
+		errs := make(chan error, len(states))
+		for _, state := range states {
+			state := state
+			wg.Add(1)
+			go func() { defer wg.Done(); errs <- store.Merge(state) }()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range resources {
+			cleanupContainerBundle(t, kubeContext, resources[i])
+		}
+		t.Logf("load wave: tasks=%d apply=%s total=%s cache_entries=%d", taskCount, applyElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond), len(store.CacheSeed(request)))
+	})
+
+	if liveEndpoint, liveModel := strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_ENDPOINT")), strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_MODEL")); liveEndpoint != "" || liveModel != "" {
+		if liveEndpoint == "" || liveModel == "" {
+			t.Fatal("ORKA_CONTAINER_LIVE_ENDPOINT and ORKA_CONTAINER_LIVE_MODEL must be set together")
+		}
+		t.Run("live-kimi-flatcar", func(t *testing.T) {
+			resources := buildKindContainerTask(t, namespace, image, id+"-live-kimi", liveEndpoint, liveModel, secretName, request, labels, nil, "25m", true)
+			start := time.Now()
+			name := applyContainerResources(t, kubeContext, resources)
+			status := waitContainerTask(t, kubeContext, namespace, name, 30*time.Minute)
+			elapsed := time.Since(start).Round(time.Second)
+			if status.Phase != "Succeeded" {
+				raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
+				t.Fatalf("live Kimi Task status = %+v\n%s", status, raw)
+			}
+			assertContainerJobPlacement(t, kubeContext, namespace, status.JobName, resources)
+			raw := fetchContainerTaskResult(t, kubeContext, namespace, name)
+			result, err := orka.ParseContainerAnalysisResult(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc := models.TestCase{Name: request.TestCase.Name, Status: "failed", AISummary: result.Summary, AIAnalysis: result.Analysis}
+			scoreBenchCase(t, bc, &tc, elapsed, "Orka container Kimi")
+			state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources, request))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("container state: cache_entries=%d traces=%d task_attempts=%d", len(state.CacheEntries), len(state.Traces), status.Attempts)
+			cleanupContainerBundle(t, kubeContext, resources)
+		})
+	}
+
 	assertNoPodsOnGPUNode(t, kubeContext, namespace)
 	cleanup()
 	waitForSmokeCleanup(t, kubeContext, namespace, id, 2*time.Minute)
@@ -197,12 +281,12 @@ func containerStateIdentity(resources orka.ContainerAnalysisResources, request a
 	return analysisruntime.NewContainerStateIdentity("orka-system", name, request)
 }
 
-func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string, cacheSeed map[string]ai.CacheEntry) orka.ContainerAnalysisResources {
+func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, model, secretName string, request ai.FailureAnalysisRequest, labels map[string]string, cacheSeed map[string]ai.CacheEntry, taskTimeout string, benchmarkProject bool) orka.ContainerAnalysisResources {
 	t.Helper()
 	resources, err := orka.BuildContainerAnalysisResources(orka.ContainerAnalysisTaskSpec{
 		Namespace: namespace, NamePrefix: prefix, Image: image,
 		Command: []string{"/app"}, Args: []string{"-data-dir=/tmp/analyzer"},
-		Timeout: "2m", MaxRetries: 1, ProjectDir: containerAnalyzerProject(t), Request: request, CacheSeed: cacheSeed, Labels: labels,
+		Timeout: taskTimeout, MaxRetries: 1, ProjectDir: containerAnalyzerProject(t, benchmarkProject), Request: request, CacheSeed: cacheSeed, Labels: labels,
 		Environment: map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
 		SecretEnv: []orka.SecretEnvVar{
 			{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"},
@@ -215,7 +299,7 @@ func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, mo
 	return resources
 }
 
-func containerAnalyzerProject(t *testing.T) string {
+func containerAnalyzerProject(t *testing.T, benchmark bool) string {
 	t.Helper()
 	dir := t.TempDir()
 	config := `id: container-analyzer-spike
@@ -237,15 +321,19 @@ ai:
   tools: [filesystem]
   min_tool_calls: 2
 `
+	prompt := `You are debugging Kubernetes Cluster API Provider Azure E2E failures.
+Use the build artifacts to distinguish transient bootstrap failures from persistent product defects.
+`
+	if benchmark {
+		config = strings.Replace(config, "  tools: [filesystem]\n  min_tool_calls: 2", "  tools: [filesystem, k8s]\n  max_iters: 15\n  timeout: 20m\n  min_tool_calls: 5\n  min_gcs_bytes: 500000\n  critique:\n    max_retries: 2", 1)
+		prompt = benchPromptAddendum
+	}
 	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	prompt := `You are debugging Kubernetes Cluster API Provider Azure E2E failures.
-Use the build artifacts to distinguish transient bootstrap failures from persistent product defects.
-`
 	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte(prompt), 0o644); err != nil {
 		t.Fatal(err)
 	}

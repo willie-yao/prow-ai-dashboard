@@ -130,4 +130,6 @@ RUN_ORKA_CONTAINER_ANALYZER_KIND=1 \
 ORKA_CONTAINER_CONTEXT="$context" \
 ORKA_CONTAINER_IMAGE="$analyzer_image" \
 ORKA_CONTAINER_MODEL_IMAGE="$model_image" \
-go test ./internal/e2e -run '^TestOrkaContainerAnalyzerKind$' -v -count=1
+ORKA_CONTAINER_LIVE_ENDPOINT="${ORKA_CONTAINER_LIVE_ENDPOINT:-}" \
+ORKA_CONTAINER_LIVE_MODEL="${ORKA_CONTAINER_LIVE_MODEL:-}" \
+go test ./internal/e2e -run '^TestOrkaContainerAnalyzerKind$' -v -count=1 -timeout 45m
