@@ -271,6 +271,10 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !cloud.Applies(serviceDraft) || !proxy.Applies(serviceDraft) {
 		t.Fatalf("API reachability draft applicability: cloud=%v proxy=%v", cloud.Applies(serviceDraft), proxy.Applies(serviceDraft))
 	}
+	authorizationDraft := "providerID is missing, but the Kubernetes API returned an authorization error"
+	if proxy.Applies(authorizationDraft) {
+		t.Fatal("authorization error unexpectedly required kube-proxy evidence")
+	}
 }
 
 func TestProviderIDDiagnosisMatchesOnlyRelevantBuiltinRecipes(t *testing.T) {
@@ -344,6 +348,13 @@ func TestPodEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if got, want := applicableEvidenceIDs(skill, crashLoopDraft), []string{"pod-state-events", "kubelet"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Pod startup evidence = %v, want %v", got, want)
 	}
+	directCrashLoopDraft := "The container entered CrashLoopBackOff."
+	if !matchContains(set, directCrashLoopDraft, skill.ID) {
+		t.Fatalf("direct CrashLoopBackOff draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, directCrashLoopDraft), []string{"pod-state-events", "kubelet"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct CrashLoopBackOff evidence = %v, want %v", got, want)
+	}
 }
 
 func TestClusterProvisioningDiagnosisRequiresResponsibleController(t *testing.T) {
@@ -358,6 +369,10 @@ func TestClusterProvisioningDiagnosisRequiresResponsibleController(t *testing.T)
 	}
 	if got, want := applicableEvidenceIDs(skill, draft), []string{"provisioning-object-state", "responsible-controller"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cluster provisioning evidence = %v, want %v", got, want)
+	}
+	operationFirst := "Provisioning of the workload Machine timed out."
+	if !matchContains(set, operationFirst, skill.ID) {
+		t.Fatalf("operation-first provisioning draft did not match %q", skill.ID)
 	}
 }
 
@@ -378,6 +393,16 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if matchContains(set, healthyDraft, skill.ID) || service.Applies(healthyDraft) || dns.Applies(healthyDraft) {
 		t.Fatalf("healthy API draft matched connectivity requirements: match=%v service=%v dns=%v",
 			matchContains(set, healthyDraft, skill.ID), service.Applies(healthyDraft), dns.Applies(healthyDraft))
+	}
+	authorizationDraft := "The Kubernetes Service returned an authorization error after accepting the request"
+	if matchContains(set, authorizationDraft, skill.ID) || service.Applies(authorizationDraft) || dns.Applies(authorizationDraft) {
+		t.Fatalf("authorization error matched connectivity requirements: match=%v service=%v dns=%v",
+			matchContains(set, authorizationDraft, skill.ID), service.Applies(authorizationDraft), dns.Applies(authorizationDraft))
+	}
+	connectionFailure := "The Kubernetes API Service connection failed before the request reached the server"
+	if !matchContains(set, connectionFailure, skill.ID) || !service.Applies(connectionFailure) {
+		t.Fatalf("connection failure did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, connectionFailure, skill.ID), service.Applies(connectionFailure))
 	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
