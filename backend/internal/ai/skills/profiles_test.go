@@ -287,6 +287,18 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !proxy.Applies(synchronizationDraft) {
 		t.Fatal("kube-proxy synchronization failure did not require kube-proxy evidence")
 	}
+	connectivityDraft := "providerID is missing and Kubernetes API Service connectivity failed"
+	if !proxy.Applies(connectivityDraft) {
+		t.Fatal("API Service connectivity failure did not require kube-proxy evidence")
+	}
+	kubeProxyRequest := "providerID is missing and kube-proxy request timed out"
+	if !proxy.Applies(kubeProxyRequest) {
+		t.Fatal("kube-proxy request timeout did not require kube-proxy evidence")
+	}
+	kubeProxyAuthorization := "providerID is missing and kube-proxy request failed with an authorization error"
+	if proxy.Applies(kubeProxyAuthorization) {
+		t.Fatal("kube-proxy authorization error unexpectedly required kube-proxy transport evidence")
+	}
 }
 
 func TestProviderIDDiagnosisMatchesOnlyRelevantBuiltinRecipes(t *testing.T) {
@@ -443,6 +455,21 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !matchContains(set, dnsNegative, skill.ID) || service.Applies(dnsNegative) || !dns.Applies(dnsNegative) {
 		t.Fatalf("negative DNS resolution did not match DNS-only evidence: match=%v service=%v dns=%v",
 			matchContains(set, dnsNegative, skill.ID), service.Applies(dnsNegative), dns.Applies(dnsNegative))
+	}
+	connectivityFailure := "Kubernetes API Service connectivity failed"
+	if !matchContains(set, connectivityFailure, skill.ID) || !service.Applies(connectivityFailure) {
+		t.Fatalf("Service connectivity failure did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, connectivityFailure, skill.ID), service.Applies(connectivityFailure))
+	}
+	kubeProxyRequest := "kube-proxy request timed out"
+	if !matchContains(set, kubeProxyRequest, skill.ID) || !service.Applies(kubeProxyRequest) {
+		t.Fatalf("kube-proxy request timeout did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, kubeProxyRequest, skill.ID), service.Applies(kubeProxyRequest))
+	}
+	kubeProxyAuthorization := "kube-proxy request failed with an authorization error"
+	if matchContains(set, kubeProxyAuthorization, skill.ID) || service.Applies(kubeProxyAuthorization) {
+		t.Fatalf("kube-proxy authorization error matched transport requirements: match=%v service=%v",
+			matchContains(set, kubeProxyAuthorization, skill.ID), service.Applies(kubeProxyAuthorization))
 	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {

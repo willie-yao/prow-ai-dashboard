@@ -4,12 +4,13 @@ priority: 230
 triggers:
   - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
   - '(?i)\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access|lookup|resolve)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
-  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
   - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
-  - '(?i)\b(reach|connect(?:ion|ing|ed)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access|lookup|resolve|resolution)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
   - '(?i)\brequest\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
   - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(unreachable|refused|no route)\b'
-  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed)?|dial(?:ing)?|request|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|lookup|resolve|resolution)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+  - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
   - '(?i)\b(kube-proxy|dns|resolver|nameserver)\b.{0,160}\b(never|did not|failed to)\s+(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|lookup|resolv(?:e[ds]?|ing))\b'
 required_evidence:
   - id: affected-client
@@ -23,12 +24,13 @@ required_evidence:
     when:
       - '(?i)\b(cluster.?ip|service)\b.{0,160}\b(unreachable|refused|no route)\b'
       - '(?i)\b(cannot|could not|failed to|unable to)\s+(reach|connect(?: to)?|dial|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b'
-      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed)?|dial(?:ing)?|access)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
       - '(?i)\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
-      - '(?i)\b(reach|connect(?:ion|ing|ed)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\b(reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|access)\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
       - '(?i)\brequest\b.{0,80}\b(api(?:server)?|kubernetes api|cluster.?ip|service)\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
       - '(?i)\bkube-proxy\b.{0,160}\b(unreachable|refused|no route)\b'
-      - '(?i)\bkube-proxy\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed)?|dial(?:ing)?|lookup|resolve)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\b(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list|reach|connect(?:ion|ing|ed|ivity)?|dial(?:ing)?|lookup|resolve)\b.{0,80}\b(timeout|timed out|refused|failed|failure|error|no route)\b'
+      - '(?i)\bkube-proxy\b.{0,160}\brequest\b.{0,80}\b(unreachable|timeout|timed out|refused|no route)\b'
       - '(?i)\bkube-proxy\b.{0,160}\b(never|did not|failed to)\s+(sync|synchroniz(?:e[ds]?|ing|ation)|watch|list)\b'
     any_of:
       - '(?i)^artifacts/clusters/[^/]+/(?:logs/)?kube-system/kube-proxy-[^/]+/(?:kube-proxy\.log|pod-describe\.txt)$'
