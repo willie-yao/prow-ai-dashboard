@@ -74,12 +74,15 @@ per-environment-value limit.
 
 The lifecycle helper prunes bundles older than 24 hours when their Task is
 terminal or missing, creates the ConfigMap before applying the Task, and rolls
-back only a bundle created by the failed application attempt. Existing immutable
-bundles are verified and preserved across reconciliation failures. The result
-handler deletes the Task-scoped bundle immediately after terminal result
-processing. Orka Task history and durable results remain available without
-retaining the private input ConfigMap. The pipeline ServiceAccount has only
-create, get, list, and delete access to ConfigMaps.
+back only a bundle created by the failed application attempt. Each reconciliation
+writes a unique claim annotation. Pruning and rollback delete with the resource
+version they inspected, so a concurrent claim prevents a stale delete. Existing
+immutable bundles are verified and preserved across reconciliation failures. The
+result handler deletes the Task-scoped bundle immediately after terminal result
+processing, and later reconciliations do not recreate it. Orka Task history and
+durable results remain available without retaining the private input ConfigMap.
+The pipeline ServiceAccount has only create, get, list, patch, and delete access
+to ConfigMaps.
 
 ## Remaining design risks
 

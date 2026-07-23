@@ -12,6 +12,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 const (
@@ -69,6 +70,13 @@ func BuildContainerAnalysisResources(in ContainerAnalysisTaskSpec) (ContainerAna
 	}
 	if strings.TrimSpace(in.ProjectDir) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis project directory is required")
+	}
+	api := strings.TrimSpace(in.Environment["AI_API"])
+	if api == "" {
+		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_API")
+	}
+	if err := project.ValidateAIAPI(api); err != nil {
+		return ContainerAnalysisResources{}, err
 	}
 	if strings.TrimSpace(in.Environment["AI_ENDPOINT"]) == "" {
 		return ContainerAnalysisResources{}, fmt.Errorf("container analysis Task environment requires AI_ENDPOINT")

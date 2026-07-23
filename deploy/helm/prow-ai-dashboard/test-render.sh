@@ -273,7 +273,7 @@ if [[ -z "$rbac_name_a" || -z "$rbac_name_b" || "$rbac_name_a" == "$rbac_name_b"
 fi
 for file in "$tmp/rbac-dashboard-a.yaml" "$tmp/rbac-dashboard-b.yaml"; do
   grep -Fq 'resources: ["configmaps"]' "$file"
-  grep -Fq 'verbs: ["create", "get", "list", "delete"]' "$file"
+  grep -Fq 'verbs: ["create", "get", "list", "patch", "delete"]' "$file"
 done
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set orka.fixRuntime.enabled=true \

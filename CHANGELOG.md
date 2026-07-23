@@ -32,6 +32,8 @@ for how to pin a release.
   deletes private Task-scoped bundles immediately, failed Task application rolls
   back only newly created bundles, and active reconciliation prunes terminal or
   orphaned bundles after 24 hours under least-privilege ConfigMap RBAC.
+  Resource-version claims prevent pruning or rollback from deleting a bundle
+  concurrently adopted by another reconciler.
 - **Dashboard container result framing.** The experimental dashboard-owned
   analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task
   logs are parsed for the last valid marker instead of treating the final line

@@ -2,6 +2,8 @@ package orka
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -17,6 +19,7 @@ const (
 	containerAnalysisBundleLabel        = "prow-ai-dashboard/bundle"
 	containerAnalysisBundleSelector     = containerAnalysisBundleLabel + "=true"
 	containerAnalysisTaskNameAnnotation = "prow-ai-dashboard/task-name"
+	containerAnalysisClaimAnnotation    = "prow-ai-dashboard/bundle-claim"
 	// ContainerAnalysisBundleRetention bounds orphaned private input bundles.
 	ContainerAnalysisBundleRetention = 24 * time.Hour
 )
@@ -26,7 +29,9 @@ type ContainerAnalysisResourceClient interface {
 	Apply(context.Context, schema.GroupVersionResource, string, map[string]any) error
 	CreateIfAbsent(context.Context, schema.GroupVersionResource, string, map[string]any) (bool, error)
 	Get(context.Context, schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error)
+	PatchAnnotations(context.Context, schema.GroupVersionResource, string, string, map[string]string) (string, error)
 	Delete(context.Context, schema.GroupVersionResource, string, string) error
+	DeleteIfResourceVersion(context.Context, schema.GroupVersionResource, string, string, string) (bool, error)
 	ListByLabel(context.Context, schema.GroupVersionResource, string, string) ([]unstructured.Unstructured, error)
 	TaskState(context.Context, string, string) (TaskState, error)
 }
@@ -66,37 +71,70 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 	if err != nil {
 		return err
 	}
-	taskNamespace, _, err := containerResourceRef(resources.Task)
+	taskNamespace, taskName, err := containerResourceRef(resources.Task)
 	if err != nil {
 		return err
 	}
 	if taskNamespace != bundleNamespace {
 		return fmt.Errorf("container analysis Task and bundle namespaces differ")
 	}
+	claim, err := newContainerAnalysisBundleClaim()
+	if err != nil {
+		return err
+	}
 	created, err := client.CreateIfAbsent(ctx, configMapsGVR, bundleNamespace, resources.BundleConfigMap)
 	if err != nil {
 		return fmt.Errorf("create container analysis bundle %s: %w", bundleName, err)
 	}
-	if !created {
-		existing, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
-		if err != nil {
-			return fmt.Errorf("read existing container analysis bundle %s: %w", bundleName, err)
+	existing, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
+	if err != nil {
+		return fmt.Errorf("read container analysis bundle %s: %w", bundleName, err)
+	}
+	if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
+		return err
+	}
+	claimedVersion, err := client.PatchAnnotations(ctx, configMapsGVR, bundleNamespace, bundleName, map[string]string{
+		containerAnalysisClaimAnnotation: claim,
+	})
+	if err != nil {
+		if created {
+			_ = rollbackContainerAnalysisBundle(ctx, client, bundleNamespace, bundleName, taskName, existing.GetResourceVersion())
 		}
-		if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
-			return err
-		}
+		return fmt.Errorf("claim container analysis bundle %s: %w", bundleName, err)
 	}
 	if err := client.Apply(ctx, TasksGVR, taskNamespace, resources.Task); err != nil {
 		applyErr := fmt.Errorf("apply container analysis Task: %w", err)
 		if !created {
 			return applyErr
 		}
-		if cleanupErr := client.Delete(ctx, configMapsGVR, bundleNamespace, bundleName); cleanupErr != nil {
-			return errors.Join(applyErr, fmt.Errorf("roll back container analysis bundle %s: %w", bundleName, cleanupErr))
+		if cleanupErr := rollbackContainerAnalysisBundle(ctx, client, bundleNamespace, bundleName, taskName, claimedVersion); cleanupErr != nil {
+			return errors.Join(applyErr, cleanupErr)
 		}
 		return applyErr
 	}
 	return nil
+}
+
+func rollbackContainerAnalysisBundle(ctx context.Context, client ContainerAnalysisResourceClient, namespace, bundleName, taskName, resourceVersion string) error {
+	state, err := client.TaskState(ctx, namespace, taskName)
+	if err != nil {
+		return fmt.Errorf("check Task before rolling back container analysis bundle %s: %w", bundleName, err)
+	}
+	if state.Exists {
+		return nil
+	}
+	if _, err := client.DeleteIfResourceVersion(ctx, configMapsGVR, namespace, bundleName, resourceVersion); err != nil {
+		return fmt.Errorf("roll back container analysis bundle %s: %w", bundleName, err)
+	}
+	return nil
+}
+
+func newContainerAnalysisBundleClaim() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("create container analysis bundle claim: %w", err)
+	}
+	return hex.EncodeToString(value[:]), nil
 }
 
 func validateExistingContainerAnalysisBundle(existing *unstructured.Unstructured, expected map[string]any) error {
@@ -165,10 +203,17 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 				continue
 			}
 		}
-		if err := client.Delete(ctx, configMapsGVR, namespace, items[i].GetName()); err != nil {
+		resourceVersion := items[i].GetResourceVersion()
+		if resourceVersion == "" {
+			continue
+		}
+		removed, err := client.DeleteIfResourceVersion(ctx, configMapsGVR, namespace, items[i].GetName(), resourceVersion)
+		if err != nil {
 			return deleted, fmt.Errorf("delete expired container analysis bundle %s: %w", items[i].GetName(), err)
 		}
-		deleted++
+		if removed {
+			deleted++
+		}
 	}
 	return deleted, nil
 }

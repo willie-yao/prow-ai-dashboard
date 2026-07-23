@@ -14,19 +14,24 @@ import (
 )
 
 type fakeContainerResourceClient struct {
-	applyErrAt   int
-	createExists bool
-	createErr    error
-	getErr       error
-	deleteErr    error
-	listErr      error
-	taskErr      error
-	applied      []string
-	created      []string
-	deleted      []string
-	listed       []unstructured.Unstructured
-	existing     *unstructured.Unstructured
-	taskStates   map[string]TaskState
+	applyErrAt            int
+	createExists          bool
+	createErr             error
+	getErr                error
+	patchErr              error
+	deleteErr             error
+	deleteVersionErr      error
+	deleteVersionConflict bool
+	listErr               error
+	taskErr               error
+	applied               []string
+	created               []string
+	claimed               []string
+	deleted               []string
+	deletedVersion        []string
+	listed                []unstructured.Unstructured
+	existing              *unstructured.Unstructured
+	taskStates            map[string]TaskState
 }
 
 func (f *fakeContainerResourceClient) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
@@ -44,16 +49,48 @@ func (f *fakeContainerResourceClient) CreateIfAbsent(_ context.Context, gvr sche
 	if f.createErr != nil {
 		return false, f.createErr
 	}
-	return !f.createExists, nil
+	if f.createExists {
+		return false, nil
+	}
+	f.existing = (&unstructured.Unstructured{Object: obj}).DeepCopy()
+	f.existing.SetResourceVersion("rv-created")
+	return true, nil
 }
 
 func (f *fakeContainerResourceClient) Get(context.Context, schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error) {
 	return f.existing, f.getErr
 }
 
+func (f *fakeContainerResourceClient) PatchAnnotations(_ context.Context, gvr schema.GroupVersionResource, _, name string, annotations map[string]string) (string, error) {
+	f.claimed = append(f.claimed, gvr.Resource+"/"+name)
+	if f.patchErr != nil {
+		return "", f.patchErr
+	}
+	if f.existing != nil {
+		merged := f.existing.GetAnnotations()
+		if merged == nil {
+			merged = map[string]string{}
+		}
+		for key, value := range annotations {
+			merged[key] = value
+		}
+		f.existing.SetAnnotations(merged)
+		f.existing.SetResourceVersion("rv-claimed")
+	}
+	return "rv-claimed", nil
+}
+
 func (f *fakeContainerResourceClient) Delete(_ context.Context, gvr schema.GroupVersionResource, _ string, name string) error {
 	f.deleted = append(f.deleted, gvr.Resource+"/"+name)
 	return f.deleteErr
+}
+
+func (f *fakeContainerResourceClient) DeleteIfResourceVersion(_ context.Context, gvr schema.GroupVersionResource, _, name, resourceVersion string) (bool, error) {
+	f.deletedVersion = append(f.deletedVersion, gvr.Resource+"/"+name+"@"+resourceVersion)
+	if f.deleteVersionErr != nil {
+		return false, f.deleteVersionErr
+	}
+	return !f.deleteVersionConflict, nil
 }
 
 func (f *fakeContainerResourceClient) ListByLabel(_ context.Context, gvr schema.GroupVersionResource, _ string, selector string) ([]unstructured.Unstructured, error) {
@@ -111,11 +148,12 @@ func TestReconcileContainerAnalysisResourcesPrunesAndAppliesInOrder(t *testing.T
 	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources(), now); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(client.deleted, []string{"configmaps/old", "configmaps/missing", "configmaps/legacy"}) {
-		t.Fatalf("deleted = %v", client.deleted)
+	wantDeleted := []string{"configmaps/old@rv-old", "configmaps/missing@rv-missing", "configmaps/legacy@rv-legacy"}
+	if !reflect.DeepEqual(client.deletedVersion, wantDeleted) {
+		t.Fatalf("versioned deletes = %v, want %v", client.deletedVersion, wantDeleted)
 	}
-	if !reflect.DeepEqual(client.created, []string{"configmaps/bundle"}) {
-		t.Fatalf("created = %v", client.created)
+	if !reflect.DeepEqual(client.created, []string{"configmaps/bundle"}) || !reflect.DeepEqual(client.claimed, []string{"configmaps/bundle"}) {
+		t.Fatalf("created=%v claimed=%v", client.created, client.claimed)
 	}
 	if !reflect.DeepEqual(client.applied, []string{"tasks/task"}) {
 		t.Fatalf("applied = %v", client.applied)
@@ -129,50 +167,75 @@ func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
 	if err := ReconcileContainerAnalysisResources(context.Background(), client, lifecycleResources(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.created) != 0 || len(client.applied) != 0 {
-		t.Fatalf("terminal Task recreated resources: created=%v applied=%v", client.created, client.applied)
+	if len(client.created) != 0 || len(client.claimed) != 0 || len(client.applied) != 0 {
+		t.Fatalf("terminal Task recreated resources: created=%v claimed=%v applied=%v", client.created, client.claimed, client.applied)
 	}
 	if !reflect.DeepEqual(client.deleted, []string{"configmaps/bundle"}) {
 		t.Fatalf("deleted = %v", client.deleted)
 	}
 }
 
-func TestApplyContainerAnalysisResourcesRollsBackOnlyNewBundle(t *testing.T) {
+func TestApplyContainerAnalysisResourcesRollsBackOnlyUnadoptedNewBundle(t *testing.T) {
 	resources := lifecycleResources()
 	client := &fakeContainerResourceClient{applyErrAt: 1}
 	err := ApplyContainerAnalysisResources(context.Background(), client, resources)
 	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
 		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
 	}
-	if !reflect.DeepEqual(client.deleted, []string{"configmaps/bundle"}) {
-		t.Fatalf("deleted = %v", client.deleted)
+	if !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/bundle@rv-claimed"}) {
+		t.Fatalf("versioned deletes = %v", client.deletedVersion)
+	}
+
+	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
+	existing.SetResourceVersion("rv-existing")
+	client = &fakeContainerResourceClient{applyErrAt: 1, createExists: true, existing: existing}
+	err = ApplyContainerAnalysisResources(context.Background(), client, resources)
+	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
+		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
+	}
+	if len(client.deletedVersion) != 0 {
+		t.Fatalf("existing bundle was deleted: %v", client.deletedVersion)
 	}
 
 	client = &fakeContainerResourceClient{
-		applyErrAt:   1,
-		createExists: true,
-		existing:     &unstructured.Unstructured{Object: resources.BundleConfigMap},
+		applyErrAt: 1,
+		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Running"}},
 	}
 	err = ApplyContainerAnalysisResources(context.Background(), client, resources)
 	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
 		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
 	}
-	if len(client.deleted) != 0 {
-		t.Fatalf("existing bundle was deleted: %v", client.deleted)
+	if len(client.deletedVersion) != 0 {
+		t.Fatalf("bundle adopted by active Task was deleted: %v", client.deletedVersion)
+	}
+}
+
+func TestPruneContainerAnalysisBundlesSkipsConcurrentClaim(t *testing.T) {
+	now := time.Now()
+	client := &fakeContainerResourceClient{
+		listed:                []unstructured.Unstructured{bundleObject("raced", "missing-task", now.Add(-2*ContainerAnalysisBundleRetention))},
+		deleteVersionConflict: true,
+	}
+	deleted, err := PruneContainerAnalysisBundles(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 || !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/raced@rv-raced"}) {
+		t.Fatalf("deleted=%d versioned deletes=%v", deleted, client.deletedVersion)
 	}
 }
 
 func TestApplyContainerAnalysisResourcesRejectsMismatchedExistingBundle(t *testing.T) {
 	resources := lifecycleResources()
-	existing := &unstructured.Unstructured{Object: map[string]any{}}
-	existing.Object = deepCopyMap(resources.BundleConfigMap)
+	existing := &unstructured.Unstructured{Object: deepCopyMap(resources.BundleConfigMap)}
+	existing.SetResourceVersion("rv-existing")
 	existing.Object["data"].(map[string]any)["bundle.json"] = "different"
 	client := &fakeContainerResourceClient{createExists: true, existing: existing}
 	if err := ApplyContainerAnalysisResources(context.Background(), client, resources); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
 	}
-	if len(client.applied) != 0 || len(client.deleted) != 0 {
-		t.Fatalf("mismatched existing bundle changed resources: applied=%v deleted=%v", client.applied, client.deleted)
+	if len(client.applied) != 0 || len(client.deletedVersion) != 0 {
+		t.Fatalf("mismatched existing bundle changed resources: applied=%v deleted=%v", client.applied, client.deletedVersion)
 	}
 }
 
@@ -192,9 +255,9 @@ func TestPruneContainerAnalysisBundlesFailsClosed(t *testing.T) {
 		t.Fatalf("PruneContainerAnalysisBundles error = %v", err)
 	}
 	client = &fakeContainerResourceClient{
-		listed:     []unstructured.Unstructured{bundleObject("old", "old-task", time.Now().Add(-2*ContainerAnalysisBundleRetention))},
-		taskStates: map[string]TaskState{"old-task": {Exists: true, Phase: "Failed"}},
-		deleteErr:  errors.New("forbidden"),
+		listed:           []unstructured.Unstructured{bundleObject("old", "old-task", time.Now().Add(-2*ContainerAnalysisBundleRetention))},
+		taskStates:       map[string]TaskState{"old-task": {Exists: true, Phase: "Failed"}},
+		deleteVersionErr: errors.New("forbidden"),
 	}
 	if _, err := PruneContainerAnalysisBundles(context.Background(), client, "orka-system", time.Now()); err == nil || !strings.Contains(err.Error(), "delete expired") {
 		t.Fatalf("PruneContainerAnalysisBundles error = %v", err)
@@ -216,6 +279,7 @@ func bundleObject(name, taskName string, created time.Time) unstructured.Unstruc
 			"annotations": map[string]any{containerAnalysisTaskNameAnnotation: taskName},
 		},
 	}}
+	object.SetResourceVersion("rv-" + name)
 	if !created.IsZero() {
 		object.SetCreationTimestamp(metav1.NewTime(created))
 	}

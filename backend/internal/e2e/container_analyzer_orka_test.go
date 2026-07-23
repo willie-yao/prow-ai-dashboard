@@ -137,7 +137,7 @@ func buildKindContainerTask(t *testing.T, namespace, image, prefix, endpoint, mo
 		Namespace: namespace, NamePrefix: prefix, Image: image,
 		Command: []string{"/app"}, Args: []string{"-data-dir=/tmp/analyzer"},
 		Timeout: "2m", MaxRetries: 1, ProjectDir: containerAnalyzerProject(t), Request: request, Labels: labels,
-		Environment: map[string]string{"AI_ENDPOINT": endpoint, "AI_MODEL": model},
+		Environment: map[string]string{"AI_API": "chat_completions", "AI_ENDPOINT": endpoint, "AI_MODEL": model},
 		SecretEnv:   []orka.SecretEnvVar{{Name: "AI_TOKEN", SecretName: secretName, SecretKey: "token"}},
 	})
 	if err != nil {

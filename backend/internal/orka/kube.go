@@ -96,6 +96,32 @@ func (k *KubeClient) Get(ctx context.Context, gvr schema.GroupVersionResource, n
 	return u, nil
 }
 
+// PatchAnnotations updates metadata annotations and returns the new resource version.
+func (k *KubeClient) PatchAnnotations(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, annotations map[string]string) (string, error) {
+	data, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": annotations}})
+	if err != nil {
+		return "", err
+	}
+	u, err := k.dyn.Resource(gvr).Namespace(ns).Patch(ctx, name, types.MergePatchType, data, metav1.PatchOptions{})
+	if err != nil {
+		return "", fmt.Errorf("patch %s/%s annotations: %w", gvr.Resource, name, err)
+	}
+	return u.GetResourceVersion(), nil
+}
+
+// DeleteIfResourceVersion deletes only when the object has not changed.
+func (k *KubeClient) DeleteIfResourceVersion(ctx context.Context, gvr schema.GroupVersionResource, ns, name, resourceVersion string) (bool, error) {
+	preconditions := &metav1.Preconditions{ResourceVersion: &resourceVersion}
+	err := k.dyn.Resource(gvr).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{Preconditions: preconditions})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // TaskState is the existing execution state needed before reapplying a Task.
 type TaskState struct {
 	Exists          bool

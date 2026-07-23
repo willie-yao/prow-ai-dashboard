@@ -23,7 +23,7 @@ rules:
   # Immutable container analyzer bundles use create/get/list/delete only.
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["create", "get", "list", "delete"]
+    verbs: ["create", "get", "list", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -29,7 +29,7 @@ rules:
   # Container analyzer bundles are immutable and deleted after result handling.
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["create", "get", "list", "delete"]
+    verbs: ["create", "get", "list", "patch", "delete"]
   {{- else }}
   # Fix generation only creates and polls Tasks.
   - apiGroups: ["core.orka.ai"]

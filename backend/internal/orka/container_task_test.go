@@ -71,6 +71,7 @@ func containerTaskSpec(t *testing.T) ContainerAnalysisTaskSpec {
 		ProjectDir: containerTaskProject(t),
 		Request:    containerTaskRequest(),
 		Environment: map[string]string{
+			"AI_API":      "chat_completions",
 			"AI_ENDPOINT": "https://model.invalid/v1/chat/completions",
 			"AI_MODEL":    "script-model",
 		},
@@ -236,6 +237,7 @@ func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
 
 func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
 	for name, mutate := range map[string]func(*ContainerAnalysisTaskSpec){
+		"api":      func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_API") },
 		"endpoint": func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_ENDPOINT") },
 		"model":    func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_MODEL") },
 		"token":    func(spec *ContainerAnalysisTaskSpec) { spec.SecretEnv = nil },
@@ -247,6 +249,11 @@ func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
 				t.Fatalf("BuildContainerAnalysisResources error = %v", err)
 			}
 		})
+	}
+	spec := containerTaskSpec(t)
+	spec.Environment["AI_API"] = "invalid"
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "AI API") {
+		t.Fatalf("BuildContainerAnalysisResources invalid API error = %v", err)
 	}
 }
 
