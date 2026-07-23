@@ -50,6 +50,13 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		modelImage = "python:3.12-alpine"
 	}
 	secretName := "analyzer-secret-" + strings.TrimPrefix(id, "container-analyzer-")
+	liveEndpoint := strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_ENDPOINT"))
+	liveModel := strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_MODEL"))
+	liveToken := os.Getenv("ORKA_CONTAINER_LIVE_TOKEN")
+	secretToken := "script-token"
+	if liveEndpoint != "" && liveToken != "" {
+		secretToken = liveToken
+	}
 	cleanup := func() {
 		containerKubectlIgnore(t, kubeContext, "delete", "task,job,pod,deployment,service,configmap,secret", "-n", namespace, "-l", "prow-ai-dashboard/smoke="+id, "--wait=true", "--timeout=2m")
 	}
@@ -57,7 +64,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	applyContainerModelServer(t, kubeContext, namespace, modelName, modelImage, id)
-	applyContainerSecret(t, kubeContext, namespace, secretName, id)
+	applyContainerSecret(t, kubeContext, namespace, secretName, id, secretToken)
 	containerKubectl(t, kubeContext, nil, "wait", "-n", namespace, "--for=condition=Available", "deployment/"+modelName, "--timeout=3m")
 	pruneContainerBundles(t, kubeContext, namespace)
 
@@ -243,7 +250,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 		t.Logf("load wave: tasks=%d apply=%s total=%s cache_entries=%d traces=%d", taskCount, applyElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond), taskCount, len(traceTasks))
 	})
 
-	if liveEndpoint, liveModel := strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_ENDPOINT")), strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_MODEL")); liveEndpoint != "" || liveModel != "" {
+	if liveEndpoint != "" || liveModel != "" {
 		if liveEndpoint == "" || liveModel == "" {
 			t.Fatal("ORKA_CONTAINER_LIVE_ENDPOINT and ORKA_CONTAINER_LIVE_MODEL must be set together")
 		}
@@ -781,12 +788,12 @@ func TestContainerModelReadinessProbeUsesTCPPort(t *testing.T) {
 	}
 }
 
-func applyContainerSecret(t *testing.T, kubeContext, namespace, name, id string) {
+func applyContainerSecret(t *testing.T, kubeContext, namespace, name, id, token string) {
 	t.Helper()
 	secret := map[string]any{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
 		"metadata":   map[string]any{"name": name, "namespace": namespace, "labels": map[string]any{"prow-ai-dashboard/smoke": id}},
-		"stringData": map[string]any{"token": "script-token", "state-key": containerAnalyzerStateKeyText()},
+		"stringData": map[string]any{"token": token, "state-key": containerAnalyzerStateKeyText()},
 	}
 	data, err := json.Marshal(secret)
 	if err != nil {

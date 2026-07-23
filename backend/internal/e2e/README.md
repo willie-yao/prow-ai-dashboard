@@ -199,5 +199,6 @@ experimental/orka/test-container-analyzer-kind.sh
 
 The default test does not call a live model and does not touch H100 or Ray
 resources. Set `ORKA_CONTAINER_LIVE_ENDPOINT` and `ORKA_CONTAINER_LIVE_MODEL` to
-add the matching live Flatcar benchmark. The scripted run also applies a
+add the matching live Flatcar benchmark. Set `ORKA_CONTAINER_LIVE_TOKEN` when
+the endpoint requires authentication. The scripted run also applies a
 five-Task load wave and verifies state merging, CPU placement, and cleanup.

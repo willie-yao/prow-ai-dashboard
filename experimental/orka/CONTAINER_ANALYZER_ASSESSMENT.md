@@ -26,8 +26,8 @@ ready.
 | Structured result framing | Implemented in v2 and retained by `dashboard-failure-analyzer-v4` |
 | Immutable request and project bundle | Implemented in v3 and retained by `dashboard-failure-analyzer-v4` |
 | Persistent cache and private traces | Implemented by `dashboard-failure-analyzer-v4` |
-| Clean in-process and container Kimi comparison | Pending |
-| Bounded multi-failure load test | Pending |
+| Clean in-process and container Kimi comparison | Complete: 0/5 in-process, 2/5 container |
+| Bounded multi-failure load test | Complete: five distinct Tasks, five persisted cache and trace identities |
 
 No supported Helm analysis mode should use the container path until every gate
 passes.
