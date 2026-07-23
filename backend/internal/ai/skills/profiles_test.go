@@ -439,6 +439,11 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 		t.Fatalf("kube-proxy synchronization failure did not match connectivity requirements: match=%v service=%v",
 			matchContains(set, synchronizationFailure, skill.ID), service.Applies(synchronizationFailure))
 	}
+	dnsNegative := "DNS never resolved the Kubernetes API hostname"
+	if !matchContains(set, dnsNegative, skill.ID) || service.Applies(dnsNegative) || !dns.Applies(dnsNegative) {
+		t.Fatalf("negative DNS resolution did not match DNS-only evidence: match=%v service=%v dns=%v",
+			matchContains(set, dnsNegative, skill.ID), service.Applies(dnsNegative), dns.Applies(dnsNegative))
+	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
 		t.Fatalf("DNS draft applicability: service=%v dns=%v", service.Applies(dnsDraft), dns.Applies(dnsDraft))
