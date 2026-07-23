@@ -151,9 +151,11 @@ loopback DNS chain. Lifecycle isolation did not make Kimi's diagnosis acceptable
 
 An isolated kind wave applied five Tasks in 565 ms and completed all five in
 11.6 seconds. Every analyzer Job used the CPU node pool and the same local image.
-All results and encrypted state deltas parsed, concurrent cache/trace merges
-succeeded, and every Task, Job, Pod, ConfigMap, Secret, image, and cluster owned
-by the run was removed. Separate cases proved retry and persistent cache reuse.
+All results and encrypted state deltas parsed. The five Tasks used distinct
+failure and cache identities; concurrent merges were reloaded from disk and all
+five cache entries and all five Task trace identities were present. Every Task,
+Job, Pod, ConfigMap, Secret, image, and cluster owned by the run was removed.
+Separate cases proved retry and persistent cache reuse.
 
 ## Decision
 

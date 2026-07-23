@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
 	"k8s.io/client-go/rest"
 )
@@ -163,16 +164,23 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 	})
 	t.Run("five-task-load-wave", func(t *testing.T) {
 		const taskCount = 5
-		store, err := analysisruntime.NewContainerStateStore(t.TempDir())
+		stateDir := t.TempDir()
+		store, err := analysisruntime.NewContainerStateStore(stateDir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resources := make([]orka.ContainerAnalysisResources, 0, taskCount)
+		requests := make([]ai.FailureAnalysisRequest, 0, taskCount)
 		names := make([]string, 0, taskCount)
 		start := time.Now()
 		for i := 0; i < taskCount; i++ {
-			r := buildKindContainerTask(t, namespace, image, fmt.Sprintf("%s-load-%d", id, i), endpoint, fmt.Sprintf("script-load-%d", i), secretName, request, labels, nil, "2m", false)
+			loadRequest := request
+			loadRequest.TestCase = request.TestCase
+			loadRequest.TestCase.Name = fmt.Sprintf("%s load-%d", request.TestCase.Name, i)
+			loadRequest.TestCase.FailureMessage = fmt.Sprintf("%s load-%d", request.TestCase.FailureMessage, i)
+			r := buildKindContainerTask(t, namespace, image, fmt.Sprintf("%s-load-%d", id, i), endpoint, fmt.Sprintf("script-load-%d", i), secretName, loadRequest, labels, nil, "2m", false)
 			resources = append(resources, r)
+			requests = append(requests, loadRequest)
 			names = append(names, applyContainerResources(t, kubeContext, r))
 		}
 		applyElapsed := time.Since(start)
@@ -187,7 +195,7 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 			if _, err := orka.ParseContainerAnalysisResult(raw); err != nil {
 				t.Fatalf("load Task %s result: %v", name, err)
 			}
-			state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources[i], request))
+			state, err := analysisruntime.ParseEncryptedContainerAnalysisState(raw, containerAnalyzerStateKey(), containerStateIdentity(resources[i], requests[i]))
 			if err != nil {
 				t.Fatalf("load Task %s state: %v", name, err)
 			}
@@ -207,10 +215,32 @@ func TestOrkaContainerAnalyzerKind(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		reloaded, err := analysisruntime.NewContainerStateStore(stateDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range requests {
+			if got := len(reloaded.CacheSeed(requests[i])); got != 1 {
+				t.Fatalf("persisted cache entries for request %d = %d, want 1", i, got)
+			}
+		}
+		traceStore, err := ai.LoadTraceStore(filepath.Join(stateDir, output.AITraceFilename))
+		if err != nil {
+			t.Fatal(err)
+		}
+		traceTasks := map[string]bool{}
+		for _, trace := range traceStore.Snapshot().Traces {
+			traceTasks[trace.TaskName] = true
+		}
+		for i, name := range names {
+			if !traceTasks[name] {
+				t.Fatalf("persisted trace for load Task %d %s is missing", i, name)
+			}
+		}
 		for i := range resources {
 			cleanupContainerBundle(t, kubeContext, resources[i])
 		}
-		t.Logf("load wave: tasks=%d apply=%s total=%s cache_entries=%d", taskCount, applyElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond), len(store.CacheSeed(request)))
+		t.Logf("load wave: tasks=%d apply=%s total=%s cache_entries=%d traces=%d", taskCount, applyElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond), taskCount, len(traceTasks))
 	})
 
 	if liveEndpoint, liveModel := strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_ENDPOINT")), strings.TrimSpace(os.Getenv("ORKA_CONTAINER_LIVE_MODEL")); liveEndpoint != "" || liveModel != "" {
