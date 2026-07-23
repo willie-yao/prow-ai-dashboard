@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -101,6 +102,33 @@ func TestRunWritesOnlyResultToStdout(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), request.TestCase.FailureMessage) || strings.Contains(stderr.String(), request.TestCase.FailureMessage) {
 		t.Fatal("complete failure request leaked to output")
+	}
+}
+
+func TestAnalyzerRedactsProviderURLsFromDurableStderr(t *testing.T) {
+	const privateURL = "https://private-model.example/v1/chat/completions?token=secret"
+	fake := &fakeAnalyzer{err: errors.New("post " + privateURL + ": timeout")}
+	factory := func(context.Context, commandOptions, envGetter) (*analyzerRuntime, error) {
+		return &analyzerRuntime{
+			analyzer: fake, httpClient: http.DefaultClient,
+			save: func() error {
+				log.Printf("service failure: post %s: timeout", privateURL)
+				return nil
+			},
+		}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), nil, requestEnv(t, analyzerTestRequest()), &stdout, &stderr, factory)
+	if err == nil {
+		t.Fatal("run succeeded")
+	}
+	if strings.Contains(stderr.String(), privateURL) || !strings.Contains(stderr.String(), "[redacted-url]") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	var rendered bytes.Buffer
+	writeAnalyzerError(&rendered, err)
+	if strings.Contains(rendered.String(), privateURL) || !strings.Contains(rendered.String(), "[redacted-url]") {
+		t.Fatalf("rendered error = %q", rendered.String())
 	}
 }
 

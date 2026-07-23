@@ -36,11 +36,11 @@ semantic judge, cache implementation, and private trace implementation.
 
 ## Adapter size
 
-Production code added by the spike is 728 lines:
+Production code added by the spike is 745 lines:
 
 | Area | Lines |
 | --- | ---: |
-| Analyzer command | 158 |
+| Analyzer command | 175 |
 | Shared runtime wiring | 219 |
 | Bounded request transport | 98 |
 | Orka container Task and result adapter | 253 |

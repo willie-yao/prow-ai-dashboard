@@ -20,6 +20,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
@@ -40,14 +41,30 @@ type commandOptions struct {
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Getenv, os.Stdout, os.Stderr, loadRuntime); err != nil {
-		fmt.Fprintf(os.Stderr, "analyzer: %v\n", err)
+		writeAnalyzerError(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
+func writeAnalyzerError(w io.Writer, err error) {
+	fmt.Fprintf(w, "analyzer: %s\n", redact.URLs(err.Error()))
+}
+
+type redactingWriter struct {
+	w io.Writer
+}
+
+func (w redactingWriter) Write(data []byte) (int, error) {
+	sanitized := []byte(redact.URLs(string(data)))
+	if _, err := w.w.Write(sanitized); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
 func run(ctx context.Context, args []string, getenv envGetter, stdout, stderr io.Writer, factory runtimeFactory) error {
 	oldWriter, oldFlags, oldPrefix := log.Writer(), log.Flags(), log.Prefix()
-	log.SetOutput(stderr)
+	log.SetOutput(redactingWriter{w: stderr})
 	log.SetFlags(log.LstdFlags | log.LUTC)
 	log.SetPrefix("")
 	defer func() {
