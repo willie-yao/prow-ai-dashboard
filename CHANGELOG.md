@@ -29,11 +29,11 @@ for how to pin a release.
   temporary files, keep credentials in Secret references, and reject unsafe
   YAML graphs or bundles that exceed the bounded environment transport. Terminal
   result handling
-  deletes private Task-scoped bundles immediately, failed Task application rolls
-  back only newly created bundles, and one batch-level GC pass prunes terminal or
-  orphaned bundles after 24 hours under least-privilege ConfigMap RBAC.
-  Resource-version claims prevent pruning or rollback from deleting a bundle
-  concurrently adopted by another reconciler. Terminal cleanup is bound to the
+  deletes private Task-scoped bundles immediately, while failed Task application
+  leaves inputs for one batch-level GC pass to prune after 24 hours under
+  least-privilege ConfigMap RBAC. Short-lived claims and resource-version deletes
+  prevent GC from deleting a bundle concurrently adopted by another reconciler.
+  Terminal cleanup is bound to the
   observed Task UID so delayed handling cannot delete a replacement Task input.
 - **Dashboard container result framing.** The experimental dashboard-owned
   analyzer now emits a bounded base64 result marker on stdout. Mixed Orka Task

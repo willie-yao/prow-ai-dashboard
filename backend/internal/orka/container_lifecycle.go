@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"maps"
 	"time"
@@ -16,12 +15,15 @@ import (
 var configMapsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 
 const (
-	containerAnalysisBundleLabel        = "prow-ai-dashboard/bundle"
-	containerAnalysisBundleSelector     = containerAnalysisBundleLabel + "=true"
-	containerAnalysisTaskNameAnnotation = "prow-ai-dashboard/task-name"
-	containerAnalysisClaimAnnotation    = "prow-ai-dashboard/bundle-claim"
+	containerAnalysisBundleLabel         = "prow-ai-dashboard/bundle"
+	containerAnalysisBundleSelector      = containerAnalysisBundleLabel + "=true"
+	containerAnalysisTaskNameAnnotation  = "prow-ai-dashboard/task-name"
+	containerAnalysisClaimAnnotation     = "prow-ai-dashboard/bundle-claim"
+	containerAnalysisClaimTimeAnnotation = "prow-ai-dashboard/bundle-claimed-at"
 	// ContainerAnalysisBundleRetention bounds orphaned private input bundles.
 	ContainerAnalysisBundleRetention = 24 * time.Hour
+	// ContainerAnalysisClaimTTL protects an active resource-application claim.
+	ContainerAnalysisClaimTTL = 10 * time.Minute
 )
 
 // ContainerAnalysisResourceClient applies and removes analyzer resources.
@@ -61,13 +63,13 @@ func ReconcileContainerAnalysisResources(ctx context.Context, client ContainerAn
 	return nil
 }
 
-// ApplyContainerAnalysisResources applies the bundle before its Task and rolls back on failure.
+// ApplyContainerAnalysisResources claims the bundle before applying its Task.
 func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalysisResourceClient, resources ContainerAnalysisResources) error {
 	bundleNamespace, bundleName, err := containerResourceRef(resources.BundleConfigMap)
 	if err != nil {
 		return err
 	}
-	taskNamespace, taskName, err := containerResourceRef(resources.Task)
+	taskNamespace, _, err := containerResourceRef(resources.Task)
 	if err != nil {
 		return err
 	}
@@ -78,8 +80,7 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 	if err != nil {
 		return err
 	}
-	created, err := client.CreateIfAbsent(ctx, configMapsGVR, bundleNamespace, resources.BundleConfigMap)
-	if err != nil {
+	if _, err := client.CreateIfAbsent(ctx, configMapsGVR, bundleNamespace, resources.BundleConfigMap); err != nil {
 		return fmt.Errorf("create container analysis bundle %s: %w", bundleName, err)
 	}
 	existing, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
@@ -89,38 +90,24 @@ func ApplyContainerAnalysisResources(ctx context.Context, client ContainerAnalys
 	if err := validateExistingContainerAnalysisBundle(existing, resources.BundleConfigMap); err != nil {
 		return err
 	}
-	claimedVersion, err := client.PatchAnnotations(ctx, configMapsGVR, bundleNamespace, bundleName, map[string]string{
-		containerAnalysisClaimAnnotation: claim,
-	})
-	if err != nil {
-		if created {
-			_ = rollbackContainerAnalysisBundle(ctx, client, bundleNamespace, bundleName, taskName, existing.GetResourceVersion())
-		}
+	if _, err := client.PatchAnnotations(ctx, configMapsGVR, bundleNamespace, bundleName, map[string]string{
+		containerAnalysisClaimAnnotation:     claim,
+		containerAnalysisClaimTimeAnnotation: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
 		return fmt.Errorf("claim container analysis bundle %s: %w", bundleName, err)
 	}
-	if err := client.Apply(ctx, TasksGVR, taskNamespace, resources.Task); err != nil {
-		applyErr := fmt.Errorf("apply container analysis Task: %w", err)
-		if !created {
-			return applyErr
-		}
-		if cleanupErr := rollbackContainerAnalysisBundle(ctx, client, bundleNamespace, bundleName, taskName, claimedVersion); cleanupErr != nil {
-			return errors.Join(applyErr, cleanupErr)
-		}
-		return applyErr
-	}
-	return nil
-}
-
-func rollbackContainerAnalysisBundle(ctx context.Context, client ContainerAnalysisResourceClient, namespace, bundleName, taskName, resourceVersion string) error {
-	state, err := client.TaskState(ctx, namespace, taskName)
+	claimed, err := client.Get(ctx, configMapsGVR, bundleNamespace, bundleName)
 	if err != nil {
-		return fmt.Errorf("check Task before rolling back container analysis bundle %s: %w", bundleName, err)
+		return fmt.Errorf("verify container analysis bundle claim %s: %w", bundleName, err)
 	}
-	if state.Exists {
-		return nil
+	if err := validateExistingContainerAnalysisBundle(claimed, resources.BundleConfigMap); err != nil {
+		return err
 	}
-	if _, err := client.DeleteIfResourceVersion(ctx, configMapsGVR, namespace, bundleName, resourceVersion); err != nil {
-		return fmt.Errorf("roll back container analysis bundle %s: %w", bundleName, err)
+	if claimed.GetAnnotations()[containerAnalysisClaimAnnotation] != claim {
+		return fmt.Errorf("container analysis bundle %s claim was superseded", bundleName)
+	}
+	if err := client.Apply(ctx, TasksGVR, taskNamespace, resources.Task); err != nil {
+		return fmt.Errorf("apply container analysis Task: %w", err)
 	}
 	return nil
 }
@@ -232,6 +219,7 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 			continue
 		}
 		taskName := items[i].GetAnnotations()[containerAnalysisTaskNameAnnotation]
+		terminalTask := false
 		if taskName != "" {
 			state, err := client.TaskState(ctx, namespace, taskName)
 			if err != nil {
@@ -240,6 +228,10 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 			if state.Exists && !TerminalPhase(state.Phase) {
 				continue
 			}
+			terminalTask = state.Exists && TerminalPhase(state.Phase)
+		}
+		if !terminalTask && activeContainerAnalysisClaim(items[i].GetAnnotations(), now) {
+			continue
 		}
 		resourceVersion := items[i].GetResourceVersion()
 		if resourceVersion == "" {
@@ -254,6 +246,17 @@ func PruneContainerAnalysisBundles(ctx context.Context, client ContainerAnalysis
 		}
 	}
 	return deleted, nil
+}
+
+func activeContainerAnalysisClaim(annotations map[string]string, now time.Time) bool {
+	if annotations[containerAnalysisClaimAnnotation] == "" {
+		return false
+	}
+	claimedAt, err := time.Parse(time.RFC3339Nano, annotations[containerAnalysisClaimTimeAnnotation])
+	if err != nil {
+		return true
+	}
+	return now.Before(claimedAt.Add(ContainerAnalysisClaimTTL))
 }
 
 func containerResourceRef(resource map[string]any) (string, string, error) {

@@ -14,25 +14,27 @@ import (
 )
 
 type fakeContainerResourceClient struct {
-	applyErrAt            int
-	createExists          bool
-	createErr             error
-	getErr                error
-	patchErr              error
-	deleteErr             error
-	deleteVersionErr      error
-	deleteVersionConflict bool
-	listErr               error
-	taskErr               error
-	applied               []string
-	created               []string
-	claimed               []string
-	deleted               []string
-	deletedVersion        []string
-	listed                []unstructured.Unstructured
-	existing              *unstructured.Unstructured
-	taskStates            map[string]TaskState
-	taskStateSequences    map[string][]TaskState
+	applyErrAt                int
+	createExists              bool
+	createErr                 error
+	getErr                    error
+	getCalls                  int
+	supersedeClaimOnSecondGet bool
+	patchErr                  error
+	deleteErr                 error
+	deleteVersionErr          error
+	deleteVersionConflict     bool
+	listErr                   error
+	taskErr                   error
+	applied                   []string
+	created                   []string
+	claimed                   []string
+	deleted                   []string
+	deletedVersion            []string
+	listed                    []unstructured.Unstructured
+	existing                  *unstructured.Unstructured
+	taskStates                map[string]TaskState
+	taskStateSequences        map[string][]TaskState
 }
 
 func (f *fakeContainerResourceClient) Apply(_ context.Context, gvr schema.GroupVersionResource, _ string, obj map[string]any) error {
@@ -59,6 +61,12 @@ func (f *fakeContainerResourceClient) CreateIfAbsent(_ context.Context, gvr sche
 }
 
 func (f *fakeContainerResourceClient) Get(context.Context, schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error) {
+	f.getCalls++
+	if f.supersedeClaimOnSecondGet && f.getCalls == 2 && f.existing != nil {
+		annotations := f.existing.GetAnnotations()
+		annotations[containerAnalysisClaimAnnotation] = "other-claim"
+		f.existing.SetAnnotations(annotations)
+	}
 	return f.existing, f.getErr
 }
 
@@ -199,15 +207,15 @@ func TestReconcileContainerAnalysisResourcesSkipsTerminalTask(t *testing.T) {
 	}
 }
 
-func TestApplyContainerAnalysisResourcesRollsBackOnlyUnadoptedNewBundle(t *testing.T) {
+func TestApplyContainerAnalysisResourcesDoesNotDeleteOnTaskFailure(t *testing.T) {
 	resources := lifecycleResources()
 	client := &fakeContainerResourceClient{applyErrAt: 1}
 	err := ApplyContainerAnalysisResources(context.Background(), client, resources)
 	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
 		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
 	}
-	if !reflect.DeepEqual(client.deletedVersion, []string{"configmaps/bundle@rv-claimed"}) {
-		t.Fatalf("versioned deletes = %v", client.deletedVersion)
+	if len(client.deletedVersion) != 0 {
+		t.Fatalf("failed reconciliation deleted bundle: %v", client.deletedVersion)
 	}
 
 	existing := (&unstructured.Unstructured{Object: resources.BundleConfigMap}).DeepCopy()
@@ -220,17 +228,44 @@ func TestApplyContainerAnalysisResourcesRollsBackOnlyUnadoptedNewBundle(t *testi
 	if len(client.deletedVersion) != 0 {
 		t.Fatalf("existing bundle was deleted: %v", client.deletedVersion)
 	}
+}
 
-	client = &fakeContainerResourceClient{
-		applyErrAt: 1,
-		taskStates: map[string]TaskState{"task": {Exists: true, Phase: "Running"}},
-	}
-	err = ApplyContainerAnalysisResources(context.Background(), client, resources)
-	if err == nil || !strings.Contains(err.Error(), "apply container analysis Task") {
+func TestApplyContainerAnalysisResourcesStopsWhenClaimIsSuperseded(t *testing.T) {
+	client := &fakeContainerResourceClient{supersedeClaimOnSecondGet: true}
+	err := ApplyContainerAnalysisResources(context.Background(), client, lifecycleResources())
+	if err == nil || !strings.Contains(err.Error(), "claim was superseded") {
 		t.Fatalf("ApplyContainerAnalysisResources error = %v", err)
 	}
-	if len(client.deletedVersion) != 0 {
-		t.Fatalf("bundle adopted by active Task was deleted: %v", client.deletedVersion)
+	if len(client.applied) != 0 || len(client.deletedVersion) != 0 {
+		t.Fatalf("superseded claimant changed resources: applied=%v deleted=%v", client.applied, client.deletedVersion)
+	}
+}
+
+func TestPruneContainerAnalysisBundlesSkipsActiveMissingTaskClaim(t *testing.T) {
+	now := time.Now().UTC()
+	active := bundleObject("active", "missing-task", now.Add(-2*ContainerAnalysisBundleRetention))
+	annotations := active.GetAnnotations()
+	annotations[containerAnalysisClaimAnnotation] = "claim"
+	annotations[containerAnalysisClaimTimeAnnotation] = now.Format(time.RFC3339Nano)
+	active.SetAnnotations(annotations)
+	client := &fakeContainerResourceClient{listed: []unstructured.Unstructured{active}}
+	deleted, err := PruneContainerAnalysisBundles(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 || len(client.deletedVersion) != 0 {
+		t.Fatalf("active claim was pruned: deleted=%d calls=%v", deleted, client.deletedVersion)
+	}
+
+	annotations[containerAnalysisClaimTimeAnnotation] = now.Add(-ContainerAnalysisClaimTTL - time.Second).Format(time.RFC3339Nano)
+	active.SetAnnotations(annotations)
+	client = &fakeContainerResourceClient{listed: []unstructured.Unstructured{active}}
+	deleted, err = PruneContainerAnalysisBundles(context.Background(), client, "orka-system", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expired claim deleted = %d, want 1", deleted)
 	}
 }
 
