@@ -273,6 +273,44 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	}
 }
 
+func TestProviderIDDiagnosisMatchesOnlyRelevantBuiltinRecipes(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := "The worker Node exists but has no providerID and retains the cloud-provider uninitialized taint. " +
+		"The MachineDeployment controller timed out waiting for that providerID. " +
+		"The cloud-node-manager controller entered CrashLoopBackOff because it could not reach the Kubernetes API Service ClusterIP. " +
+		"kube-proxy never synchronized because the API hostname lookup through the DNS resolver was refused."
+
+	for _, id := range []string{
+		"engine.kubernetes.machine-node-providerid",
+		"engine.kubernetes.service-api-dns-connectivity",
+	} {
+		if !matchContains(set, draft, id) {
+			t.Errorf("providerID draft did not match %q; got %v", id, skillIDs(set.Match(draft)))
+		}
+	}
+	for _, id := range []string{
+		"engine.kubernetes.pod-container-startup",
+		"engine.kubernetes.cluster-control-plane-provisioning",
+		"engine.prow.run-context",
+	} {
+		if matchContains(set, draft, id) {
+			t.Errorf("providerID draft unexpectedly matched %q", id)
+		}
+	}
+
+	provider := findSkill(t, set, "engine.kubernetes.machine-node-providerid")
+	if got, want := applicableEvidenceIDs(provider, draft), []string{"machine-state", "node-state", "cloud-provider-controller", "kube-proxy"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("providerID evidence = %v, want %v", got, want)
+	}
+	connectivity := findSkill(t, set, "engine.kubernetes.service-api-dns-connectivity")
+	if got, want := applicableEvidenceIDs(connectivity, draft), []string{"affected-client", "service-routing", "dns-resolution"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("connectivity evidence = %v, want %v", got, want)
+	}
+}
+
 func TestPodEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
 	if err != nil {
@@ -298,6 +336,29 @@ func TestPodEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if device.Applies(csiDraft) || network.Applies(csiDraft) || image.Applies(csiDraft) {
 		t.Fatalf("CSI draft required unrelated subsystem evidence")
 	}
+
+	crashLoopDraft := "The application Pod startup failed after its container entered CrashLoopBackOff."
+	if !matchContains(set, crashLoopDraft, skill.ID) {
+		t.Fatalf("Pod startup draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, crashLoopDraft), []string{"pod-state-events", "kubelet"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Pod startup evidence = %v, want %v", got, want)
+	}
+}
+
+func TestClusterProvisioningDiagnosisRequiresResponsibleController(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := "Provisioning failed for the workload Machine while its infrastructure controller reconciliation stalled."
+	skill := findSkill(t, set, "engine.kubernetes.cluster-control-plane-provisioning")
+	if !matchContains(set, draft, skill.ID) {
+		t.Fatalf("cluster provisioning draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, draft), []string{"provisioning-object-state", "responsible-controller"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cluster provisioning evidence = %v, want %v", got, want)
+	}
 }
 
 func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
@@ -313,9 +374,43 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !service.Applies(serviceDraft) || dns.Applies(serviceDraft) {
 		t.Fatalf("service draft applicability: service=%v dns=%v", service.Applies(serviceDraft), dns.Applies(serviceDraft))
 	}
+	healthyDraft := "cloud-node-manager can reach the Kubernetes API Service; providerID reconciliation is blocked elsewhere"
+	if matchContains(set, healthyDraft, skill.ID) || service.Applies(healthyDraft) || dns.Applies(healthyDraft) {
+		t.Fatalf("healthy API draft matched connectivity requirements: match=%v service=%v dns=%v",
+			matchContains(set, healthyDraft, skill.ID), service.Applies(healthyDraft), dns.Applies(healthyDraft))
+	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
 		t.Fatalf("DNS draft applicability: service=%v dns=%v", service.Applies(dnsDraft), dns.Applies(dnsDraft))
+	}
+}
+
+func TestProwRunContextEvidenceAppliesByClaim(t *testing.T) {
+	set, err := LoadMerged(t.TempDir(), ProfileSelection{Kubernetes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill := findSkill(t, set, "engine.prow.run-context")
+
+	componentLifecycle := "The cloud-node-manager container started and finished before controller cleanup retried."
+	if matchContains(set, componentLifecycle, skill.ID) {
+		t.Fatalf("component lifecycle unexpectedly matched %q", skill.ID)
+	}
+
+	runLifecycle := "The Prow run finished during teardown, so the diagnosis depends on cleanup timing and duration."
+	if !matchContains(set, runLifecycle, skill.ID) {
+		t.Fatalf("run lifecycle draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, runLifecycle), []string{"run-start", "run-finish"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("run lifecycle evidence = %v, want %v", got, want)
+	}
+
+	prowContext := "The Prow job checked out the wrong commit, so the tested revision differs from the intended one."
+	if !matchContains(set, prowContext, skill.ID) {
+		t.Fatalf("Prow context draft did not match %q", skill.ID)
+	}
+	if got, want := applicableEvidenceIDs(skill, prowContext), []string{"prow-context"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Prow context evidence = %v, want %v", got, want)
 	}
 }
 
@@ -328,13 +423,30 @@ func TestBuiltinRecipesRemainProviderAndVersionNeutral(t *testing.T) {
 		if !strings.HasPrefix(skill.ID, "engine.") {
 			continue
 		}
-		serialized := strings.ToLower(strings.Join(append(append([]string{}, skill.Triggers...), skill.Procedure), "\n"))
+		parts := append([]string{skill.ID, skill.Name, skill.Description}, skill.Triggers...)
+		parts = append(parts, skill.Procedure)
+		for _, group := range skill.RequiredEvidence {
+			parts = append(parts, group.ID, group.Description)
+			parts = append(parts, group.When...)
+			parts = append(parts, group.AnyOf...)
+		}
+		serialized := strings.ToLower(strings.Join(parts, "\n"))
 		for _, forbidden := range []string{`(?i)\bcapz\b`, `(?i)\bazure\b`, `(?i)\baso\b`, `(?i)\bflatcar\b`, `\b1\.\d+\b`} {
 			if regexp.MustCompile(forbidden).MatchString(serialized) {
 				t.Errorf("%s contains provider or version token matching %q", skill.ID, forbidden)
 			}
 		}
 	}
+}
+
+func applicableEvidenceIDs(skill Skill, draft string) []string {
+	var ids []string
+	for _, group := range skill.RequiredEvidence {
+		if group.Applies(draft) {
+			ids = append(ids, group.ID)
+		}
+	}
+	return ids
 }
 
 func skillIDs(skills []Skill) []string {
