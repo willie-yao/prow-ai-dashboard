@@ -1,8 +1,8 @@
 # Onboarding a project
 
 The `fetcher onboard` command verifies Prow job discovery and creates a small
-consumer scaffold. The project schema supports both analysis backends, while the
-command sets deployment-specific branding and files for Pages or Kubernetes.
+consumer scaffold. The command sets deployment-specific branding and files for Pages or
+Kubernetes.
 
 ## Choose the environment
 

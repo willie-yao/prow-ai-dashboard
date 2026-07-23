@@ -1,13 +1,13 @@
 # AI diagnostic skills and project recipes
 
 > Status: Engine profiles plus consumer extensions. Skills extend the always-on
-> critique gate and the Orka required-evidence contract.
+> critique gate and deterministic evidence planner.
 
 Skills are YAML diagnostic recipes that steer the analysis toward canonical
 evidence. A recipe contains trigger regexes, required artifact-path groups, and
 a short investigation procedure.
 
-The engine composes one merged set for both analysis backends:
+The engine composes one merged set for the dashboard-owned analyzer:
 
 1. **Engine Prow profile.** Always enabled because the product analyzes Prow
    runs. It teaches the distinction between `build-log.txt` and JUnit details,

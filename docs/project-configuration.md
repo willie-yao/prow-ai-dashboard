@@ -158,8 +158,8 @@ a secret in another header.
 ## Custom skills
 
 Diagnostic recipes live under `skills/*.yaml`. Their presence is the opt-in.
-Both analysis backends load the same recipes, enforce their required evidence,
-and include the skill-set hash in cache or Task identity. See
+The analyzer loads these recipes, enforces their required evidence, and includes
+the skill-set hash in cache acceptance. See
 [Custom diagnostic skills](skills.md).
 
 ## Optional features
