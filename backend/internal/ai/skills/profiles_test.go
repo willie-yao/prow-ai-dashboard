@@ -271,9 +271,17 @@ func TestMachineEvidenceGroupsApplyByFailureClass(t *testing.T) {
 	if !cloud.Applies(serviceDraft) || !proxy.Applies(serviceDraft) {
 		t.Fatalf("API reachability draft applicability: cloud=%v proxy=%v", cloud.Applies(serviceDraft), proxy.Applies(serviceDraft))
 	}
-	authorizationDraft := "providerID is missing, but the Kubernetes API returned an authorization error"
-	if proxy.Applies(authorizationDraft) {
-		t.Fatal("authorization error unexpectedly required kube-proxy evidence")
+	for _, authorizationDraft := range []string{
+		"providerID is missing, but the Kubernetes API returned an authorization error",
+		"providerID is missing, but cloud-node-manager's Kubernetes API request failed with an authorization error",
+	} {
+		if proxy.Applies(authorizationDraft) {
+			t.Errorf("authorization error unexpectedly required kube-proxy evidence: %q", authorizationDraft)
+		}
+	}
+	connectionOrderDraft := "providerID is missing because cloud-node-manager's connection to the Kubernetes API Service timed out"
+	if !proxy.Applies(connectionOrderDraft) {
+		t.Fatal("operation-first API connection did not require kube-proxy evidence")
 	}
 }
 
@@ -394,15 +402,29 @@ func TestConnectivityEvidenceGroupsApplyByFailureClass(t *testing.T) {
 		t.Fatalf("healthy API draft matched connectivity requirements: match=%v service=%v dns=%v",
 			matchContains(set, healthyDraft, skill.ID), service.Applies(healthyDraft), dns.Applies(healthyDraft))
 	}
-	authorizationDraft := "The Kubernetes Service returned an authorization error after accepting the request"
-	if matchContains(set, authorizationDraft, skill.ID) || service.Applies(authorizationDraft) || dns.Applies(authorizationDraft) {
-		t.Fatalf("authorization error matched connectivity requirements: match=%v service=%v dns=%v",
-			matchContains(set, authorizationDraft, skill.ID), service.Applies(authorizationDraft), dns.Applies(authorizationDraft))
+	for _, authorizationDraft := range []string{
+		"The Kubernetes Service returned an authorization error after accepting the request",
+		"The Kubernetes API request failed with an authorization error",
+	} {
+		if matchContains(set, authorizationDraft, skill.ID) || service.Applies(authorizationDraft) || dns.Applies(authorizationDraft) {
+			t.Errorf("authorization error matched connectivity requirements: draft=%q match=%v service=%v dns=%v",
+				authorizationDraft, matchContains(set, authorizationDraft, skill.ID), service.Applies(authorizationDraft), dns.Applies(authorizationDraft))
+		}
 	}
 	connectionFailure := "The Kubernetes API Service connection failed before the request reached the server"
 	if !matchContains(set, connectionFailure, skill.ID) || !service.Applies(connectionFailure) {
 		t.Fatalf("connection failure did not match connectivity requirements: match=%v service=%v",
 			matchContains(set, connectionFailure, skill.ID), service.Applies(connectionFailure))
+	}
+	operationFirst := "The connection to the Kubernetes API Service timed out"
+	if !matchContains(set, operationFirst, skill.ID) || !service.Applies(operationFirst) {
+		t.Fatalf("operation-first connection failure did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, operationFirst, skill.ID), service.Applies(operationFirst))
+	}
+	requestTimeout := "The Kubernetes API request timed out before receiving a response"
+	if !matchContains(set, requestTimeout, skill.ID) || !service.Applies(requestTimeout) {
+		t.Fatalf("request timeout did not match connectivity requirements: match=%v service=%v",
+			matchContains(set, requestTimeout, skill.ID), service.Applies(requestTimeout))
 	}
 	dnsDraft := "API hostname lookup used a loopback DNS resolver that refused connections"
 	if service.Applies(dnsDraft) || !dns.Applies(dnsDraft) {
@@ -420,6 +442,10 @@ func TestProwRunContextEvidenceAppliesByClaim(t *testing.T) {
 	componentLifecycle := "The cloud-node-manager container started and finished before controller cleanup retried."
 	if matchContains(set, componentLifecycle, skill.ID) {
 		t.Fatalf("component lifecycle unexpectedly matched %q", skill.ID)
+	}
+	workloadCleanup := "The Kubernetes Job failed during controller cleanup."
+	if matchContains(set, workloadCleanup, skill.ID) {
+		t.Fatalf("workload cleanup unexpectedly matched %q", skill.ID)
 	}
 
 	runLifecycle := "The Prow run finished during teardown, so the diagnosis depends on cleanup timing and duration."

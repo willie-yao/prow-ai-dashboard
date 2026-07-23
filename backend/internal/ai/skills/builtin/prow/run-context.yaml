@@ -3,20 +3,20 @@ name: Prow run context and comparison
 priority: 110
 triggers:
   - '(?i)\b(artifact collection|collection error|podinfo|prowjob|clone-records)\b'
-  - '(?i)\b(prow|run|job|test)\b.{0,100}\b(cleanup|teardown)\b'
-  - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|job|test)\b'
-  - '(?i)\b(prow|run|job)\b.{0,100}\b(start(?:ed)?|finish(?:ed)?|timestamp|duration|revision|commit|check(?:ed)? out|checkout|clone)\b'
-  - '(?i)\b(start(?:ed)?|finish(?:ed)?|timestamp|duration|revision|commit|check(?:ed)? out|checkout|clone)\b.{0,100}\b(prow|run|job)\b'
+  - '(?i)\b(prow|run|test run)\b.{0,100}\b(cleanup|teardown)\b'
+  - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|test run)\b'
+  - '(?i)\b(prow|run|test run)\b.{0,100}\b(start(?:ed)?|finish(?:ed)?|timestamp|duration|revision|commit|check(?:ed)? out|checkout|clone)\b'
+  - '(?i)\b(start(?:ed)?|finish(?:ed)?|timestamp|duration|revision|commit|check(?:ed)? out|checkout|clone)\b.{0,100}\b(prow|run|test run)\b'
   - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
 required_evidence:
   - id: run-start
     description: run start metadata
     when:
       - '(?i)\b(artifact collection|collection error)\b'
-      - '(?i)\b(prow|run|job|test)\b.{0,100}\b(cleanup|teardown)\b'
-      - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|job|test)\b'
-      - '(?i)\b(prow|run|job)\b.{0,100}\b(start(?:ed)?|timestamp|duration)\b'
-      - '(?i)\b(start(?:ed)?|timestamp|duration)\b.{0,100}\b(prow|run|job)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(cleanup|teardown)\b'
+      - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(start(?:ed)?|timestamp|duration)\b'
+      - '(?i)\b(start(?:ed)?|timestamp|duration)\b.{0,100}\b(prow|run|test run)\b'
       - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
     any_of:
       - '(?i)(^|/)started\.json$'
@@ -24,10 +24,10 @@ required_evidence:
     description: run finish metadata and result
     when:
       - '(?i)\b(artifact collection|collection error)\b'
-      - '(?i)\b(prow|run|job|test)\b.{0,100}\b(cleanup|teardown)\b'
-      - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|job|test)\b'
-      - '(?i)\b(prow|run|job)\b.{0,100}\b(finish(?:ed)?|timestamp|duration)\b'
-      - '(?i)\b(finish(?:ed)?|timestamp|duration)\b.{0,100}\b(prow|run|job)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(cleanup|teardown)\b'
+      - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(finish(?:ed)?|timestamp|duration)\b'
+      - '(?i)\b(finish(?:ed)?|timestamp|duration)\b.{0,100}\b(prow|run|test run)\b'
       - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
     any_of:
       - '(?i)(^|/)finished\.json$'
