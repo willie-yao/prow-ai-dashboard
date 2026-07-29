@@ -721,11 +721,14 @@ For each job, the engine:
    that job gets one fresh retry. Successful job correlations are not rerun, and
    both attempts use the same strict response validation.
 
-The retry is bounded at two job-level attempts. The transport already permits
-up to two internal retries for HTTP 429, so a repeatedly rate-limited correlation
-can make at most six provider requests across the two attempts. Other eligible
-provider failures make at most two requests. A final failure aborts transactional
-publication and retains the previously published generation.
+The retry is bounded at two job-level attempts. A tool-free correlation makes
+one logical model call per attempt. Since the transport permits up to two internal
+retries for HTTP 429, that path makes at most six HTTP requests across both
+attempts. A grounded attempt remains bounded at six tool-loop turns, one forced
+finalization, and one extraction call. Each logical call has the same three-request
+HTTP 429 cap, so grounded mode has a hard limit of 48 HTTP requests across both
+attempts. A final failure aborts transactional publication and retains the
+previously published generation.
 
 The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
 prompt version, the grounding mode (grounded vs tool-free), plus the exact

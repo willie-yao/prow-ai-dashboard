@@ -467,3 +467,27 @@ func TestPatternRetryClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestGroundedPatternVerdictPropagatesFinalizeHTTPError(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	for index := 0; index < patternMaxIters; index++ {
+		srv.push(200, chatRespToolCall(fmt.Sprintf("call_%d", index), "list_repo_tree", map[string]interface{}{"path": ""}))
+	}
+	srv.push(408, "private finalize response")
+	client := newAgenticTestClient(t, srv.URL)
+	s := NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
+	s.SetSourceRepo("example", "repo")
+	s.SetPatternRepoReader(&fakeRepoReader{files: map[string]string{"config/controller.yaml": "enabled: true"}})
+
+	_, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+	if category := PatternFailureCategoryOf(err); category != PatternFailureRequestTimeout {
+		t.Fatalf("category = %q, error = %v", category, err)
+	}
+	if strings.Contains(err.Error(), "private finalize response") {
+		t.Fatalf("error exposed provider body: %v", err)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != int32(patternMaxIters+1) {
+		t.Fatalf("model calls = %d, want %d", got, patternMaxIters+1)
+	}
+}

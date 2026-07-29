@@ -346,7 +346,7 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	}
 	env := &tools.Env{Repo: s.patternRepo, Cache: s.patternToolCache()}
 	out, err := s.client.ToolLoop(ctx, patternGroundedSystemPrompt, userPrompt, reg, enabled, env,
-		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true})
+		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true, PropagateFinalizeError: true})
 	if err != nil {
 		return patternResponse{}, safePatternProviderError(err)
 	}
