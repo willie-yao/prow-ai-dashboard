@@ -698,8 +698,8 @@ The engine always runs one job-level correlation pass after every per-failure
 analysis in the run is complete (so all per-build root causes are available).
 Like artifact-tree seeding, it is not configurable: it is self-gating (a no-op
 for any job that didn't fail in enough builds) and cached, so it costs nothing
-on a healthy dashboard and one bounded correlation attempt per genuinely recurring
-job otherwise.
+on a healthy dashboard. A genuinely recurring job gets one initial bounded
+correlation attempt plus at most one retry for the narrow failures below.
 
 For each job, the engine:
 
