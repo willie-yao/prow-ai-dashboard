@@ -414,3 +414,56 @@ func TestAnalyzePatternAcceptsKimiTrailingProse(t *testing.T) {
 		t.Fatalf("pattern = %+v", pa)
 	}
 }
+
+func TestAnalyzePatternProviderErrorsAreBodySafe(t *testing.T) {
+	shrinkCallDelay(t)
+	tests := []struct {
+		name         string
+		status       int
+		body         string
+		wantCategory PatternFailureCategory
+	}{
+		{name: "request timeout", status: 408, body: "private timeout response", wantCategory: PatternFailureRequestTimeout},
+		{name: "server failure", status: 503, body: "private server response", wantCategory: PatternFailureProvider5xx},
+		{name: "nonretryable failure", status: 400, body: "private request response", wantCategory: PatternFailureProvider},
+		{name: "malformed success", status: 200, body: "private malformed response", wantCategory: PatternFailureProvider},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			srv.push(testCase.status, testCase.body)
+			s := newPatternTestService(t, srv.URL)
+			_, err := s.AnalyzePattern(t.Context(), "job", "job", patternFailures(2))
+			if category := PatternFailureCategoryOf(err); category != testCase.wantCategory {
+				t.Fatalf("category = %q, want %q, error=%v", category, testCase.wantCategory, err)
+			}
+			if err == nil || strings.Contains(err.Error(), testCase.body) {
+				t.Fatalf("error exposed provider body: %v", err)
+			}
+		})
+	}
+}
+
+func TestPatternRetryClassification(t *testing.T) {
+	ambiguous := &patternValidationError{category: patternValidationAmbiguous}
+	for _, err := range []error{
+		ambiguous,
+		&PatternProviderError{StatusCode: 408},
+		&PatternProviderError{StatusCode: 429},
+		&PatternProviderError{StatusCode: 500},
+	} {
+		if !IsRetryablePatternError(err) {
+			t.Fatalf("error was not retryable: %v", err)
+		}
+	}
+	for _, err := range []error{
+		&patternValidationError{category: patternValidationSchema},
+		&patternValidationError{category: patternValidationBuilds},
+		&PatternProviderError{StatusCode: 400},
+		context.Canceled,
+	} {
+		if IsRetryablePatternError(err) {
+			t.Fatalf("error was retryable: %v", err)
+		}
+	}
+}
