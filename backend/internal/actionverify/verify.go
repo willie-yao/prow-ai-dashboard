@@ -70,12 +70,8 @@ type fileEvidence struct {
 }
 
 var backtickPattern = regexp.MustCompile("`([^`\\n]+)`")
-var explicitSymbolPattern = regexp.MustCompile(`^((?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*)(?:\(\))?$`)
-var sourceExtensions = map[string]bool{
-	".c": true, ".cc": true, ".cpp": true, ".go": true, ".h": true, ".hpp": true,
-	".java": true, ".js": true, ".jsx": true, ".kt": true, ".py": true, ".rb": true,
-	".rs": true, ".sh": true, ".ts": true, ".tsx": true, ".yaml": true, ".yml": true,
-}
+var bareSymbolPattern = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)(?:\(\))?$`)
+var qualifiedCallPattern = regexp.MustCompile(`^(?:[A-Za-z_][A-Za-z0-9_]*\.)+([A-Za-z_][A-Za-z0-9_]*)\(\)$`)
 var knownGOOS = map[string]bool{
 	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
 	"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true, "netbsd": true,
@@ -353,17 +349,14 @@ func explicitSymbols(proposal string) []string {
 	var symbols []string
 	for _, match := range backtickPattern.FindAllStringSubmatch(proposal, -1) {
 		value := strings.TrimSpace(match[1])
-		if sourceExtensions[strings.ToLower(path.Ext(value))] {
-			continue
+		parsed := bareSymbolPattern.FindStringSubmatch(value)
+		if len(parsed) != 2 {
+			parsed = qualifiedCallPattern.FindStringSubmatch(value)
 		}
-		parsed := explicitSymbolPattern.FindStringSubmatch(value)
 		if len(parsed) != 2 {
 			continue
 		}
 		symbol := parsed[1]
-		if dot := strings.LastIndexByte(symbol, '.'); dot >= 0 {
-			symbol = symbol[dot+1:]
-		}
 		if !seen[symbol] {
 			seen[symbol] = true
 			symbols = append(symbols, symbol)

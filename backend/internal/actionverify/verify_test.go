@@ -153,3 +153,15 @@ func TestVerifyRecursiveDefinitionIsInconclusive(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 }
+
+func TestVerifyIgnoresBacktickedArtifactNames(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/main.go": "package pkg\n",
+	})}, Input{
+		Proposal:      "Implement `MissingHelper`. Evidence: `junit.xml` and `sigs.k8s.io/module/x.go`.",
+		RelevantFiles: []string{"pkg/main.go"},
+	})
+	if result.State != StateUnresolved {
+		t.Fatalf("result = %+v", result)
+	}
+}
