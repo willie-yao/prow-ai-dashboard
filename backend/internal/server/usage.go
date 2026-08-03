@@ -182,20 +182,20 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	pricingHashes := map[string]bool{}
 	var recent []aiusage.OperationUsage
 	for _, ledger := range ledgers {
-		if ledger.Currency != "" {
-			currencies[ledger.Currency] = true
-		}
 		for _, day := range ledger.Days {
 			date, err := time.Parse(time.DateOnly, day.Date)
 			if err != nil || date.Before(start) || date.After(end) {
 				continue
 			}
-			for _, hash := range day.PricingHashes {
-				if hash != "" {
-					pricingHashes[hash] = true
-				}
-			}
 			if len(featureFilter) == 0 {
+				if day.Totals.Operations > 0 && ledger.Currency != "" {
+					currencies[ledger.Currency] = true
+				}
+				for _, hash := range day.PricingHashes {
+					if hash != "" {
+						pricingHashes[hash] = true
+					}
+				}
 				totals := dayTotals[day.Date]
 				addUsageTotals(&totals, day.Totals)
 				dayTotals[day.Date] = totals
@@ -208,6 +208,9 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				addUsageTotals(&featureTotal, values)
 				featureTotals[feature] = featureTotal
 				if len(featureFilter) > 0 {
+					if values.Operations > 0 && ledger.Currency != "" {
+						currencies[ledger.Currency] = true
+					}
 					dayTotal := dayTotals[day.Date]
 					addUsageTotals(&dayTotal, values)
 					dayTotals[day.Date] = dayTotal
@@ -223,6 +226,14 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				continue
 			}
 			recent = append(recent, operation)
+			if len(featureFilter) > 0 {
+				if operation.Currency != "" {
+					currencies[operation.Currency] = true
+				}
+				if operation.PricingHash != "" {
+					pricingHashes[operation.PricingHash] = true
+				}
+			}
 		}
 	}
 	var totals aiusage.UsageTotals

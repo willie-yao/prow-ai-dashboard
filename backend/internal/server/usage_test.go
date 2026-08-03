@@ -117,3 +117,16 @@ func TestBuildUsageReportDefaultsToThirtyDays(t *testing.T) {
 		t.Fatalf("range=%s..%s", start, end)
 	}
 }
+
+func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	ledgers := []aiusage.UsageLedger{
+		{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}, aiusage.FeatureAnalysisChat: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}}, PricingHashes: []string{"failure-price"}}}, RecentOperations: []aiusage.OperationUsage{{ID: "chat", Feature: aiusage.FeatureAnalysisChat, Currency: "USD", PricingHash: "chat-price", CompletedAt: "2026-08-02T12:00:00Z"}}},
+		{Version: 1, Currency: "EUR", Days: []aiusage.DailyUsage{{Date: "2026-07-01", Totals: aiusage.UsageTotals{Operations: 1}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1}}, PricingHashes: []string{"eur-price"}}}},
+	}
+	report := buildUsageReport(ledgers, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end)
+	if report.Currency != "USD" || report.MixedCurrency || report.MixedPricing || report.Coverage.Status != "complete" {
+		t.Fatalf("report = %+v", report)
+	}
+}

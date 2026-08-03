@@ -238,7 +238,11 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		trace.Finish("error", err)
-		usageOutcome = aiusage.OutcomeError
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			usageOutcome = aiusage.OutcomeCancelled
+		} else {
+			usageOutcome = aiusage.OutcomeError
+		}
 		return err
 	}
 	tc.AISummary = summary

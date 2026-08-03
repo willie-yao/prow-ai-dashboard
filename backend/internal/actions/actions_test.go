@@ -278,8 +278,12 @@ func TestPreviewFixWithContextHonorsMinConfidence(t *testing.T) {
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
 		Repo: &project.SourceRepo{Owner: "o", Name: "r"}, MinConfidence: "high",
 	}}}
+	usage, usageErr := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
+	if usageErr != nil {
+		t.Fatal(usageErr)
+	}
 	service := NewService(cfg, t.TempDir(), AIConfig{
-		API: "chat_completions", Endpoint: "https://ai.example/v1/chat/completions", Model: "model", Token: "token",
+		API: "chat_completions", Endpoint: "https://ai.example/v1/chat/completions", Model: "model", Token: "token", UsageRecorder: usage,
 	})
 	_, err := service.PreviewFixWithContext(
 		t.Context(), pattern, "token", "", FixTarget{JobID: "periodic-x", BuildID: "123"}, fixpr.GenerationContext{
@@ -291,6 +295,10 @@ func TestPreviewFixWithContextHonorsMinConfidence(t *testing.T) {
 	)
 	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "not auto-fixable") {
 		t.Fatalf("error = %v", err)
+	}
+	snapshot := usage.Snapshot()
+	if len(snapshot.RecentOperations) != 1 || snapshot.RecentOperations[0].Feature != aiusage.FeatureFixPreview || snapshot.RecentOperations[0].Outcome != aiusage.OutcomeError {
+		t.Fatalf("usage = %+v", snapshot)
 	}
 }
 

@@ -313,7 +313,9 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		Correlation: aiusage.Correlation{JobID: jobID, TestName: subject},
 	})
 	defer func() {
-		if resultErr != nil {
+		if errors.Is(resultErr, context.Canceled) || errors.Is(resultErr, context.DeadlineExceeded) {
+			usageOutcome = aiusage.OutcomeCancelled
+		} else if resultErr != nil {
 			usageOutcome = aiusage.OutcomeError
 		}
 		usageOperation.Finish(usageOutcome)
@@ -345,6 +347,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				if options.OnCacheHit != nil {
 					options.OnCacheHit()
 				}
+				usageOutcome = aiusage.OutcomeCacheHit
 				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures), cachedData.FileLinks, cachedData.SourceRef), nil
 			}
 		}

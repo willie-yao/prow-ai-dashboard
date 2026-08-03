@@ -732,7 +732,6 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 		return PreviewResult{}, nil, err
 	}
 	analysis := subject.Build.Failure.AIAnalysis
-	aiusage.MarkExternalUnmetered(ctx)
 	gf, err := mgr.GenerateBuildPreview(ctx, fixpr.BuildFailure{
 		ID: subject.ID, JobID: subject.Build.JobID, JobName: subject.Build.JobName, BuildID: subject.Build.Build.BuildID,
 		RootCause: analysis.RootCause, SuggestedFix: analysis.SuggestedFix, RelevantFiles: subject.Build.RelevantFiles, SourceFiles: sourceFiles,
@@ -780,7 +779,6 @@ func (s *Service) generateFixPreviewForPattern(
 		return PreviewResult{}, nil, err
 	}
 	var gf *fixpr.GeneratedFix
-	aiusage.MarkExternalUnmetered(ctx)
 	if generationContext == nil {
 		gf, err = mgr.GeneratePreview(ctx, pattern, instruction)
 	} else {
@@ -830,7 +828,15 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 // PreviewFixWithContext generates a fix from one validated selected chat response.
 func (s *Service) PreviewFixWithContext(
 	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
-) (PreviewResult, error) {
+) (_ PreviewResult, resultErr error) {
+	logicalID := actionRequestID(ctx)
+	if logicalID == "" {
+		logicalID = pattern.ID
+	}
+	ctx, usageOperation := aiusage.Begin(ctx, s.ai.UsageRecorder, aiusage.Metadata{
+		LogicalID: logicalID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview,
+	})
+	defer func() { usageOperation.Finish(actionUsageOutcome(resultErr)) }()
 	if strings.TrimSpace(target.JobID) == "" || strings.TrimSpace(target.BuildID) == "" ||
 		pattern.JobID != target.JobID || !slices.Contains(pattern.SharedBuilds, target.BuildID) {
 		return PreviewResult{}, ErrPatternMismatch

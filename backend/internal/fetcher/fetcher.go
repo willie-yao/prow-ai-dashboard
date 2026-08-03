@@ -1046,7 +1046,6 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{
 		LogicalID: "scheduled-fix-prs", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFixPreview,
 	})
-	aiusage.MarkExternalUnmetered(ctx)
 	stats, err := mgr.Reconcile(ctx, patterns)
 	usageOperation.Finish(fetcherUsageOutcome(err))
 	if err != nil {
