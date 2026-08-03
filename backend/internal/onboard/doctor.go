@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -472,7 +473,8 @@ func doctorRestrictedSourceRanges(ranges []string) bool {
 	}
 	for _, cidr := range ranges {
 		cidr = strings.TrimSpace(cidr)
-		if cidr == "" || cidr == "0.0.0.0/0" || cidr == "::/0" {
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil || prefix.Bits() == 0 {
 			return false
 		}
 	}

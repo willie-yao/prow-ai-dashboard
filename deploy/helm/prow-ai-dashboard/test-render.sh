@@ -1256,7 +1256,7 @@ helm install old-reuse-notes "$chart" -n dashboard-test -f "$tmp/values.yaml" -f
   --dry-run=client --debug > "$tmp/old-reuse-notes.yaml" 2>&1
 grep -Fq 'ClusterIP only' "$tmp/old-reuse-notes.yaml"
 
-for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
+for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-range alternate-universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
   invalid_args=()
   want=
   case "$invalid_origin" in
@@ -1270,6 +1270,10 @@ for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-ra
       ;;
     universal-ipv6-range)
       invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=::/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    alternate-universal-ipv6-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0:0:0:0:0:0:0:0/0)
       want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
       ;;
     empty-range)

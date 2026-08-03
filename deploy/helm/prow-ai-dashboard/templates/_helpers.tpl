@@ -144,7 +144,7 @@ call site.
 {{- range $range := $ranges -}}
 {{- $range = trim $range -}}
 {{- if not $range -}}{{- fail "server.service.loadBalancerSourceRanges must not contain empty entries" -}}{{- end -}}
-{{- if or (eq $range "0.0.0.0/0") (eq $range "::/0") -}}
+{{- if regexMatch "/0$" $range -}}
 {{- fail "server.service.loadBalancerSourceRanges must not contain universal CIDRs; remove them and set publicOriginAcknowledged=true for an intentional public origin" -}}
 {{- end -}}
 {{- end -}}
