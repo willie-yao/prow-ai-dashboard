@@ -1191,6 +1191,8 @@ func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) s
 var longCLIFlagRE = regexp.MustCompile(`--[A-Za-z][A-Za-z0-9-]*`)
 var shortCLIFlagRE = regexp.MustCompile(`(^|[[:space:]])(-[A-Za-z][A-Za-z0-9]*)`)
 
+const ungroundedRemediationFallback = "Apply the required remediation outcome using verified project automation, then rerun the failing job."
+
 type cliFlagMatch struct {
 	Value string
 	Start int
@@ -1229,17 +1231,32 @@ func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisR
 	parsed.SearchSuggestions = compactPublishedStrings(suggestions, 50)
 	parsed.RootCause = s.removeUngroundedSourcePaths(parsed.RootCause, "", true)
 	parsed.Summary = s.removeUngroundedSourcePaths(parsed.Summary, "", true)
-	parsed.SuggestedFix = s.removeUngroundedSourcePaths(parsed.SuggestedFix, "verified project automation", false)
+	if s.hasUngroundedSourcePath(parsed.SuggestedFix, false) {
+		parsed.SuggestedFix = ungroundedRemediationFallback
+	}
 	parsed.RootCause = s.removeUngroundedCLIFlags(parsed.RootCause, matchedSkills, "")
 	parsed.Summary = s.removeUngroundedCLIFlags(parsed.Summary, matchedSkills, "")
-	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, "Apply the required remediation outcome using verified project automation, then rerun the failing job.")
+	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, ungroundedRemediationFallback)
 	return parsed
+}
+
+func (s *agentState) sourcePathGrounded(candidate string, allowArtifact bool) bool {
+	clean := strings.ToLower(strings.TrimPrefix(candidate, "./"))
+	return sourceReadMatches(clean, s.readSourceFull) || allowArtifact && readsArtifact(clean, s.readArtifactsFull, s.readArtifactsBase)
+}
+
+func (s *agentState) hasUngroundedSourcePath(text string, allowArtifact bool) bool {
+	for _, candidate := range sourceCitationRE.FindAllString(text, -1) {
+		if !s.sourcePathGrounded(candidate, allowArtifact) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *agentState) removeUngroundedSourcePaths(text, replacement string, allowArtifact bool) string {
 	return sourceCitationRE.ReplaceAllStringFunc(text, func(candidate string) string {
-		clean := strings.ToLower(strings.TrimPrefix(candidate, "./"))
-		if sourceReadMatches(clean, s.readSourceFull) || allowArtifact && readsArtifact(clean, s.readArtifactsFull, s.readArtifactsBase) {
+		if s.sourcePathGrounded(candidate, allowArtifact) {
 			return candidate
 		}
 		return replacement

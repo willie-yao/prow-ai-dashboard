@@ -452,7 +452,7 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 	return out
 }
 
-var proseLineClaimRE = regexp.MustCompile(`(?i)\blines?\s+L?(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?`)
+var proseLineClaimRE = regexp.MustCompile(`(?i)\blines?\s+(?:number\s+)?L?(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?`)
 var pathLineSuffixRE = regexp.MustCompile(`(?i)(?::(\d+)(?:-(\d+))?|#L(\d+)(?:-L?(\d+))?)\b`)
 var bareLineClaimRE = regexp.MustCompile(`\bL(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?\b`)
 

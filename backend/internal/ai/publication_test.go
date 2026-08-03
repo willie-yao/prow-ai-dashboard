@@ -135,6 +135,17 @@ func TestPreparePublishedAnalysisKeepsGroundedShortFlags(t *testing.T) {
 	}
 }
 
+func TestPreparePublishedAnalysisFallsBackForUngroundedPathInCommand(t *testing.T) {
+	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"kubectl apply -f"}}}
+	parsed := analysisResponse{
+		SuggestedFix: "Run kubectl apply -f guessed.yaml.",
+	}
+	got := state.preparePublishedAnalysis(parsed).SuggestedFix
+	if strings.Contains(got, "kubectl apply") || strings.Contains(got, "guessed.yaml") || !strings.Contains(got, "verified project automation") {
+		t.Fatalf("ungrounded command path was rewritten inline: %q", got)
+	}
+}
+
 func TestPreparePublishedAnalysisRequiresExactFlagGrounding(t *testing.T) {
 	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool --supported-extra"}}}
 	parsed := analysisResponse{SuggestedFix: "Run tool --supported and rerun the job."}
@@ -196,6 +207,7 @@ func TestPathQualifiedAndBareLineClaimsRequireCitations(t *testing.T) {
 		"The failure is at build-log.txt:73.",
 		"The failure is at build-log.txt#L73.",
 		"The failure is at L73.",
+		"The failure is at line number 73.",
 	} {
 		parsed := analysisResponse{RootCause: text, EvidenceCitations: []models.EvidenceCitation{citation}}
 		out := critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence})
