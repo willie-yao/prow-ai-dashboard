@@ -7,8 +7,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	pathpkg "path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -31,7 +33,7 @@ type Result struct {
 	Reason string `json:"reason"`
 }
 
-var implementationPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce)\s+(?:the\s+)?\x60?([A-Za-z_][A-Za-z0-9_]{3,})\x60?`)
+var implementationPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?\s+(?:the\s+)?|add(?:ing)?\s+(?:a\s+)?(?:call\s+to\s+)?|create\s+|define\s+|introduce\s+)\x60?([A-Za-z_][A-Za-z0-9_]{3,})\x60?`)
 var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
 
 func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
@@ -65,15 +67,56 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		if !found {
 			continue
 		}
-		read++
 		if !strings.HasSuffix(path, ".go") {
 			continue
 		}
+		read++
 		file, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
 		if err != nil {
 			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
 		}
 		packageName := file.Name.Name
+		imports := map[string]bool{}
+		for _, spec := range file.Imports {
+			name := ""
+			if spec.Name != nil {
+				name = spec.Name.Name
+			} else if value, err := strconv.Unquote(spec.Path.Value); err == nil {
+				name = pathpkg.Base(value)
+			}
+			if name != "" && name != "." && name != "_" {
+				imports[name] = true
+			}
+		}
+		locals := map[string]bool{}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch value := node.(type) {
+			case *ast.AssignStmt:
+				if value.Tok == token.DEFINE {
+					for _, expr := range value.Lhs {
+						if id, ok := expr.(*ast.Ident); ok {
+							locals[id.Name] = true
+						}
+					}
+				}
+			case *ast.RangeStmt:
+				if id, ok := value.Key.(*ast.Ident); ok {
+					locals[id.Name] = true
+				}
+				if id, ok := value.Value.(*ast.Ident); ok {
+					locals[id.Name] = true
+				}
+			case *ast.ValueSpec:
+				for _, id := range value.Names {
+					locals[id.Name] = true
+				}
+			case *ast.Field:
+				for _, id := range value.Names {
+					locals[id.Name] = true
+				}
+			}
+			return true
+		})
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch value := node.(type) {
 			case *ast.FuncDecl:
@@ -87,7 +130,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 					name = fun.Name
 				case *ast.SelectorExpr:
 					name = fun.Sel.Name
-					if qualifier, ok := fun.X.(*ast.Ident); ok {
+					if qualifier, ok := fun.X.(*ast.Ident); ok && imports[qualifier.Name] && !locals[qualifier.Name] {
 						callPackage = qualifier.Name
 					} else {
 						callPackage = ""

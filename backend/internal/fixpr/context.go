@@ -3,6 +3,7 @@ package fixpr
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -61,7 +62,7 @@ func (c GenerationContext) Validate() error {
 		}
 	}
 	if c.Source != nil {
-		if len(strings.TrimSpace(c.Source.Revision)) != 40 {
+		if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(c.Source.Revision)) {
 			return fmt.Errorf("source revision must be a full commit SHA")
 		}
 		if strings.TrimSpace(c.Source.Finding) == "" || len(c.Source.Finding) > maxContextTextBytes {

@@ -464,7 +464,7 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 			files = append(files, path)
 		}
 	}
-	if !regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(strings.TrimSpace(revision)) {
+	if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(revision)) {
 		return fmt.Errorf("%w: source revision is not an immutable full commit", ErrRemediationInconclusive)
 	}
 	reader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, strings.ToLower(revision), s.ai.SourceToken)

@@ -1267,7 +1267,7 @@ func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	service := NewService(cfg, dataDir, AIConfig{})
 	reader := fakeActionSourceReader{
 		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi_test.go":           "package e2e\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+		"test/e2e/capi_test.go":           "package e2e\nimport \"example/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
 	}
 	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
 		return actionverify.Verify(ctx, reader, input)
