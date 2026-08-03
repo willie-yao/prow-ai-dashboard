@@ -104,7 +104,7 @@ func TestRejectedRefinementRetainsSafePreviewWithoutConfirmation(t *testing.T) {
 	}}
 	service.rmu.Unlock()
 
-	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string, *issues.IssueSpec, string) (PreviewResult, *previewEntry, error) {
+	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string, *issues.IssueSpec, string, string) (PreviewResult, *previewEntry, error) {
 		return PreviewResult{Kind: "issue", Title: safeSpec.Title, Body: safeSpec.Body}, &previewEntry{
 			failureID: pattern.ID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: "o/r", spec: safeSpec,
 		}, ErrDraftRefinementRejected
@@ -147,7 +147,7 @@ func TestAsyncRequestRejectsUnsafeGeneratedDraft(t *testing.T) {
 	}}
 	service.rmu.Unlock()
 
-	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string, *issues.IssueSpec, string) (PreviewResult, *previewEntry, error) {
+	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string, *issues.IssueSpec, string, string) (PreviewResult, *previewEntry, error) {
 		return PreviewResult{Kind: "issue", Title: unsafeSpec.Title, Body: unsafeSpec.Body}, &previewEntry{
 			failureID: pattern.ID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: "o/r", spec: unsafeSpec,
 		}, nil
@@ -197,6 +197,32 @@ func TestRejectedRefinementUsesSupersededIssueSnapshot(t *testing.T) {
 	}
 	if view.Preview.Title != prior.Title || view.Preview.Body != prior.Body {
 		t.Fatalf("fallback changed prior draft: got=%+v want=%+v", view.Preview, prior)
+	}
+}
+
+func TestRefinementRejectsStaleSupersededDraft(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const priorID = "stale-ready"
+	key := issues.KeyPrefixPattern + pattern.JobID
+	prior := issues.IssueSpec{Key: key, Title: "Stale title", Body: "## Summary\nStale body\n\n" + issues.MarkerFor(key)}
+	service.rmu.Lock()
+	service.requests.Requests[priorID] = &actionRequest{
+		ActionRequestView: ActionRequestView{
+			ID: priorID, FailureID: pattern.ID, PatternHash: "stale-hash", Kind: "create-issue", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			Preview: &PreviewResult{Kind: "issue", Title: prior.Title, Body: prior.Body},
+		},
+		Issue: &prior, TargetRepo: "o/r",
+	}
+	service.rmu.Unlock()
+
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "tighten it", priorID); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("stale refinement error = %v", err)
+	}
+	view, err := service.GetRequest(priorID, "alice")
+	if err != nil || view.Status != RequestReady || view.SupersededBy != "" {
+		t.Fatalf("stale source request changed: view=%+v err=%v", view, err)
 	}
 }
 
@@ -255,7 +281,7 @@ func TestCreateRequestSupersedesPendingRequest(t *testing.T) {
 
 	started := make(chan struct{})
 	generatorDone := make(chan struct{})
-	go service.generateRequestWith(blockedID, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _ string) (PreviewResult, *previewEntry, error) {
+	go service.generateRequestWith(blockedID, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
 		close(started)
 		<-ctx.Done()
 		close(generatorDone)
@@ -485,7 +511,7 @@ func TestLoadHidesUnsafeUnknownDraftWithoutChangingOutcome(t *testing.T) {
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 				Preview: &PreviewResult{Kind: "issue", Title: "Unsafe", Body: unsafeBody},
 			},
-			Issue: &issues.IssueSpec{Key: key, Title: "Unsafe", Body: unsafeBody},
+			Issue: &issues.IssueSpec{Key: key, Title: "Unsafe", Body: unsafeBody}, TargetRepo: "o/r",
 		},
 	}}
 	data, _ := json.Marshal(state)
@@ -510,6 +536,12 @@ func TestLoadHidesUnsafeUnknownDraftWithoutChangingOutcome(t *testing.T) {
 	duplicate, err := reloaded.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
 	if err != nil || duplicate.ID != "unsafe-unknown" || duplicate.Status != RequestUnknown {
 		t.Fatalf("unknown request no longer prevented duplicates: view=%+v err=%v", duplicate, err)
+	}
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/7"}
+	reloaded.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	url, err := reloaded.ConfirmRequest(context.Background(), "unsafe-unknown", "alice", "token")
+	if err != nil || url != manager.url {
+		t.Fatalf("unknown request reconciliation failed: url=%q err=%v", url, err)
 	}
 }
 

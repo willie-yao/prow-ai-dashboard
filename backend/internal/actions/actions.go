@@ -476,7 +476,7 @@ func (s *Service) buildFixManager(userToken string) (*fixpr.Manager, error) {
 }
 
 // generateIssuePreview renders an issue draft without caching or posting it.
-func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo string) (PreviewResult, *previewEntry, error) {
+func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo, basePatternHash string) (PreviewResult, *previewEntry, error) {
 	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -493,7 +493,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 	}
 	var final issues.IssueSpec
 	if baseIssue != nil {
-		if baseIssue.Key != spec.Key || (baseTargetRepo != "" && baseTargetRepo != targetRepo) {
+		if basePatternHash == "" || basePatternHash != subject.ContentHash || baseIssue.Key != spec.Key || (baseTargetRepo != "" && baseTargetRepo != targetRepo) {
 			return PreviewResult{}, nil, ErrPreviewTargetChanged
 		}
 		final = *baseIssue
@@ -528,7 +528,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 // PreviewIssue renders the exact issue that would be filed for the failure,
 // without filing it, and caches it for confirmation.
 func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
-	preview, entry, err := s.generateIssuePreview(ctx, failureID, userToken, instruction, nil, "")
+	preview, entry, err := s.generateIssuePreview(ctx, failureID, userToken, instruction, nil, "", "")
 	if err != nil {
 		return PreviewResult{}, err
 	}

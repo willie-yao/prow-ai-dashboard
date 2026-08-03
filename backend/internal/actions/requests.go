@@ -68,13 +68,14 @@ type ActionRequestView struct {
 
 type actionRequest struct {
 	ActionRequestView
-	Instruction    string                      `json:"instruction,omitempty"`
-	Issue          *issues.IssueSpec           `json:"issue,omitempty"`
-	Fix            *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
-	TargetRepo     string                      `json:"target_repo,omitempty"`
-	TargetConfig   string                      `json:"target_config,omitempty"`
-	BaseIssue      *issues.IssueSpec           `json:"base_issue,omitempty"`
-	BaseTargetRepo string                      `json:"base_target_repo,omitempty"`
+	Instruction     string                      `json:"instruction,omitempty"`
+	Issue           *issues.IssueSpec           `json:"issue,omitempty"`
+	Fix             *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	TargetRepo      string                      `json:"target_repo,omitempty"`
+	TargetConfig    string                      `json:"target_config,omitempty"`
+	BaseIssue       *issues.IssueSpec           `json:"base_issue,omitempty"`
+	BaseTargetRepo  string                      `json:"base_target_repo,omitempty"`
+	BasePatternHash string                      `json:"base_pattern_hash,omitempty"`
 }
 
 type actionRequestState struct {
@@ -158,6 +159,7 @@ func (s *Service) loadActionRequests() {
 		}
 		request.BaseIssue = nil
 		request.BaseTargetRepo = ""
+		request.BasePatternHash = ""
 		request.UpdatedAt = nowText
 		changed = true
 	}
@@ -260,7 +262,8 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if kind != "create-issue" && kind != "propose-fix" {
 		return ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
 	}
-	if _, err := s.resolveSubject(failureID); err != nil {
+	subject, err := s.resolveSubject(failureID)
+	if err != nil {
 		return ActionRequestView{}, err
 	}
 
@@ -336,10 +339,15 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	}
 	if superseded != nil {
 		if request.Instruction != "" && kind == "create-issue" && superseded.Kind == kind && superseded.Status == RequestReady && superseded.Issue != nil {
+			if superseded.PatternHash == "" || superseded.PatternHash != subject.ContentHash {
+				s.rmu.Unlock()
+				return ActionRequestView{}, ErrPreviewTargetChanged
+			}
 			base := *superseded.Issue
 			base.Labels = slices.Clone(base.Labels)
 			request.BaseIssue = &base
 			request.BaseTargetRepo = superseded.TargetRepo
+			request.BasePatternHash = superseded.PatternHash
 		}
 		supersededStatus = superseded.Status
 		supersededUpdatedAt = superseded.UpdatedAt
@@ -370,16 +378,16 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	return view, nil
 }
 
-type requestPreviewGenerator func(context.Context, string, string, string, string, *issues.IssueSpec, string) (PreviewResult, *previewEntry, error)
+type requestPreviewGenerator func(context.Context, string, string, string, string, *issues.IssueSpec, string, string) (PreviewResult, *previewEntry, error)
 
 func (s *Service) generateRequest(id, userToken string) {
 	s.generateRequestWith(id, userToken, s.generateRequestPreview)
 }
 
-func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo string) (PreviewResult, *previewEntry, error) {
+func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, userToken, instruction string, baseIssue *issues.IssueSpec, baseTargetRepo, basePatternHash string) (PreviewResult, *previewEntry, error) {
 	switch kind {
 	case "create-issue":
-		return s.generateIssuePreview(ctx, failureID, userToken, instruction, baseIssue, baseTargetRepo)
+		return s.generateIssuePreview(ctx, failureID, userToken, instruction, baseIssue, baseTargetRepo, basePatternHash)
 	case "propose-fix":
 		return s.generateFixPreview(ctx, failureID, userToken, instruction)
 	default:
@@ -407,6 +415,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	}
 	failureID, kind, instruction := request.FailureID, request.Kind, request.Instruction
 	baseTargetRepo := request.BaseTargetRepo
+	basePatternHash := request.BasePatternHash
 	var baseIssue *issues.IssueSpec
 	if request.BaseIssue != nil {
 		base := *request.BaseIssue
@@ -415,7 +424,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	}
 	s.rmu.Unlock()
 
-	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction, baseIssue, baseTargetRepo)
+	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction, baseIssue, baseTargetRepo, basePatternHash)
 	fallbackPreview := errors.Is(err, ErrDraftRefinementRejected) && entry != nil
 	if err == nil || fallbackPreview {
 		if validateErr := s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind); validateErr != nil {
@@ -438,6 +447,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	request.BaseIssue = nil
 	request.BaseTargetRepo = ""
+	request.BasePatternHash = ""
 	if err != nil {
 		request.Status = RequestFailed
 		if fallbackPreview {
@@ -574,11 +584,22 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request is being confirmed")
 	}
-	if request.Preview == nil {
+	entryKind := ""
+	if request.Preview != nil {
+		entryKind = request.Preview.Kind
+	} else if reconcileOnly {
+		switch request.Kind {
+		case "create-issue":
+			entryKind = "issue"
+		case "propose-fix":
+			entryKind = gfKind
+		}
+	}
+	if entryKind == "" {
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: request.Preview.Kind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
+	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: entryKind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {
@@ -699,7 +720,7 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 				request.UpdatedAt = now.Format(time.RFC3339)
 				changed = true
 			}
-			if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.Fix != nil || request.EmailError != "" {
+			if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Fix != nil || request.EmailError != "" {
 				request.Error = ""
 				request.Warning = ""
 				request.Preview = nil
@@ -707,6 +728,7 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 				request.Issue = nil
 				request.BaseIssue = nil
 				request.BaseTargetRepo = ""
+				request.BasePatternHash = ""
 				request.Fix = nil
 				request.EmailError = ""
 				changed = true
