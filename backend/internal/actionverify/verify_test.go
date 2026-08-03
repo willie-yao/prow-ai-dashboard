@@ -272,3 +272,21 @@ func TestVerifyDoesNotTreatSourcePathAsSymbol(t *testing.T) {
 		Proposal: "Implement ExistingFix in `pkg/machine_controller.go`.", RelevantFiles: []string{"pkg/fix.go"},
 	}, StateAlreadyPresent)
 }
+
+func TestVerifyDoesNotCountDirectRecursionAsInvocation(t *testing.T) {
+	reader := fakeReader{
+		"main.go": "package main\nfunc ExistingFix(){ ExistingFix() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+}
+
+func TestVerifyIgnoresCamelCaseProseAfterSymbol(t *testing.T) {
+	reader := fakeReader{
+		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ExistingFix using GitHub APIs.", RelevantFiles: []string{"main.go"},
+	}, StateAlreadyPresent)
+}

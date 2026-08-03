@@ -163,6 +163,12 @@ type issuePreviewManager interface {
 
 type issueManagerFactory func(userToken, owner, repo string) issuePreviewManager
 
+type sourceVerificationCall struct {
+	done   chan struct{}
+	result actionverify.Result
+	err    error
+}
+
 // Service runs on-demand actions against the data written to DataDir. It reads
 // jobs/*.json to resolve a failure id and reuses the issue and fix-PR state
 // files alongside them. A mutex serializes state read-modify-write so
@@ -196,6 +202,8 @@ type Service struct {
 	sourceVerifyMu          sync.Mutex
 	sourceVerifications     map[string]actionverify.Result
 	sourceVerificationOrder []string
+	sourceVerificationCalls map[string]*sourceVerificationCall
+	sourceVerifySlots       chan struct{}
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -209,7 +217,9 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
-		sourceVerifications: map[string]actionverify.Result{},
+		sourceVerifications:     map[string]actionverify.Result{},
+		sourceVerificationCalls: map[string]*sourceVerificationCall{},
+		sourceVerifySlots:       make(chan struct{}, 2),
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
@@ -524,22 +534,45 @@ func (s *Service) cachedSourceVerification(
 	key := hex.EncodeToString(sum[:])
 
 	s.sourceVerifyMu.Lock()
-	defer s.sourceVerifyMu.Unlock()
 	if result, ok := s.sourceVerifications[key]; ok {
+		s.sourceVerifyMu.Unlock()
 		return result, nil
 	}
-	var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
-	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
-	if err != nil {
-		return actionverify.Result{}, err
+	if call := s.sourceVerificationCalls[key]; call != nil {
+		s.sourceVerifyMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return actionverify.Result{}, ctx.Err()
+		case <-call.done:
+			return call.result, call.err
+		}
 	}
-	if len(s.sourceVerificationOrder) >= maxCachedVerifications {
-		delete(s.sourceVerifications, s.sourceVerificationOrder[0])
-		s.sourceVerificationOrder = s.sourceVerificationOrder[1:]
+	call := &sourceVerificationCall{done: make(chan struct{})}
+	s.sourceVerificationCalls[key] = call
+	s.sourceVerifyMu.Unlock()
+
+	select {
+	case s.sourceVerifySlots <- struct{}{}:
+		var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
+		call.result, call.err = s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
+		<-s.sourceVerifySlots
+	case <-ctx.Done():
+		call.err = ctx.Err()
 	}
-	s.sourceVerifications[key] = result
-	s.sourceVerificationOrder = append(s.sourceVerificationOrder, key)
-	return result, nil
+
+	s.sourceVerifyMu.Lock()
+	if call.err == nil {
+		if len(s.sourceVerificationOrder) >= maxCachedVerifications {
+			delete(s.sourceVerifications, s.sourceVerificationOrder[0])
+			s.sourceVerificationOrder = s.sourceVerificationOrder[1:]
+		}
+		s.sourceVerifications[key] = call.result
+		s.sourceVerificationOrder = append(s.sourceVerificationOrder, key)
+	}
+	delete(s.sourceVerificationCalls, key)
+	close(call.done)
+	s.sourceVerifyMu.Unlock()
+	return call.result, call.err
 }
 
 // buildFixManager builds the fix-PR manager for the source repo using

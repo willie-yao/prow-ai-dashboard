@@ -197,8 +197,8 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 }
 
 const (
-	maxSourceArchiveBytes         = 128 << 20
-	maxSourceArchiveExpandedBytes = 512 << 20
+	maxSourceArchiveBytes         = 32 << 20
+	maxSourceArchiveExpandedBytes = 256 << 20
 	maxSourceFileBytes            = 8 << 20
 )
 

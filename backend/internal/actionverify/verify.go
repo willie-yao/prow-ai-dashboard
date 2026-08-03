@@ -57,7 +57,7 @@ type packageResolver struct {
 	modules []moduleRoot
 }
 
-var implementationClausePattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce|call(?:ing)?|use|using|invoke|invoking)\b([^.!?;\n]{0,256})`)
+var implementationVerbPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce|call(?:ing)?|invoke|invoking)\b`)
 var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{3,}$`)
 var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]{3,})\x60`)
@@ -218,17 +218,28 @@ func implementationSymbols(proposal string) map[string]bool {
 		}
 		return strings.Repeat(" ", len(span))
 	})
-	for _, match := range implementationClausePattern.FindAllStringSubmatch(proposal, -1) {
-		clause := match[1]
-		for _, quoted := range quotedIdentifierPattern.FindAllStringSubmatch(clause, -1) {
-			if identifierPattern.MatchString(quoted[1]) {
-				symbols[quoted[1]] = true
-			}
+	for _, location := range implementationVerbPattern.FindAllStringIndex(proposal, -1) {
+		end := location[1] + 256
+		if end > len(proposal) {
+			end = len(proposal)
 		}
-		clause = backtickSpanPattern.ReplaceAllString(clause, " ")
+		clause := proposal[location[1]:end]
+		if boundary := strings.IndexAny(clause, ".!?;\n"); boundary >= 0 {
+			clause = clause[:boundary]
+		}
+		quoted := quotedIdentifierPattern.FindAllStringSubmatch(clause, -1)
+		if len(quoted) > 0 {
+			for _, match := range quoted {
+				if identifierPattern.MatchString(match[1]) {
+					symbols[match[1]] = true
+				}
+			}
+			continue
+		}
 		for _, candidate := range identifierTokenPattern.FindAllString(clause, -1) {
 			if codeLikeIdentifier(candidate) {
 				symbols[candidate] = true
+				break
 			}
 		}
 	}
@@ -352,6 +363,63 @@ func (r packageResolver) packageID(filePath string) string {
 	return "repo:" + dir
 }
 
+type sourceEvidenceVisitor struct {
+	symbols         map[string]bool
+	evidence        *sourceEvidence
+	packageID       string
+	imports         map[string]string
+	hasDotImport    bool
+	currentFunction string
+}
+
+func (v *sourceEvidenceVisitor) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+	switch value := node.(type) {
+	case *ast.FuncDecl:
+		if v.symbols[value.Name.Name] {
+			markPackage(v.evidence.definitions, value.Name.Name, v.packageID)
+		}
+		child := *v
+		child.currentFunction = ""
+		if value.Recv == nil {
+			child.currentFunction = value.Name.Name
+		}
+		return &child
+	case *ast.CallExpr:
+		name, callPackage, ambiguous := "", "", false
+		switch fun := value.Fun.(type) {
+		case *ast.Ident:
+			name = fun.Name
+			switch {
+			case fun.Obj != nil && fun.Obj.Kind != ast.Fun:
+				ambiguous = true
+			case fun.Obj == nil && v.hasDotImport:
+				ambiguous = true
+			default:
+				callPackage = v.packageID
+			}
+		case *ast.SelectorExpr:
+			name = fun.Sel.Name
+			qualifier, ok := fun.X.(*ast.Ident)
+			if ok && qualifier.Obj == nil {
+				callPackage = v.imports[qualifier.Name]
+			}
+			ambiguous = callPackage == ""
+		}
+		if !v.symbols[name] || name == v.currentFunction && callPackage == v.packageID {
+			return v
+		}
+		if ambiguous {
+			v.evidence.ambiguousSelectors[name] = true
+		} else if callPackage != "" {
+			markPackage(v.evidence.calls, name, callPackage)
+		}
+	}
+	return v
+}
+
 func inspectGoSource(path, content string, symbols map[string]bool, resolver packageResolver, evidence *sourceEvidence) (string, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
 	if err != nil {
@@ -377,44 +445,10 @@ func inspectGoSource(path, content string, symbols map[string]bool, resolver pac
 			imports[alias] = "module:" + importPath + "#" + pathpkg.Base(importPath)
 		}
 	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch value := node.(type) {
-		case *ast.FuncDecl:
-			if symbols[value.Name.Name] {
-				markPackage(evidence.definitions, value.Name.Name, packageID)
-			}
-		case *ast.CallExpr:
-			name, callPackage, ambiguous := "", "", false
-			switch fun := value.Fun.(type) {
-			case *ast.Ident:
-				name = fun.Name
-				switch {
-				case fun.Obj != nil && fun.Obj.Kind != ast.Fun:
-					ambiguous = true
-				case fun.Obj == nil && hasDotImport:
-					ambiguous = true
-				default:
-					callPackage = packageID
-				}
-			case *ast.SelectorExpr:
-				name = fun.Sel.Name
-				qualifier, ok := fun.X.(*ast.Ident)
-				if ok && qualifier.Obj == nil {
-					callPackage = imports[qualifier.Name]
-				}
-				ambiguous = callPackage == ""
-			}
-			if !symbols[name] {
-				break
-			}
-			if ambiguous {
-				evidence.ambiguousSelectors[name] = true
-			} else if callPackage != "" {
-				markPackage(evidence.calls, name, callPackage)
-			}
-		}
-		return true
-	})
+	ast.Walk(&sourceEvidenceVisitor{
+		symbols: symbols, evidence: evidence, packageID: packageID,
+		imports: imports, hasDotImport: hasDotImport,
+	}, file)
 	return packageID, nil
 }
 

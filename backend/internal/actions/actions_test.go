@@ -1438,3 +1438,61 @@ func TestIssuePreflightChecksFinalDraft(t *testing.T) {
 		t.Fatalf("verified proposals = %v", proposals)
 	}
 }
+
+func TestSourceVerificationRunsIndependentKeysConcurrently(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		started <- struct{}{}
+		<-release
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	errs := make(chan error, 2)
+	for _, proposal := range []string{"Implement FirstHelper.", "Implement SecondHelper."} {
+		proposal := proposal
+		go func() {
+			_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), proposal, []string{"main.go"})
+			errs <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("independent source verification did not start concurrently")
+		}
+	}
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestSourceVerificationWaitHonorsContext(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		close(started)
+		<-release
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
+		leaderDone <- err
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := service.cachedSourceVerification(ctx, "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting verification error = %v", err)
+	}
+	close(release)
+	if err := <-leaderDone; err != nil {
+		t.Fatal(err)
+	}
+}
