@@ -381,3 +381,13 @@ func TestVerifyUsesDeclaredPackageNameForVersionedImport(t *testing.T) {
 		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"fix.go", "sub/use.go"},
 	}, StateAlreadyPresent)
 }
+
+func TestVerifyAllowsMissingSymbolInConstrainedGroundedFile(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":                 "module example\n",
+		"target/main_windows.go": "package target\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"target/main_windows.go"},
+	}, StateUnresolved)
+}

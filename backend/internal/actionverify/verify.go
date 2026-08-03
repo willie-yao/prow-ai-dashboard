@@ -181,7 +181,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		}
 		for symbol := range symbols {
 			anchors[symbol][packageID] = true
-			if constrained {
+			if constrained && (len(target.definitions[symbol]) > 0 || len(target.calls[symbol]) > 0 || target.ambiguousSelectors[symbol]) {
 				constrainedSymbols[symbol] = true
 			}
 		}
