@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -313,5 +314,48 @@ func TestRecorderAllowsCurrencyChangeAfterPricedDataExpires(t *testing.T) {
 	}
 	if snapshot := changed.Snapshot(); snapshot.Currency != "EUR" || len(snapshot.Days) != 0 || len(snapshot.DedupeOperations) != 0 {
 		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestOperationMarksOverflowUnreported(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 10)
+	ctx, operation := Begin(t.Context(), recorder, Metadata{LogicalID: "overflow", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: now})
+	ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: math.MaxInt})
+	ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: math.MaxInt})
+	got := operation.Finish(OutcomeSuccess)
+	if got.ModelRequests != 2 || got.ReportedRequests != 1 || got.UnreportedRequests != 1 || got.InputTokens != int64(math.MaxInt) || !got.UsageInvalid {
+		t.Fatalf("operation = %+v", got)
+	}
+}
+
+func TestSnapshotExpiresIdleLedgerAndPersistsIt(t *testing.T) {
+	current := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "usage.json")
+	pricing, err := NewPriceTable(Rates{Currency: "USD", InputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRecorder(path, RecorderOptions{RetentionDays: 1, RecentOperations: 10, Pricing: pricing, Now: func() time.Time { return current }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := current.Format(time.RFC3339Nano)
+	recorder.Record(OperationUsage{ID: "0011223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess})
+	current = current.AddDate(0, 0, 2)
+	snapshot := recorder.Snapshot()
+	if len(snapshot.Days) != 0 || len(snapshot.RecentOperations) != 0 || len(snapshot.DedupeOperations) != 0 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted UsageLedger
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Days) != 0 || len(persisted.RecentOperations) != 0 || len(persisted.DedupeOperations) != 0 {
+		t.Fatalf("persisted = %+v", persisted)
 	}
 }

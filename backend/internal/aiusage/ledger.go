@@ -274,13 +274,24 @@ func (r *Recorder) hasRetainedCostLocked() bool {
 	return false
 }
 
-// Snapshot returns an independent deterministic copy of the current ledger.
+// Snapshot enforces retention and returns an independent deterministic copy.
 func (r *Recorder) Snapshot() UsageLedger {
 	if r == nil {
 		return UsageLedger{Version: LedgerVersion, Days: []DailyUsage{}, RecentOperations: []OperationUsage{}, DedupeOperations: map[string]OperationUsage{}}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	beforeDays, beforeRecent, beforeDedupe := len(r.ledger.Days), len(r.ledger.RecentOperations), len(r.ledger.DedupeOperations)
+	r.pruneLocked()
+	r.truncateRecentLocked()
+	if beforeDays != len(r.ledger.Days) || beforeRecent != len(r.ledger.RecentOperations) || beforeDedupe != len(r.ledger.DedupeOperations) {
+		r.ledger.UpdatedAt = r.now().UTC().Format(time.RFC3339Nano)
+		if r.path != "" {
+			if err := r.write(r.path, r.ledger); err != nil {
+				r.logf("⚠ AI usage ledger retention write failed: %v", err)
+			}
+		}
+	}
 	data, _ := json.Marshal(r.ledger)
 	var out UsageLedger
 	_ = json.Unmarshal(data, &out)

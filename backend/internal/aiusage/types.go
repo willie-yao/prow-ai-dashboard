@@ -104,6 +104,7 @@ type OperationUsage struct {
 	ReasoningTokens    int64       `json:"reasoning_tokens,omitempty"`
 	EstimatedCostNanos int64       `json:"estimated_cost_nanos,omitempty"`
 	ExternalUnmetered  bool        `json:"external_unmetered,omitempty"`
+	UsageInvalid       bool        `json:"usage_invalid,omitempty"`
 	Correlation        Correlation `json:"correlation,omitempty"`
 }
 

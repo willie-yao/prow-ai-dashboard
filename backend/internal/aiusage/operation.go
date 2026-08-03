@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -69,20 +70,40 @@ func ObserveModelRequest(ctx context.Context, usage TokenUsage) {
 	if op.finished {
 		return
 	}
-	op.usage.ModelRequests++
-	if usage.Reported {
-		op.usage.ReportedRequests++
-		input := max(usage.InputTokens, 0)
-		cached := min(max(usage.CachedInputTokens, 0), input)
-		output := max(usage.OutputTokens, 0)
-		reasoning := min(max(usage.ReasoningTokens, 0), output)
-		op.usage.InputTokens += int64(input)
-		op.usage.CachedInputTokens += int64(cached)
-		op.usage.OutputTokens += int64(output)
-		op.usage.ReasoningTokens += int64(reasoning)
-	} else {
-		op.usage.UnreportedRequests++
+	if op.usage.ModelRequests < math.MaxInt {
+		op.usage.ModelRequests++
 	}
+	if !usage.Reported {
+		op.usage.UnreportedRequests++
+		return
+	}
+	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.CachedInputTokens > usage.InputTokens ||
+		usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.ReasoningTokens > usage.OutputTokens {
+		op.usage.UnreportedRequests++
+		op.usage.UsageInvalid = true
+		return
+	}
+	input, inputOK := checkedTokenAdd(op.usage.InputTokens, usage.InputTokens)
+	cached, cachedOK := checkedTokenAdd(op.usage.CachedInputTokens, usage.CachedInputTokens)
+	output, outputOK := checkedTokenAdd(op.usage.OutputTokens, usage.OutputTokens)
+	reasoning, reasoningOK := checkedTokenAdd(op.usage.ReasoningTokens, usage.ReasoningTokens)
+	if !inputOK || !cachedOK || !outputOK || !reasoningOK {
+		op.usage.UnreportedRequests++
+		op.usage.UsageInvalid = true
+		return
+	}
+	op.usage.ReportedRequests++
+	op.usage.InputTokens = input
+	op.usage.CachedInputTokens = cached
+	op.usage.OutputTokens = output
+	op.usage.ReasoningTokens = reasoning
+}
+
+func checkedTokenAdd(current int64, value int) (int64, bool) {
+	if value < 0 || current > math.MaxInt64-int64(value) {
+		return current, false
+	}
+	return current + int64(value), true
 }
 
 // MarkExternalUnmetered records model work performed outside ai.Client.
