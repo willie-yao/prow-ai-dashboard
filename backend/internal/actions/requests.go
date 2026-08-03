@@ -110,12 +110,20 @@ func (s *Service) loadActionRequests() {
 	changed := s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
-		if request.Status == RequestPending {
-			request.Status = RequestFailed
-			request.Error = "server restarted before draft generation completed"
-			request.UpdatedAt = nowText
-			changed = true
+		if request.Status != RequestPending {
+			continue
 		}
+		request.Status = RequestFailed
+		if request.BaseIssue != nil && strings.TrimSpace(request.BaseIssue.Title) != "" && strings.TrimSpace(request.BaseIssue.Body) != "" {
+			request.Warning = draftRefinementWarning
+			request.Preview = &PreviewResult{Kind: "issue", Title: request.BaseIssue.Title, Body: request.BaseIssue.Body}
+		} else {
+			request.Error = "server restarted before draft generation completed"
+		}
+		request.BaseIssue = nil
+		request.BaseTargetRepo = ""
+		request.UpdatedAt = nowText
+		changed = true
 	}
 	if changed {
 		if err := statefile.WriteJSON(s.requestStatePath(), state); err != nil {

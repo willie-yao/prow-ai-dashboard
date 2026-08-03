@@ -329,6 +329,43 @@ func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 	}
 }
 
+func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
+	service, _ := requestTestService(t)
+	now := time.Now().UTC()
+	base := &issues.IssueSpec{Key: "pattern::periodic-x", Title: "Reviewed title", Body: "## What happened\nReviewed body"}
+	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+		"request-refine": {
+			ActionRequestView: ActionRequestView{
+				ID: "request-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			},
+			BaseIssue: base, BaseTargetRepo: "o/r",
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("request-refine", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != RequestFailed || view.Warning == "" || view.Error != "" || view.Preview == nil {
+		t.Fatalf("view = %+v", view)
+	}
+	if view.Preview.Title != base.Title || view.Preview.Body != base.Body {
+		t.Fatalf("fallback = %+v, want %+v", view.Preview, base)
+	}
+	reloaded.rmu.Lock()
+	persisted := reloaded.requests.Requests["request-refine"]
+	reloaded.rmu.Unlock()
+	if persisted.BaseIssue != nil || persisted.BaseTargetRepo != "" {
+		t.Fatalf("internal fallback fields were not cleared: %+v", persisted)
+	}
+}
+
 func TestCancelReadyRequest(t *testing.T) {
 	service, pattern := requestTestService(t)
 	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
