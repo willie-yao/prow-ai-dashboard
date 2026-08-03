@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1060,7 +1061,14 @@ func TestCreateRequestDoesNotDeduplicateDifferentInstruction(t *testing.T) {
 
 func TestCleanupRetriesAfterRuntimeBecomesAvailable(t *testing.T) {
 	service, pattern := requestTestService(t)
-	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return nil, nil }
+	fake := &fakeManagedAgentRuntime{}
+	var available atomic.Bool
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
+		if !available.Load() {
+			return nil, nil
+		}
+		return fake, nil
+	}
 	now := time.Now().UTC()
 	const id = "runtime-unavailable"
 	service.requests.Requests[id] = &actionRequest{
@@ -1072,8 +1080,7 @@ func TestCleanupRetriesAfterRuntimeBecomesAvailable(t *testing.T) {
 	if err != nil || view.Status != RequestCancelling {
 		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
 	}
-	fake := &fakeManagedAgentRuntime{}
-	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	available.Store(true)
 	waitRequest(t, service, id, "alice", RequestCancelled)
 }
 
