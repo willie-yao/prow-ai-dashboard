@@ -151,11 +151,15 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 	}{
 		{name: "actions disabled", want: DoctorPass},
 		{name: "cluster ip", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorPass},
+		{name: "chat cluster ip", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorPass},
 		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
+		{name: "chat public load balancer", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
 		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
 		{name: "acknowledged public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    publicOriginAcknowledged: true\n", want: DoctorWarn},
+		{name: "universal source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
+		{name: "internal missing annotations", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
 		{name: "source ranges and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [10.0.0.0/8]\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
-		{name: "internal and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
+		{name: "internal and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n      annotations:\n        example.com/internal: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

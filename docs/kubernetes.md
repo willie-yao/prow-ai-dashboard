@@ -819,7 +819,7 @@ Key values (see `deploy/helm/prow-ai-dashboard/values.yaml` for the full set):
 
 ### Secure server origin topologies
 
-Authenticated actions should not be exposed through an unrestricted origin.
+Authenticated actions and chat should not be exposed through an unrestricted origin.
 Use one of these topologies, in preference order:
 
 1. **ClusterIP behind an in-cluster ingress.** Keep the default Service type,
@@ -833,7 +833,7 @@ Use one of these topologies, in preference order:
 4. **Restricted public LoadBalancer.** Use
    `server.service.loadBalancerSourceRanges` and NetworkPolicy as a last resort.
    If neither source ranges nor an explicit internal origin is configured, the
-   chart rejects authenticated actions unless
+   chart rejects authenticated actions or chat unless
    `server.service.publicOriginAcknowledged=true`.
 
 Example restricted public origin:

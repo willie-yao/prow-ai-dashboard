@@ -345,12 +345,16 @@ type doctorKubernetesValues struct {
 		Actions struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"actions"`
+		Chat struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"chat"`
 		Service struct {
 			Type                     string   `yaml:"type"`
 			LoadBalancerSourceRanges []string `yaml:"loadBalancerSourceRanges"`
 			PublicOriginAcknowledged bool     `yaml:"publicOriginAcknowledged"`
 			Internal                 struct {
-				Enabled bool `yaml:"enabled"`
+				Enabled     bool           `yaml:"enabled"`
+				Annotations map[string]any `yaml:"annotations"`
 			} `yaml:"internal"`
 		} `yaml:"service"`
 	} `yaml:"server"`
@@ -423,8 +427,8 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 }
 
 func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), values doctorKubernetesValues) {
-	if !values.Server.Actions.Enabled {
-		add("Kubernetes origin security", DoctorPass, "authenticated write actions are disabled", "")
+	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled {
+		add("Kubernetes origin security", DoctorPass, "authenticated actions and chat are disabled", "")
 		return
 	}
 	serviceType := strings.TrimSpace(values.Server.Service.Type)
@@ -433,14 +437,18 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 	}
 	switch serviceType {
 	case "ClusterIP":
-		add("Kubernetes origin security", DoctorPass, "authenticated actions use a ClusterIP Service", "")
+		add("Kubernetes origin security", DoctorPass, "authenticated server features use a ClusterIP Service", "")
 	case "LoadBalancer":
-		restricted := values.Server.Service.Internal.Enabled || len(values.Server.Service.LoadBalancerSourceRanges) > 0
+		if values.Server.Service.Internal.Enabled && len(values.Server.Service.Internal.Annotations) == 0 {
+			add("Kubernetes origin security", DoctorWarn, "internal LoadBalancer is enabled without provider annotations", "Set server.service.internal.annotations for the cloud provider and verify that the resulting address is private.")
+			return
+		}
+		restricted := values.Server.Service.Internal.Enabled || doctorRestrictedSourceRanges(values.Server.Service.LoadBalancerSourceRanges)
 		if !restricted {
 			if values.Server.Service.PublicOriginAcknowledged {
-				add("Kubernetes origin security", DoctorWarn, "authenticated actions use an acknowledged public LoadBalancer", "Verify direct origin reachability at runtime and restrict it with source ranges, a private origin, and NetworkPolicy where possible.")
+				add("Kubernetes origin security", DoctorWarn, "authenticated server features use an acknowledged public LoadBalancer", "Verify direct origin reachability at runtime and restrict it with source ranges, a private origin, and NetworkPolicy where possible.")
 			} else {
-				add("Kubernetes origin security", DoctorWarn, "authenticated actions use a public LoadBalancer without source ranges, an explicit internal origin, or acknowledgement", "Prefer ClusterIP, configure an internal LoadBalancer or loadBalancerSourceRanges, and enable NetworkPolicy. Use publicOriginAcknowledged only for an intentional last-resort public origin.")
+				add("Kubernetes origin security", DoctorWarn, "authenticated server features use a public LoadBalancer without source ranges, an explicit internal origin, or acknowledgement", "Prefer ClusterIP, configure an internal LoadBalancer or loadBalancerSourceRanges, and enable NetworkPolicy. Use publicOriginAcknowledged only for an intentional last-resort public origin.")
 			}
 			return
 		}
@@ -448,10 +456,23 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 			add("Kubernetes origin security", DoctorWarn, "the LoadBalancer origin is restricted but NetworkPolicy is disabled", "Enable NetworkPolicy with ingress rules for the expected ingress or proxy path.")
 			return
 		}
-		add("Kubernetes origin security", DoctorPass, "authenticated actions use an origin-restricted LoadBalancer with NetworkPolicy", "")
+		add("Kubernetes origin security", DoctorPass, "authenticated server features use an origin-restricted LoadBalancer with NetworkPolicy", "")
 	default:
-		add("Kubernetes origin security", DoctorWarn, "authenticated actions use Service type "+serviceType, "Prefer ClusterIP behind an ingress or an explicitly restricted LoadBalancer, then verify runtime reachability.")
+		add("Kubernetes origin security", DoctorWarn, "authenticated server features use Service type "+serviceType, "Prefer ClusterIP behind an ingress or an explicitly restricted LoadBalancer, then verify runtime reachability.")
 	}
+}
+
+func doctorRestrictedSourceRanges(ranges []string) bool {
+	if len(ranges) == 0 {
+		return false
+	}
+	for _, cidr := range ranges {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" || cidr == "0.0.0.0/0" || cidr == "::/0" {
+			return false
+		}
+	}
+	return true
 }
 
 func placeholder(value string) bool {

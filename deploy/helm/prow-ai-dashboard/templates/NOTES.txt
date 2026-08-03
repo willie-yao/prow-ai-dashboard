@@ -27,8 +27,8 @@ Service origin:
   NodePort exposes the server on every selected node. Prefer ClusterIP or an
   explicitly restricted LoadBalancer for authenticated actions.
 {{- end }}
-{{- if and .Values.server.actions.enabled (not .Values.networkPolicy.enabled) }}
-  Authenticated actions are enabled while NetworkPolicy is disabled.
+{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled) (not .Values.networkPolicy.enabled) }}
+  Authenticated actions or chat are enabled while NetworkPolicy is disabled.
 {{- end }}
   Service annotations are pass-through configuration, not proof that the
   origin is unreachable. Verify the deployed network path directly.

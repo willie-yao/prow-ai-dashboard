@@ -1180,7 +1180,28 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/
   echo 'authenticated actions accepted an unrestricted public LoadBalancer' >&2
   exit 1
 fi
-grep -Fq 'authenticated actions with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true' "$tmp/service-unrestricted.yaml"
+grep -Fq 'authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true' "$tmp/service-unrestricted.yaml"
+
+cat > "$tmp/origin-chat-unrestricted.yaml" <<'VALUES'
+ai:
+  enabled: true
+  endpoint: http://model.test/v1/chat/completions
+  model: test-model
+  token: test-token
+server:
+  chat:
+    enabled: true
+  actions:
+    mode: proxy
+    admins: [alice]
+  service:
+    type: LoadBalancer
+VALUES
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-chat-unrestricted.yaml" > "$tmp/service-chat-unrestricted.yaml" 2>&1; then
+  echo 'authenticated chat accepted an unrestricted public LoadBalancer' >&2
+  exit 1
+fi
+grep -Fq 'authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true' "$tmp/service-chat-unrestricted.yaml"
 
 cat > "$tmp/origin-acknowledged.yaml" <<'VALUES'
 server:
@@ -1209,13 +1230,25 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 fi
 grep -Fq 'networkPolicy.ingress requires networkPolicy.enabled=true' "$tmp/networkpolicy-disabled-ingress.yaml"
 
-for invalid_origin in ranges-on-clusterip internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
+for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
   invalid_args=()
   want=
   case "$invalid_origin" in
     ranges-on-clusterip)
       invalid_args=(--set server.service.loadBalancerSourceRanges[0]=10.0.0.0/8)
       want='server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer'
+      ;;
+    universal-ipv4-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0.0.0.0/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    universal-ipv6-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=::/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    empty-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set-string server.service.loadBalancerSourceRanges[0]=)
+      want='server.service.loadBalancerSourceRanges must not contain empty entries'
       ;;
     internal-without-annotations)
       invalid_args=(--set server.service.type=LoadBalancer --set server.service.internal.enabled=true)

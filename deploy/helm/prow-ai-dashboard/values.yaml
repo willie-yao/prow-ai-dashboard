@@ -314,7 +314,7 @@ server:
     internal:
       enabled: false
       annotations: {}
-    # A public LoadBalancer with authenticated write actions must either set
+    # A public LoadBalancer with authenticated actions or chat must either set
     # source ranges, use internal.enabled, or explicitly acknowledge the risk.
     # Acknowledgement does not prove that the origin is unreachable directly.
     publicOriginAcknowledged: false
