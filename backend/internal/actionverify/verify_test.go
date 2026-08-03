@@ -329,3 +329,37 @@ func TestVerifyRequiresEverySymbolInSingleClause(t *testing.T) {
 		Proposal: "Implement ExistingFix and MissingHelper.", RelevantFiles: []string{"main.go"},
 	}, StateUnresolved)
 }
+
+func TestVerifyBuildConstrainedEvidenceIsInconclusive(t *testing.T) {
+	for name, constrainedFile := range map[string]string{
+		"filename":  "target/fix_windows.go",
+		"directive": "target/fix_tagged.go",
+	} {
+		t.Run(name, func(t *testing.T) {
+			content := "package target\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n"
+			if name == "directive" {
+				content = "//go:build custom\n\n" + content
+			}
+			reader := fakeReader{
+				"go.mod":         "module example\n",
+				"target/main.go": "package target\n",
+				constrainedFile:  content,
+			}
+			verifyState(t, reader, Input{
+				Proposal: "Implement ExistingFix.", RelevantFiles: []string{"target/main.go"},
+			}, StateInconclusive)
+		})
+	}
+}
+
+func TestVerifyDoesNotCombineMutuallyExclusiveFiles(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":                "module example\n",
+		"target/main.go":        "package target\n",
+		"target/fix_windows.go": "package target\nfunc ExistingFix(){}\n",
+		"target/use_linux.go":   "package target\nfunc use(){ ExistingFix() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"target/main.go"},
+	}, StateInconclusive)
+}

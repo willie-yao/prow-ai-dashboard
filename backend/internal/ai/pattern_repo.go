@@ -81,6 +81,7 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 func (r *githubRepoReader) resolvedRef() string { r.mu.Lock(); defer r.mu.Unlock(); return r.ref }
 
 var githubAPIBase = "https://api.github.com"
+var githubArchiveHost = "codeload.github.com"
 
 // NewGitHubRepoReader binds a reader to owner/repo at ref. Empty ref means the
 // default branch (HEAD). Empty token falls back to anonymous access. The
@@ -227,7 +228,29 @@ func (r *githubRepoReader) readArchive(ctx context.Context, ref string, wanted m
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "prow-ai-dashboard")
-	resp, err := r.client.Do(req)
+	client := *r.client
+	previousRedirect := client.CheckRedirect
+	client.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 source archive redirects")
+		}
+		if previousRedirect != nil {
+			if err := previousRedirect(redirect, via); err != nil {
+				return err
+			}
+		}
+		if r.token == "" || len(via) == 0 {
+			return nil
+		}
+		targetHost := redirect.URL.Hostname()
+		sameOrigin := strings.EqualFold(redirect.URL.Scheme, via[0].URL.Scheme) && strings.EqualFold(redirect.URL.Host, via[0].URL.Host)
+		if !sameOrigin && (redirect.URL.Scheme != "https" || !strings.EqualFold(targetHost, githubArchiveHost)) {
+			return fmt.Errorf("refusing authenticated source archive redirect to %s", redirect.URL.Host)
+		}
+		redirect.Header.Set("Authorization", "Bearer "+r.token)
+		return nil
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

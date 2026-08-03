@@ -72,6 +72,16 @@ var sourceExtensions = map[string]bool{
 	".tmpl": true, ".ts": true, ".tsx": true, ".txt": true, ".xml": true, ".yaml": true,
 	".yml": true, ".zsh": true,
 }
+var constrainedGOOS = map[string]bool{
+	"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
+	"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true, "netbsd": true,
+	"openbsd": true, "plan9": true, "solaris": true, "wasip1": true, "windows": true, "zos": true,
+}
+var constrainedGOARCH = map[string]bool{
+	"386": true, "amd64": true, "arm": true, "arm64": true, "loong64": true, "mips": true,
+	"mips64": true, "mips64le": true, "mipsle": true, "ppc64": true, "ppc64le": true,
+	"riscv64": true, "s390x": true, "sparc64": true, "wasm": true,
+}
 
 func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if reader == nil {
@@ -147,6 +157,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		calls:              map[string]map[string]bool{},
 		ambiguousSelectors: map[string]bool{},
 	}
+	constrainedSymbols := map[string]bool{}
 	inspected := map[string]bool{}
 	anchors := map[string]map[string]bool{}
 	for symbol := range symbols {
@@ -156,12 +167,22 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		if !strings.HasSuffix(path, ".go") {
 			continue
 		}
-		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, &evidence)
+		constrained := isBuildConstrained(path, contents[path])
+		target := &evidence
+		if constrained {
+			target = &sourceEvidence{
+				definitions: map[string]map[string]bool{}, calls: map[string]map[string]bool{}, ambiguousSelectors: map[string]bool{},
+			}
+		}
+		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, target)
 		if err != nil {
 			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
 		}
 		for symbol := range symbols {
 			anchors[symbol][packageID] = true
+			if constrained {
+				constrainedSymbols[symbol] = true
+			}
 		}
 		inspected[path] = true
 	}
@@ -177,7 +198,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		return alreadyPresentResult(symbols), nil
 	}
 	for _, path := range goPaths {
-		if inspected[path] {
+		if inspected[path] || !containsCandidateIdentifier(contents[path], symbols) {
 			continue
 		}
 		extra := sourceEvidence{
@@ -185,12 +206,23 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 			calls:              map[string]map[string]bool{},
 			ambiguousSelectors: map[string]bool{},
 		}
-		if !containsCandidateIdentifier(contents[path], symbols) {
-			continue
-		}
 		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, &extra)
 		if err != nil {
 			return Result{State: StateInconclusive, Reason: "pinned Go source could not be parsed exhaustively"}, nil
+		}
+		if isBuildConstrained(path, contents[path]) {
+			for symbol := range symbols {
+				for candidatePackage := range extra.definitions[symbol] {
+					constrainedSymbols[symbol] = constrainedSymbols[symbol] || anchors[symbol][candidatePackage]
+				}
+				for candidatePackage := range extra.calls[symbol] {
+					constrainedSymbols[symbol] = constrainedSymbols[symbol] || anchors[symbol][candidatePackage]
+				}
+				if extra.ambiguousSelectors[symbol] && anchors[symbol][packageID] {
+					constrainedSymbols[symbol] = true
+				}
+			}
+			continue
 		}
 		mergeAnchoredEvidence(&evidence, extra, packageID, anchors, symbols)
 	}
@@ -201,11 +233,37 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		if symbolMatched(symbol, evidence) {
 			continue
 		}
+		if constrainedSymbols[symbol] {
+			return Result{State: StateInconclusive, Reason: fmt.Sprintf("matching evidence for %s is build constrained", symbol)}, nil
+		}
 		if evidence.ambiguousSelectors[symbol] || packageIdentityAmbiguous(symbol, evidence) {
 			return Result{State: StateInconclusive, Reason: fmt.Sprintf("selector identity for %s could not be resolved", symbol)}, nil
 		}
 	}
 	return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the pinned source"}, nil
+}
+
+func isBuildConstrained(filePath, content string) bool {
+	base := strings.TrimSuffix(pathpkg.Base(filePath), ".go")
+	base = strings.TrimSuffix(base, "_test")
+	parts := strings.Split(base, "_")
+	if len(parts) > 1 {
+		suffix := parts[len(parts)-1]
+		if constrainedGOOS[suffix] || constrainedGOARCH[suffix] {
+			return true
+		}
+	}
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "//go:build ") || strings.HasPrefix(line, "// +build ") {
+			return true
+		}
+		if strings.HasPrefix(line, "package ") {
+			break
+		}
+	}
+	return false
 }
 
 // HasImplementationSymbols reports whether proposal names code-like remediation symbols.

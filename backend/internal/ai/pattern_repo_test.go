@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -158,5 +159,62 @@ func TestGitHubRepoReaderRejectsTruncatedTree(t *testing.T) {
 	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "")
 	if _, err := reader.ListTree(context.Background()); err == nil || !strings.Contains(err.Error(), "truncated") {
 		t.Fatalf("ListTree error = %v", err)
+	}
+}
+
+func TestGitHubRepoReaderForwardsPrivateTokenToCodeload(t *testing.T) {
+	const token = "read-token-value"
+	archive := sourceArchive(t, map[string]string{"go.mod": "module example/repo\n"})
+	var apiAuth, archiveAuth string
+	archiveServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		archiveAuth = r.Header.Get("Authorization")
+		_, _ = w.Write(archive)
+	}))
+	defer archiveServer.Close()
+	archiveURL, err := url.Parse(archiveServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiAuth = r.Header.Get("Authorization")
+		http.Redirect(w, r, archiveServer.URL+"/archive.tar.gz", http.StatusFound)
+	}))
+	defer apiServer.Close()
+
+	oldAPI, oldArchiveHost := githubAPIBase, githubArchiveHost
+	githubAPIBase, githubArchiveHost = apiServer.URL, archiveURL.Hostname()
+	t.Cleanup(func() { githubAPIBase, githubArchiveHost = oldAPI, oldArchiveHost })
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token).(*githubRepoReader)
+	reader.client = archiveServer.Client()
+	files, err := reader.ReadFiles(context.Background(), []string{"go.mod"})
+	if err != nil || files["go.mod"] != "module example/repo\n" {
+		t.Fatalf("files=%v err=%v", files, err)
+	}
+	if apiAuth != "Bearer "+token || archiveAuth != "Bearer "+token {
+		t.Fatalf("authorization api=%q archive=%q", apiAuth, archiveAuth)
+	}
+}
+
+func TestGitHubRepoReaderRejectsUnexpectedPrivateArchiveRedirect(t *testing.T) {
+	redirected := false
+	archiveServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected = true
+	}))
+	defer archiveServer.Close()
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, archiveServer.URL+"/archive.tar.gz", http.StatusFound)
+	}))
+	defer apiServer.Close()
+
+	oldAPI, oldArchiveHost := githubAPIBase, githubArchiveHost
+	githubAPIBase, githubArchiveHost = apiServer.URL, "codeload.github.com"
+	t.Cleanup(func() { githubAPIBase, githubArchiveHost = oldAPI, oldArchiveHost })
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", "read-token-value").(*githubRepoReader)
+	reader.client = archiveServer.Client()
+	if _, err := reader.ReadFiles(context.Background(), []string{"go.mod"}); err == nil || !strings.Contains(err.Error(), "refusing authenticated source archive redirect") {
+		t.Fatalf("ReadFiles error = %v", err)
+	}
+	if redirected {
+		t.Fatal("unexpected redirect received authenticated request")
 	}
 }
