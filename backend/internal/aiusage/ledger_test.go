@@ -26,6 +26,16 @@ func testRecorder(t *testing.T, path string, now time.Time, recent int) *Recorde
 	return recorder
 }
 
+func TestBeginHashesOpaqueStableIDs(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 10)
+	_, first := Begin(t.Context(), recorder, Metadata{ID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	_, second := Begin(t.Context(), recorder, Metadata{ID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	if first == nil || second == nil || first.usage.ID != second.usage.ID || first.usage.ID == "request-123" || len(first.usage.ID) != 32 {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+}
+
 func TestOperationRecordsProviderUsage(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 10)

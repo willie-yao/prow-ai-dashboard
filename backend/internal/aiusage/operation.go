@@ -3,6 +3,7 @@ package aiusage
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"sync"
@@ -125,16 +126,25 @@ func randomID() string {
 }
 
 func safeOperationID(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if len(value) < 16 || len(value) > 64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return ""
 	}
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && r != '-' {
-			return ""
+	normalized := strings.ToLower(value)
+	if len(normalized) >= 16 && len(normalized) <= 64 {
+		valid := true
+		for _, r := range normalized {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') && r != '-' {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return normalized
 		}
 	}
-	return value
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:16])
 }
 
 func safeFingerprint(value string) string {
