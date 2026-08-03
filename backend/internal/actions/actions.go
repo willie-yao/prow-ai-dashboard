@@ -41,6 +41,9 @@ var ErrNotFound = errors.New("failure not found")
 // ErrPreviewRejected means generation safely declined an actionable fix preview.
 var ErrPreviewRejected = errors.New("fix preview rejected")
 
+// ErrDraftRefinementRejected means a replacement issue draft failed validation.
+var ErrDraftRefinementRejected = errors.New("draft refinement rejected")
+
 // ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
 var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
 
@@ -495,13 +498,22 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 	}
 	title, body := issues.RenderSpec(ctx, filler, spec)
 	final := issues.IssueSpec{Key: spec.Key, Title: title, Body: body, Labels: spec.Labels}
+	preview := PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body}
+	entry := &previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}
 	if strings.TrimSpace(instruction) != "" {
-		if c := s.aiClient(); c != nil {
-			final = issues.ReviseBody(ctx, c, final, instruction)
+		c := s.aiClient()
+		if c == nil {
+			return preview, entry, fmt.Errorf("%w: AI is unavailable", ErrDraftRefinementRejected)
 		}
+		revised, reviseErr := issues.ReviseBody(ctx, c, final, instruction)
+		if reviseErr != nil {
+			return preview, entry, fmt.Errorf("%w: safe structured revision was not produced", ErrDraftRefinementRejected)
+		}
+		final = revised
+		preview = PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body}
+		entry.spec = final
 	}
-	return PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body},
-		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}, nil
+	return preview, entry, nil
 }
 
 // PreviewIssue renders the exact issue that would be filed for the failure,

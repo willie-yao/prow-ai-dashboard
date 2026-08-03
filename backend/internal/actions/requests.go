@@ -36,6 +36,8 @@ const (
 	RequestExpired   = "expired"
 )
 
+const draftRefinementWarning = "The revised draft was rejected because it did not match the required safe structure. The previous valid draft is shown below, but this replacement request cannot be confirmed."
+
 var ErrRequestNotFound = errors.New("action request not found")
 
 // RequestReadyNotifier sends a draft-ready notification after async generation.
@@ -53,6 +55,7 @@ type ActionRequestView struct {
 	UpdatedAt    string         `json:"updated_at"`
 	ExpiresAt    string         `json:"expires_at"`
 	Error        string         `json:"error,omitempty"`
+	Warning      string         `json:"warning,omitempty"`
 	ResultURL    string         `json:"result_url,omitempty"`
 	SupersededBy string         `json:"superseded_by,omitempty"`
 	Preview      *PreviewResult `json:"preview,omitempty"`
@@ -298,8 +301,12 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	s.rmu.Unlock()
 
 	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction)
-	if err == nil {
-		err = s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind)
+	fallbackPreview := errors.Is(err, ErrDraftRefinementRejected) && entry != nil
+	if err == nil || fallbackPreview {
+		if validateErr := s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind); validateErr != nil {
+			err = validateErr
+			fallbackPreview = false
+		}
 	}
 
 	s.rmu.Lock()
@@ -311,7 +318,12 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err != nil {
 		request.Status = RequestFailed
-		request.Error = safeReason(err.Error())
+		if fallbackPreview {
+			request.Warning = draftRefinementWarning
+			request.Preview = &preview
+		} else {
+			request.Error = safeReason(err.Error())
+		}
 	} else {
 		request.Status = RequestReady
 		request.Preview = &preview
@@ -565,8 +577,9 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 				request.UpdatedAt = now.Format(time.RFC3339)
 				changed = true
 			}
-			if request.Error != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.Fix != nil || request.EmailError != "" {
+			if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.Fix != nil || request.EmailError != "" {
 				request.Error = ""
+				request.Warning = ""
 				request.Preview = nil
 				request.Instruction = ""
 				request.Issue = nil

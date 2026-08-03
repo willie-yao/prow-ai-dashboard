@@ -91,6 +91,46 @@ func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 	}
 }
 
+func TestRejectedRefinementRetainsSafePreviewWithoutConfirmation(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const requestID = "unsafe-refinement"
+	safeSpec := issues.IssueSpec{Key: "pattern::safe", Title: "Safe title", Body: "## What happened\nSafe body\n\n" + issues.MarkerFor("pattern::safe")}
+	service.rmu.Lock()
+	service.requests.Requests[requestID] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: requestID, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice",
+		Status: RequestPending, CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
+		ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	service.rmu.Unlock()
+
+	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string) (PreviewResult, *previewEntry, error) {
+		return PreviewResult{Kind: "issue", Title: safeSpec.Title, Body: safeSpec.Body}, &previewEntry{
+			failureID: pattern.ID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: "o/r", spec: safeSpec,
+		}, ErrDraftRefinementRejected
+	})
+
+	view, err := service.GetRequest(requestID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != RequestFailed || view.Warning == "" || view.Preview == nil {
+		t.Fatalf("view = %+v", view)
+	}
+	if view.Preview.Body != safeSpec.Body || strings.Contains(strings.ToLower(view.Preview.Body), "the user wants me") {
+		t.Fatalf("unsafe content reached preview: %+v", view.Preview)
+	}
+	service.rmu.Lock()
+	persisted := service.requests.Requests[requestID]
+	service.rmu.Unlock()
+	if persisted.Issue != nil {
+		t.Fatal("failed replacement retained a confirmable issue payload")
+	}
+	if _, err := service.ConfirmRequest(context.Background(), requestID, "alice", "token"); err == nil || !strings.Contains(err.Error(), RequestFailed) {
+		t.Fatalf("ConfirmRequest() error = %v", err)
+	}
+}
+
 func TestCreateRequestSupersedesReadyRequest(t *testing.T) {
 	service, pattern := requestTestService(t)
 	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
@@ -99,7 +139,7 @@ func TestCreateRequestSupersedesReadyRequest(t *testing.T) {
 	}
 	waitRequest(t, service, created.ID, "alice", RequestReady)
 
-	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "mention IPv6", created.ID)
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +194,7 @@ func TestCreateRequestSupersedesPendingRequest(t *testing.T) {
 	})
 	<-started
 
-	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "replacement", blockedID)
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", blockedID)
 	if err != nil {
 		t.Fatal(err)
 	}
