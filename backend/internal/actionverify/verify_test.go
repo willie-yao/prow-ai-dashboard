@@ -247,6 +247,36 @@ func TestVerifyStructuredJSONConfigurationMapping(t *testing.T) {
 	}
 }
 
+func TestVerifyStructuredINICommentsAndUnknownFormats(t *testing.T) {
+	for name, test := range map[string]struct {
+		filePath string
+		content  string
+		want     string
+	}{
+		"commented INI value": {
+			filePath: "config/features.ini",
+			content:  "# GenericWorkload=true\n",
+			want:     StateUnresolved,
+		},
+		"unknown format": {
+			filePath: "config/features.data",
+			content:  "# GenericWorkload=true\n",
+			want:     StateInconclusive,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := verify(t, fakeReader{archive: archive(map[string]string{test.filePath: test.content})}, Input{Targets: []models.RemediationTarget{{
+				Intent: models.RemediationIntentSetConfiguration,
+				Path:   test.filePath,
+				Value:  "GenericWorkload=true",
+			}}})
+			if result.State != test.want {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
 func TestVerifyStructuredInvestigationRemainsInconclusive(t *testing.T) {
 	result := verify(t, fakeReader{archive: archive(map[string]string{})}, Input{Targets: []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}}})
 	if result.State != StateInconclusive {

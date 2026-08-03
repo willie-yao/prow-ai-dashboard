@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 // fakeRepoReader is a tools.RepoReader test double over a fixed file set.
@@ -168,6 +170,13 @@ func TestPatternFileLinksIncludeOnlyReadCitations(t *testing.T) {
 	links, ref := s.patternFileLinks(patternResponse{SuggestedFix: "Update config/controller.yaml and config/guessed.yaml."}, []string{"config/controller.yaml"})
 	if links["config/controller.yaml"] != "https://github.com/o/r/blob/HEAD/config/controller.yaml" || links["config/guessed.yaml"] != "" || ref != "o/r@HEAD" {
 		t.Fatalf("links=%v ref=%q", links, ref)
+	}
+}
+
+func TestPatternTargetsAcceptCanonicalizedReadPaths(t *testing.T) {
+	targets := []models.RemediationTarget{{Intent: models.RemediationIntentModifySymbol, Symbol: "Fix", Path: "pkg/fix.go"}}
+	if !patternTargetsWereRead(targets, []string{"./pkg/fix.go"}) {
+		t.Fatal("canonical target did not match normalized repository read")
 	}
 }
 

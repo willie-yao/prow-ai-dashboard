@@ -505,7 +505,10 @@ func (s *Service) patternFileLinks(p patternResponse, reads []string) (map[strin
 func patternTargetsWereRead(targets []models.RemediationTarget, reads []string) bool {
 	read := make(map[string]bool, len(reads))
 	for _, value := range reads {
-		read[value] = true
+		value = path.Clean(strings.TrimPrefix(strings.TrimSpace(value), "./"))
+		if value != "" && value != "." {
+			read[value] = true
+		}
 	}
 	for _, target := range targets {
 		if target.Path != "" && !read[target.Path] {

@@ -478,7 +478,10 @@ func verifyConfiguration(ctx context.Context, reader Reader, archive Archive, ta
 	if !ok {
 		return inconclusive(fmt.Sprintf("remediation path %s was not found", target.Path)), nil
 	}
-	present := configurationValuePresent(target.Path, content, target.Value)
+	present, supported := configurationValuePresent(target.Path, content, target.Value)
+	if !supported {
+		return inconclusive(fmt.Sprintf("configuration format for %s is unsupported", target.Path)), nil
+	}
 	switch target.Intent {
 	case models.RemediationIntentSetConfiguration:
 		if present {
@@ -602,24 +605,27 @@ func symbolDeclarationKind(filePath, content, symbol string) (declarationKind, e
 	return declarationMissing, nil
 }
 
-func configurationValuePresent(filePath, content, value string) bool {
+func configurationValuePresent(filePath, content, value string) (bool, bool) {
 	value = strings.TrimSpace(value)
 	key, expected, assignment := strings.Cut(value, "=")
 	if !assignment {
-		return false
+		return false, true
 	}
 	key, expected = strings.TrimSpace(key), strings.TrimSpace(expected)
 	switch strings.ToLower(path.Ext(filePath)) {
 	case ".yaml", ".yml":
 		if present, parsed := yamlConfigurationValuePresent(content, key, expected); parsed {
-			return present
+			return present, true
 		}
 	case ".json":
 		if present, parsed := jsonConfigurationValuePresent(content, key, expected); parsed {
-			return present
+			return present, true
 		}
 	}
-	markers := configCommentMarkers(filePath)
+	markers, supported := configCommentMarkers(filePath)
+	if !supported {
+		return false, false
+	}
 	pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])` + regexp.QuoteMeta(key) + `\s*=\s*` + regexp.QuoteMeta(expected) + `(?:\s|[,\]}"']|$)`)
 	mappingPattern := regexp.MustCompile(`(^|[\s{,\-])["']?` + regexp.QuoteMeta(key) + `["']?\s*:\s*["']?` + regexp.QuoteMeta(expected) + `["']?(?:\s|[,\]}]|$)`)
 	for _, line := range strings.Split(content, "\n") {
@@ -628,10 +634,10 @@ func configurationValuePresent(filePath, content, value string) bool {
 			continue
 		}
 		if pattern.MatchString(line) || mappingPattern.MatchString(line) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 func yamlConfigurationValuePresent(content, key, expected string) (bool, bool) {
@@ -740,20 +746,26 @@ func assignmentTokenPresent(content, key, expected string) bool {
 	return pattern.MatchString(content)
 }
 
-func configCommentMarkers(filePath string) []string {
+func configCommentMarkers(filePath string) ([]string, bool) {
 	switch strings.ToLower(path.Ext(filePath)) {
-	case ".yaml", ".yml", ".toml", ".cfg", ".conf", ".sh", ".py", ".star", ".bzl":
-		return []string{"#"}
+	case ".yaml", ".yml", ".toml", ".cfg", ".conf", ".sh", ".py", ".star", ".bzl", ".env":
+		return []string{"#"}, true
+	case ".ini":
+		return []string{"#", ";"}, true
+	case ".properties":
+		return []string{"#", "!"}, true
 	case ".go", ".js", ".jsx", ".ts", ".tsx", ".java", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp", ".proto":
-		return []string{"//"}
+		return []string{"//"}, true
+	case ".json":
+		return nil, true
 	case ".tpl":
-		return []string{"#", "//"}
+		return []string{"#", "//"}, true
 	default:
 		base := strings.ToLower(path.Base(filePath))
 		if base == "dockerfile" || base == "makefile" {
-			return []string{"#"}
+			return []string{"#"}, true
 		}
-		return nil
+		return nil, false
 	}
 }
 
