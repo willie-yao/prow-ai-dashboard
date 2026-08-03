@@ -370,3 +370,14 @@ func TestVerifyRequiresMixedQuotedAndUnquotedSymbols(t *testing.T) {
 		Proposal: "Implement MissingHelper and call `ExistingFix`.", RelevantFiles: []string{"main.go"},
 	}, StateUnresolved)
 }
+
+func TestVerifyUsesDeclaredPackageNameForVersionedImport(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":     "module example.com/lib/v2\n",
+		"fix.go":     "package lib\nfunc ExistingFix(){}\n",
+		"sub/use.go": "package sub\nimport \"example.com/lib/v2\"\nfunc use(){ lib.ExistingFix() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"fix.go", "sub/use.go"},
+	}, StateAlreadyPresent)
+}

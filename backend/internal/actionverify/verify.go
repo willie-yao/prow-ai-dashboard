@@ -54,7 +54,8 @@ type moduleRoot struct {
 }
 
 type packageResolver struct {
-	modules []moduleRoot
+	modules      []moduleRoot
+	packageNames map[string]string
 }
 
 var implementationVerbPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce|call(?:ing)?|invoke|invoking)\b`)
@@ -151,7 +152,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 			return Result{State: StateInconclusive, Reason: fmt.Sprintf("pinned source path %s was not found", path)}, nil
 		}
 	}
-	resolver := newPackageResolver(contents, modulePaths)
+	resolver := newPackageResolver(contents, modulePaths, goPaths)
 	evidence := sourceEvidence{
 		definitions:        map[string]map[string]bool{},
 		calls:              map[string]map[string]bool{},
@@ -425,7 +426,7 @@ func readSourceFiles(ctx context.Context, reader Reader, paths []string) (map[st
 	return contents, nil
 }
 
-func newPackageResolver(contents map[string]string, modulePaths []string) packageResolver {
+func newPackageResolver(contents map[string]string, modulePaths, goPaths []string) packageResolver {
 	modules := make([]moduleRoot, 0, len(modulePaths))
 	for _, path := range modulePaths {
 		modulePath := parseModulePath(contents[path])
@@ -439,7 +440,25 @@ func newPackageResolver(contents map[string]string, modulePaths []string) packag
 		modules = append(modules, moduleRoot{dir: dir, path: modulePath})
 	}
 	sort.Slice(modules, func(i, j int) bool { return len(modules[i].dir) > len(modules[j].dir) })
-	return packageResolver{modules: modules}
+	resolver := packageResolver{modules: modules, packageNames: map[string]string{}}
+	conflicts := map[string]bool{}
+	for _, path := range goPaths {
+		file, err := parser.ParseFile(token.NewFileSet(), path, contents[path], parser.PackageClauseOnly)
+		if err != nil || strings.HasSuffix(file.Name.Name, "_test") {
+			continue
+		}
+		packagePath := resolver.packageID(path)
+		if conflicts[packagePath] {
+			continue
+		}
+		if previous := resolver.packageNames[packagePath]; previous != "" && previous != file.Name.Name {
+			delete(resolver.packageNames, packagePath)
+			conflicts[packagePath] = true
+			continue
+		}
+		resolver.packageNames[packagePath] = file.Name.Name
+	}
+	return resolver
 }
 
 func parseModulePath(content string) string {
@@ -562,7 +581,12 @@ func inspectGoSource(path, content string, symbols map[string]bool, resolver pac
 		if err != nil {
 			continue
 		}
-		alias := pathpkg.Base(importPath)
+		packagePath := "module:" + importPath
+		packageName := resolver.packageNames[packagePath]
+		if packageName == "" {
+			packageName = pathpkg.Base(importPath)
+		}
+		alias := packageName
 		if spec.Name != nil {
 			alias = spec.Name.Name
 		}
@@ -571,7 +595,7 @@ func inspectGoSource(path, content string, symbols map[string]bool, resolver pac
 			hasDotImport = true
 		case "", "_":
 		default:
-			imports[alias] = "module:" + importPath + "#" + pathpkg.Base(importPath)
+			imports[alias] = packagePath + "#" + packageName
 		}
 	}
 	ast.Walk(&sourceEvidenceVisitor{
