@@ -59,6 +59,7 @@ backend/                         Go 1.25
 
     -- analysis (the most active area) --
     ai/                          Model transports + the agentic tool-calling loop
+    aiusage/                     Private token usage and cost accounting
       agentic.go                 The loop, finalize branch, floor gates
       toolloop.go                Tool dispatch and transcript management
       service.go                 Cache key, staleness, shouldReanalyze
