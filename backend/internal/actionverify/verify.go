@@ -60,7 +60,7 @@ type packageResolver struct {
 var implementationVerbPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce|call(?:ing)?|invoke|invoking)\b`)
 var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
-var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]*)\x60`)
+var quotedCodePattern = regexp.MustCompile(`^((?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*)(?:\(\))?$`)
 var backtickSpanPattern = regexp.MustCompile(`\x60[^\x60\n]+\x60`)
 var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
 var sourceExtensions = map[string]bool{
@@ -213,7 +213,7 @@ func HasImplementationSymbols(proposal string) bool {
 func implementationSymbols(proposal string) map[string]bool {
 	symbols := map[string]bool{}
 	proposal = backtickSpanPattern.ReplaceAllStringFunc(proposal, func(span string) string {
-		if quotedIdentifierPattern.MatchString(span) {
+		if _, ok := quotedImplementationSymbol(span); ok {
 			return span
 		}
 		return strings.Repeat(" ", len(span))
@@ -224,14 +224,14 @@ func implementationSymbols(proposal string) map[string]bool {
 			end = len(proposal)
 		}
 		clause := proposal[location[1]:end]
-		if boundary := strings.IndexAny(clause, ".!?;\n"); boundary >= 0 {
+		if boundary := implementationClauseBoundary(clause); boundary >= 0 {
 			clause = clause[:boundary]
 		}
-		quoted := quotedIdentifierPattern.FindAllStringSubmatch(clause, -1)
+		quoted := backtickSpanPattern.FindAllString(clause, -1)
 		if len(quoted) > 0 {
-			for _, match := range quoted {
-				if identifierPattern.MatchString(match[1]) {
-					symbols[match[1]] = true
+			for _, span := range quoted {
+				if symbol, ok := quotedImplementationSymbol(span); ok {
+					symbols[symbol] = true
 				}
 			}
 			continue
@@ -244,6 +244,36 @@ func implementationSymbols(proposal string) map[string]bool {
 		}
 	}
 	return symbols
+}
+
+func implementationClauseBoundary(clause string) int {
+	inCode := false
+	for i := range len(clause) {
+		if clause[i] == '`' {
+			inCode = !inCode
+			continue
+		}
+		if !inCode && strings.ContainsRune(".!?;\n", rune(clause[i])) {
+			return i
+		}
+	}
+	return -1
+}
+
+func quotedImplementationSymbol(span string) (string, bool) {
+	value := strings.TrimSpace(strings.Trim(span, "`"))
+	if proposalSourcePath(value) {
+		return "", false
+	}
+	match := quotedCodePattern.FindStringSubmatch(value)
+	if len(match) != 2 {
+		return "", false
+	}
+	symbol := match[1]
+	if dot := strings.LastIndexByte(symbol, '.'); dot >= 0 {
+		symbol = symbol[dot+1:]
+	}
+	return symbol, identifierPattern.MatchString(symbol)
 }
 
 func codeLikeIdentifier(candidate string) bool {

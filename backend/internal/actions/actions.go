@@ -525,7 +525,6 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 func (s *Service) cachedSourceVerification(
 	ctx context.Context, owner, repo, revision, proposal string, files []string,
 ) (actionverify.Result, error) {
-	const maxCachedVerifications = 64
 	payload, _ := json.Marshal(struct {
 		Owner, Repo, Revision, Proposal string
 		Files                           []string
@@ -538,19 +537,31 @@ func (s *Service) cachedSourceVerification(
 		s.sourceVerifyMu.Unlock()
 		return result, nil
 	}
-	if call := s.sourceVerificationCalls[key]; call != nil {
-		s.sourceVerifyMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return actionverify.Result{}, ctx.Err()
-		case <-call.done:
-			return call.result, call.err
-		}
+	call := s.sourceVerificationCalls[key]
+	if call == nil {
+		call = &sourceVerificationCall{done: make(chan struct{})}
+		s.sourceVerificationCalls[key] = call
+		go s.runSourceVerification(context.WithoutCancel(ctx), key, call, owner, repo, revision, proposal, files)
 	}
-	call := &sourceVerificationCall{done: make(chan struct{})}
-	s.sourceVerificationCalls[key] = call
 	s.sourceVerifyMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return actionverify.Result{}, ctx.Err()
+	case <-call.done:
+		return call.result, call.err
+	}
+}
 
+func (s *Service) runSourceVerification(
+	parent context.Context, key string, call *sourceVerificationCall,
+	owner, repo, revision, proposal string, files []string,
+) {
+	const (
+		maxCachedVerifications = 64
+		verificationTimeout    = 2 * time.Minute
+	)
+	ctx, cancel := context.WithTimeout(parent, verificationTimeout)
+	defer cancel()
 	select {
 	case s.sourceVerifySlots <- struct{}{}:
 		var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
@@ -572,7 +583,6 @@ func (s *Service) cachedSourceVerification(
 	delete(s.sourceVerificationCalls, key)
 	close(call.done)
 	s.sourceVerifyMu.Unlock()
-	return call.result, call.err
 }
 
 // buildFixManager builds the fix-PR manager for the source repo using

@@ -299,3 +299,15 @@ func TestVerifyAcceptsShortBacktickedSymbol(t *testing.T) {
 		Proposal: "Implement `Do`.", RelevantFiles: []string{"main.go"},
 	}, StateAlreadyPresent)
 }
+
+func TestVerifyAcceptsBacktickedCallNotation(t *testing.T) {
+	reader := fakeReader{
+		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+	}
+	for _, proposal := range []string{
+		"Implement `ExistingFix()`.",
+		"Implement `pkg.ExistingFix()`.",
+	} {
+		verifyState(t, reader, Input{Proposal: proposal, RelevantFiles: []string{"main.go"}}, StateAlreadyPresent)
+	}
+}

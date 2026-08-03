@@ -1496,3 +1496,34 @@ func TestSourceVerificationWaitHonorsContext(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSourceVerificationSurvivesLeaderCancellation(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		close(started)
+		<-release
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	leaderCtx, cancelLeader := context.WithCancel(t.Context())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := service.cachedSourceVerification(leaderCtx, "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
+		leaderDone <- err
+	}()
+	<-started
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
+		waiterDone <- err
+	}()
+	cancelLeader()
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader error = %v", err)
+	}
+	close(release)
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiter error = %v", err)
+	}
+}
