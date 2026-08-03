@@ -908,8 +908,8 @@ func validateAIUsagePricing(pricing *AIUsagePricing) error {
 	if currency == "" && input == "" && cached == "" && output == "" {
 		return nil
 	}
-	if len(currency) != 3 || strings.ToUpper(currency) != currency {
-		return fmt.Errorf("ai.usage.pricing.currency must be a three-letter uppercase code")
+	if !validAIUsageCurrency(currency) {
+		return fmt.Errorf("ai.usage.pricing.currency must be three ASCII uppercase letters")
 	}
 	if input == "" || output == "" {
 		return fmt.Errorf("ai.usage.pricing requires input_per_million and output_per_million")
@@ -931,6 +931,18 @@ func validateAIUsagePricing(pricing *AIUsagePricing) error {
 		}
 	}
 	return nil
+}
+
+func validAIUsageCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for _, r := range value {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateAIUsageRate(value string) error {

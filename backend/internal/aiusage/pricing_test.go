@@ -15,6 +15,8 @@ func TestNewPriceTable(t *testing.T) {
 		{name: "valid", rates: Rates{Currency: "USD", InputPerMillion: "1.2500", OutputPerMillion: "10"}},
 		{name: "cached", rates: Rates{Currency: "USD", InputPerMillion: "1", CachedInputPerMillion: "0.1", OutputPerMillion: "2"}},
 		{name: "lower currency", rates: Rates{Currency: "usd", InputPerMillion: "1", OutputPerMillion: "2"}, wantErr: true},
+		{name: "numeric currency", rates: Rates{Currency: "123", InputPerMillion: "1", OutputPerMillion: "2"}, wantErr: true},
+		{name: "symbol currency", rates: Rates{Currency: "$$$", InputPerMillion: "1", OutputPerMillion: "2"}, wantErr: true},
 		{name: "missing output", rates: Rates{Currency: "USD", InputPerMillion: "1"}, wantErr: true},
 		{name: "negative", rates: Rates{Currency: "USD", InputPerMillion: "-1", OutputPerMillion: "2"}, wantErr: true},
 		{name: "exponent", rates: Rates{Currency: "USD", InputPerMillion: "1e2", OutputPerMillion: "2"}, wantErr: true},

@@ -38,8 +38,8 @@ func NewPriceTable(rates Rates) (PriceTable, error) {
 	if rates.Currency == "" && rates.InputPerMillion == "" && rates.CachedInputPerMillion == "" && rates.OutputPerMillion == "" {
 		return PriceTable{}, nil
 	}
-	if len(rates.Currency) != 3 || strings.ToUpper(rates.Currency) != rates.Currency {
-		return PriceTable{}, fmt.Errorf("pricing currency must be a three-letter uppercase code")
+	if !validCurrency(rates.Currency) {
+		return PriceTable{}, fmt.Errorf("pricing currency must be three ASCII uppercase letters")
 	}
 	if rates.InputPerMillion == "" || rates.OutputPerMillion == "" {
 		return PriceTable{}, fmt.Errorf("pricing requires input_per_million and output_per_million")
@@ -65,6 +65,18 @@ func NewPriceTable(rates Rates) (PriceTable, error) {
 		currency: rates.Currency, input: input, cachedInput: cached, output: output,
 		hash: hex.EncodeToString(digest[:8]), configured: true,
 	}, nil
+}
+
+func validCurrency(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for _, r := range value {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseRate(value string) (*big.Rat, string, error) {

@@ -1,7 +1,9 @@
 package aiusage
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -43,6 +45,9 @@ func TestOperationRecordsProviderUsage(t *testing.T) {
 	snapshot := recorder.Snapshot()
 	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.ModelRequests != 2 || len(snapshot.RecentOperations) != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if len(snapshot.DedupeOperations) != 1 || snapshot.DedupeOperations[0].StartedAt != "" || snapshot.DedupeOperations[0].Correlation != (Correlation{}) {
+		t.Fatalf("dedupe operation = %+v", snapshot.DedupeOperations)
 	}
 }
 
@@ -115,6 +120,13 @@ func TestNewRecorderRejectsMalformedAndNewerLedgers(t *testing.T) {
 	if _, err := NewRecorder(newer, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {
 		t.Fatal("expected newer-version error")
 	}
+	invalidCurrency := filepath.Join(dir, "invalid-currency.json")
+	if err := os.WriteFile(invalidCurrency, []byte(`{"version":1,"currency":"123","days":[],"recent_operations":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRecorder(invalidCurrency, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {
+		t.Fatal("expected invalid-currency error")
+	}
 }
 
 func TestRecorderWritesPrivateFile(t *testing.T) {
@@ -175,5 +187,73 @@ func TestRecorderConcurrentOperations(t *testing.T) {
 	snapshot := recorder.Snapshot()
 	if snapshot.Days[0].Totals.Operations != 50 || snapshot.Days[0].Totals.InputTokens != 50 {
 		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestRecorderPersistsCurrencyAndRejectsChanges(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "usage.json")
+	recorder := testRecorder(t, path, now, 10)
+	stamp := now.Format(time.RFC3339Nano)
+	got := recorder.Record(OperationUsage{ID: "0011223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, ReportedRequests: 1, InputTokens: 10})
+	if got.Currency != "USD" || recorder.Snapshot().Currency != "USD" {
+		t.Fatalf("operation=%+v ledger=%+v", got, recorder.Snapshot())
+	}
+	eur, err := NewPriceTable(Rates{Currency: "EUR", InputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRecorder(path, RecorderOptions{RetentionDays: 2, RecentOperations: 10, Pricing: eur, Now: func() time.Time { return now }}); err == nil {
+		t.Fatal("expected currency-change error")
+	}
+}
+
+func TestNewRecorderAppliesLoadedPrivacyLimits(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "usage.json")
+	pricing, err := NewPriceTable(Rates{Currency: "USD", InputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRecorder(path, RecorderOptions{RetentionDays: 3, RecentOperations: 3, Pricing: pricing, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, completed := range []time.Time{now.AddDate(0, 0, -2), now.AddDate(0, 0, -1), now} {
+		stamp := completed.Format(time.RFC3339Nano)
+		recorder.Record(OperationUsage{ID: fmt.Sprintf("%016x", i+1), Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess})
+	}
+	loaded, err := NewRecorder(path, RecorderOptions{RetentionDays: 1, RecentOperations: 0, Pricing: pricing, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := loaded.Snapshot()
+	if len(snapshot.Days) != 1 || snapshot.Days[0].Date != "2026-08-03" || len(snapshot.RecentOperations) != 0 || len(snapshot.DedupeOperations) != 1 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted UsageLedger
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Days) != 1 || len(persisted.RecentOperations) != 0 || len(persisted.DedupeOperations) != 1 || persisted.RetentionDays != 1 {
+		t.Fatalf("persisted = %+v", persisted)
+	}
+}
+
+func TestRecorderDeduplicatesEntireRetentionWindow(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 0)
+	stamp := now.Format(time.RFC3339Nano)
+	for i := 0; i < 1001; i++ {
+		recorder.Record(OperationUsage{ID: fmt.Sprintf("%016x", i), Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, InputTokens: 1})
+	}
+	recorder.Record(OperationUsage{ID: "0000000000000000", Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, InputTokens: 10})
+	snapshot := recorder.Snapshot()
+	if snapshot.Days[0].Totals.Operations != 1001 || snapshot.Days[0].Totals.InputTokens != 1010 || len(snapshot.DedupeOperations) != 1001 {
+		t.Fatalf("totals=%+v dedupe=%d", snapshot.Days[0].Totals, len(snapshot.DedupeOperations))
 	}
 }

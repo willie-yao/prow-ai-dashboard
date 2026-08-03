@@ -1182,6 +1182,8 @@ func TestValidateAIUsage(t *testing.T) {
 		{name: "recent negative", usage: &AIUsage{RecentOperations: intPtr(-1)}, wantErr: "recent_operations"},
 		{name: "recent large", usage: &AIUsage{RecentOperations: intPtr(5001)}, wantErr: "recent_operations"},
 		{name: "currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "usd", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
+		{name: "numeric currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "123", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
+		{name: "symbol currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "$$$", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
 		{name: "partial", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1"}}, wantErr: "requires input_per_million and output_per_million"},
 		{name: "negative", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "-1", OutputPerMillion: "2"}}, wantErr: "non-negative decimal"},
 		{name: "exponent", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1e2", OutputPerMillion: "2"}}, wantErr: "non-negative decimal"},

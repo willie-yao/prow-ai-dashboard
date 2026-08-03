@@ -91,6 +91,7 @@ type OperationUsage struct {
 	CompletedAt        string      `json:"completed_at"`
 	Outcome            Outcome     `json:"outcome"`
 	ModelFingerprint   string      `json:"model_fingerprint,omitempty"`
+	Currency           string      `json:"currency,omitempty"`
 	PricingHash        string      `json:"pricing_hash,omitempty"`
 	ModelRequests      int         `json:"model_requests,omitempty"`
 	ReportedRequests   int         `json:"reported_requests,omitempty"`
@@ -115,6 +116,7 @@ type DailyUsage struct {
 type UsageLedger struct {
 	Version           int              `json:"version"`
 	UpdatedAt         string           `json:"updated_at"`
+	Currency          string           `json:"currency,omitempty"`
 	RetentionDays     int              `json:"retention_days"`
 	DroppedOperations int              `json:"dropped_operations,omitempty"`
 	Days              []DailyUsage     `json:"days"`

@@ -15,7 +15,6 @@ import (
 const (
 	DefaultRetentionDays    = 90
 	DefaultRecentOperations = 250
-	defaultDedupeOperations = 1000
 )
 
 // RecorderOptions configure one writer-owned private ledger.
@@ -57,34 +56,53 @@ func NewRecorder(path string, options RecorderOptions) (*Recorder, error) {
 	if options.Logf == nil {
 		options.Logf = log.Printf
 	}
-	ledger, err := loadLedger(path, options.RetentionDays)
+	ledger, existed, err := loadLedger(path, options.RetentionDays)
 	if err != nil {
 		return nil, err
 	}
-	return &Recorder{
+	currency := options.Pricing.Currency()
+	if ledger.Currency != "" && !validCurrency(ledger.Currency) {
+		return nil, fmt.Errorf("usage ledger currency %q is invalid", ledger.Currency)
+	}
+	if ledger.Currency != "" && currency != "" && ledger.Currency != currency {
+		return nil, fmt.Errorf("usage ledger currency %q does not match configured currency %q", ledger.Currency, currency)
+	}
+	if ledger.Currency == "" {
+		ledger.Currency = currency
+	}
+	recorder := &Recorder{
 		path: path, ledger: ledger, recentOperations: options.RecentOperations,
 		pricing: options.Pricing, now: options.Now, write: options.Write, logf: options.Logf,
-	}, nil
+	}
+	recorder.pruneLocked()
+	recorder.truncateRecentLocked()
+	if existed {
+		recorder.ledger.UpdatedAt = recorder.now().UTC().Format(time.RFC3339Nano)
+		if err := recorder.write(path, recorder.ledger); err != nil {
+			return nil, fmt.Errorf("persist usage ledger limits: %w", err)
+		}
+	}
+	return recorder, nil
 }
 
-func loadLedger(path string, retentionDays int) (UsageLedger, error) {
+func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
 	fresh := UsageLedger{Version: LedgerVersion, RetentionDays: retentionDays, Days: []DailyUsage{}, RecentOperations: []OperationUsage{}, DedupeOperations: []OperationUsage{}}
 	if path == "" {
-		return fresh, nil
+		return fresh, false, nil
 	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return fresh, nil
+		return fresh, false, nil
 	}
 	if err != nil {
-		return UsageLedger{}, err
+		return UsageLedger{}, false, err
 	}
 	var ledger UsageLedger
 	if err := json.Unmarshal(data, &ledger); err != nil {
-		return UsageLedger{}, fmt.Errorf("decode usage ledger: %w", err)
+		return UsageLedger{}, false, fmt.Errorf("decode usage ledger: %w", err)
 	}
 	if ledger.Version > LedgerVersion {
-		return UsageLedger{}, fmt.Errorf("usage ledger version %d is newer than supported version %d", ledger.Version, LedgerVersion)
+		return UsageLedger{}, false, fmt.Errorf("usage ledger version %d is newer than supported version %d", ledger.Version, LedgerVersion)
 	}
 	ledger.Version = LedgerVersion
 	ledger.RetentionDays = retentionDays
@@ -97,7 +115,7 @@ func loadLedger(path string, retentionDays int) (UsageLedger, error) {
 	if ledger.DedupeOperations == nil {
 		ledger.DedupeOperations = append([]OperationUsage(nil), ledger.RecentOperations...)
 	}
-	return ledger, nil
+	return ledger, true, nil
 }
 
 // Record prices and persists one completed operation. Persistence failures are
@@ -109,6 +127,19 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	operation = normalizeOperation(operation, r.now())
+	if operation.Currency == "" {
+		operation.Currency = r.pricing.Currency()
+		if operation.Currency == "" {
+			operation.Currency = r.ledger.Currency
+		}
+	}
+	if r.ledger.Currency == "" {
+		r.ledger.Currency = operation.Currency
+	}
+	if operation.EstimatedCostNanos > 0 && operation.Currency != r.ledger.Currency {
+		r.logf("⚠ AI usage cost currency %q does not match ledger currency %q", operation.Currency, r.ledger.Currency)
+		operation.EstimatedCostNanos = 0
+	}
 	if operation.PricingHash == "" {
 		operation.PricingHash = r.pricing.Hash()
 	}
@@ -121,6 +152,7 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 		if err != nil {
 			r.logf("⚠ AI usage cost estimate failed: %v", err)
 		} else {
+			operation.Currency = r.pricing.Currency()
 			operation.EstimatedCostNanos = cost
 		}
 	}
@@ -143,12 +175,7 @@ func (r *Recorder) recordLocked(operation OperationUsage) {
 		}
 	}
 	r.applyLocked(operation, 1)
-	r.ledger.DedupeOperations = append([]OperationUsage{operation}, r.ledger.DedupeOperations...)
-	if len(r.ledger.DedupeOperations) > defaultDedupeOperations {
-		dropped := len(r.ledger.DedupeOperations) - defaultDedupeOperations
-		r.ledger.DedupeOperations = r.ledger.DedupeOperations[:defaultDedupeOperations]
-		r.ledger.DroppedOperations += dropped
-	}
+	r.ledger.DedupeOperations = append([]OperationUsage{dedupeOperation(operation)}, r.ledger.DedupeOperations...)
 	for i, existing := range r.ledger.RecentOperations {
 		if existing.ID == operation.ID {
 			r.ledger.RecentOperations = append(r.ledger.RecentOperations[:i], r.ledger.RecentOperations[i+1:]...)
@@ -157,13 +184,29 @@ func (r *Recorder) recordLocked(operation OperationUsage) {
 	}
 	if r.recentOperations > 0 {
 		r.ledger.RecentOperations = append([]OperationUsage{operation}, r.ledger.RecentOperations...)
-		if len(r.ledger.RecentOperations) > r.recentOperations {
-			dropped := len(r.ledger.RecentOperations) - r.recentOperations
-			r.ledger.RecentOperations = r.ledger.RecentOperations[:r.recentOperations]
-			r.ledger.DroppedOperations += dropped
-		}
 	}
+	r.truncateRecentLocked()
 	r.pruneLocked()
+}
+
+func dedupeOperation(operation OperationUsage) OperationUsage {
+	operation.StartedAt = ""
+	operation.ModelFingerprint = ""
+	operation.Correlation = Correlation{}
+	return operation
+}
+
+func (r *Recorder) truncateRecentLocked() {
+	if r.recentOperations == 0 {
+		r.ledger.DroppedOperations += len(r.ledger.RecentOperations)
+		r.ledger.RecentOperations = []OperationUsage{}
+		return
+	}
+	if len(r.ledger.RecentOperations) > r.recentOperations {
+		dropped := len(r.ledger.RecentOperations) - r.recentOperations
+		r.ledger.RecentOperations = r.ledger.RecentOperations[:r.recentOperations]
+		r.ledger.DroppedOperations += dropped
+	}
 }
 
 func (r *Recorder) applyLocked(operation OperationUsage, direction int64) {
@@ -250,6 +293,9 @@ func normalizeOperation(operation OperationUsage, now time.Time) OperationUsage 
 		operation.Outcome = OutcomeError
 	}
 	operation.ModelFingerprint = safeFingerprint(operation.ModelFingerprint)
+	if !validCurrency(operation.Currency) {
+		operation.Currency = ""
+	}
 	operation.ModelRequests = max(operation.ModelRequests, 0)
 	operation.ReportedRequests = max(operation.ReportedRequests, 0)
 	operation.UnreportedRequests = max(operation.UnreportedRequests, 0)
