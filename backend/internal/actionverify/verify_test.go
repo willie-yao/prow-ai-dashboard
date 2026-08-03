@@ -228,3 +228,21 @@ func TestVerifyIgnoresBacktickedSourceURL(t *testing.T) {
 		Proposal: "Implement MissingHelper using `https://example.test/main.go`.", RelevantFiles: []string{"main.go"},
 	}, StateUnresolved)
 }
+
+func TestVerifyFindsCodeLikeSymbolAfterProse(t *testing.T) {
+	reader := fakeReader{
+		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+	}
+	for _, proposal := range []string{
+		"Implement the missing ExistingFix helper.",
+		"Implement validation by calling ExistingFix.",
+	} {
+		verifyState(t, reader, Input{Proposal: proposal, RelevantFiles: []string{"main.go"}}, StateAlreadyPresent)
+	}
+}
+
+func TestVerifyRejectsAmbiguousProseSymbol(t *testing.T) {
+	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
+		Proposal: "Implement validation for this failure.", RelevantFiles: []string{"main.go"},
+	}, StateInconclusive)
+}

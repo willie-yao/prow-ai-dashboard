@@ -56,7 +56,10 @@ type packageResolver struct {
 	modules []moduleRoot
 }
 
-var implementationPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?\s+(?:the\s+)?|add(?:ing)?\s+(?:a\s+)?(?:call\s+to\s+)?|create\s+|define\s+|introduce\s+)\x60?([A-Za-z_][A-Za-z0-9_]{3,})\x60?`)
+var implementationClausePattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce)\b([^.!?;\n]{0,256})`)
+var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{3,}$`)
+var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
+var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]{3,})\x60`)
 var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
 var sourceExtensions = map[string]bool{
 	".bash": true, ".c": true, ".cc": true, ".cfg": true, ".conf": true, ".cpp": true,
@@ -72,13 +75,9 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if reader == nil {
 		return Result{State: StateInconclusive, Reason: "source reader is unavailable"}, nil
 	}
-	matches := implementationPattern.FindAllStringSubmatch(input.Proposal, -1)
-	if len(matches) == 0 {
-		return Result{State: StateInconclusive, Reason: "proposal does not name an implementation symbol"}, nil
-	}
-	symbols := map[string]bool{}
-	for _, match := range matches {
-		symbols[match[1]] = true
+	symbols := implementationSymbols(input.Proposal)
+	if len(symbols) == 0 {
+		return Result{State: StateInconclusive, Reason: "proposal does not name an unambiguous implementation symbol"}, nil
 	}
 	groundedPaths := append([]string(nil), input.RelevantFiles...)
 	for _, match := range pathPattern.FindAllStringSubmatch(input.Proposal, -1) {
@@ -199,6 +198,44 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		}
 	}
 	return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the pinned source"}, nil
+}
+
+func implementationSymbols(proposal string) map[string]bool {
+	symbols := map[string]bool{}
+	for _, match := range implementationClausePattern.FindAllStringSubmatch(proposal, -1) {
+		clause := match[1]
+		for _, quoted := range quotedIdentifierPattern.FindAllStringSubmatch(clause, -1) {
+			if identifierPattern.MatchString(quoted[1]) {
+				symbols[quoted[1]] = true
+			}
+		}
+		for _, candidate := range identifierTokenPattern.FindAllString(clause, -1) {
+			if codeLikeIdentifier(candidate) {
+				symbols[candidate] = true
+			}
+		}
+	}
+	return symbols
+}
+
+func codeLikeIdentifier(candidate string) bool {
+	if !identifierPattern.MatchString(candidate) {
+		return false
+	}
+	if strings.Contains(candidate, "_") {
+		return true
+	}
+	hasLower := false
+	hasInnerUpper := false
+	for i := range len(candidate) {
+		switch {
+		case candidate[i] >= 'a' && candidate[i] <= 'z':
+			hasLower = true
+		case i > 0 && candidate[i] >= 'A' && candidate[i] <= 'Z':
+			hasInnerUpper = true
+		}
+	}
+	return hasLower && hasInnerUpper
 }
 
 func proposalSourcePath(candidate string) bool {

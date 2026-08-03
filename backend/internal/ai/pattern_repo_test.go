@@ -145,3 +145,18 @@ func sourceArchive(t *testing.T, files map[string]string) []byte {
 	}
 	return output.Bytes()
 }
+
+func TestGitHubRepoReaderRejectsTruncatedTree(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"truncated":true,"tree":[{"path":"partial.go","type":"blob"}]}`))
+	}))
+	defer srv.Close()
+	oldAPI := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = oldAPI })
+
+	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "")
+	if _, err := reader.ListTree(context.Background()); err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("ListTree error = %v", err)
+	}
+}
