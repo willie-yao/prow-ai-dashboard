@@ -58,6 +58,15 @@ type packageResolver struct {
 
 var implementationPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?\s+(?:the\s+)?|add(?:ing)?\s+(?:a\s+)?(?:call\s+to\s+)?|create\s+|define\s+|introduce\s+)\x60?([A-Za-z_][A-Za-z0-9_]{3,})\x60?`)
 var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
+var sourceExtensions = map[string]bool{
+	".bash": true, ".c": true, ".cc": true, ".cfg": true, ".conf": true, ".cpp": true,
+	".css": true, ".go": true, ".h": true, ".hpp": true, ".html": true, ".ini": true,
+	".java": true, ".js": true, ".json": true, ".jsx": true, ".kt": true, ".kts": true,
+	".md": true, ".mod": true, ".proto": true, ".py": true, ".rb": true, ".rs": true,
+	".scss": true, ".sh": true, ".sql": true, ".sum": true, ".toml": true, ".tpl": true,
+	".tmpl": true, ".ts": true, ".tsx": true, ".txt": true, ".xml": true, ".yaml": true,
+	".yml": true, ".zsh": true,
+}
 
 func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if reader == nil {
@@ -73,7 +82,9 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	}
 	groundedPaths := append([]string(nil), input.RelevantFiles...)
 	for _, match := range pathPattern.FindAllStringSubmatch(input.Proposal, -1) {
-		groundedPaths = append(groundedPaths, match[1])
+		if proposalSourcePath(match[1]) {
+			groundedPaths = append(groundedPaths, match[1])
+		}
 	}
 	groundedPaths = compact(groundedPaths)
 	if len(groundedPaths) == 0 {
@@ -133,14 +144,30 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		ambiguousSelectors: map[string]bool{},
 	}
 	inspected := map[string]bool{}
+	anchors := map[string]map[string]bool{}
+	for symbol := range symbols {
+		anchors[symbol] = map[string]bool{}
+	}
 	for _, path := range groundedPaths {
 		if !strings.HasSuffix(path, ".go") {
 			continue
 		}
-		if err := inspectGoSource(path, contents[path], symbols, resolver, &evidence); err != nil {
+		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, &evidence)
+		if err != nil {
 			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
 		}
+		for symbol := range symbols {
+			anchors[symbol][packageID] = true
+		}
 		inspected[path] = true
+	}
+	for symbol := range symbols {
+		for packageID := range evidence.definitions[symbol] {
+			anchors[symbol][packageID] = true
+		}
+		for packageID := range evidence.calls[symbol] {
+			anchors[symbol][packageID] = true
+		}
 	}
 	if allSymbolsMatched(symbols, evidence) {
 		return alreadyPresentResult(symbols), nil
@@ -149,9 +176,16 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		if inspected[path] {
 			continue
 		}
-		if err := inspectGoSource(path, contents[path], symbols, resolver, &evidence); err != nil {
+		extra := sourceEvidence{
+			definitions:        map[string]map[string]bool{},
+			calls:              map[string]map[string]bool{},
+			ambiguousSelectors: map[string]bool{},
+		}
+		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, &extra)
+		if err != nil {
 			return Result{State: StateInconclusive, Reason: "pinned Go source could not be parsed exhaustively"}, nil
 		}
+		mergeAnchoredEvidence(&evidence, extra, packageID, anchors, symbols)
 	}
 	if allSymbolsMatched(symbols, evidence) {
 		return alreadyPresentResult(symbols), nil
@@ -165,6 +199,16 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		}
 	}
 	return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the pinned source"}, nil
+}
+
+func proposalSourcePath(candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	clean := pathpkg.Clean(candidate)
+	if clean == "." || clean == ".." || clean != candidate || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") ||
+		strings.Contains(clean, "\\") || strings.Contains(clean, "://") || strings.ContainsAny(clean, " \t\r\n?#") {
+		return false
+	}
+	return sourceExtensions[strings.ToLower(pathpkg.Ext(clean))]
 }
 
 func readSourceFiles(ctx context.Context, reader Reader, paths []string) (map[string]string, error) {
@@ -239,10 +283,10 @@ func (r packageResolver) packageID(filePath string) string {
 	return "repo:" + dir
 }
 
-func inspectGoSource(path, content string, symbols map[string]bool, resolver packageResolver, evidence *sourceEvidence) error {
+func inspectGoSource(path, content string, symbols map[string]bool, resolver packageResolver, evidence *sourceEvidence) (string, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
 	if err != nil {
-		return err
+		return "", err
 	}
 	packageID := resolver.packageID(path) + "#" + file.Name.Name
 	imports := map[string]string{}
@@ -302,7 +346,25 @@ func inspectGoSource(path, content string, symbols map[string]bool, resolver pac
 		}
 		return true
 	})
-	return nil
+	return packageID, nil
+}
+
+func mergeAnchoredEvidence(target *sourceEvidence, source sourceEvidence, filePackage string, anchors map[string]map[string]bool, symbols map[string]bool) {
+	for symbol := range symbols {
+		for packageID := range source.definitions[symbol] {
+			if anchors[symbol][packageID] {
+				markPackage(target.definitions, symbol, packageID)
+			}
+		}
+		for packageID := range source.calls[symbol] {
+			if anchors[symbol][packageID] {
+				markPackage(target.calls, symbol, packageID)
+			}
+		}
+		if source.ambiguousSelectors[symbol] && anchors[symbol][filePackage] {
+			target.ambiguousSelectors[symbol] = true
+		}
+	}
 }
 
 func allSymbolsMatched(symbols map[string]bool, evidence sourceEvidence) bool {

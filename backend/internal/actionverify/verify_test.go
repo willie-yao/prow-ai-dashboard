@@ -122,6 +122,34 @@ func TestVerifyMissingGroundedPathIsInconclusive(t *testing.T) {
 	}, StateInconclusive)
 }
 
+func TestVerifyIgnoresBacktickedSemanticVersion(t *testing.T) {
+	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
+		Proposal: "Implement MissingHelper for `v1.13.3`.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+}
+
+func TestVerifyExhaustivePassDoesNotUseUnrelatedPackage(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":       "module example\n",
+		"target/a.go":  "package target\n",
+		"other/fix.go": "package other\nfunc ValidateConfig(){}\nfunc use(){ ValidateConfig() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ValidateConfig.", RelevantFiles: []string{"target/a.go"},
+	}, StateUnresolved)
+}
+
+func TestVerifyExhaustivePassUsesGroundedPackage(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":           "module example\n",
+		"target/a.go":      "package target\n",
+		"target/helper.go": "package target\nfunc ValidateConfig(){}\nfunc use(){ ValidateConfig() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ValidateConfig.", RelevantFiles: []string{"target/a.go"},
+	}, StateAlreadyPresent)
+}
+
 func TestVerifyAddCallForm(t *testing.T) {
 	verifyState(t, fakeReader{"p.go": "package p\nfunc ExistingFix(){}\nfunc x(){ExistingFix()}\n"}, Input{
 		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"p.go"},
@@ -193,4 +221,10 @@ func TestVerifyUsesBulkPinnedSourceRead(t *testing.T) {
 	if reader.bulkCalls != 1 || reader.readCalls != 0 {
 		t.Fatalf("bulk calls = %d, file calls = %d", reader.bulkCalls, reader.readCalls)
 	}
+}
+
+func TestVerifyIgnoresBacktickedSourceURL(t *testing.T) {
+	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
+		Proposal: "Implement MissingHelper using `https://example.test/main.go`.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
 }
