@@ -311,3 +311,21 @@ func TestVerifyAcceptsBacktickedCallNotation(t *testing.T) {
 		verifyState(t, reader, Input{Proposal: proposal, RelevantFiles: []string{"main.go"}}, StateAlreadyPresent)
 	}
 }
+
+func TestVerifyGenericFunctionInvocation(t *testing.T) {
+	for _, source := range []string{
+		"package main\nfunc ExistingFix[T any](){}\nfunc use(){ ExistingFix[int]() }\n",
+		"package main\nfunc ExistingFix[A, B any](){}\nfunc use(){ ExistingFix[int, string]() }\n",
+	} {
+		verifyState(t, fakeReader{"main.go": source}, Input{
+			Proposal: "Implement ExistingFix.", RelevantFiles: []string{"main.go"},
+		}, StateAlreadyPresent)
+	}
+}
+
+func TestVerifyRequiresEverySymbolInSingleClause(t *testing.T) {
+	reader := fakeReader{"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n"}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ExistingFix and MissingHelper.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+}

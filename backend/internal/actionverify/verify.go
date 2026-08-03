@@ -77,9 +77,12 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if reader == nil {
 		return Result{State: StateInconclusive, Reason: "source reader is unavailable"}, nil
 	}
-	symbols := implementationSymbols(input.Proposal)
+	symbols, ambiguousSymbols := implementationSymbols(input.Proposal)
 	if len(symbols) == 0 {
 		return Result{State: StateInconclusive, Reason: "proposal does not name an unambiguous implementation symbol"}, nil
+	}
+	if ambiguousSymbols {
+		return Result{State: StateInconclusive, Reason: "proposal contains ambiguous implementation symbols"}, nil
 	}
 	groundedPaths := append([]string(nil), input.RelevantFiles...)
 	for _, match := range pathPattern.FindAllStringSubmatch(input.Proposal, -1) {
@@ -207,11 +210,13 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 
 // HasImplementationSymbols reports whether proposal names code-like remediation symbols.
 func HasImplementationSymbols(proposal string) bool {
-	return len(implementationSymbols(proposal)) > 0
+	symbols, _ := implementationSymbols(proposal)
+	return len(symbols) > 0
 }
 
-func implementationSymbols(proposal string) map[string]bool {
+func implementationSymbols(proposal string) (map[string]bool, bool) {
 	symbols := map[string]bool{}
+	ambiguous := false
 	proposal = backtickSpanPattern.ReplaceAllStringFunc(proposal, func(span string) string {
 		if _, ok := quotedImplementationSymbol(span); ok {
 			return span
@@ -236,14 +241,36 @@ func implementationSymbols(proposal string) map[string]bool {
 			}
 			continue
 		}
-		for _, candidate := range identifierTokenPattern.FindAllString(clause, -1) {
-			if codeLikeIdentifier(candidate) {
+		candidates := identifierTokenPattern.FindAllStringIndex(clause, -1)
+		previousEnd := -1
+	candidateLoop:
+		for _, location := range candidates {
+			candidate := clause[location[0]:location[1]]
+			if !codeLikeIdentifier(candidate) {
+				continue
+			}
+			if previousEnd < 0 {
 				symbols[candidate] = true
-				break
+				previousEnd = location[1]
+				continue
+			}
+			gap := strings.ToLower(strings.TrimSpace(clause[previousEnd:location[0]]))
+			switch {
+			case gap == "and" || gap == "or" || gap == "," || gap == ", and" || gap == ", or":
+				symbols[candidate] = true
+				previousEnd = location[1]
+			case strings.HasPrefix(gap, "using") || strings.HasPrefix(gap, "with") || strings.HasPrefix(gap, "via") ||
+				strings.HasPrefix(gap, "through") || strings.HasPrefix(gap, "for") || strings.HasPrefix(gap, "on") || strings.HasPrefix(gap, "in"):
+				break candidateLoop
+			case implementationVerbPattern.MatchString(gap):
+				previousEnd = location[1]
+			default:
+				ambiguous = true
+				previousEnd = location[1]
 			}
 		}
 	}
-	return symbols
+	return symbols, ambiguous
 }
 
 func implementationClauseBoundary(clause string) int {
@@ -402,6 +429,21 @@ type sourceEvidenceVisitor struct {
 	currentFunction string
 }
 
+func unwrapGenericCall(expr ast.Expr) ast.Expr {
+	for {
+		switch value := expr.(type) {
+		case *ast.IndexExpr:
+			expr = value.X
+		case *ast.IndexListExpr:
+			expr = value.X
+		case *ast.ParenExpr:
+			expr = value.X
+		default:
+			return expr
+		}
+	}
+}
+
 func (v *sourceEvidenceVisitor) Visit(node ast.Node) ast.Visitor {
 	if node == nil {
 		return nil
@@ -419,7 +461,8 @@ func (v *sourceEvidenceVisitor) Visit(node ast.Node) ast.Visitor {
 		return &child
 	case *ast.CallExpr:
 		name, callPackage, ambiguous := "", "", false
-		switch fun := value.Fun.(type) {
+		funExpr := unwrapGenericCall(value.Fun)
+		switch fun := funExpr.(type) {
 		case *ast.Ident:
 			name = fun.Name
 			switch {
