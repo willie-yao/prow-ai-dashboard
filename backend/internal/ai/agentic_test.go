@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -591,8 +592,8 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	if summary.Summary != "real cause" {
 		t.Errorf("expected post-nudge final, got summary=%q", summary.Summary)
 	}
-	if analysis.RootCause != "found in build-log.txt line 42" {
-		t.Errorf("expected post-nudge root cause, got %q", analysis.RootCause)
+	if analysis.RootCause != "found in build-log.txt the cited artifact evidence" {
+		t.Errorf("expected unsupported line claim to be removed, got %q", analysis.RootCause)
 	}
 	if analysis.ToolCalls != 1 {
 		t.Errorf("tool_calls = %d, want 1", analysis.ToolCalls)
@@ -1204,8 +1205,8 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	if summary.Summary != "deep" {
 		t.Errorf("expected clean final, got summary=%q", summary.Summary)
 	}
-	if !strings.Contains(analysis.SuggestedFix, "kustomize/cluster-template.yaml") {
-		t.Errorf("expected concrete fix, got %q", analysis.SuggestedFix)
+	if !strings.Contains(analysis.SuggestedFix, "verified project automation") || len(analysis.RelevantFiles) != 0 || !slices.Contains(analysis.SearchSuggestions, "kustomize/cluster-template.yaml") {
+		t.Errorf("expected filtered remediation, got fix=%q relevant=%v suggestions=%v", analysis.SuggestedFix, analysis.RelevantFiles, analysis.SearchSuggestions)
 	}
 
 	// Critique-passing answer must be cached: second call hits cache, no
@@ -1526,11 +1527,11 @@ func TestAgentic_DraftObserverReceivesCopiesInOrder(t *testing.T) {
 	if observations[1].Attempt != 2 || observations[1].Phase != "critique_retry" || observations[1].PuntCount != 0 {
 		t.Fatalf("revised observation = %+v", observations[1])
 	}
-	if analysis.RootCause != observations[1].RootCause || analysis.SuggestedFix != observations[1].SuggestedFix {
+	if analysis.RootCause != observations[1].RootCause || strings.Contains(analysis.SuggestedFix, "observer mutation") {
 		t.Fatalf("observer mutation affected runtime: analysis=%+v observation=%+v", analysis, observations[1])
 	}
-	if len(analysis.RelevantFiles) != 1 || analysis.RelevantFiles[0] != "kustomize/cluster-template.yaml" {
-		t.Fatalf("observer mutated relevant files: %v", analysis.RelevantFiles)
+	if len(analysis.RelevantFiles) != 0 || !slices.Contains(analysis.SearchSuggestions, "kustomize/cluster-template.yaml") {
+		t.Fatalf("published file classification: relevant=%v suggestions=%v", analysis.RelevantFiles, analysis.SearchSuggestions)
 	}
 
 	_, hit, err := client.doAnalyzeAgentic(context.Background(), in,
@@ -1672,7 +1673,7 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 			if got := atomic.LoadInt32(&srv.calls); got != before {
 				t.Fatalf("cached call count = %d, want %d", got, before)
 			}
-			if !cached.CacheHit || cached.CritiquePassed || cached.CritiqueVersion != 0 {
+			if !cached.CacheHit || cached.CritiquePassed || cached.CritiqueVersion != currentCritiqueVersion {
 				t.Fatalf("cached analysis = %+v", cached)
 			}
 		})

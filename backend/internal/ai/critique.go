@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 // Package ai's critique gate runs a deterministic regex pass on the model's
@@ -105,7 +108,7 @@ func findPunts(text string) []string {
 // weaker version are invalidated on read. Cosmetic prompt-shape changes
 // do not bump; only behavior changes that make an existing cached answer
 // invalid under today's contract.
-const currentCritiqueVersion = 6
+const currentCritiqueVersion = 7
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It matches the engine's
@@ -267,6 +270,9 @@ type critiqueOutcome struct {
 	// ever fetching via a read/tail/grep tool.
 	UnreadCitations []string
 
+	// CitationIssues lists invalid structured evidence or line claims.
+	CitationIssues []string
+
 	// MissingSkillEvidence pairs each matched recipe with the evidence
 	// groups it still requires the agent to satisfy.
 	MissingSkillEvidence []skillEvidenceMiss
@@ -288,7 +294,7 @@ type skillEvidenceMiss struct {
 // Matches is the flat union of all triggered checks, for log lines and
 // for callers that just want "what tripped the gate".
 func (o critiqueOutcome) Matches() []string {
-	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.MissingSkillEvidence)
+	n := len(o.PuntMatches) + len(o.UnreadCitations) + len(o.CitationIssues) + len(o.MissingSkillEvidence)
 	if o.TransientPersistCount > 0 {
 		n++
 	}
@@ -298,6 +304,9 @@ func (o critiqueOutcome) Matches() []string {
 	out := make([]string, 0, n)
 	out = append(out, o.PuntMatches...)
 	out = append(out, o.UnreadCitations...)
+	for _, issue := range o.CitationIssues {
+		out = append(out, "citation:"+issue)
+	}
 	for _, m := range o.MissingSkillEvidence {
 		// Keep each skill miss as one short token in logs.
 		ids := make([]string, 0, len(m.Missing))
@@ -322,6 +331,19 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 	return n
 }
 
+type analysisCitationContext struct {
+	Evidence map[string]*analysisChatEvidence
+	Full     bool
+}
+
+type proseLineClaim struct {
+	Start      int
+	End        int
+	Path       string
+	MatchStart int
+	MatchEnd   int
+}
+
 // critiqueDraft inspects a parsed final answer against the critique contract
 // against punt, unread-citation, recipe-driven missing-evidence, and
 // transient-but-persistent checks. Returns Passed=true only when every check
@@ -337,7 +359,7 @@ func critiqueDraft(parsed analysisResponse, readsFull, readsBase map[string]bool
 	return critiqueDraftWithContent(parsed, readsFull, readsBase, nil, nil, matchedSkills, consecutiveFailures)
 }
 
-func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[string]bool, contentByPath map[string][]string, sourceReads map[string]bool, matchedSkills []skills.Skill, consecutiveFailures int) critiqueOutcome {
+func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[string]bool, contentByPath map[string][]string, sourceReads map[string]bool, matchedSkills []skills.Skill, consecutiveFailures int, citationContexts ...analysisCitationContext) critiqueOutcome {
 	puntMatches := findPunts(parsed.SuggestedFix)
 
 	// Scan every prose field plus each relevant_files entry: the model
@@ -409,18 +431,151 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 		transientPersist = consecutiveFailures
 	}
 
+	var citationIssues []string
+	if len(citationContexts) > 0 {
+		citationIssues = validateAnalysisCitations(parsed, citationContexts[0])
+	}
+
 	out := critiqueOutcome{
 		PuntMatches:           puntMatches,
+		CitationIssues:        citationIssues,
 		UnreadCitations:       unread,
 		MissingSkillEvidence:  missingSkillEv,
 		TransientPersistCount: transientPersist,
 	}
-	if len(puntMatches) == 0 && len(unread) == 0 && len(missingSkillEv) == 0 && transientPersist == 0 {
+	if len(puntMatches) == 0 && len(unread) == 0 && len(citationIssues) == 0 && len(missingSkillEv) == 0 && transientPersist == 0 {
 		out.Passed = true
 		return out
 	}
 	out.Feedback = formatCritiqueFeedback(parsed, out)
 	return out
+}
+
+var proseLineClaimRE = regexp.MustCompile(`(?i)\blines?\s+L?(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?`)
+
+func validateAnalysisCitations(parsed analysisResponse, context analysisCitationContext) []string {
+	if context.Full {
+		return []string{"evidence read budget was exceeded"}
+	}
+	var issues []string
+	if len(parsed.EvidenceCitations) > 20 {
+		issues = append(issues, "more than 20 evidence citations")
+	}
+	for i, citation := range parsed.EvidenceCitations {
+		if issue := evidenceCitationIssue(citation, context.Evidence); issue != "" {
+			issues = append(issues, fmt.Sprintf("citation %d %s", i+1, issue))
+		}
+	}
+	claims := proseLineClaims(parsed.RootCause + "\n" + parsed.Summary)
+	for _, claim := range claims {
+		matched := false
+		for _, citation := range parsed.EvidenceCitations {
+			if citationSupportsLineClaim(citation, claim) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			claimLabel := fmt.Sprintf("%d-%d", claim.Start, claim.End)
+			if claim.Path != "" {
+				claimLabel = claim.Path + ":" + claimLabel
+			}
+			issues = append(issues, fmt.Sprintf("prose line claim %s has no matching citation", claimLabel))
+		}
+	}
+	return issues
+}
+
+func citationSupportsLineClaim(citation models.EvidenceCitation, claim proseLineClaim) bool {
+	if citation.LineStart > claim.Start || citation.LineEnd < claim.End {
+		return false
+	}
+	return claim.Path == "" || NormalizeArtifactCitation(citation.Path) == claim.Path
+}
+
+func evidenceCitationIssue(citation models.EvidenceCitation, evidenceByPath map[string]*analysisChatEvidence) string {
+	clean, err := artifacts.SafePath(strings.TrimSpace(citation.Path))
+	if err != nil || clean == "" || clean != citation.Path {
+		return "has an invalid path"
+	}
+	evidence := evidenceByPath[clean]
+	if evidence == nil {
+		return "names an unread artifact"
+	}
+	if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart+1 > 200 {
+		return "has an invalid line range"
+	}
+	quote := strings.TrimSpace(citation.Quote)
+	if len(quote) < 4 || len(quote) > 2000 {
+		return "has an invalid quote"
+	}
+	if !normalizedQuoteInRange(evidence.Lines, citation.LineStart, citation.LineEnd, quote) {
+		return "quote does not occur at the claimed lines"
+	}
+	return ""
+}
+
+func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) bool {
+	parts := make([]string, 0, end-start+1)
+	for line := start; line <= end; line++ {
+		text, ok := lines[line]
+		if !ok {
+			return false
+		}
+		parts = append(parts, text)
+	}
+	return strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), normalizeCitationText(quote))
+}
+
+func normalizeCitationText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func proseLineClaims(value string) []proseLineClaim {
+	matches := proseLineClaimRE.FindAllStringSubmatchIndex(value, -1)
+	claims := make([]proseLineClaim, 0, len(matches))
+	for _, match := range matches {
+		start, err := strconv.Atoi(value[match[2]:match[3]])
+		if err != nil || start <= 0 {
+			continue
+		}
+		end := start
+		if match[4] >= 0 {
+			if parsed, err := strconv.Atoi(value[match[4]:match[5]]); err == nil && parsed >= start {
+				end = parsed
+			}
+		}
+		claims = append(claims, proseLineClaim{
+			Start: start, End: end,
+			Path:       nearbyArtifactCitation(value, match[0]),
+			MatchStart: match[0], MatchEnd: match[1],
+		})
+	}
+	return claims
+}
+
+func nearbyArtifactCitation(value string, claimStart int) string {
+	if claimStart <= 0 || claimStart > len(value) {
+		return ""
+	}
+	prefix := value[:claimStart]
+	boundary := max(strings.LastIndex(prefix, "\n"), strings.LastIndex(prefix, ";"))
+	if sentence := strings.LastIndex(prefix, ". "); sentence >= 0 {
+		boundary = max(boundary, sentence+1)
+	}
+	if boundary >= 0 {
+		prefix = prefix[boundary+1:]
+	}
+	paths := ArtifactCitations(prefix)
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[len(paths)-1]
+}
+
+func formatCitationIssues(issues []string) string {
+	return "Your structured evidence citations are invalid:\n- " + strings.Join(issues, "\n- ") +
+		"\nRead or grep the exact artifact range, then re-emit matching path, line_start, line_end, and quote values. Do not infer line numbers from timestamps or numeric values."
 }
 
 func sourceReadMatches(candidate string, reads map[string]bool) bool {
@@ -482,7 +637,7 @@ func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, tre
 		return 0
 	}
 	out.MissingSkillEvidence = kept
-	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
+	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.CitationIssues) == 0 && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
 		out.Passed = true
 		out.Feedback = ""
 	} else {
@@ -504,6 +659,9 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	}
 	if len(out.UnreadCitations) > 0 {
 		sections = append(sections, formatUnreadSection(out.UnreadCitations))
+	}
+	if len(out.CitationIssues) > 0 {
+		sections = append(sections, formatCitationIssues(out.CitationIssues))
 	}
 	if len(out.MissingSkillEvidence) > 0 {
 		sections = append(sections, formatSkillEvidenceSection(out.MissingSkillEvidence))
