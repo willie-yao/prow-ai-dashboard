@@ -324,6 +324,24 @@ func githubExpression(value any, scope, name string) bool {
 	return body == scope+"."+name
 }
 
+type doctorNetworkPolicyPeer struct {
+	PodSelector       map[string]any `yaml:"podSelector"`
+	NamespaceSelector map[string]any `yaml:"namespaceSelector"`
+	IPBlock           *struct {
+		CIDR string `yaml:"cidr"`
+	} `yaml:"ipBlock"`
+}
+
+type doctorNetworkPolicyIngressRule struct {
+	From []doctorNetworkPolicyPeer `yaml:"from"`
+}
+
+type doctorNetworkPolicyValues struct {
+	Enabled bool                             `yaml:"enabled"`
+	Ingress []doctorNetworkPolicyIngressRule `yaml:"ingress"`
+	From    []doctorNetworkPolicyPeer        `yaml:"from"`
+}
+
 type doctorKubernetesValues struct {
 	Persistence struct {
 		Enabled       *bool  `yaml:"enabled"`
@@ -359,9 +377,7 @@ type doctorKubernetesValues struct {
 			} `yaml:"internal"`
 		} `yaml:"service"`
 	} `yaml:"server"`
-	NetworkPolicy struct {
-		Enabled bool `yaml:"enabled"`
-	} `yaml:"networkPolicy"`
+	NetworkPolicy doctorNetworkPolicyValues `yaml:"networkPolicy"`
 }
 
 func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) (includePresubmits bool) {
@@ -438,10 +454,10 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 	}
 	switch serviceType {
 	case "ClusterIP":
-		if values.NetworkPolicy.Enabled {
+		if doctorNetworkPolicyRestricted(values.NetworkPolicy) {
 			add("Kubernetes origin security", DoctorPass, "authenticated server features use a ClusterIP Service with NetworkPolicy", "")
 		} else {
-			add("Kubernetes origin security", DoctorWarn, "authenticated server features use a ClusterIP Service but NetworkPolicy is disabled", "Enable NetworkPolicy and allow only the expected ingress controller or authentication proxy path.")
+			add("Kubernetes origin security", DoctorWarn, "authenticated server features use a ClusterIP Service without a restrictive NetworkPolicy", "Enable NetworkPolicy and allow only the expected ingress controller or authentication proxy path.")
 		}
 	case "LoadBalancer":
 		if values.Server.Service.Internal.Enabled && len(values.Server.Service.Internal.Annotations) == 0 {
@@ -457,8 +473,8 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 			}
 			return
 		}
-		if !values.NetworkPolicy.Enabled {
-			add("Kubernetes origin security", DoctorWarn, "the LoadBalancer origin is restricted but NetworkPolicy is disabled", "Enable NetworkPolicy with ingress rules for the expected ingress or proxy path.")
+		if !doctorNetworkPolicyRestricted(values.NetworkPolicy) {
+			add("Kubernetes origin security", DoctorWarn, "the LoadBalancer origin is restricted but NetworkPolicy does not restrict ingress", "Enable NetworkPolicy with ingress rules for the expected ingress or proxy path.")
 			return
 		}
 		add("Kubernetes origin security", DoctorPass, "authenticated server features use an origin-restricted LoadBalancer with NetworkPolicy", "")
@@ -479,6 +495,48 @@ func doctorRestrictedSourceRanges(ranges []string) bool {
 		}
 	}
 	return true
+}
+
+func doctorNetworkPolicyRestricted(policy doctorNetworkPolicyValues) bool {
+	if !policy.Enabled {
+		return false
+	}
+	if policy.Ingress != nil {
+		if len(policy.Ingress) == 0 {
+			return true
+		}
+		for _, rule := range policy.Ingress {
+			if len(rule.From) == 0 {
+				return false
+			}
+			for _, peer := range rule.From {
+				if !doctorNetworkPolicyPeerRestricted(peer) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if len(policy.From) == 0 {
+		return false
+	}
+	for _, peer := range policy.From {
+		if !doctorNetworkPolicyPeerRestricted(peer) {
+			return false
+		}
+	}
+	return true
+}
+
+func doctorNetworkPolicyPeerRestricted(peer doctorNetworkPolicyPeer) bool {
+	if peer.IPBlock != nil {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(peer.IPBlock.CIDR))
+		return err == nil && prefix.Bits() > 0
+	}
+	if peer.NamespaceSelector != nil {
+		return len(peer.NamespaceSelector) > 0 || len(peer.PodSelector) > 0
+	}
+	return peer.PodSelector != nil
 }
 
 func placeholder(value string) bool {

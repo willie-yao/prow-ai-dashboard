@@ -1256,6 +1256,23 @@ helm install old-reuse-notes "$chart" -n dashboard-test -f "$tmp/values.yaml" -f
   --dry-run=client --debug > "$tmp/old-reuse-notes.yaml" 2>&1
 grep -Fq 'ClusterIP only' "$tmp/old-reuse-notes.yaml"
 
+cat > "$tmp/explicit-empty-ingress.yaml" <<'VALUES'
+networkPolicy:
+  enabled: true
+  ingress: []
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: stale-ingress
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/explicit-empty-ingress.yaml" \
+  --show-only templates/networkpolicy.yaml > "$tmp/explicit-empty-ingress-render.yaml"
+grep -A1 -F 'ingress:' "$tmp/explicit-empty-ingress-render.yaml" | grep -Fq '[]'
+if grep -Fq 'stale-ingress' "$tmp/explicit-empty-ingress-render.yaml"; then
+  echo 'explicit empty ingress retained a legacy peer' >&2
+  exit 1
+fi
+
 for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-range alternate-universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
   invalid_args=()
   want=

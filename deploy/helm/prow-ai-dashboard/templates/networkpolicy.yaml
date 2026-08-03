@@ -1,6 +1,8 @@
 {{- include "prow-ai-dashboard.validateNetworkSecurity" . -}}
 {{- if .Values.networkPolicy.enabled }}
-{{- $ingress := .Values.networkPolicy.ingress | default list -}}
+{{- $ingressValue := get .Values.networkPolicy "ingress" -}}
+{{- $ingressDefined := and (hasKey .Values.networkPolicy "ingress") (not (kindIs "invalid" $ingressValue)) -}}
+{{- $ingress := $ingressValue | default list -}}
 {{- $legacyFrom := .Values.networkPolicy.from | default list -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -17,7 +19,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    {{- if $ingress }}
+    {{- if $ingressDefined }}
     {{- toYaml $ingress | nindent 4 }}
     {{- else if $legacyFrom }}
     - from:

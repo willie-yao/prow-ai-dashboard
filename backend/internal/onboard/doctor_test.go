@@ -151,7 +151,9 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 	}{
 		{name: "actions disabled", want: DoctorPass},
 		{name: "cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
-		{name: "cluster ip with network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
+		{name: "cluster ip with deny all network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "cluster ip with catch all network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - {}\n", want: DoctorWarn},
+		{name: "cluster ip with scoped network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchLabels:\n              name: ingress\n", want: DoctorPass},
 		{name: "chat cluster ip without network policy", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
 		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
 		{name: "chat public load balancer", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
@@ -160,8 +162,8 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		{name: "universal source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
 		{name: "alternate ipv6 universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['0:0:0:0:0:0:0:0/0']\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
 		{name: "internal missing annotations", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
-		{name: "source ranges and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [10.0.0.0/8]\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
-		{name: "internal and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n      annotations:\n        example.com/internal: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
+		{name: "source ranges and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [10.0.0.0/8]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "internal and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n      annotations:\n        example.com/internal: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
