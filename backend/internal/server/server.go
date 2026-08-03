@@ -473,8 +473,12 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if errors.Is(err, actions.ErrPreviewPending) || errors.Is(err, actions.ErrPreviewSuperseded) {
+	if errors.Is(err, actions.ErrPreviewPending) {
 		http.Error(w, "action request is already being processed", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, actions.ErrPreviewSuperseded) {
+		http.Error(w, "action request was replaced by a newer attempt", http.StatusConflict)
 		return
 	}
 	if errors.Is(err, actions.ErrPreviewOutcomeUnknown) {
@@ -493,7 +497,7 @@ func safeOperatorError(err error) string {
 	if err == nil {
 		return "unknown error"
 	}
-	value := redact.URLs(strings.TrimSpace(err.Error()))
+	value := redact.Credentials(redact.URLs(strings.TrimSpace(err.Error())))
 	value = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return ' '

@@ -262,7 +262,7 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	case errors.Is(err, analysischat.ErrRequestPending):
 		status, message, outcome = http.StatusConflict, analysischat.ErrRequestPending.Error(), "pending"
 	case errors.Is(err, analysischat.ErrIdempotencyConflict):
-		status, message, outcome = http.StatusConflict, "analysis changed; start a new chat", "rejected"
+		status, message, outcome = http.StatusConflict, "analysis chat request conflicts with existing input", "rejected"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
 		status, message, outcome = http.StatusConflict, "analysis chat outcome is unknown", "unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):

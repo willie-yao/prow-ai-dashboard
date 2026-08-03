@@ -1112,6 +1112,11 @@ func TestWriteActionErrorMapsPendingConfirmation(t *testing.T) {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
+	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewSuperseded)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "replaced") {
+		t.Fatalf("superseded response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
 	writeActionError(recorder, "confirm", "alice", actions.ErrPreviewOutcomeUnknown)
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "outcome is unknown") {
 		t.Fatalf("unknown outcome response = %d %q", recorder.Code, recorder.Body.String())

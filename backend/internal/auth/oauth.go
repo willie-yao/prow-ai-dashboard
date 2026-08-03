@@ -253,11 +253,8 @@ func validateGrantedScope(expected, granted string) error {
 	for _, value := range strings.FieldsFunc(granted, func(r rune) bool { return r == ',' || r == ' ' }) {
 		grants[strings.TrimSpace(value)] = true
 	}
-	if expected == "public_repo" && grants["repo"] {
-		return fmt.Errorf("unexpected broad repo scope")
-	}
-	if !grants[expected] {
-		return fmt.Errorf("required scope %q was not granted", expected)
+	if len(grants) != 1 || !grants[expected] {
+		return fmt.Errorf("granted scopes do not exactly match %q", expected)
 	}
 	return nil
 }

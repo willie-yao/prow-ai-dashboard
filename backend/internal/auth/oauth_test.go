@@ -281,7 +281,7 @@ func TestOAuth_LoginRejectsExternalReturn(t *testing.T) {
 }
 
 func TestValidateGrantedScope(t *testing.T) {
-	if err := validateGrantedScope("public_repo", "public_repo,read:user"); err != nil {
+	if err := validateGrantedScope("public_repo", "public_repo"); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateGrantedScope("public_repo", "repo"); err == nil {
@@ -289,6 +289,9 @@ func TestValidateGrantedScope(t *testing.T) {
 	}
 	if err := validateGrantedScope("repo", "public_repo"); err == nil {
 		t.Fatal("missing private repo grant was accepted")
+	}
+	if err := validateGrantedScope("public_repo", "public_repo,gist"); err == nil {
+		t.Fatal("unrelated retained grant was accepted")
 	}
 }
 
