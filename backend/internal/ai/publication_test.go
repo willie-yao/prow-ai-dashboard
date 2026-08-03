@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -87,6 +88,25 @@ func TestEvidenceCitationRangeOverflowIsRejected(t *testing.T) {
 	evidence := map[string]*analysisChatEvidence{"build-log.txt": {Lines: map[int]string{1: "error text"}}}
 	if issue := evidenceCitationIssue(citation, evidence); !strings.Contains(issue, "invalid line range") {
 		t.Fatalf("overflowing range issue = %q", issue)
+	}
+}
+
+func TestInvalidNumericProseLineClaimsAreRemoved(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	for _, text := range []string{
+		"The failure is shown at line 0.",
+		fmt.Sprintf("The failure is shown at line %d0.", maxInt),
+		"The failure is shown at lines 73-42.",
+	} {
+		parsed := analysisResponse{RootCause: text}
+		out := critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: map[string]*analysisChatEvidence{}})
+		if out.Passed || len(out.CitationIssues) == 0 {
+			t.Fatalf("invalid numeric claim %q passed: %+v", text, out)
+		}
+		sanitized := sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: map[string]*analysisChatEvidence{}})
+		if sanitized.RootCause == text {
+			t.Fatalf("invalid numeric claim survived: %q", sanitized.RootCause)
+		}
 	}
 }
 

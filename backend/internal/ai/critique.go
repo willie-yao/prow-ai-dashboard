@@ -341,6 +341,8 @@ type proseLineClaim struct {
 	Start      int
 	End        int
 	Path       string
+	Raw        string
+	Valid      bool
 	MatchStart int
 	MatchEnd   int
 }
@@ -474,6 +476,10 @@ func validateAnalysisCitations(parsed analysisResponse, context analysisCitation
 		}
 	}
 	for _, claim := range claims {
+		if !claim.Valid {
+			issues = append(issues, fmt.Sprintf("prose line claim %q is invalid", claim.Raw))
+			continue
+		}
 		matched := false
 		for _, citation := range parsed.EvidenceCitations {
 			if citationSupportsLineClaim(citation, claim) {
@@ -493,6 +499,9 @@ func validateAnalysisCitations(parsed analysisResponse, context analysisCitation
 }
 
 func citationSupportsLineClaim(citation models.EvidenceCitation, claim proseLineClaim) bool {
+	if !claim.Valid {
+		return false
+	}
 	if citation.LineStart != claim.Start || citation.LineEnd != claim.End {
 		return false
 	}
@@ -543,21 +552,27 @@ func normalizeCitationText(value string) string {
 func proseLineClaims(value string) []proseLineClaim {
 	var claims []proseLineClaim
 	appendClaim := func(matchStart, matchEnd, startIndex, startEnd, endIndex, endEnd int, explicitPath string) {
+		claim := proseLineClaim{Raw: value[matchStart:matchEnd], MatchStart: matchStart, MatchEnd: matchEnd}
 		start, err := strconv.Atoi(value[startIndex:startEnd])
 		if err != nil || start <= 0 {
+			claims = append(claims, claim)
 			return
 		}
 		end := start
 		if endIndex >= 0 {
-			if parsed, err := strconv.Atoi(value[endIndex:endEnd]); err == nil && parsed >= start {
-				end = parsed
+			parsed, err := strconv.Atoi(value[endIndex:endEnd])
+			if err != nil || parsed < start {
+				claims = append(claims, claim)
+				return
 			}
+			end = parsed
 		}
 		path := explicitPath
 		if path == "" {
 			path = nearbyArtifactCitation(value, matchStart, matchEnd)
 		}
-		claims = append(claims, proseLineClaim{Start: start, End: end, Path: path, MatchStart: matchStart, MatchEnd: matchEnd})
+		claim.Start, claim.End, claim.Path, claim.Valid = start, end, path, true
+		claims = append(claims, claim)
 	}
 	for _, match := range proseLineClaimRE.FindAllStringSubmatchIndex(value, -1) {
 		appendClaim(match[0], match[1], match[2], match[3], match[4], match[5], "")
