@@ -532,6 +532,7 @@ func (s *Service) transitionToCleanup(id, finalStatus, reason string) (context.C
 		*request = previous
 		return nil, err
 	}
+	s.cancelRequestNotificationLocked(id)
 	return s.requestCancels[id], nil
 }
 
@@ -598,6 +599,7 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 
 func (s *Service) stopActiveRequests() {
 	s.rmu.Lock()
+	s.stopping = true
 	var ids []string
 	var cancels []context.CancelFunc
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -624,6 +626,22 @@ func (s *Service) stopActiveRequests() {
 	}
 	for _, id := range ids {
 		s.startCleanup(id)
+	}
+}
+
+func (s *Service) readyRequestMatchesCurrent(request *actionRequest, subject *ActionSubject) bool {
+	if request == nil || subject == nil || request.PatternHash == "" || request.PatternHash != subject.ContentHash {
+		return false
+	}
+	switch request.Kind {
+	case "create-issue":
+		eff := s.cfg.EffectiveIssues()
+		return eff.Repo != nil && request.TargetRepo == eff.Repo.Owner+"/"+eff.Repo.Name
+	case "propose-fix":
+		eff := s.cfg.EffectiveFixPRs()
+		return eff.Repo != nil && request.TargetRepo == eff.Repo.Owner+"/"+eff.Repo.Name && request.TargetConfig == fixTargetFingerprint(eff)
+	default:
+		return false
 	}
 }
 
@@ -654,11 +672,16 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	supersedesID = strings.TrimSpace(supersedesID)
 
 	s.rmu.Lock()
+	if s.stopping {
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("action service is stopping")
+	}
 	s.expireRequestsLocked(now)
 	var superseded *actionRequest
 	var supersededStatus, supersededUpdatedAt, supersededBy string
 	var supersededCleanup *actionCleanupState
 	var supersededCancel context.CancelFunc
+	var supersededNotifyCancel context.CancelFunc
 	if supersedesID != "" {
 		superseded = s.requests.Requests[supersedesID]
 		if superseded == nil || superseded.Owner != owner {
@@ -682,6 +705,9 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if supersedesID == "" {
 		for _, existing := range s.requests.Requests {
 			if existing.Owner != owner || existing.FailureID != failureID || existing.Kind != kind || existing.Instruction != request.Instruction {
+				continue
+			}
+			if existing.Status == RequestReady && !s.readyRequestMatchesCurrent(existing, subject) {
 				continue
 			}
 			if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestCancelling || existing.Status == RequestUnknown {
@@ -745,6 +771,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		superseded.UpdatedAt = now.Format(time.RFC3339)
 		superseded.SupersededBy = request.ID
 		supersededCancel = s.requestCancels[supersedesID]
+		supersededNotifyCancel = s.requestNotifyCancels[supersedesID]
 	}
 	s.requests.Requests[request.ID] = request
 	if err := s.saveRequestsLocked(); err != nil {
@@ -763,6 +790,9 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 
 	if supersededCancel != nil {
 		supersededCancel()
+	}
+	if supersededNotifyCancel != nil {
+		supersededNotifyCancel()
 	}
 	if superseded != nil {
 		s.startCleanup(supersedesID)
@@ -896,6 +926,13 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	s.notifyRequestReady(view)
 }
 
+func (s *Service) cancelRequestNotificationLocked(id string) {
+	if cancel := s.requestNotifyCancels[id]; cancel != nil {
+		cancel()
+		delete(s.requestNotifyCancels, id)
+	}
+}
+
 func (s *Service) notifyRequestReady(view ActionRequestView) {
 	s.rmu.Lock()
 	changed := s.expireRequestsLocked(time.Now().UTC())
@@ -911,7 +948,19 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 	}
 	view = current.ActionRequestView
 	notifier := s.requestNotify
+	notifyCtx, notifyCancel := context.WithCancel(context.Background())
+	if s.requestNotifyCancels == nil {
+		s.requestNotifyCancels = map[string]context.CancelFunc{}
+	}
+	s.cancelRequestNotificationLocked(view.ID)
+	s.requestNotifyCancels[view.ID] = notifyCancel
 	s.rmu.Unlock()
+	defer func() {
+		notifyCancel()
+		s.rmu.Lock()
+		delete(s.requestNotifyCancels, view.ID)
+		s.rmu.Unlock()
+	}()
 	if notifier == nil || s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 		return
 	}
@@ -924,7 +973,7 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 			if err := s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind); err != nil {
 				return err
 			}
-			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			notifyCtx, notifyCancel := context.WithTimeout(notifyCtx, 30*time.Second)
 			defer notifyCancel()
 			return notifier(notifyCtx, view)
 		})
@@ -932,7 +981,11 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 			break
 		}
 		if attempt < 2 {
-			time.Sleep(time.Duration(1+attempt*2) * time.Second)
+			select {
+			case <-notifyCtx.Done():
+				return
+			case <-time.After(time.Duration(1+attempt*2) * time.Second):
+			}
 		}
 	}
 	s.rmu.Lock()
@@ -1042,6 +1095,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 			s.rmu.Unlock()
 			return "", err
 		}
+		s.cancelRequestNotificationLocked(id)
 	}
 	s.requestConfirms[id] = struct{}{}
 	s.rmu.Unlock()
@@ -1121,7 +1175,9 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		current := s.currentRequestView(id)
 		if cleanupErr != nil && current.Status == RequestCancelling {
 			if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
-				_ = s.markCleanupBlocked(id)
+				if !s.markCleanupBlocked(id) {
+					s.startCleanup(id)
+				}
 			} else {
 				s.startCleanup(id)
 			}
@@ -1146,7 +1202,9 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 	current := s.currentRequestView(id)
 	if cleanupErr != nil && current.Status == RequestCancelling {
 		if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
-			_ = s.markCleanupBlocked(id)
+			if !s.markCleanupBlocked(id) {
+				s.startCleanup(id)
+			}
 		} else {
 			s.startCleanup(id)
 		}
@@ -1181,6 +1239,7 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			continue
 		}
 		if request.Status != RequestExpired {
+			s.cancelRequestNotificationLocked(id)
 			request.Status = RequestExpired
 			request.UpdatedAt = now.Format(time.RFC3339)
 			changed = true

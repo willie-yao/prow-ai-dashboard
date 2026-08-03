@@ -171,18 +171,20 @@ type Service struct {
 	previewStore        *previewStore
 	issueManagerFactory issueManagerFactory
 
-	rmu                sync.Mutex
-	requests           *actionRequestState
-	requestTimeout     time.Duration
-	requestNotify      RequestReadyNotifier
-	requestCancels     map[string]context.CancelFunc
-	requestConfirms    map[string]struct{}
-	requestDone        map[string]chan struct{}
-	requestCleanups    map[string]struct{}
-	requestsConfigured bool
-	requestWG          sync.WaitGroup
-	managedRuntime     func() (runtime.ManagedAgentRuntime, error)
-	requestStateWriter func(string, any) error
+	rmu                  sync.Mutex
+	requests             *actionRequestState
+	requestTimeout       time.Duration
+	requestNotify        RequestReadyNotifier
+	requestNotifyCancels map[string]context.CancelFunc
+	requestCancels       map[string]context.CancelFunc
+	requestConfirms      map[string]struct{}
+	requestDone          map[string]chan struct{}
+	requestCleanups      map[string]struct{}
+	requestsConfigured   bool
+	stopping             bool
+	requestWG            sync.WaitGroup
+	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter   func(string, any) error
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -194,7 +196,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		issueManagerFactory: func(token, owner, repo string) issuePreviewManager {
 			return issues.NewManager(issues.NewClient(token, owner, repo), filepath.Join(dataDir, "issue_state.json"), owner+"/"+repo, issues.Options{MaxNewPerRun: 1})
 		},
-		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{},
+		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
 	}
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {

@@ -153,6 +153,7 @@ export function ActionRequestPage() {
   async function refreshRequestState(id: string): Promise<ActionRequest | null> {
     try {
       const value = await loadLatestActionRequest(API_BASE, id);
+      if (activeRequestID.current !== id) return null;
       setRequest(value);
       if (value.id !== requestID) {
         navigate(`/action-request/${encodeURIComponent(value.id)}`, {
@@ -169,6 +170,7 @@ export function ActionRequestPage() {
     if (!request || !actionRequestCanConfirm(request.status, Boolean(request.preview))) {
       return;
     }
+    const startedRequestID = request.id;
     setConfirming(true);
     setError(null);
     try {
@@ -178,8 +180,10 @@ export function ActionRequestPage() {
       );
       if (!res.ok) throw new Error(await actionErrorMessage(res));
       const body = (await res.json()) as { url: string };
+      if (activeRequestID.current !== startedRequestID) return;
       setRequest({ ...request, status: "confirmed", result_url: body.url });
     } catch (e) {
+      if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
       setError(
@@ -230,6 +234,7 @@ export function ActionRequestPage() {
     if (!request || request.status !== "ready" || instruction.trim() === "") {
       return;
     }
+    const startedRequestID = request.id;
     setRefining(true);
     setError(null);
     try {
@@ -247,10 +252,12 @@ export function ActionRequestPage() {
       );
       if (!res.ok) throw new Error(await actionErrorMessage(res));
       const next = (await res.json()) as ActionRequest;
+      if (activeRequestID.current !== startedRequestID) return;
       setInstruction("");
       setRequest(next);
       navigate(`/action-request/${encodeURIComponent(next.id)}`, { replace: true });
     } catch (e) {
+      if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
       setError(
@@ -301,7 +308,7 @@ export function ActionRequestPage() {
       </ActionRequestPageFrame>
     );
   }
-  if (!request) {
+  if (!request || request.id !== requestID) {
     return (
       <ActionRequestPageFrame>
         <CircularProgress size={24} />

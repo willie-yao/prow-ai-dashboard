@@ -80,7 +80,11 @@ func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("draft-ready notifier was not called")
 	}
-	ready = waitRequest(t, service, created.ID, "alice", RequestReady)
+	deadline := time.Now().Add(time.Second)
+	for !ready.EmailSent && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		ready = waitRequest(t, service, created.ID, "alice", RequestReady)
+	}
 	if !ready.EmailSent {
 		t.Fatalf("email status not persisted: %+v", ready)
 	}
@@ -1170,5 +1174,83 @@ func TestCleanupRetriesFinalStateWriteFailure(t *testing.T) {
 	waitRequest(t, service, id, "alice", RequestCancelled)
 	if writes.Load() < 3 {
 		t.Fatalf("state writes = %d, want retry", writes.Load())
+	}
+}
+
+func TestSupersedingRequestCancelsReadyNotification(t *testing.T) {
+	service, pattern := requestTestService(t)
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	var calls atomic.Int32
+	service.ConfigureAsyncRequests(time.Minute, func(ctx context.Context, _ ActionRequestView) error {
+		if calls.Add(1) != 1 {
+			return nil
+		}
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return ctx.Err()
+	})
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, created.ID, "alice", RequestReady)
+	<-started
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("superseded ready notification was not cancelled")
+	}
+	waitRequest(t, service, replacement.ID, "alice", RequestReady)
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateRequestDoesNotReuseStaleReadyRequest(t *testing.T) {
+	service, pattern := requestTestService(t)
+	first, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestReady)
+	service.rmu.Lock()
+	service.requests.Requests[first.ID].PatternHash = "stale"
+	service.rmu.Unlock()
+	second, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("stale ready request %q was reused", first.ID)
+	}
+	waitRequest(t, service, second.ID, "alice", RequestReady)
+}
+
+func TestShutdownRejectsNewRequests(t *testing.T) {
+	service, pattern := requestTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.ConfigureAsyncRequestsWithContext(ctx, time.Minute, nil)
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		service.rmu.Lock()
+		stopping := service.stopping
+		service.rmu.Unlock()
+		if stopping {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", ""); err == nil || !strings.Contains(err.Error(), "stopping") {
+		t.Fatalf("CreateRequest() error = %v", err)
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
