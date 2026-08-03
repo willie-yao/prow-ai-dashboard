@@ -1188,7 +1188,26 @@ func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) s
 	return out.String()
 }
 
-var cliFlagRE = regexp.MustCompile(`--[A-Za-z][A-Za-z0-9-]*`)
+var longCLIFlagRE = regexp.MustCompile(`--[A-Za-z][A-Za-z0-9-]*`)
+var shortCLIFlagRE = regexp.MustCompile(`(^|[[:space:]])(-[A-Za-z][A-Za-z0-9]*)`)
+
+type cliFlagMatch struct {
+	Value string
+	Start int
+	End   int
+}
+
+func cliFlagMatches(text string) []cliFlagMatch {
+	matches := make([]cliFlagMatch, 0)
+	for _, indexes := range longCLIFlagRE.FindAllStringIndex(text, -1) {
+		matches = append(matches, cliFlagMatch{Value: text[indexes[0]:indexes[1]], Start: indexes[0], End: indexes[1]})
+	}
+	for _, indexes := range shortCLIFlagRE.FindAllStringSubmatchIndex(text, -1) {
+		matches = append(matches, cliFlagMatch{Value: text[indexes[4]:indexes[5]], Start: indexes[4], End: indexes[5]})
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Start < matches[j].Start })
+	return matches
+}
 
 func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisResponse {
 	matchedSkills := matchSkillsForDraft(s, parsed)
@@ -1233,7 +1252,7 @@ func readsArtifact(candidate string, full, base map[string]bool) bool {
 }
 
 func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skills.Skill, remediationFallback string) string {
-	flags := cliFlagRE.FindAllString(text, -1)
+	flags := cliFlagMatches(text)
 	if len(flags) == 0 {
 		return text
 	}
@@ -1249,13 +1268,13 @@ func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skill
 	}
 	joined := strings.Join(grounding, "\n")
 	groundedFlags := map[string]bool{}
-	for _, flag := range cliFlagRE.FindAllString(joined, -1) {
-		groundedFlags[flag] = true
+	for _, flag := range cliFlagMatches(joined) {
+		groundedFlags[flag.Value] = true
 	}
 	unsupported := map[string]bool{}
 	for _, flag := range flags {
-		if !groundedFlags[flag] {
-			unsupported[flag] = true
+		if !groundedFlags[flag.Value] {
+			unsupported[flag.Value] = true
 		}
 	}
 	if len(unsupported) == 0 {
@@ -1264,14 +1283,17 @@ func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skill
 	if remediationFallback != "" {
 		return remediationFallback
 	}
-	cleaned := cliFlagRE.ReplaceAllStringFunc(text, func(flag string) string {
-		if unsupported[flag] {
-			return ""
+	var cleaned strings.Builder
+	last := 0
+	for _, flag := range flags {
+		cleaned.WriteString(text[last:flag.Start])
+		if !unsupported[flag.Value] {
+			cleaned.WriteString(flag.Value)
 		}
-		return flag
-	})
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	return cleaned
+		last = flag.End
+	}
+	cleaned.WriteString(text[last:])
+	return strings.Join(strings.Fields(cleaned.String()), " ")
 }
 
 func compactPublishedStrings(values []string, limit int) []string {

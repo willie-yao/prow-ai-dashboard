@@ -114,10 +114,24 @@ func TestPreparePublishedAnalysisKeepsGroundedFlag(t *testing.T) {
 }
 
 func TestPreparePublishedAnalysisFallsBackForAnyUnsupportedRemediationFlag(t *testing.T) {
-	parsed := analysisResponse{SuggestedFix: "Run helm uninstall --dry-run release."}
-	got := (&agentState{}).preparePublishedAnalysis(parsed).SuggestedFix
-	if strings.Contains(got, "helm uninstall") || strings.Contains(got, "--dry-run") || !strings.Contains(got, "verified project automation") {
-		t.Fatalf("unsafe command rewrite was published: %q", got)
+	for _, fix := range []string{
+		"Run helm uninstall --dry-run release.",
+		"Run kubectl apply -f guessed.yaml.",
+		"Run helm uninstall -n prod release.",
+	} {
+		got := (&agentState{}).preparePublishedAnalysis(analysisResponse{SuggestedFix: fix}).SuggestedFix
+		if strings.Contains(got, "helm uninstall") || strings.Contains(got, "kubectl apply") || !strings.Contains(got, "verified project automation") {
+			t.Fatalf("unsafe command rewrite was published: input=%q output=%q", fix, got)
+		}
+	}
+}
+
+func TestPreparePublishedAnalysisKeepsGroundedShortFlags(t *testing.T) {
+	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool -abc", "helm uninstall -nprod release"}}}
+	for _, fix := range []string{"Run tool -abc.", "Run helm uninstall -nprod release."} {
+		if got := state.preparePublishedAnalysis(analysisResponse{SuggestedFix: fix}).SuggestedFix; got != fix {
+			t.Fatalf("grounded short flag changed: input=%q output=%q", fix, got)
+		}
 	}
 }
 
@@ -196,6 +210,39 @@ func TestPathQualifiedAndBareLineClaimsRequireCitations(t *testing.T) {
 	valid := analysisResponse{RootCause: "The failure is at build-log.txt:2494.", EvidenceCitations: []models.EvidenceCitation{citation}}
 	if out := critiqueDraftWithContent(valid, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence}); !out.Passed {
 		t.Fatalf("valid path-qualified claim failed: %+v", out)
+	}
+}
+
+func TestSourceLineClaimsCannotUseArtifactCitations(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build-log.txt": {Lines: map[int]string{999: "source line claim"}},
+	}
+	citation := models.EvidenceCitation{Path: "build-log.txt", LineStart: 999, LineEnd: 999, Quote: "source line claim"}
+	for _, text := range []string{
+		"The failure is in scripts/ci-e2e.sh:999.",
+		"The failure is in scripts/ci-e2e.sh at line 999.",
+	} {
+		parsed := analysisResponse{RootCause: text, EvidenceCitations: []models.EvidenceCitation{citation}}
+		out := critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence})
+		if out.Passed || len(out.CitationIssues) == 0 {
+			t.Fatalf("source claim %q used an artifact citation: %+v", text, out)
+		}
+		sanitized := sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: evidence})
+		if strings.Contains(sanitized.RootCause, "999") {
+			t.Fatalf("source line claim %q survived as %q", text, sanitized.RootCause)
+		}
+	}
+}
+
+func TestEvidenceOverflowOnlyBlocksLineAwareDrafts(t *testing.T) {
+	context := analysisCitationContext{Full: true}
+	plain := analysisResponse{RootCause: "The controller failed after the API became unavailable."}
+	if out := critiqueDraftWithContent(plain, nil, nil, nil, nil, nil, 0, context); !out.Passed {
+		t.Fatalf("plain draft was blocked by unused evidence overflow: %+v", out)
+	}
+	lineAware := analysisResponse{RootCause: "The controller failed at line 42."}
+	if out := critiqueDraftWithContent(lineAware, nil, nil, nil, nil, nil, 0, context); out.Passed || len(out.CitationIssues) == 0 {
+		t.Fatalf("line-aware draft ignored evidence overflow: %+v", out)
 	}
 }
 

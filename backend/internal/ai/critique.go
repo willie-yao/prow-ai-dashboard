@@ -457,8 +457,12 @@ var pathLineSuffixRE = regexp.MustCompile(`(?i)(?::(\d+)(?:-(\d+))?|#L(\d+)(?:-L
 var bareLineClaimRE = regexp.MustCompile(`\bL(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?\b`)
 
 func validateAnalysisCitations(parsed analysisResponse, context analysisCitationContext) []string {
+	claims := proseLineClaims(parsed.RootCause + "\n" + parsed.Summary)
 	if context.Full {
-		return []string{"evidence read budget was exceeded"}
+		if len(parsed.EvidenceCitations) > 0 || len(claims) > 0 {
+			return []string{"evidence read budget was exceeded"}
+		}
+		return nil
 	}
 	var issues []string
 	if len(parsed.EvidenceCitations) > 20 {
@@ -469,7 +473,6 @@ func validateAnalysisCitations(parsed analysisResponse, context analysisCitation
 			issues = append(issues, fmt.Sprintf("citation %d %s", i+1, issue))
 		}
 	}
-	claims := proseLineClaims(parsed.RootCause + "\n" + parsed.Summary)
 	for _, claim := range claims {
 		matched := false
 		for _, citation := range parsed.EvidenceCitations {
@@ -491,6 +494,9 @@ func validateAnalysisCitations(parsed analysisResponse, context analysisCitation
 
 func citationSupportsLineClaim(citation models.EvidenceCitation, claim proseLineClaim) bool {
 	if citation.LineStart > claim.Start || citation.LineEnd < claim.End {
+		return false
+	}
+	if claim.Path != "" && isSourceCitation(claim.Path) && len(ArtifactCitations(claim.Path)) == 0 {
 		return false
 	}
 	return claim.Path == "" || NormalizeArtifactCitation(citation.Path) == claim.Path
@@ -557,7 +563,7 @@ func proseLineClaims(value string) []proseLineClaim {
 		appendClaim(match[0], match[1], match[2], match[3], match[4], match[5], "")
 	}
 	for _, match := range pathLineSuffixRE.FindAllStringSubmatchIndex(value, -1) {
-		pathMatches := artifactCitationRE.FindAllStringIndex(value[:match[0]], -1)
+		pathMatches := lineClaimPathMatches(value[:match[0]])
 		if len(pathMatches) == 0 || pathMatches[len(pathMatches)-1][1] != match[0] {
 			continue
 		}
@@ -596,9 +602,10 @@ func nearbyArtifactCitation(value string, claimStart, claimEnd int) string {
 	if boundary >= 0 {
 		prefix = prefix[boundary+1:]
 	}
-	paths := ArtifactCitations(prefix)
+	paths := lineClaimPathMatches(prefix)
 	if len(paths) > 0 {
-		return paths[len(paths)-1]
+		pathMatch := paths[len(paths)-1]
+		return NormalizeArtifactCitation(prefix[pathMatch[0]:pathMatch[1]])
 	}
 	suffix := value[claimEnd:]
 	boundary = len(suffix)
@@ -607,11 +614,32 @@ func nearbyArtifactCitation(value string, claimStart, claimEnd int) string {
 			boundary = min(boundary, index)
 		}
 	}
-	paths = ArtifactCitations(suffix[:boundary])
+	paths = lineClaimPathMatches(suffix[:boundary])
 	if len(paths) > 0 {
-		return paths[0]
+		return NormalizeArtifactCitation(suffix[paths[0][0]:paths[0][1]])
 	}
 	return ""
+}
+
+func lineClaimPathMatches(value string) [][2]int {
+	seen := map[[2]int]bool{}
+	var matches [][2]int
+	for _, re := range []*regexp.Regexp{artifactCitationRE, sourceCitationRE} {
+		for _, indexes := range re.FindAllStringIndex(value, -1) {
+			span := [2]int{indexes[0], indexes[1]}
+			if !seen[span] {
+				seen[span] = true
+				matches = append(matches, span)
+			}
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i][0] != matches[j][0] {
+			return matches[i][0] < matches[j][0]
+		}
+		return matches[i][1] < matches[j][1]
+	})
+	return matches
 }
 
 func formatCitationIssues(issues []string) string {
