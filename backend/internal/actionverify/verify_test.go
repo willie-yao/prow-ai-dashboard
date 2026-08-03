@@ -239,6 +239,28 @@ func TestVerifyStructuredJSONConfigurationMapping(t *testing.T) {
 	}
 }
 
+func TestVerifyStructuredMalformedConfigurationIsInconclusive(t *testing.T) {
+	for name, test := range map[string]struct {
+		filePath string
+		content  string
+	}{
+		"malformed JSON": {filePath: "config/features.json", content: `{"other":true`},
+		"trailing JSON":  {filePath: "config/features.json", content: `{"other":true} trailing`},
+		"malformed YAML": {filePath: "config/features.yaml", content: "featureGates: [\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := verify(t, fakeReader{archive: archive(map[string]string{test.filePath: test.content})}, Input{Targets: []models.RemediationTarget{{
+				Intent: models.RemediationIntentSetConfiguration,
+				Path:   test.filePath,
+				Value:  "GenericWorkload=true",
+			}}})
+			if result.State != StateInconclusive {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
 func TestVerifyStructuredINICommentsAndUnknownFormats(t *testing.T) {
 	for name, test := range map[string]struct {
 		filePath string

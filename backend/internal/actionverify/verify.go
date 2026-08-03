@@ -575,10 +575,12 @@ func configurationValuePresent(filePath, content, value string) (bool, bool) {
 		if present, parsed := yamlConfigurationValuePresent(content, key, expected); parsed {
 			return present, true
 		}
+		return false, false
 	case ".json":
 		if present, parsed := jsonConfigurationValuePresent(content, key, expected); parsed {
 			return present, true
 		}
+		return false, false
 	}
 	markers, supported := configCommentMarkers(filePath)
 	if !supported {
@@ -652,6 +654,9 @@ func jsonConfigurationValuePresent(content, key, expected string) (bool, bool) {
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
+		return false, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return false, false
 	}
 	return jsonValueHasConfiguration(value, key, expected), true
