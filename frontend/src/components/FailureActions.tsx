@@ -371,7 +371,10 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   ): Promise<ActionRequest | null> {
     try {
       const value = await loadLatestActionRequest(API_BASE, id);
-      if (activeFailureID.current !== startedFailureID || activeRequestID.current !== id) return null;
+      if (
+        activeFailureID.current !== startedFailureID ||
+        (activeRequestID.current !== undefined && activeRequestID.current !== id)
+      ) return null;
       activeAction.current = value.kind;
       setAction(value.kind);
       setRequest(value);

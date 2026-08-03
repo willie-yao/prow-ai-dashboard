@@ -310,18 +310,28 @@ func (s *Service) finishGeneration(id string) {
 	}
 }
 
-func (s *Service) startCleanup(id string) {
-	s.rmu.Lock()
+func (s *Service) registerCleanupLocked(id string) bool {
 	if s.requestCleanups == nil {
 		s.requestCleanups = map[string]struct{}{}
 	}
 	if _, running := s.requestCleanups[id]; running {
-		s.rmu.Unlock()
-		return
+		return false
 	}
 	s.requestCleanups[id] = struct{}{}
-	s.rmu.Unlock()
 	s.requestWG.Add(1)
+	return true
+}
+
+func (s *Service) startCleanup(id string) {
+	s.rmu.Lock()
+	registered := s.registerCleanupLocked(id)
+	s.rmu.Unlock()
+	if registered {
+		s.launchCleanup(id)
+	}
+}
+
+func (s *Service) launchCleanup(id string) {
 	go func() {
 		defer s.requestWG.Done()
 		defer func() {
@@ -1165,8 +1175,8 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			request.Cleanup = &actionCleanupState{FinalStatus: RequestExpired, Reason: "action request expired during runtime cleanup", RequestedAt: now.Format(time.RFC3339)}
 			request.UpdatedAt = now.Format(time.RFC3339)
 			changed = true
-			if s.requestsConfigured {
-				go s.startCleanup(id)
+			if s.requestsConfigured && s.registerCleanupLocked(id) {
+				s.launchCleanup(id)
 			}
 			continue
 		}
