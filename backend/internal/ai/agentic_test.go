@@ -2092,8 +2092,8 @@ func TestCritiqueDraft_FeedbackTruncatesLongFix(t *testing.T) {
 // hallucinatedFinalJSON has a clean suggested_fix but cites unread manager.log.
 const hallucinatedFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"manager.log shows the controller failed to reconcile the AzureMachine","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":[]}`
 
-// readThenCleanFinalJSON cites build-log.txt, which the model has read.
-const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"]}`
+// readThenCleanFinalJSON cites build-log.txt at the exact line returned by grep.
+const readThenCleanFinalJSON = `{"summary":"deep","is_transient":false,"root_cause":"build-log.txt:42 shows the vnet peering name mismatch","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 142 to match the staging vnet peering name; reapply.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"vnet peering mismatch"}]}`
 
 // TestAgentic_HallucinationRetry verifies an unread-citation critique can
 // recover after the model reads and cites a matching artifact.
@@ -2103,16 +2103,16 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 
 	// Round 1: model emits final citing manager.log (never read).
 	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
-	// Round 2: after critique feedback, model reads build-log.txt.
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
-		"path": "build-log.txt", "offset": 0, "length": 256,
+	// Round 2: after critique feedback, model greps the exact build-log line.
+	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
 	}))
 	// Round 3: re-emit citing build-log.txt, which passes.
 	srv.push(200, chatRespFinal(readThenCleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{
-		files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch on line 42\n")},
+		files: map[string][]byte{"build-log.txt": []byte(strings.Repeat("\n", 41) + "vnet peering mismatch on line 42\n")},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
 	opts := AgenticOptions{
@@ -3332,7 +3332,7 @@ func TestEvidenceTrackingCanonicalizesSafeToolPath(t *testing.T) {
 	}
 }
 
-func TestTruncatedToolEnvelopeDoesNotCreateInvisibleContentProof(t *testing.T) {
+func TestTruncatedToolEnvelopeCreatesNoInvisibleEvidence(t *testing.T) {
 	registry, enabled := newTestRegistry(t)
 	line := "MATCH " + strings.Repeat("x", 900) + "\n"
 	browser := &fakeBrowser{files: map[string][]byte{"logs/large.log": []byte(strings.Repeat(line, 100))}}
@@ -3353,7 +3353,7 @@ func TestTruncatedToolEnvelopeDoesNotCreateInvisibleContentProof(t *testing.T) {
 	if len(envelope) <= agenticToolBudget || modelVisibleToolPayload(envelope) != nil {
 		t.Fatalf("expected a truncated non-decodable envelope, length=%d", len(envelope))
 	}
-	if !state.evidenceArtifactsFull["logs/large.log"] || len(state.evidenceContentByPath) != 0 {
+	if len(state.evidenceArtifactsFull) != 0 || len(state.evidenceContentByPath) != 0 || len(state.analysisEvidence) != 0 {
 		t.Fatalf("capped evidence tracking = paths:%v content:%v", state.evidenceArtifactsFull, state.evidenceContentByPath)
 	}
 }

@@ -1155,6 +1155,7 @@ func sanitizePublishedCitations(parsed analysisResponse, context analysisCitatio
 	parsed.EvidenceCitations = valid
 	parsed.RootCause = removeUncitedLineClaims(parsed.RootCause, valid)
 	parsed.Summary = removeUncitedLineClaims(parsed.Summary, valid)
+	parsed.SuggestedFix = removeUncitedLineClaims(parsed.SuggestedFix, valid)
 	return parsed
 }
 
@@ -1176,6 +1177,8 @@ func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) s
 		}
 		if supported {
 			out.WriteString(text[claim.MatchStart:claim.MatchEnd])
+		} else if text[claim.MatchStart] == ':' || text[claim.MatchStart] == '#' {
+			// Keep the artifact path while dropping an unsupported attached suffix.
 		} else {
 			out.WriteString("the cited artifact evidence")
 		}
@@ -1210,7 +1213,7 @@ func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisR
 	parsed.SuggestedFix = s.removeUngroundedSourcePaths(parsed.SuggestedFix, "verified project automation", false)
 	parsed.RootCause = s.removeUngroundedCLIFlags(parsed.RootCause, matchedSkills, "")
 	parsed.Summary = s.removeUngroundedCLIFlags(parsed.Summary, matchedSkills, "")
-	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, "Apply the required vendor configuration outcome using verified project automation, then rerun the failing job.")
+	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, "Apply the required remediation outcome using verified project automation, then rerun the failing job.")
 	return parsed
 }
 
@@ -1229,7 +1232,7 @@ func readsArtifact(candidate string, full, base map[string]bool) bool {
 	return full[normalized] || base[path.Base(normalized)]
 }
 
-func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skills.Skill, vendorFallback string) string {
+func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skills.Skill, remediationFallback string) string {
 	flags := cliFlagRE.FindAllString(text, -1)
 	if len(flags) == 0 {
 		return text
@@ -1258,6 +1261,9 @@ func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skill
 	if len(unsupported) == 0 {
 		return text
 	}
+	if remediationFallback != "" {
+		return remediationFallback
+	}
 	cleaned := cliFlagRE.ReplaceAllStringFunc(text, func(flag string) string {
 		if unsupported[flag] {
 			return ""
@@ -1265,9 +1271,6 @@ func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skill
 		return flag
 	})
 	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	if vendorFallback != "" && strings.Contains(strings.ToLower(cleaned), "az ") {
-		return vendorFallback
-	}
 	return cleaned
 }
 
@@ -2084,17 +2087,16 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	// the hallucination gate.
 	if isContentFetchingTool(tc.Function.Name) {
 		if !toolFailed {
-			if p := extractToolPathArg(tc.Function.Arguments); p != "" {
+			if p := extractToolPathArg(tc.Function.Arguments); p != "" && visiblePayload != nil {
 				s.recordSuccessfulRead(p)
-				if !recordAnalysisChatEvidence(s.analysisEvidence, tc, result.Payload) {
+				if !recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload) {
 					s.analysisEvidenceFull = true
 				}
-				originalSnippets := toolResultSnippets(tc.Function.Name, result.Payload)
+				visibleSnippets := toolResultSnippets(tc.Function.Name, visiblePayload)
 				newPath := false
-				if len(originalSnippets) > 0 {
+				if len(visibleSnippets) > 0 {
 					newPath = s.recordEvidenceRead(p)
 				}
-				visibleSnippets := toolResultSnippets(tc.Function.Name, visiblePayload)
 				contentAdded := false
 				for _, snippet := range visibleSnippets {
 					contentAdded = s.recordEvidenceContent(p, snippet) || contentAdded

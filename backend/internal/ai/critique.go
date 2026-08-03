@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -452,6 +453,8 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 }
 
 var proseLineClaimRE = regexp.MustCompile(`(?i)\blines?\s+L?(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?`)
+var pathLineSuffixRE = regexp.MustCompile(`(?i)(?::(\d+)(?:-(\d+))?|#L(\d+)(?:-L?(\d+))?)\b`)
+var bareLineClaimRE = regexp.MustCompile(`\bL(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?\b`)
 
 func validateAnalysisCitations(parsed analysisResponse, context analysisCitationContext) []string {
 	if context.Full {
@@ -532,30 +535,57 @@ func normalizeCitationText(value string) string {
 }
 
 func proseLineClaims(value string) []proseLineClaim {
-	matches := proseLineClaimRE.FindAllStringSubmatchIndex(value, -1)
-	claims := make([]proseLineClaim, 0, len(matches))
-	for _, match := range matches {
-		start, err := strconv.Atoi(value[match[2]:match[3]])
+	var claims []proseLineClaim
+	appendClaim := func(matchStart, matchEnd, startIndex, startEnd, endIndex, endEnd int, explicitPath string) {
+		start, err := strconv.Atoi(value[startIndex:startEnd])
 		if err != nil || start <= 0 {
-			continue
+			return
 		}
 		end := start
-		if match[4] >= 0 {
-			if parsed, err := strconv.Atoi(value[match[4]:match[5]]); err == nil && parsed >= start {
+		if endIndex >= 0 {
+			if parsed, err := strconv.Atoi(value[endIndex:endEnd]); err == nil && parsed >= start {
 				end = parsed
 			}
 		}
-		claims = append(claims, proseLineClaim{
-			Start: start, End: end,
-			Path:       nearbyArtifactCitation(value, match[0]),
-			MatchStart: match[0], MatchEnd: match[1],
-		})
+		path := explicitPath
+		if path == "" {
+			path = nearbyArtifactCitation(value, matchStart, matchEnd)
+		}
+		claims = append(claims, proseLineClaim{Start: start, End: end, Path: path, MatchStart: matchStart, MatchEnd: matchEnd})
 	}
+	for _, match := range proseLineClaimRE.FindAllStringSubmatchIndex(value, -1) {
+		appendClaim(match[0], match[1], match[2], match[3], match[4], match[5], "")
+	}
+	for _, match := range pathLineSuffixRE.FindAllStringSubmatchIndex(value, -1) {
+		pathMatches := artifactCitationRE.FindAllStringIndex(value[:match[0]], -1)
+		if len(pathMatches) == 0 || pathMatches[len(pathMatches)-1][1] != match[0] {
+			continue
+		}
+		pathMatch := pathMatches[len(pathMatches)-1]
+		startIndex, startEnd, endIndex, endEnd := match[2], match[3], match[4], match[5]
+		if startIndex < 0 {
+			startIndex, startEnd, endIndex, endEnd = match[6], match[7], match[8], match[9]
+		}
+		appendClaim(match[0], match[1], startIndex, startEnd, endIndex, endEnd, NormalizeArtifactCitation(value[pathMatch[0]:pathMatch[1]]))
+	}
+	for _, match := range bareLineClaimRE.FindAllStringSubmatchIndex(value, -1) {
+		overlaps := false
+		for _, claim := range claims {
+			if match[0] < claim.MatchEnd && match[1] > claim.MatchStart {
+				overlaps = true
+				break
+			}
+		}
+		if !overlaps {
+			appendClaim(match[0], match[1], match[2], match[3], match[4], match[5], nearbyArtifactCitation(value, match[0], match[1]))
+		}
+	}
+	sort.Slice(claims, func(i, j int) bool { return claims[i].MatchStart < claims[j].MatchStart })
 	return claims
 }
 
-func nearbyArtifactCitation(value string, claimStart int) string {
-	if claimStart <= 0 || claimStart > len(value) {
+func nearbyArtifactCitation(value string, claimStart, claimEnd int) string {
+	if claimStart < 0 || claimEnd < claimStart || claimEnd > len(value) {
 		return ""
 	}
 	prefix := value[:claimStart]
@@ -567,10 +597,21 @@ func nearbyArtifactCitation(value string, claimStart int) string {
 		prefix = prefix[boundary+1:]
 	}
 	paths := ArtifactCitations(prefix)
-	if len(paths) == 0 {
-		return ""
+	if len(paths) > 0 {
+		return paths[len(paths)-1]
 	}
-	return paths[len(paths)-1]
+	suffix := value[claimEnd:]
+	boundary = len(suffix)
+	for _, separator := range []string{"\n", ";", ". "} {
+		if index := strings.Index(suffix, separator); index >= 0 {
+			boundary = min(boundary, index)
+		}
+	}
+	paths = ArtifactCitations(suffix[:boundary])
+	if len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
 }
 
 func formatCitationIssues(issues []string) string {

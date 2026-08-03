@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
@@ -48,6 +49,13 @@ func TestAnalysisCitationValidation(t *testing.T) {
 	sanitized = sanitizePublishedCitations(wrongPath, analysisCitationContext{Evidence: evidence})
 	if strings.Contains(sanitized.RootCause, "line 2494") {
 		t.Fatalf("wrong-path line claim was published: %+v", sanitized)
+	}
+
+	wrongSuffixPath := valid
+	wrongSuffixPath.RootCause = "The etcd join failure is shown at line 2494 in other.log."
+	out = critiqueDraftWithContent(wrongSuffixPath, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence})
+	if out.Passed || !strings.Contains(strings.Join(out.CitationIssues, " "), "other.log:2494-2494") {
+		t.Fatalf("suffix-path outcome = %+v", out)
 	}
 }
 
@@ -105,6 +113,14 @@ func TestPreparePublishedAnalysisKeepsGroundedFlag(t *testing.T) {
 	}
 }
 
+func TestPreparePublishedAnalysisFallsBackForAnyUnsupportedRemediationFlag(t *testing.T) {
+	parsed := analysisResponse{SuggestedFix: "Run helm uninstall --dry-run release."}
+	got := (&agentState{}).preparePublishedAnalysis(parsed).SuggestedFix
+	if strings.Contains(got, "helm uninstall") || strings.Contains(got, "--dry-run") || !strings.Contains(got, "verified project automation") {
+		t.Fatalf("unsafe command rewrite was published: %q", got)
+	}
+}
+
 func TestPreparePublishedAnalysisRequiresExactFlagGrounding(t *testing.T) {
 	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool --supported-extra"}}}
 	parsed := analysisResponse{SuggestedFix: "Run tool --supported and rerun the job."}
@@ -146,6 +162,57 @@ func TestInvalidEvidenceCitationIsDropped(t *testing.T) {
 	sanitized := sanitizePublishedCitations(parsed, context)
 	if len(sanitized.EvidenceCitations) != 0 || strings.Contains(sanitized.RootCause, "line 10") {
 		t.Fatalf("invalid citation was published: %+v", sanitized)
+	}
+}
+
+func TestSuggestedFixLineClaimIsSanitized(t *testing.T) {
+	parsed := analysisResponse{SuggestedFix: "Update scripts/ci-e2e.sh at line 999 and rerun the job."}
+	sanitized := sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: map[string]*analysisChatEvidence{}})
+	if strings.Contains(sanitized.SuggestedFix, "line 999") {
+		t.Fatalf("unsupported suggested-fix line survived: %q", sanitized.SuggestedFix)
+	}
+}
+
+func TestPathQualifiedAndBareLineClaimsRequireCitations(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build-log.txt": {Lines: map[int]string{2494: "error execution phase etcd-join"}},
+	}
+	citation := models.EvidenceCitation{Path: "build-log.txt", LineStart: 2494, LineEnd: 2494, Quote: "error execution phase etcd-join"}
+	for _, text := range []string{
+		"The failure is at build-log.txt:73.",
+		"The failure is at build-log.txt#L73.",
+		"The failure is at L73.",
+	} {
+		parsed := analysisResponse{RootCause: text, EvidenceCitations: []models.EvidenceCitation{citation}}
+		out := critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence})
+		if out.Passed || len(out.CitationIssues) == 0 {
+			t.Fatalf("unsupported claim %q passed: %+v", text, out)
+		}
+		sanitized := sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: evidence})
+		if strings.Contains(sanitized.RootCause, "73") {
+			t.Fatalf("unsupported claim %q survived as %q", text, sanitized.RootCause)
+		}
+	}
+	valid := analysisResponse{RootCause: "The failure is at build-log.txt:2494.", EvidenceCitations: []models.EvidenceCitation{citation}}
+	if out := critiqueDraftWithContent(valid, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence}); !out.Passed {
+		t.Fatalf("valid path-qualified claim failed: %+v", out)
+	}
+}
+
+func TestCappedToolPayloadCannotGroundHiddenEvidence(t *testing.T) {
+	state := &agentState{opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now()}
+	payload := map[string]interface{}{
+		"matches": []interface{}{
+			map[string]interface{}{"context": []interface{}{"> 1: " + strings.Repeat("x", agenticToolBudget)}},
+			map[string]interface{}{"context": []interface{}{"> 2494: hidden evidence"}},
+		},
+	}
+	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, payload))
+	evidence := map[string]*analysisChatEvidence{}
+	call := modelToolCall{Function: modelFunction{Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`}}
+	recordAnalysisChatEvidence(evidence, call, visible)
+	if issue := evidenceCitationIssue(models.EvidenceCitation{Path: "build-log.txt", LineStart: 2494, LineEnd: 2494, Quote: "hidden evidence"}, evidence); issue == "" {
+		t.Fatal("hidden capped evidence was accepted")
 	}
 }
 
