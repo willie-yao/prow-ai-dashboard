@@ -510,7 +510,7 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	files = slices.Compact(files)
 	result, err := s.cachedSourceVerification(ctx, repo.Owner, repo.Name, revision, proposal, files)
 	if err != nil {
-		return fmt.Errorf("%w: pinned source could not be checked", ErrRemediationInconclusive)
+		return fmt.Errorf("%w: pinned source could not be checked: %w", ErrRemediationInconclusive, err)
 	}
 	switch result.State {
 	case actionverify.StateUnresolved:

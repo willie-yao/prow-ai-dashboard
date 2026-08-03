@@ -291,19 +291,17 @@ func implementationSymbols(proposal string) (map[string]bool, bool) {
 			clause = clause[:boundary]
 		}
 		quoted := backtickSpanPattern.FindAllString(clause, -1)
-		if len(quoted) > 0 {
-			for _, span := range quoted {
-				if symbol, ok := quotedImplementationSymbol(span); ok {
-					symbols[symbol] = true
-				}
+		for _, span := range quoted {
+			if symbol, ok := quotedImplementationSymbol(span); ok {
+				symbols[symbol] = true
 			}
-			continue
 		}
-		candidates := identifierTokenPattern.FindAllStringIndex(clause, -1)
+		unquotedClause := backtickSpanPattern.ReplaceAllString(clause, " ")
+		candidates := identifierTokenPattern.FindAllStringIndex(unquotedClause, -1)
 		previousEnd := -1
 	candidateLoop:
 		for _, location := range candidates {
-			candidate := clause[location[0]:location[1]]
+			candidate := unquotedClause[location[0]:location[1]]
 			if !codeLikeIdentifier(candidate) {
 				continue
 			}
@@ -312,7 +310,7 @@ func implementationSymbols(proposal string) (map[string]bool, bool) {
 				previousEnd = location[1]
 				continue
 			}
-			gap := strings.ToLower(strings.TrimSpace(clause[previousEnd:location[0]]))
+			gap := strings.ToLower(strings.TrimSpace(unquotedClause[previousEnd:location[0]]))
 			switch {
 			case gap == "and" || gap == "or" || gap == "," || gap == ", and" || gap == ", or":
 				symbols[candidate] = true

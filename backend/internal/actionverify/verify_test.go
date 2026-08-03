@@ -363,3 +363,10 @@ func TestVerifyDoesNotCombineMutuallyExclusiveFiles(t *testing.T) {
 		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"target/main.go"},
 	}, StateInconclusive)
 }
+
+func TestVerifyRequiresMixedQuotedAndUnquotedSymbols(t *testing.T) {
+	reader := fakeReader{"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n"}
+	verifyState(t, reader, Input{
+		Proposal: "Implement MissingHelper and call `ExistingFix`.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+}

@@ -494,6 +494,7 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		return
 	}
 	if errors.Is(err, actions.ErrRemediationInconclusive) {
+		log.Printf("action source verification inconclusive for %s (by %s): %s", id, login, safeOperatorError(err))
 		http.Error(w, "source verification was inconclusive; investigate the grounded source before filing", http.StatusConflict)
 		return
 	}
