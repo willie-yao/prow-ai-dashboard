@@ -570,8 +570,6 @@ func doctorLabelSelectorRestricted(selector *doctorLabelSelector) bool {
 			continue
 		}
 		switch expression.Operator {
-		case "Exists":
-			return true
 		case "In":
 			if len(expression.Values) > 0 {
 				return true
