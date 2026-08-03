@@ -31,6 +31,7 @@ type RevisionContext struct {
 // SourceContext is one independently verified source investigation result.
 type SourceContext struct {
 	Finding   string     `json:"finding"`
+	Revision  string     `json:"revision"`
 	Citations []Evidence `json:"citations"`
 }
 
@@ -60,6 +61,9 @@ func (c GenerationContext) Validate() error {
 		}
 	}
 	if c.Source != nil {
+		if len(strings.TrimSpace(c.Source.Revision)) != 40 {
+			return fmt.Errorf("source revision must be a full commit SHA")
+		}
 		if strings.TrimSpace(c.Source.Finding) == "" || len(c.Source.Finding) > maxContextTextBytes {
 			return fmt.Errorf("source finding must be 1-%d bytes", maxContextTextBytes)
 		}

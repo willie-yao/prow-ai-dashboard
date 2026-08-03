@@ -681,6 +681,8 @@ func (s *Service) generateFixPreviewForPattern(
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
 		}
 		if generationContext.Source != nil {
+			repo := s.cfg.EffectiveAnalysisSourceRepo()
+			verificationPattern.SourceRef = repo.Owner + "/" + repo.Name + "@" + generationContext.Source.Revision
 			verificationPattern.RelevantFiles = nil
 			for _, citation := range generationContext.Source.Citations {
 				verificationPattern.RelevantFiles = append(verificationPattern.RelevantFiles, citation.Path)

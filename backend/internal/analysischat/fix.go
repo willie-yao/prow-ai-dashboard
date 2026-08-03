@@ -28,6 +28,7 @@ type FixCandidate struct {
 	ProposedRevision  *Revision
 	ArtifactCitations []Citation
 	SourceRequestID   string
+	SourceRevision    string
 	SourceResult      *sourceinvestigation.Result
 	Pattern           models.PatternAnalysis
 }
@@ -104,6 +105,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 				return changed, sourceinvestigation.ErrInvalidResult
 			}
 			candidate.SourceRequestID = sourceRequestID
+			candidate.SourceRevision = record.Subject.Repository.Revision
 			candidate.SourceResult = sourceinvestigation.CloneResult(record.View.Result)
 			return changed, nil
 		default:
