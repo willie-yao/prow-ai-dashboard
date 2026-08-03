@@ -324,9 +324,18 @@ func githubExpression(value any, scope, name string) bool {
 	return body == scope+"."+name
 }
 
+type doctorLabelSelector struct {
+	MatchLabels      map[string]string `yaml:"matchLabels"`
+	MatchExpressions []struct {
+		Key      string   `yaml:"key"`
+		Operator string   `yaml:"operator"`
+		Values   []string `yaml:"values"`
+	} `yaml:"matchExpressions"`
+}
+
 type doctorNetworkPolicyPeer struct {
-	PodSelector       map[string]any `yaml:"podSelector"`
-	NamespaceSelector map[string]any `yaml:"namespaceSelector"`
+	PodSelector       *doctorLabelSelector `yaml:"podSelector"`
+	NamespaceSelector *doctorLabelSelector `yaml:"namespaceSelector"`
 	IPBlock           *struct {
 		CIDR string `yaml:"cidr"`
 	} `yaml:"ipBlock"`
@@ -534,9 +543,13 @@ func doctorNetworkPolicyPeerRestricted(peer doctorNetworkPolicyPeer) bool {
 		return err == nil && prefix.Bits() > 0
 	}
 	if peer.NamespaceSelector != nil {
-		return len(peer.NamespaceSelector) > 0 || len(peer.PodSelector) > 0
+		return doctorLabelSelectorRestricted(peer.NamespaceSelector) || doctorLabelSelectorRestricted(peer.PodSelector)
 	}
-	return peer.PodSelector != nil
+	return doctorLabelSelectorRestricted(peer.PodSelector)
+}
+
+func doctorLabelSelectorRestricted(selector *doctorLabelSelector) bool {
+	return selector != nil && (len(selector.MatchLabels) > 0 || len(selector.MatchExpressions) > 0)
 }
 
 func placeholder(value string) bool {
