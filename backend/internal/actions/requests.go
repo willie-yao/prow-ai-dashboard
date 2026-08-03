@@ -406,8 +406,11 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 				return s.currentRequestView(id), runtime.ErrUnavailable
 			}
 			cleaner, err := s.managedRuntime()
-			if err != nil || cleaner == nil {
+			if err != nil {
 				return s.currentRequestView(id), err
+			}
+			if cleaner == nil {
+				return s.currentRequestView(id), runtime.ErrUnavailable
 			}
 			if err := cleaner.Cleanup(ctx, *work); err != nil {
 				return s.currentRequestView(id), err
@@ -487,7 +490,6 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 		*request = previous
 		return ActionRequestView{}, err
 	}
-	delete(s.requestDone, id)
 	return request.ActionRequestView, nil
 }
 

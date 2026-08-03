@@ -1057,3 +1057,63 @@ func TestCreateRequestDoesNotDeduplicateDifferentInstruction(t *testing.T) {
 	waitRequest(t, service, first.ID, "alice", RequestReady)
 	waitRequest(t, service, second.ID, "alice", RequestFailed)
 }
+
+func TestCleanupRetriesAfterRuntimeBecomesAvailable(t *testing.T) {
+	service, pattern := requestTestService(t)
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return nil, nil }
+	now := time.Now().UTC()
+	const id = "runtime-unavailable"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+	}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
+	}
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	waitRequest(t, service, id, "alice", RequestCancelled)
+}
+
+func TestOverlappingCleanupWaitsForGenerationExit(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "overlapping-cleanup"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestCancelling,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Cleanup: &actionCleanupState{FinalStatus: RequestCancelled, RequestedAt: now.Format(time.RFC3339)},
+	}
+	service.requestDone[id] = make(chan struct{})
+	firstDone := make(chan ActionRequestView, 1)
+	go func() {
+		view, _ := service.cleanupRequest(context.Background(), id)
+		firstDone <- view
+	}()
+	time.Sleep(20 * time.Millisecond)
+	service.rmu.Lock()
+	service.requests.Requests[id].Runtime = &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}
+	service.rmu.Unlock()
+	second, err := service.cleanupRequest(context.Background(), id)
+	if err != nil || second.Status != RequestCancelled {
+		t.Fatalf("second cleanup view=%+v err=%v", second, err)
+	}
+	select {
+	case <-firstDone:
+		t.Fatal("first cleanup returned before generation exited")
+	case <-time.After(20 * time.Millisecond):
+	}
+	service.finishGeneration(id)
+	select {
+	case first := <-firstDone:
+		if first.Status != RequestCancelled {
+			t.Fatalf("first cleanup view=%+v", first)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first cleanup did not finish after generation exit")
+	}
+}
