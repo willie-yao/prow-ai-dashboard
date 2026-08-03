@@ -45,6 +45,7 @@ type Result struct {
 type sourceEvidence struct {
 	definitions        map[string]map[string]bool
 	calls              map[string]map[string]bool
+	references         map[string]map[string]bool
 	ambiguousSelectors map[string]bool
 }
 
@@ -156,6 +157,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	evidence := sourceEvidence{
 		definitions:        map[string]map[string]bool{},
 		calls:              map[string]map[string]bool{},
+		references:         map[string]map[string]bool{},
 		ambiguousSelectors: map[string]bool{},
 	}
 	constrainedSymbols := map[string]bool{}
@@ -176,7 +178,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		target := &evidence
 		if constrained {
 			target = &sourceEvidence{
-				definitions: map[string]map[string]bool{}, calls: map[string]map[string]bool{}, ambiguousSelectors: map[string]bool{},
+				definitions: map[string]map[string]bool{}, calls: map[string]map[string]bool{}, references: map[string]map[string]bool{}, ambiguousSelectors: map[string]bool{},
 			}
 		}
 		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, target)
@@ -224,6 +226,9 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 				for candidatePackage := range extra.calls[symbol] {
 					constrainedSymbols[symbol] = constrainedSymbols[symbol] || anchors[symbol][candidatePackage]
 				}
+				for candidatePackage := range extra.references[symbol] {
+					constrainedSymbols[symbol] = constrainedSymbols[symbol] || anchors[symbol][candidatePackage]
+				}
 				if extra.ambiguousSelectors[symbol] && anchors[symbol][packageID] {
 					constrainedSymbols[symbol] = true
 				}
@@ -241,6 +246,9 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		}
 		if constrainedSymbols[symbol] {
 			return Result{State: StateInconclusive, Reason: fmt.Sprintf("matching evidence for %s is build constrained", symbol)}, nil
+		}
+		if len(evidence.references[symbol]) > 0 {
+			return Result{State: StateInconclusive, Reason: fmt.Sprintf("code references to %s could not be resolved as direct invocations", symbol)}, nil
 		}
 		if evidence.ambiguousSelectors[symbol] || packageIdentityAmbiguous(symbol, evidence) {
 			return Result{State: StateInconclusive, Reason: fmt.Sprintf("selector identity for %s could not be resolved", symbol)}, nil
@@ -607,7 +615,53 @@ func inspectGoSource(path, content string, symbols map[string]bool, resolver pac
 		symbols: symbols, evidence: evidence, packageID: packageID,
 		imports: imports, hasDotImport: hasDotImport,
 	}, file)
+	markSourceReferences(file, symbols, packageID, imports, evidence)
 	return packageID, nil
+}
+
+func markSourceReferences(file *ast.File, symbols map[string]bool, packageID string, imports map[string]string, evidence *sourceEvidence) {
+	handled := map[*ast.Ident]bool{file.Name: true}
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.FuncDecl:
+			handled[value.Name] = true
+		case *ast.ImportSpec:
+			if value.Name != nil {
+				handled[value.Name] = true
+			}
+		case *ast.CallExpr:
+			ast.Inspect(value.Fun, func(callee ast.Node) bool {
+				if id, ok := callee.(*ast.Ident); ok {
+					handled[id] = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+	ast.Inspect(file, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok || handled[selector.Sel] || !symbols[selector.Sel.Name] {
+			return true
+		}
+		referencePackage := packageID
+		if qualifier, ok := selector.X.(*ast.Ident); ok {
+			handled[qualifier] = true
+			if imported := imports[qualifier.Name]; imported != "" && qualifier.Obj == nil {
+				referencePackage = imported
+			}
+		}
+		handled[selector.Sel] = true
+		markPackage(evidence.references, selector.Sel.Name, referencePackage)
+		return true
+	})
+	ast.Inspect(file, func(node ast.Node) bool {
+		id, ok := node.(*ast.Ident)
+		if ok && symbols[id.Name] && !handled[id] {
+			markPackage(evidence.references, id.Name, packageID)
+		}
+		return true
+	})
 }
 
 func mergeAnchoredEvidence(target *sourceEvidence, source sourceEvidence, filePackage string, anchors map[string]map[string]bool, symbols map[string]bool) {
@@ -620,6 +674,11 @@ func mergeAnchoredEvidence(target *sourceEvidence, source sourceEvidence, filePa
 		for packageID := range source.calls[symbol] {
 			if anchors[symbol][packageID] {
 				markPackage(target.calls, symbol, packageID)
+			}
+		}
+		for packageID := range source.references[symbol] {
+			if anchors[symbol][packageID] {
+				markPackage(target.references, symbol, packageID)
 			}
 		}
 		if source.ambiguousSelectors[symbol] && anchors[symbol][filePackage] {
