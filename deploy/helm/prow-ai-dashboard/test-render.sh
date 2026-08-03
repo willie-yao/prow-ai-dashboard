@@ -1098,4 +1098,143 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 fi
 grep -Fq 'ai.githubReadToken and ai.githubReadTokenSecretName are mutually exclusive' "$tmp/github-read-conflict.yaml"
 
+# Service origin and NetworkPolicy guardrails.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-default.yaml"
+grep -Fq 'type: ClusterIP' "$tmp/service-default.yaml"
+if grep -Eq 'loadBalancerSourceRanges:|externalTrafficPolicy:' "$tmp/service-default.yaml"; then
+  echo 'default ClusterIP rendered LoadBalancer fields' >&2
+  exit 1
+fi
+
+cat > "$tmp/origin-source-ranges.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: oauth
+    admins: [alice]
+    oauth:
+      clientId: client
+      clientSecret: secret
+      sessionKey: session-key
+      redirectUrl: https://dashboard.test/api/auth/callback
+  service:
+    type: LoadBalancer
+    loadBalancerSourceRanges: [10.0.0.0/8]
+    externalTrafficPolicy: Local
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - protocol: TCP
+          port: 8080
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-source-ranges.yaml"
+grep -Fq 'type: LoadBalancer' "$tmp/service-source-ranges.yaml"
+grep -A1 -F 'loadBalancerSourceRanges:' "$tmp/service-source-ranges.yaml" | grep -Fq '10.0.0.0/8'
+grep -Fq 'externalTrafficPolicy: Local' "$tmp/service-source-ranges.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+  --show-only templates/networkpolicy.yaml > "$tmp/networkpolicy-ingress.yaml"
+grep -Fq 'kind: NetworkPolicy' "$tmp/networkpolicy-ingress.yaml"
+grep -Fq 'kubernetes.io/metadata.name: ingress-system' "$tmp/networkpolicy-ingress.yaml"
+grep -Fq 'port: 8080' "$tmp/networkpolicy-ingress.yaml"
+
+cat > "$tmp/origin-internal.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [alice]
+    proxy:
+      botToken: test-token
+  service:
+    type: LoadBalancer
+    internal:
+      enabled: true
+      annotations:
+        service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-internal.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-internal.yaml"
+grep -Fq 'service.beta.kubernetes.io/azure-load-balancer-internal: "true"' "$tmp/service-internal.yaml"
+
+cat > "$tmp/origin-unrestricted.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [alice]
+    proxy:
+      botToken: test-token
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/azure-allowed-service-tags: AzureFrontDoor.Backend
+VALUES
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-unrestricted.yaml" > "$tmp/service-unrestricted.yaml" 2>&1; then
+  echo 'authenticated actions accepted an unrestricted public LoadBalancer' >&2
+  exit 1
+fi
+grep -Fq 'authenticated actions with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true' "$tmp/service-unrestricted.yaml"
+
+cat > "$tmp/origin-acknowledged.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [alice]
+    proxy:
+      botToken: test-token
+  service:
+    type: LoadBalancer
+    publicOriginAcknowledged: true
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-acknowledged.yaml" \
+  --show-only templates/server-service.yaml > "$tmp/service-acknowledged.yaml"
+grep -Fq 'type: LoadBalancer' "$tmp/service-acknowledged.yaml"
+helm install notes-test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-acknowledged.yaml" \
+  --dry-run=client --debug > "$tmp/service-acknowledged-notes.yaml" 2>&1
+grep -Fq 'WARNING: public LoadBalancer origin explicitly acknowledged' "$tmp/service-acknowledged-notes.yaml"
+grep -Fq 'Service annotations are pass-through configuration, not proof' "$tmp/service-acknowledged-notes.yaml"
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set networkPolicy.ingress[0].ports[0].port=8080 > "$tmp/networkpolicy-disabled-ingress.yaml" 2>&1; then
+  echo 'networkPolicy ingress was accepted while disabled' >&2
+  exit 1
+fi
+grep -Fq 'networkPolicy.ingress requires networkPolicy.enabled=true' "$tmp/networkpolicy-disabled-ingress.yaml"
+
+for invalid_origin in ranges-on-clusterip internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
+  invalid_args=()
+  want=
+  case "$invalid_origin" in
+    ranges-on-clusterip)
+      invalid_args=(--set server.service.loadBalancerSourceRanges[0]=10.0.0.0/8)
+      want='server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer'
+      ;;
+    internal-without-annotations)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.internal.enabled=true)
+      want='server.service.internal.annotations is required when internal.enabled=true'
+      ;;
+    acknowledgement-on-clusterip)
+      invalid_args=(--set server.service.publicOriginAcknowledged=true)
+      want='server.service.publicOriginAcknowledged applies only to LoadBalancer Services'
+      ;;
+    invalid-external-policy)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.externalTrafficPolicy=External)
+      want='server.service.externalTrafficPolicy must be empty, Cluster, or Local'
+      ;;
+  esac
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${invalid_args[@]}" > "$tmp/origin-${invalid_origin}.yaml" 2>&1; then
+    echo "invalid origin configuration was accepted: $invalid_origin" >&2
+    exit 1
+  fi
+  grep -Fq "$want" "$tmp/origin-${invalid_origin}.yaml"
+done
+
 echo 'Helm render checks passed.'

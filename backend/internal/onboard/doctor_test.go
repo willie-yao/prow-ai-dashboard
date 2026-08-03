@@ -143,6 +143,34 @@ ai:
 	}
 }
 
+func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
+	tests := []struct {
+		name       string
+		originYAML string
+		want       DoctorStatus
+	}{
+		{name: "actions disabled", want: DoctorPass},
+		{name: "cluster ip", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorPass},
+		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
+		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
+		{name: "acknowledged public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    publicOriginAcknowledged: true\n", want: DoctorWarn},
+		{name: "source ranges and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [10.0.0.0/8]\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
+		{name: "internal and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := "persistence:\n  storageClass: azurefile-csi\n  accessMode: ReadWriteMany\nai:\n  enabled: false\n" + test.originYAML
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			if !hasDoctorCheck(report, "Kubernetes origin security", test.want) {
+				t.Fatalf("checks = %+v", report.Checks)
+			}
+		})
+	}
+}
+
 func TestDoctor_InvalidProjectStopsBeforeDiscovery(t *testing.T) {
 	sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job"}}}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{

@@ -11,6 +11,28 @@ Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persis
 The server serves the SPA at / and the JSON contract at /data/*, with a
 capability descriptor at /api/capabilities.
 
+Service origin:
+{{- if eq .Values.server.service.type "ClusterIP" }}
+  ClusterIP only. Place an in-cluster ingress or private origin in front of it.
+{{- else if .Values.server.service.internal.enabled }}
+  Internal LoadBalancer requested through explicit provider annotations.
+{{- else if .Values.server.service.loadBalancerSourceRanges }}
+  LoadBalancer restricted by spec.loadBalancerSourceRanges.
+{{- else if .Values.server.service.publicOriginAcknowledged }}
+  WARNING: public LoadBalancer origin explicitly acknowledged. Confirm runtime
+  reachability and restrict the origin whenever possible.
+{{- else if eq .Values.server.service.type "LoadBalancer" }}
+  LoadBalancer without an explicit chart-recognized origin restriction.
+{{- else }}
+  NodePort exposes the server on every selected node. Prefer ClusterIP or an
+  explicitly restricted LoadBalancer for authenticated actions.
+{{- end }}
+{{- if and .Values.server.actions.enabled (not .Values.networkPolicy.enabled) }}
+  Authenticated actions are enabled while NetworkPolicy is disabled.
+{{- end }}
+  Service annotations are pass-through configuration, not proof that the
+  origin is unreachable. Verify the deployed network path directly.
+
 {{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled) (eq .Values.server.actions.mode "oauth") }}
 OAuth access:
 {{- if .Values.server.actions.enabled }}
