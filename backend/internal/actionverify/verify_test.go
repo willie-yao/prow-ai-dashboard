@@ -207,6 +207,11 @@ func TestVerifyStructuredConfigurationStates(t *testing.T) {
 			value:   "GenericWorkload=true",
 			want:    StateAlreadyPresent,
 		},
+		"later YAML document applied": {
+			content: "kind: First\n---\nfeatureGates:\n  GenericWorkload: true\n",
+			value:   "GenericWorkload=true",
+			want:    StateAlreadyPresent,
+		},
 		"inline comment is not applied": {
 			content: "featureGates: [] # GenericWorkload=true was removed\n",
 			value:   "GenericWorkload=true",

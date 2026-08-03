@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	goscanner "go/scanner"
 	"go/token"
+	"io"
 	"path"
 	"regexp"
 	"sort"
@@ -634,11 +635,25 @@ func configurationValuePresent(filePath, content, value string) bool {
 }
 
 func yamlConfigurationValuePresent(content, key, expected string) (bool, bool) {
-	var document yaml.Node
-	if err := yaml.Unmarshal([]byte(content), &document); err != nil || len(document.Content) == 0 {
-		return false, false
+	decoder := yaml.NewDecoder(strings.NewReader(content))
+	parsed := false
+	for {
+		var document yaml.Node
+		err := decoder.Decode(&document)
+		if err == io.EOF {
+			return false, parsed
+		}
+		if err != nil {
+			return false, false
+		}
+		if len(document.Content) == 0 {
+			continue
+		}
+		parsed = true
+		if yamlNodeHasConfiguration(&document, key, expected) {
+			return true, true
+		}
 	}
-	return yamlNodeHasConfiguration(&document, key, expected), true
 }
 
 func yamlNodeHasConfiguration(node *yaml.Node, key, expected string) bool {
