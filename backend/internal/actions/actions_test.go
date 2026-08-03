@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
@@ -1237,5 +1238,52 @@ func TestPatternIssueAmbiguousWriteUsesOpenOnlyReconciliation(t *testing.T) {
 	url, err := service.ConfirmRequest(t.Context(), ready.ID, "alice", "token")
 	if err != nil || url != manager.url {
 		t.Fatalf("open reconciliation url=%q err=%v", url, err)
+	}
+}
+
+type fakeActionSourceReader map[string]string
+
+func (f fakeActionSourceReader) ListTree(context.Context) ([]string, error) { return nil, nil }
+func (f fakeActionSourceReader) ReadFile(_ context.Context, path string) (string, bool, error) {
+	value, ok := f[path]
+	return value, ok, nil
+}
+
+func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-capz", Systemic: true,
+		SuggestedFix:  "Implement `LabelCRDsForClusterctlUpgrade`.",
+		RelevantFiles: []string{"internal/asomigration/labels.go", "test/e2e/capi_test.go"},
+		SourceRef:     "0123456789abcdef0123456789abcdef01234567",
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-capz.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	cfg := &project.Config{
+		Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}},
+		Issues:   &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
+		AI:       &project.AI{SourceRepo: &project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}, FixPRs: &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "o", Name: "r"}}},
+	}
+	service := NewService(cfg, dataDir, AIConfig{})
+	reader := fakeActionSourceReader{
+		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
+		"test/e2e/capi_test.go":           "package e2e\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+	}
+	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		return actionverify.Verify(ctx, reader, input)
+	}
+	if _, err := service.PreviewIssue(context.Background(), pattern.ID, "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("issue preview error = %v", err)
+	}
+	if _, err := service.PreviewFix(context.Background(), pattern.ID, "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("fix preview error = %v", err)
+	}
+	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
+	if view.Preview != nil || !strings.Contains(view.Error, "already") {
+		t.Fatalf("request remained actionable: %+v", view)
 	}
 }

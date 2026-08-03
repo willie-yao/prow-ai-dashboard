@@ -18,11 +18,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
@@ -44,6 +46,9 @@ var ErrPreviewRejected = errors.New("fix preview rejected")
 
 // ErrDraftRefinementRejected means a replacement issue draft failed validation.
 var ErrDraftRefinementRejected = errors.New("draft refinement rejected")
+
+var ErrRemediationAlreadyPresent = errors.New("proposed remediation is already present")
+var ErrRemediationInconclusive = errors.New("source verification was inconclusive")
 
 // ErrPatternMismatch means the selected recurring pattern does not include the chat analysis.
 var ErrPatternMismatch = errors.New("pattern does not include selected analysis")
@@ -71,11 +76,12 @@ const previewTTL = 15 * time.Minute
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
-	Token    string
-	API      string
-	Endpoint string
-	Model    string
-	Headers  map[string]string
+	Token       string
+	API         string
+	Endpoint    string
+	Model       string
+	Headers     map[string]string
+	SourceToken string
 }
 
 // FixTarget identifies the published build selected by analysis chat.
@@ -185,6 +191,7 @@ type Service struct {
 	requestWG            sync.WaitGroup
 	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
 	requestStateWriter   func(string, any) error
+	sourceVerifier       func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -199,6 +206,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
 	}
+	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
 		eff := s.cfg.EffectiveFixPRs()
 		rt, err := fixruntime.New(eff.AgentRuntime)
@@ -420,6 +428,53 @@ func (s *Service) buildIssueSpecForBuild(subject *BuildActionSubject, id string)
 	return spec, eff.Repo.Owner + "/" + eff.Repo.Name, nil
 }
 
+func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject) error {
+	if subject == nil || s.sourceVerifier == nil {
+		return nil
+	}
+	repo := s.cfg.EffectiveAnalysisSourceRepo()
+	if repo.Owner == "" || repo.Name == "" {
+		return nil
+	}
+	var revision, proposal string
+	var files []string
+	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
+		revision, proposal = subject.Pattern.SourceRef, subject.Pattern.SuggestedFix
+		if sourceRepo, sourceRevision, ok := strings.Cut(revision, "@"); ok {
+			if sourceRepo != repo.Owner+"/"+repo.Name {
+				return fmt.Errorf("%w: grounded repository does not match configured source", ErrRemediationInconclusive)
+			}
+			revision = sourceRevision
+		}
+		files = append(files, subject.Pattern.RelevantFiles...)
+		for path := range subject.Pattern.FileLinks {
+			files = append(files, path)
+		}
+	} else if subject.Build != nil && subject.Build.Failure.AIAnalysis != nil {
+		revision, proposal = subject.Build.Build.Commit, subject.Build.Failure.AIAnalysis.SuggestedFix
+		files = append(files, subject.Build.RelevantFiles...)
+		for path := range subject.Build.Failure.AIAnalysis.FileLinks {
+			files = append(files, path)
+		}
+	}
+	if !regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(strings.TrimSpace(revision)) {
+		return nil
+	}
+	reader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, strings.ToLower(revision), s.ai.SourceToken)
+	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
+	if err != nil {
+		return fmt.Errorf("%w: pinned source could not be checked", ErrRemediationInconclusive)
+	}
+	switch result.State {
+	case actionverify.StateUnresolved:
+		return nil
+	case actionverify.StateAlreadyPresent:
+		return fmt.Errorf("%w: %s; check whether the pattern is stale, regressed, or misclassified", ErrRemediationAlreadyPresent, result.Reason)
+	default:
+		return fmt.Errorf("%w: %s; investigate the pinned source before filing", ErrRemediationInconclusive, result.Reason)
+	}
+}
+
 // buildFixManager builds the fix-PR manager for the source repo using
 // userToken. It does not resolve a failure; callers that need the pattern look
 // it up separately.
@@ -506,6 +561,9 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
+	if err := s.verifyRemediation(ctx, subject); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	var spec issues.IssueSpec
 	var targetRepo string
 	if subject.Kind == actionSubjectPattern {
@@ -575,6 +633,9 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
+	if err := s.verifyRemediation(ctx, subject); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	if subject.Kind == actionSubjectPattern {
 		return s.generateFixPreviewForPattern(ctx, *subject.Pattern, userToken, instruction, nil)
 	}
@@ -607,6 +668,12 @@ func (s *Service) generateFixPreviewForPattern(
 	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string,
 	generationContext *fixpr.GenerationContext,
 ) (PreviewResult, *previewEntry, error) {
+	if generationContext != nil {
+		subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &pattern}
+		if err := s.verifyRemediation(ctx, subject); err != nil {
+			return PreviewResult{}, nil, err
+		}
+	}
 	mgr, err := s.buildFixManager(ctx, userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
