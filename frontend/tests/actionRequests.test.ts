@@ -145,18 +145,6 @@ test("source verification outcomes have specific labels", () => {
     "Configuration already absent",
   );
 
-  const mixedConfiguration = request("mixed-configuration", "failed", {
-    verification: {
-      state: "already_present",
-      reason:
-        "configuration GenericWorkload=true is already applied; configuration LegacyGate=true is already absent",
-    },
-  });
-  assert.equal(
-    actionRequestVerificationTitle(mixedConfiguration),
-    "Configuration targets already satisfied",
-  );
-
   const inconclusive = request("inconclusive", "failed", {
     verification: {
       state: "inconclusive",

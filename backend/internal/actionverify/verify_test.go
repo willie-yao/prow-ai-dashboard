@@ -120,14 +120,6 @@ func TestVerifyStructuredAddSymbolReferencesPackageDeclarations(t *testing.T) {
 			},
 			target: models.RemediationTarget{Intent: models.RemediationIntentAddSymbol, Symbol: "ExistingKey", Path: "pkg/symbol.go"},
 		},
-		"constant named map key across files": {
-			files: map[string]string{
-				"pkg/symbol.go": "package pkg\nconst ExistingNamedKey = \"x\"\n",
-				"pkg/type.go":   "package pkg\ntype Values map[string]int\n",
-				"pkg/use.go":    "package pkg\nvar observed = Values{ExistingNamedKey: 1}\n",
-			},
-			target: models.RemediationTarget{Intent: models.RemediationIntentAddSymbol, Symbol: "ExistingNamedKey", Path: "pkg/symbol.go"},
-		},
 		"type from another package": {
 			files: map[string]string{
 				"go.mod":      "module example/repo\n",
@@ -307,36 +299,6 @@ func TestVerifyStructuredSymbolRequiresGoPath(t *testing.T) {
 	}}})
 	if result.State != StateInconclusive || !strings.Contains(result.Reason, "metadata") {
 		t.Fatalf("result = %+v", result)
-	}
-}
-
-func TestVerifyTargetedChecksDoNotRequireSourceArchive(t *testing.T) {
-	reader := fakeReader{
-		archive: archive(map[string]string{
-			"controllers/helpers.go": "package controllers\nfunc MachinePoolModelHasChanged() bool { return false }\n",
-			"templates/dra.yaml":     "featureGates:\n  - GenericWorkload=true\n",
-		}),
-		err: errors.New("repository Go source exceeds archive limit"),
-	}
-	for name, test := range map[string]struct {
-		target models.RemediationTarget
-		want   string
-	}{
-		"modify symbol": {
-			target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "MachinePoolModelHasChanged", Path: "controllers/helpers.go"},
-			want:   StateUnresolved,
-		},
-		"configuration": {
-			target: models.RemediationTarget{Intent: models.RemediationIntentSetConfiguration, Path: "templates/dra.yaml", Value: "GenericWorkload=true"},
-			want:   StateAlreadyPresent,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			result := verify(t, reader, Input{Targets: []models.RemediationTarget{test.target}})
-			if result.State != test.want {
-				t.Fatalf("result = %+v", result)
-			}
-		})
 	}
 }
 

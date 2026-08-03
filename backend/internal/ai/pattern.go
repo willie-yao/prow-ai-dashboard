@@ -505,10 +505,7 @@ func (s *Service) patternFileLinks(p patternResponse, reads []string) (map[strin
 func patternTargetsWereRead(targets []models.RemediationTarget, reads []string) bool {
 	read := make(map[string]bool, len(reads))
 	for _, value := range reads {
-		value = path.Clean(strings.TrimPrefix(strings.TrimSpace(value), "./"))
-		if value != "" && value != "." {
-			read[value] = true
-		}
+		read[value] = true
 	}
 	for _, target := range targets {
 		if target.Path != "" && !read[target.Path] {
@@ -777,19 +774,6 @@ func canonicalizePatternResponse(parsed patternResponse) patternResponse {
 		parsed.RemediationTargets[i].Path = strings.TrimPrefix(strings.TrimSpace(parsed.RemediationTargets[i].Path), "./")
 		parsed.RemediationTargets[i].Value = strings.TrimSpace(parsed.RemediationTargets[i].Value)
 	}
-	sort.Slice(parsed.RemediationTargets, func(i, j int) bool {
-		left, right := parsed.RemediationTargets[i], parsed.RemediationTargets[j]
-		if left.Intent != right.Intent {
-			return left.Intent < right.Intent
-		}
-		if left.Path != right.Path {
-			return left.Path < right.Path
-		}
-		if left.Symbol != right.Symbol {
-			return left.Symbol < right.Symbol
-		}
-		return left.Value < right.Value
-	})
 	return parsed
 }
 
@@ -969,7 +953,7 @@ func validRemediationTarget(target models.RemediationTarget) bool {
 	}
 	switch target.Intent {
 	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		return gotoken.IsIdentifier(target.Symbol) && validPath(target.Path) && strings.HasSuffix(target.Path, ".go") && target.Value == ""
+		return gotoken.IsIdentifier(target.Symbol) && validPath(target.Path) && target.Value == ""
 	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
 		return target.Symbol == "" && validPath(target.Path) && validValue(target.Value)
 	case models.RemediationIntentInvestigate:

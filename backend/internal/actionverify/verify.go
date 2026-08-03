@@ -129,17 +129,9 @@ func verifyTargets(ctx context.Context, reader Reader, input Input) (Result, err
 	if reader == nil {
 		return inconclusive("source reader is unavailable"), nil
 	}
-	archive := Archive{}
-	for _, target := range input.Targets {
-		if target.Intent != models.RemediationIntentAddSymbol {
-			continue
-		}
-		var err error
-		archive, err = reader.ReadSourceArchive(ctx)
-		if err != nil {
-			return Result{}, fmt.Errorf("read pinned source archive: %w", err)
-		}
-		break
+	archive, err := reader.ReadSourceArchive(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("read pinned source archive: %w", err)
 	}
 	results := make([]Result, 0, len(input.Targets))
 	for _, target := range input.Targets {
@@ -220,8 +212,6 @@ func symbolUseAtTarget(ctx context.Context, reader Reader, archive Archive, targ
 	if modulePath != "" && targetDir != "." {
 		expectedImportPath += "/" + targetDir
 	}
-	mapTypes := packageMapTypes(archive.GoFiles, targetDir, targetFile.Name.Name)
-
 	symbols := map[string]bool{target.Symbol: true}
 	matchingFiles, matchingBytes := 0, 0
 	for file, content := range archive.GoFiles {
@@ -238,7 +228,7 @@ func symbolUseAtTarget(ctx context.Context, reader Reader, archive Archive, targ
 			uncertain = true
 			continue
 		}
-		item, parseErr := inspectStructuredReferences(file, content, target.Symbol, targetFile.Name.Name, expectedImportPath, mapTypes)
+		item, parseErr := inspectStructuredReferences(file, content, target.Symbol, targetFile.Name.Name, expectedImportPath)
 		if parseErr != nil {
 			uncertain = true
 			continue
@@ -263,7 +253,7 @@ type structuredReferenceEvidence struct {
 	ambiguousImport   bool
 }
 
-func inspectStructuredReferences(filePath, content, symbol, targetPackageName, expectedImportPath string, packageMapTypes map[string]bool) (structuredReferenceEvidence, error) {
+func inspectStructuredReferences(filePath, content, symbol, targetPackageName, expectedImportPath string) (structuredReferenceEvidence, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), filePath, content, 0)
 	if err != nil {
 		return structuredReferenceEvidence{}, err
@@ -339,7 +329,7 @@ func inspectStructuredReferences(filePath, content, symbol, targetPackageName, e
 				excluded[value.Label] = true
 			}
 		case *ast.CompositeLit:
-			if compositeLiteralIsMap(file, value, packageMapTypes) {
+			if compositeLiteralIsMap(file, value) {
 				break
 			}
 			for _, element := range value.Elts {
@@ -390,14 +380,11 @@ func inspectStructuredReferences(filePath, content, symbol, targetPackageName, e
 	return evidence, nil
 }
 
-func compositeLiteralIsMap(file *ast.File, literal *ast.CompositeLit, packageMapTypes map[string]bool) bool {
+func compositeLiteralIsMap(file *ast.File, literal *ast.CompositeLit) bool {
 	switch value := literal.Type.(type) {
 	case *ast.MapType:
 		return true
 	case *ast.Ident:
-		if packageMapTypes[value.Name] {
-			return true
-		}
 		object := file.Scope.Lookup(value.Name)
 		if object == nil || object.Kind != ast.Typ {
 			return false
@@ -411,35 +398,6 @@ func compositeLiteralIsMap(file *ast.File, literal *ast.CompositeLit, packageMap
 	default:
 		return false
 	}
-}
-
-func packageMapTypes(files map[string]string, directory, packageName string) map[string]bool {
-	out := map[string]bool{}
-	for filePath, content := range files {
-		if path.Dir(filePath) != directory || isBuildConstrained(filePath, content) && !strings.HasSuffix(filePath, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), filePath, content, 0)
-		if err != nil || file.Name.Name != packageName {
-			continue
-		}
-		for _, declaration := range file.Decls {
-			group, ok := declaration.(*ast.GenDecl)
-			if !ok {
-				continue
-			}
-			for _, spec := range group.Specs {
-				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok {
-					continue
-				}
-				if _, ok := typeSpec.Type.(*ast.MapType); ok {
-					out[typeSpec.Name.Name] = true
-				}
-			}
-		}
-	}
-	return out
 }
 
 func modulePathFromGoMod(content string) string {

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func newPatternTestService(t *testing.T, serverURL string) *Service {
@@ -388,7 +387,6 @@ func TestParsePatternResponseValidatesRemediationTargets(t *testing.T) {
 		{name: "unknown field", targets: `[{"intent":"investigate","verified":true}]`, wantErr: true},
 		{name: "duplicate field", targets: `[{"intent":"investigate","intent":"add_symbol"}]`, wantErr: true},
 		{name: "unsafe path", targets: `[{"intent":"modify_symbol","symbol":"Fix","path":"../helpers.go"}]`, wantErr: true},
-		{name: "symbol target is not Go source", targets: `[{"intent":"modify_symbol","symbol":"Fix","path":"config.yaml"}]`, wantErr: true},
 		{name: "invalid configuration value", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true\nOther=true"}]`, wantErr: true},
 		{name: "configuration missing assignment", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload"}]`, wantErr: true},
 	}
@@ -443,18 +441,6 @@ func TestParsePatternResponseDeduplicatesEquivalentCandidates(t *testing.T) {
 	}
 	if parsed.Confidence != "high" || strings.Join(parsed.SharedBuilds, ",") != "abuild,bbuild" || parsed.SharedRootCause != "shared cause" {
 		t.Fatalf("parsed = %+v", parsed)
-	}
-}
-
-func TestParsePatternResponseCanonicalizesRemediationTargetOrder(t *testing.T) {
-	first := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","remediation_targets":[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true"},{"intent":"modify_symbol","symbol":"MachinePoolModelHasChanged","path":"controllers/helpers.go"}],"summary":"same summary"}`
-	second := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["abuild","bbuild"],"suggested_fix":"fix it","remediation_targets":[{"intent":"modify_symbol","symbol":"MachinePoolModelHasChanged","path":"controllers/helpers.go"},{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true"}],"summary":"same summary"}`
-	parsed, stats, err := parsePatternResponseWithStats(first+"\n"+second, patternBuildIDs(patternFailures(2)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.ValidCount != 2 || stats.UniqueValidCount != 1 || len(parsed.RemediationTargets) != 2 || parsed.RemediationTargets[0].Intent != models.RemediationIntentModifySymbol {
-		t.Fatalf("parsed=%+v stats=%+v", parsed, stats)
 	}
 }
 

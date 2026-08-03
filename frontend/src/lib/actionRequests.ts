@@ -146,9 +146,7 @@ export function actionRequestVerificationTitle(
   if (verification.state === "already_present") {
     const reason = verification.reason.toLowerCase();
     if (reason.startsWith("configuration ")) {
-      const applied = reason.includes("already applied");
       const absent = reason.includes("already absent");
-      if (applied && absent) return "Configuration targets already satisfied";
       return absent ? "Configuration already absent" : "Configuration already applied";
     }
     return "Existing remediation detected";
