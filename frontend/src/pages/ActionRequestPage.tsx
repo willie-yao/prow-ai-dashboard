@@ -20,11 +20,16 @@ import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { Panel } from "../components/Panel";
 import { ActionDraftPreview } from "../components/ActionDraftPreview";
+import type { ActionRequest } from "../types/actions";
 import {
   actionErrorMessage,
+  actionRequestCanConfirm,
+  actionRequestIsPollable,
+  actionRequestStorageOwner,
+  cancelActionRequest,
   loadLatestActionRequest,
-  type ActionRequest,
-} from "../types/actions";
+  syncStoredActionRequest,
+} from "../lib/actionRequests";
 import { soft } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
@@ -63,13 +68,15 @@ export function ActionRequestPage() {
   const { requestID = "" } = useParams();
   const navigate = useNavigate();
   const { features } = useCapabilities();
-  const { status, signIn } = useAuth();
+  const { status, signIn, login, mode } = useAuth();
+  const storageOwner = actionRequestStorageOwner(login, mode);
   const [request, setRequest] = useState<ActionRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [refining, setRefining] = useState(false);
   const [instruction, setInstruction] = useState("");
+  const requestStatus = request?.status;
 
   useEffect(() => {
     if (!features.action_requests || status !== "authenticated" || !requestID)
@@ -94,21 +101,25 @@ export function ActionRequestPage() {
           return;
         }
         const value = (await res.json()) as ActionRequest;
+        const latest = value.superseded_by
+          ? await loadLatestActionRequest(API_BASE, value.id)
+          : value;
         if (cancelled) return;
-        if (value.superseded_by) {
-          navigate(`/action-request/${encodeURIComponent(value.superseded_by)}`, {
+        if (latest.id !== requestID) {
+          navigate(`/action-request/${encodeURIComponent(latest.id)}`, {
             replace: true,
           });
-          return;
         }
         retryCount = 0;
-        setRequest(value);
+        setRequest(latest);
         setError(
-          value.status === "failed" && !value.warning
-            ? value.error || "Draft generation failed."
+          latest.status === "failed" && !latest.warning
+            ? latest.error || "Draft generation failed."
             : null,
         );
-        if (value.status === "pending") timer = window.setTimeout(load, 2000);
+        if (actionRequestIsPollable(latest.status)) {
+          timer = window.setTimeout(load, 2000);
+        }
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -121,7 +132,18 @@ export function ActionRequestPage() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [features.action_requests, navigate, requestID, status]);
+  }, [features.action_requests, navigate, requestID, requestStatus, status]);
+
+  useEffect(() => {
+    if (
+      status !== "authenticated" ||
+      !storageOwner ||
+      !request
+    ) {
+      return;
+    }
+    syncStoredActionRequest(window.sessionStorage, storageOwner, request);
+  }, [request, status, storageOwner]);
 
   async function refreshRequestState(id: string): Promise<ActionRequest | null> {
     try {
@@ -139,7 +161,9 @@ export function ActionRequestPage() {
   }
 
   async function confirm() {
-    if (!request) return;
+    if (!request || !actionRequestCanConfirm(request.status, Boolean(request.preview))) {
+      return;
+    }
     setConfirming(true);
     setError(null);
     try {
@@ -165,21 +189,26 @@ export function ActionRequestPage() {
   }
 
   async function cancel() {
-    if (!request) return;
+    if (!request || request.status === "cancelling") return;
     setCancelling(true);
     setError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}api/action-requests/${encodeURIComponent(request.id)}/cancel`,
-        { method: "POST", credentials: "same-origin" },
-      );
-      if (!res.ok) throw new Error(await actionErrorMessage(res));
-      setRequest({ ...request, status: "cancelled" });
+      const value = await cancelActionRequest(API_BASE, request.id);
+      const latest = value.superseded_by
+        ? await loadLatestActionRequest(API_BASE, value.id)
+        : value;
+      setRequest(latest);
+      if (latest.id !== requestID) {
+        navigate(`/action-request/${encodeURIComponent(latest.id)}`, {
+          replace: true,
+        });
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
       setError(
         refreshed?.status === "cancelled" ||
+          refreshed?.status === "cancelling" ||
           (refreshed !== null && refreshed.id !== request.id)
           ? null
           : message,
@@ -190,7 +219,9 @@ export function ActionRequestPage() {
   }
 
   async function refine() {
-    if (!request || instruction.trim() === "") return;
+    if (!request || request.status !== "ready" || instruction.trim() === "") {
+      return;
+    }
     setRefining(true);
     setError(null);
     try {
@@ -272,9 +303,8 @@ export function ActionRequestPage() {
 
   const preview = request.preview;
   const isFix = request.kind === "propose-fix";
-  const terminal = ["failed", "confirmed", "cancelled", "expired", "unknown"].includes(
-    request.status,
-  );
+  const canCancel = request.status === "pending" || request.status === "ready";
+  const canConfirm = actionRequestCanConfirm(request.status, Boolean(preview));
 
   return (
     <ActionRequestPageFrame breadcrumbs>
@@ -368,6 +398,33 @@ export function ActionRequestPage() {
             </Box>
           )}
 
+          {request.status === "cancelling" && (
+            <Box
+              role="status"
+              sx={{
+                borderRadius: "12px",
+                bgcolor: (theme) =>
+                  (theme.vars ?? theme).palette.surface.containerLow,
+                border: "1px solid",
+                borderColor: "divider",
+                p: 2,
+              }}
+            >
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+                <CircularProgress size={20} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    Stopping runtime work
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    The request remains active until the server confirms that
+                    its runtime work has stopped.
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+          )}
+
           {request.status === "cancelled" && (
             <Alert severity="info">This request was cancelled.</Alert>
           )}
@@ -447,7 +504,7 @@ export function ActionRequestPage() {
             borderColor: "divider",
           }}
         >
-          {!terminal && (
+          {canCancel && (
             <Button
               color="inherit"
               variant="outlined"
@@ -457,7 +514,7 @@ export function ActionRequestPage() {
               {cancelling ? "Cancelling…" : "Cancel request"}
             </Button>
           )}
-          {(request.status === "ready" || request.status === "unknown") && (
+          {canConfirm && (
             <Button
               color="warning"
               variant="contained"
