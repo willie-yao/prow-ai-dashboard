@@ -50,7 +50,7 @@ func ValidateBody(body string) error {
 	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("body is empty")
 	}
-	if err := validatePromptAndReasoning("body", body, 2); err != nil {
+	if err := validatePromptAndReasoning("body", body, 2, 3); err != nil {
 		return err
 	}
 	if err := validateUniqueSections(body); err != nil {
@@ -70,13 +70,13 @@ func ValidateTitleBody(title, body string) error {
 	if utf8.RuneCountInString(title) > MaxTitleRunes {
 		return fmt.Errorf("title exceeds %d characters", MaxTitleRunes)
 	}
-	if err := validatePromptAndReasoning("title", title, 1); err != nil {
+	if err := validatePromptAndReasoning("title", title, 1, 1); err != nil {
 		return err
 	}
 	return ValidateBody(body)
 }
 
-func validatePromptAndReasoning(field, value string, minSignals int) error {
+func validatePromptAndReasoning(field, value string, preambleMinSignals, documentMinSignals int) error {
 	lower := strings.ToLower(value)
 	for _, phrase := range promptEchoPhrases {
 		if strings.Contains(lower, phrase) {
@@ -84,19 +84,23 @@ func validatePromptAndReasoning(field, value string, minSignals int) error {
 		}
 	}
 	preamble := strings.ToLower(reasoningPreamble(value))
-	signals := 0
-	for _, phrase := range reasoningPhrases {
-		if strings.Contains(preamble, phrase) {
-			signals++
-		}
-	}
-	if signals >= minSignals {
+	if countReasoningSignals(preamble) >= preambleMinSignals || countReasoningSignals(lower) >= documentMinSignals {
 		return fmt.Errorf("%s contains model reasoning", field)
 	}
 	if len(numberedDraftPattern.FindAllStringIndex(preamble, -1)) > 1 {
 		return fmt.Errorf("%s contains multiple draft variants", field)
 	}
 	return nil
+}
+
+func countReasoningSignals(value string) int {
+	signals := 0
+	for _, phrase := range reasoningPhrases {
+		if strings.Contains(value, phrase) {
+			signals++
+		}
+	}
+	return signals
 }
 
 func reasoningPreamble(value string) string {

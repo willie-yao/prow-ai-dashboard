@@ -28,6 +28,13 @@ func TestValidateBodyAllowsOrdinaryReasoningPhrasesInDraftContent(t *testing.T) 
 	}
 }
 
+func TestValidateBodyRejectsReasoningInsideSection(t *testing.T) {
+	body := "## What happened\nThe user wants me to revise this. I need to expose the plan. Let me draft it.\n"
+	if err := ValidateBody(body); err == nil {
+		t.Fatal("section reasoning was accepted")
+	}
+}
+
 func TestValidateBodyRejectsRepeatedSections(t *testing.T) {
 	body := "## Affected builds\n- 1\n\n## Affected builds\n- 2\n"
 	if err := ValidateBody(body); err == nil {

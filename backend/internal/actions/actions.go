@@ -532,6 +532,10 @@ func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instru
 	if err != nil {
 		return PreviewResult{}, err
 	}
+	preview, err = validatedPreviewEntry(entry)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+	}
 	token, err := s.stash(userToken, entry)
 	if err != nil {
 		return PreviewResult{}, err
@@ -614,6 +618,10 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 	if err != nil {
 		return PreviewResult{}, err
 	}
+	preview, err = validatedPreviewEntry(entry)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+	}
 	token, err := s.stash(userToken, entry)
 	if err != nil {
 		return PreviewResult{}, err
@@ -634,6 +642,10 @@ func (s *Service) PreviewFixWithContext(
 	if err != nil {
 		return PreviewResult{}, err
 	}
+	preview, err = validatedPreviewEntry(entry)
+	if err != nil {
+		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+	}
 	token, err := s.stash(userToken, entry)
 	if err != nil {
 		return PreviewResult{}, err
@@ -648,6 +660,10 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(userToken, token, lease)
 	if err != nil || resultURL != "" {
 		return resultURL, err
+	}
+	if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {
+		_ = s.previewStore.discard(userToken, token, attemptID)
+		return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
 	}
 	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {

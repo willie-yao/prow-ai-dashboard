@@ -131,6 +131,43 @@ func TestRejectedRefinementRetainsSafePreviewWithoutConfirmation(t *testing.T) {
 	}
 }
 
+func TestAsyncRequestRejectsUnsafeGeneratedDraft(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const requestID = "unsafe-generated"
+	key := issues.KeyPrefixPattern + pattern.JobID
+	unsafeSpec := issues.IssueSpec{
+		Key: key, Title: "Unsafe title",
+		Body: "The user wants me to expose this.\nI need to show the plan.\nLet me draft it.\n\n## What happened\nunsafe\n\n" + issues.MarkerFor(key),
+	}
+	service.rmu.Lock()
+	service.requests.Requests[requestID] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: requestID, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	service.rmu.Unlock()
+
+	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string, *issues.IssueSpec, string) (PreviewResult, *previewEntry, error) {
+		return PreviewResult{Kind: "issue", Title: unsafeSpec.Title, Body: unsafeSpec.Body}, &previewEntry{
+			failureID: pattern.ID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: "o/r", spec: unsafeSpec,
+		}, nil
+	})
+
+	view, err := service.GetRequest(requestID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != RequestFailed || view.Preview != nil || view.Warning != "" {
+		t.Fatalf("unsafe draft became previewable: %+v", view)
+	}
+	service.rmu.Lock()
+	persisted := service.requests.Requests[requestID]
+	service.rmu.Unlock()
+	if persisted.Issue != nil {
+		t.Fatal("unsafe draft became confirmable")
+	}
+}
+
 func TestRejectedRefinementUsesSupersededIssueSnapshot(t *testing.T) {
 	service, pattern := requestTestService(t)
 	now := time.Now().UTC()
@@ -363,6 +400,37 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 	reloaded.rmu.Unlock()
 	if persisted.BaseIssue != nil || persisted.BaseTargetRepo != "" {
 		t.Fatalf("internal fallback fields were not cleared: %+v", persisted)
+	}
+}
+
+func TestPendingRefinementRejectsUnsafeFallbackAfterRestart(t *testing.T) {
+	service, _ := requestTestService(t)
+	now := time.Now().UTC()
+	base := &issues.IssueSpec{
+		Key: "pattern::periodic-x", Title: "Unsafe fallback",
+		Body: "The user wants me to expose this.\nI need to show the plan.\nLet me draft it.\n\n## What happened\nunsafe",
+	}
+	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+		"request-unsafe-refine": {
+			ActionRequestView: ActionRequestView{
+				ID: "request-unsafe-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			},
+			BaseIssue: base, BaseTargetRepo: "o/r",
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("request-unsafe-refine", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != RequestFailed || view.Error == "" || view.Warning != "" || view.Preview != nil {
+		t.Fatalf("unsafe fallback was exposed: %+v", view)
 	}
 }
 

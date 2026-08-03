@@ -138,9 +138,14 @@ func (s *Service) loadActionRequests() {
 			continue
 		}
 		request.Status = RequestFailed
-		if request.BaseIssue != nil && strings.TrimSpace(request.BaseIssue.Title) != "" && strings.TrimSpace(request.BaseIssue.Body) != "" {
-			request.Warning = draftRefinementWarning
-			request.Preview = &PreviewResult{Kind: "issue", Title: request.BaseIssue.Title, Body: request.BaseIssue.Body}
+		if request.BaseIssue != nil {
+			entry := &previewEntry{kind: "issue", spec: *request.BaseIssue}
+			if preview, err := validatedPreviewEntry(entry); err == nil {
+				request.Warning = draftRefinementWarning
+				request.Preview = &preview
+			} else {
+				request.Error = "saved fallback draft did not pass current safety validation"
+			}
 		} else {
 			request.Error = "server restarted before draft generation completed"
 		}
@@ -157,29 +162,57 @@ func (s *Service) loadActionRequests() {
 }
 
 func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
+	entry := &previewEntry{kind: request.Kind}
 	switch request.Kind {
 	case "create-issue":
-		if request.Issue == nil || strings.TrimSpace(request.Issue.Key) == "" {
+		if request.Issue == nil {
 			return nil, fmt.Errorf("ready issue request has no issue draft")
 		}
-		body := strings.ReplaceAll(request.Issue.Body, issues.MarkerFor(request.Issue.Key), "")
-		if err := actiondraft.ValidateTitleBody(request.Issue.Title, body); err != nil {
-			return nil, err
-		}
-		return &PreviewResult{Kind: "issue", Title: request.Issue.Title, Body: request.Issue.Body}, nil
+		entry.kind = "issue"
+		entry.spec = *request.Issue
 	case "propose-fix":
 		if request.Fix == nil {
 			return nil, fmt.Errorf("ready fix request has no fix draft")
 		}
-		if err := actiondraft.ValidateTitleBody(request.Fix.Title, request.Fix.Description); err != nil {
-			return nil, err
-		}
-		return &PreviewResult{
-			Kind: "fix", Title: request.Fix.Title, Body: request.Fix.Description, Diff: request.Fix.Diff,
-			VerifyStatus: string(request.Fix.Verify.Status), VerifySummary: request.Fix.Verify.Summary, VerifyOutput: request.Fix.Verify.Output,
-		}, nil
+		entry.kind = gfKind
+		entry.fix = fixpr.RestoreGeneratedFix(request.Fix)
 	default:
 		return nil, fmt.Errorf("ready request has unsupported action %q", request.Kind)
+	}
+	preview, err := validatedPreviewEntry(entry)
+	if err != nil {
+		return nil, err
+	}
+	return &preview, nil
+}
+
+func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
+	if entry == nil {
+		return PreviewResult{}, fmt.Errorf("preview entry is missing")
+	}
+	switch entry.kind {
+	case "issue":
+		if strings.TrimSpace(entry.spec.Key) == "" {
+			return PreviewResult{}, fmt.Errorf("issue preview key is missing")
+		}
+		body := strings.ReplaceAll(entry.spec.Body, issues.MarkerFor(entry.spec.Key), "")
+		if err := actiondraft.ValidateTitleBody(entry.spec.Title, body); err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{Kind: "issue", Title: entry.spec.Title, Body: entry.spec.Body}, nil
+	case gfKind:
+		if entry.fix == nil {
+			return PreviewResult{}, fmt.Errorf("fix preview is missing")
+		}
+		if err := actiondraft.ValidateTitleBody(entry.fix.Title, entry.fix.Description); err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{
+			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
+			VerifyStatus: string(entry.fix.Preview.Verify.Status), VerifySummary: entry.fix.Preview.Verify.Summary, VerifyOutput: entry.fix.Preview.Verify.Output,
+		}, nil
+	default:
+		return PreviewResult{}, fmt.Errorf("preview kind %q is unsupported", entry.kind)
 	}
 }
 
@@ -381,6 +414,11 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		if validateErr := s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind); validateErr != nil {
 			err = validateErr
 			fallbackPreview = false
+		} else if validated, validateErr := validatedPreviewEntry(entry); validateErr != nil {
+			err = fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+			fallbackPreview = false
+		} else {
+			preview = validated
 		}
 	}
 
