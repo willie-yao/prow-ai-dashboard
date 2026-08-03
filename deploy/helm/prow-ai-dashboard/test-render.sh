@@ -1273,7 +1273,7 @@ if grep -Fq 'stale-ingress' "$tmp/explicit-empty-ingress-render.yaml"; then
   exit 1
 fi
 
-for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-range alternate-universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
+for invalid_origin in ranges-on-clusterip universal-ipv4-range zero-padded-universal-range universal-ipv6-range alternate-universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
   invalid_args=()
   want=
   case "$invalid_origin" in
@@ -1283,6 +1283,10 @@ for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-ra
       ;;
     universal-ipv4-range)
       invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0.0.0.0/0)
+      want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
+      ;;
+    zero-padded-universal-range)
+      invalid_args=(--set server.service.type=LoadBalancer --set server.service.loadBalancerSourceRanges[0]=0.0.0.0/00)
       want='server.service.loadBalancerSourceRanges must not contain universal CIDRs'
       ;;
     universal-ipv6-range)
