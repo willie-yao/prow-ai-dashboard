@@ -493,7 +493,7 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 }
 
 func doctorRestrictedSourceRanges(ranges []string) bool {
-	if len(ranges) == 0 {
+	if len(ranges) != 1 {
 		return false
 	}
 	for _, cidr := range ranges {
@@ -549,7 +549,28 @@ func doctorNetworkPolicyPeerRestricted(peer doctorNetworkPolicyPeer) bool {
 }
 
 func doctorLabelSelectorRestricted(selector *doctorLabelSelector) bool {
-	return selector != nil && (len(selector.MatchLabels) > 0 || len(selector.MatchExpressions) > 0)
+	if selector == nil {
+		return false
+	}
+	for key := range selector.MatchLabels {
+		if strings.TrimSpace(key) != "" {
+			return true
+		}
+	}
+	for _, expression := range selector.MatchExpressions {
+		if strings.TrimSpace(expression.Key) == "" {
+			continue
+		}
+		switch expression.Operator {
+		case "Exists":
+			return true
+		case "In":
+			if len(expression.Values) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func placeholder(value string) bool {

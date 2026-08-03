@@ -1144,6 +1144,30 @@ grep -Fq 'kind: NetworkPolicy' "$tmp/networkpolicy-ingress.yaml"
 grep -Fq 'kubernetes.io/metadata.name: ingress-system' "$tmp/networkpolicy-ingress.yaml"
 grep -Fq 'port: 8080' "$tmp/networkpolicy-ingress.yaml"
 
+for family in ipv4 ipv6; do
+  if [[ $family == ipv4 ]]; then
+    first_range=0.0.0.0/1
+    second_range=128.0.0.0/1
+  else
+    first_range=::/1
+    second_range=8000::/1
+  fi
+  if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+    --set-string "server.service.loadBalancerSourceRanges[0]=$first_range" \
+    --set-string "server.service.loadBalancerSourceRanges[1]=$second_range" > "$tmp/service-complementary-${family}.yaml" 2>&1; then
+    echo "complementary $family ranges were accepted without public acknowledgement" >&2
+    exit 1
+  fi
+  grep -Fq 'authenticated actions or chat with multiple loadBalancerSourceRanges require publicOriginAcknowledged=true' "$tmp/service-complementary-${family}.yaml"
+done
+
+helm install complementary-notes "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/origin-source-ranges.yaml" \
+  --set-string 'server.service.loadBalancerSourceRanges[0]=0.0.0.0/1' \
+  --set-string 'server.service.loadBalancerSourceRanges[1]=128.0.0.0/1' \
+  --set server.service.publicOriginAcknowledged=true \
+  --dry-run=client --debug > "$tmp/service-complementary-notes.yaml" 2>&1
+grep -Fq 'multiple LoadBalancer source ranges explicitly acknowledged' "$tmp/service-complementary-notes.yaml"
+
 cat > "$tmp/origin-internal.yaml" <<'VALUES'
 server:
   actions:

@@ -153,6 +153,7 @@ call site.
 {{- $internalEnabled := $internal.enabled | default false -}}
 {{- $internalAnnotations := $internal.annotations | default dict -}}
 {{- $publicAcknowledged := $service.publicOriginAcknowledged | default false -}}
+{{- $interactive := or .Values.server.actions.enabled .Values.server.chat.enabled -}}
 {{- if and (gt (len $ranges) 0) (ne $serviceType "LoadBalancer") -}}
 {{- fail "server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer" -}}
 {{- end -}}
@@ -174,7 +175,9 @@ call site.
 {{- if and (not .Values.networkPolicy.enabled) (gt (len (.Values.networkPolicy.ingress | default list)) 0) -}}
 {{- fail "networkPolicy.ingress requires networkPolicy.enabled=true" -}}
 {{- end -}}
-{{- $interactive := or .Values.server.actions.enabled .Values.server.chat.enabled -}}
+{{- if and $interactive (eq $serviceType "LoadBalancer") (not $internalEnabled) (gt (len $ranges) 1) (not $publicAcknowledged) -}}
+{{- fail "authenticated actions or chat with multiple loadBalancerSourceRanges require publicOriginAcknowledged=true because the chart cannot prove their union is restricted" -}}
+{{- end -}}
 {{- if and $interactive (eq $serviceType "LoadBalancer") (not $internalEnabled) (eq (len $ranges) 0) (not $publicAcknowledged) -}}
 {{- fail "authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true" -}}
 {{- end -}}

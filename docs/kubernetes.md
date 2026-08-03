@@ -836,6 +836,11 @@ Use one of these topologies, in preference order:
    chart rejects authenticated actions or chat unless
    `server.service.publicOriginAcknowledged=true`.
 
+The chart treats one non-universal source range as an explicit restriction. If
+multiple ranges are configured, set `publicOriginAcknowledged=true`; Helm
+cannot prove that their combined coverage does not span an entire address
+family. Verify the effective source-range behavior at runtime.
+
 Example restricted public origin:
 
 ```yaml

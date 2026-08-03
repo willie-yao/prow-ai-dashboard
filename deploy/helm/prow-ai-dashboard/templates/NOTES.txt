@@ -22,6 +22,9 @@ Service origin:
   ClusterIP only. Place an in-cluster ingress or private origin in front of it.
 {{- else if $internalEnabled }}
   Internal LoadBalancer requested through explicit provider annotations.
+{{- else if and (gt (len $sourceRanges) 1) $publicAcknowledged }}
+  WARNING: multiple LoadBalancer source ranges explicitly acknowledged. The
+  chart cannot prove that their combined coverage is restricted.
 {{- else if $sourceRanges }}
   LoadBalancer restricted by spec.loadBalancerSourceRanges.
 {{- else if $publicAcknowledged }}
