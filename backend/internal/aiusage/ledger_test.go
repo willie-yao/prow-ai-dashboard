@@ -359,3 +359,17 @@ func TestSnapshotExpiresIdleLedgerAndPersistsIt(t *testing.T) {
 		t.Fatalf("persisted = %+v", persisted)
 	}
 }
+
+func TestRecorderReplayDoesNotDisplaceNewerRecentOperation(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 1)
+	older := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	newer := now.Format(time.RFC3339Nano)
+	oldUsage := recorder.Record(OperationUsage{ID: "0000000000000001", LogicalID: "1000000000000001", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: older, CompletedAt: older, Outcome: OutcomeError})
+	recorder.Record(OperationUsage{ID: "0000000000000002", LogicalID: "1000000000000001", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: newer, CompletedAt: newer, Outcome: OutcomeSuccess})
+	recorder.Record(oldUsage)
+	snapshot := recorder.Snapshot()
+	if len(snapshot.RecentOperations) != 1 || snapshot.RecentOperations[0].ID != "0000000000000002" {
+		t.Fatalf("recent operations = %+v", snapshot.RecentOperations)
+	}
+}

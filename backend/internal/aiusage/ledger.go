@@ -204,6 +204,14 @@ func (r *Recorder) truncateRecentLocked() {
 		r.ledger.RecentOperations = []OperationUsage{}
 		return
 	}
+	sort.Slice(r.ledger.RecentOperations, func(i, j int) bool {
+		left, leftErr := time.Parse(time.RFC3339Nano, r.ledger.RecentOperations[i].CompletedAt)
+		right, rightErr := time.Parse(time.RFC3339Nano, r.ledger.RecentOperations[j].CompletedAt)
+		if leftErr == nil && rightErr == nil && !left.Equal(right) {
+			return left.After(right)
+		}
+		return r.ledger.RecentOperations[i].ID < r.ledger.RecentOperations[j].ID
+	})
 	if len(r.ledger.RecentOperations) > r.recentOperations {
 		dropped := len(r.ledger.RecentOperations) - r.recentOperations
 		r.ledger.RecentOperations = r.ledger.RecentOperations[:r.recentOperations]
