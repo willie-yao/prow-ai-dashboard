@@ -514,27 +514,35 @@ func doctorNetworkPolicyRestricted(policy doctorNetworkPolicyValues) bool {
 		if len(policy.Ingress) == 0 {
 			return true
 		}
+		ipBlocks := 0
 		for _, rule := range policy.Ingress {
 			if len(rule.From) == 0 {
 				return false
 			}
 			for _, peer := range rule.From {
+				if peer.IPBlock != nil {
+					ipBlocks++
+				}
 				if !doctorNetworkPolicyPeerRestricted(peer) {
 					return false
 				}
 			}
 		}
-		return true
+		return ipBlocks <= 1
 	}
 	if len(policy.From) == 0 {
 		return false
 	}
+	ipBlocks := 0
 	for _, peer := range policy.From {
+		if peer.IPBlock != nil {
+			ipBlocks++
+		}
 		if !doctorNetworkPolicyPeerRestricted(peer) {
 			return false
 		}
 	}
-	return true
+	return ipBlocks <= 1
 }
 
 func doctorNetworkPolicyPeerRestricted(peer doctorNetworkPolicyPeer) bool {
