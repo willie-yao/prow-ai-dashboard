@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -168,16 +169,20 @@ type oversizedReader struct {
 
 func (r oversizedReader) ListTree(context.Context) ([]string, error) {
 	paths := make([]string, maxExhaustiveGoFiles+1)
-	for i := range paths {
+	paths[0] = "main.go"
+	for i := 1; i < len(paths); i++ {
 		paths[i] = fmt.Sprintf("pkg/file-%04d.go", i)
 	}
 	return paths, nil
 }
 
 func TestVerifyOversizedTreeIsInconclusive(t *testing.T) {
-	verifyState(t, oversizedReader{fakeReader{"main.go": "package main\n"}}, Input{
+	result, err := Verify(context.Background(), oversizedReader{fakeReader{"main.go": "package main\n"}}, Input{
 		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
-	}, StateInconclusive)
+	})
+	if err != nil || result.State != StateInconclusive || !strings.Contains(result.Reason, "too large") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
 }
 
 func verifyState(t *testing.T, reader Reader, input Input, want string) {
@@ -245,4 +250,25 @@ func TestVerifyRejectsAmbiguousProseSymbol(t *testing.T) {
 	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
 		Proposal: "Implement validation for this failure.", RelevantFiles: []string{"main.go"},
 	}, StateInconclusive)
+}
+
+func TestVerifySkipsMalformedUnrelatedGoFixture(t *testing.T) {
+	reader := fakeReader{
+		"main.go":         "package main\n",
+		"testdata/bad.go": "package broken\n// MissingHelper is only mentioned in a comment.\nfunc {\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+}
+
+func TestVerifyDoesNotTreatSourcePathAsSymbol(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":                    "module example\n",
+		"pkg/fix.go":                "package pkg\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+		"pkg/machine_controller.go": "package pkg\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ExistingFix in `pkg/machine_controller.go`.", RelevantFiles: []string{"pkg/fix.go"},
+	}, StateAlreadyPresent)
 }

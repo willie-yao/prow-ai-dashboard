@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	goscanner "go/scanner"
 	"go/token"
 	pathpkg "path"
 	"regexp"
@@ -60,6 +61,7 @@ var implementationClausePattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?
 var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{3,}$`)
 var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]{3,})\x60`)
+var backtickSpanPattern = regexp.MustCompile(`\x60[^\x60\n]+\x60`)
 var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
 var sourceExtensions = map[string]bool{
 	".bash": true, ".c": true, ".cc": true, ".cfg": true, ".conf": true, ".cpp": true,
@@ -180,6 +182,9 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 			calls:              map[string]map[string]bool{},
 			ambiguousSelectors: map[string]bool{},
 		}
+		if !containsCandidateIdentifier(contents[path], symbols) {
+			continue
+		}
 		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, &extra)
 		if err != nil {
 			return Result{State: StateInconclusive, Reason: "pinned Go source could not be parsed exhaustively"}, nil
@@ -202,6 +207,12 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 
 func implementationSymbols(proposal string) map[string]bool {
 	symbols := map[string]bool{}
+	proposal = backtickSpanPattern.ReplaceAllStringFunc(proposal, func(span string) string {
+		if quotedIdentifierPattern.MatchString(span) {
+			return span
+		}
+		return strings.Repeat(" ", len(span))
+	})
 	for _, match := range implementationClausePattern.FindAllStringSubmatch(proposal, -1) {
 		clause := match[1]
 		for _, quoted := range quotedIdentifierPattern.FindAllStringSubmatch(clause, -1) {
@@ -209,6 +220,7 @@ func implementationSymbols(proposal string) map[string]bool {
 				symbols[quoted[1]] = true
 			}
 		}
+		clause = backtickSpanPattern.ReplaceAllString(clause, " ")
 		for _, candidate := range identifierTokenPattern.FindAllString(clause, -1) {
 			if codeLikeIdentifier(candidate) {
 				symbols[candidate] = true
@@ -236,6 +248,21 @@ func codeLikeIdentifier(candidate string) bool {
 		}
 	}
 	return hasLower && hasInnerUpper
+}
+
+func containsCandidateIdentifier(content string, symbols map[string]bool) bool {
+	file := token.NewFileSet().AddFile("source.go", -1, len(content))
+	var scanner goscanner.Scanner
+	scanner.Init(file, []byte(content), nil, 0)
+	for {
+		_, tok, literal := scanner.Scan()
+		if tok == token.EOF {
+			return false
+		}
+		if tok == token.IDENT && symbols[literal] {
+			return true
+		}
+	}
 }
 
 func proposalSourcePath(candidate string) bool {
