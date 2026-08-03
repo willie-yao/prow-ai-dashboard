@@ -357,14 +357,23 @@ func (s *Service) startCleanup(id string) {
 
 func (s *Service) markCleanupBlocked(id string) {
 	s.rmu.Lock()
-	defer s.rmu.Unlock()
 	request := s.requests.Requests[id]
 	if request == nil || request.Status != RequestCancelling {
+		s.rmu.Unlock()
 		return
 	}
-	request.Warning = "Runtime work identity changed. Cancellation requires operator review."
-	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	_ = s.saveRequestsLocked()
+	now := time.Now().UTC().Format(time.RFC3339)
+	request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "runtime work identity changed during cleanup", RequestedAt: now}
+	request.UpdatedAt = now
+	if err := s.saveRequestsLocked(); err != nil {
+		log.Printf("action request %s: persist identity-change cleanup: %v", id, err)
+		s.rmu.Unlock()
+		return
+	}
+	s.rmu.Unlock()
+	if _, err := s.finalizeCleanup(id); err != nil {
+		log.Printf("action request %s: finalize identity-change cleanup: %v", id, err)
+	}
 }
 
 func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestView, error) {
@@ -534,6 +543,7 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 	}
 	s.requestNotify = notifier
 	s.rmu.Lock()
+	s.requestsConfigured = true
 	changed := s.expireRequestsLocked(time.Now().UTC())
 	var pending []ActionRequestView
 	var cleanupIDs []string
@@ -650,7 +660,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	}
 	if supersedesID == "" {
 		for _, existing := range s.requests.Requests {
-			if existing.Owner != owner || existing.FailureID != failureID || existing.Kind != kind {
+			if existing.Owner != owner || existing.FailureID != failureID || existing.Kind != kind || existing.Instruction != request.Instruction {
 				continue
 			}
 			if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestCancelling || existing.Status == RequestUnknown {
@@ -805,8 +815,12 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		}
 	}
 
-	if ctx.Err() != nil {
-		_, transitionErr := s.transitionToCleanup(id, RequestFailed, "draft generation timed out")
+	if ctx.Err() != nil || errors.Is(err, runtime.ErrCleanupPending) {
+		reason := "draft runtime cleanup did not complete"
+		if ctx.Err() != nil {
+			reason = "draft generation timed out"
+		}
+		_, transitionErr := s.transitionToCleanup(id, RequestFailed, reason)
 		if transitionErr == nil {
 			needsCleanup = true
 		} else {
@@ -1121,31 +1135,47 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 func (s *Service) expireRequestsLocked(now time.Time) bool {
 	changed := false
 	for id, request := range s.requests.Requests {
-		if _, confirming := s.requestConfirms[id]; confirming || request.Status == RequestPending || request.Status == RequestCancelling {
+		if _, confirming := s.requestConfirms[id]; confirming {
 			continue
 		}
 		expires, err := time.Parse(time.RFC3339, request.ExpiresAt)
-		if err == nil && now.After(expires) {
-			if request.Status != RequestExpired {
-				request.Status = RequestExpired
-				request.UpdatedAt = now.Format(time.RFC3339)
-				changed = true
+		if err != nil || !now.After(expires) {
+			continue
+		}
+		if request.Status == RequestPending || request.Status == RequestCancelling {
+			if request.Status == RequestPending {
+				request.Status = RequestCancelling
+				if cancel := s.requestCancels[id]; cancel != nil {
+					cancel()
+				}
 			}
-			if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
-				request.Error = ""
-				request.Warning = ""
-				request.Preview = nil
-				request.Instruction = ""
-				request.Issue = nil
-				request.BaseIssue = nil
-				request.BaseTargetRepo = ""
-				request.BasePatternHash = ""
-				request.Runtime = nil
-				request.Cleanup = nil
-				request.Fix = nil
-				request.EmailError = ""
-				changed = true
+			request.Cleanup = &actionCleanupState{FinalStatus: RequestExpired, Reason: "action request expired during runtime cleanup", RequestedAt: now.Format(time.RFC3339)}
+			request.UpdatedAt = now.Format(time.RFC3339)
+			changed = true
+			if s.requestsConfigured {
+				go s.startCleanup(id)
 			}
+			continue
+		}
+		if request.Status != RequestExpired {
+			request.Status = RequestExpired
+			request.UpdatedAt = now.Format(time.RFC3339)
+			changed = true
+		}
+		if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
+			request.Error = ""
+			request.Warning = ""
+			request.Preview = nil
+			request.Instruction = ""
+			request.Issue = nil
+			request.BaseIssue = nil
+			request.BaseTargetRepo = ""
+			request.BasePatternHash = ""
+			request.Runtime = nil
+			request.Cleanup = nil
+			request.Fix = nil
+			request.EmailError = ""
+			changed = true
 		}
 	}
 	if len(s.requests.Requests) <= 200 {

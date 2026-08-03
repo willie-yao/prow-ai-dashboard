@@ -811,7 +811,7 @@ func TestCancelRequestWaitsForRuntimeCleanup(t *testing.T) {
 	}
 }
 
-func TestCancelRequestLeavesCancellingWhenIdentityChanges(t *testing.T) {
+func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 	service, pattern := requestTestService(t)
 	fake := &fakeManagedAgentRuntime{err: runtime.ErrWorkIdentityChanged}
 	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
@@ -823,12 +823,11 @@ func TestCancelRequestLeavesCancellingWhenIdentityChanges(t *testing.T) {
 		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "old-uid", ExecutionID: id},
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
-	if err != nil || view.Status != RequestCancelling {
+	if err != nil || view.Status != RequestFailed || view.Error == "" {
 		t.Fatalf("view=%+v err=%v", view, err)
 	}
-	view, err = service.CancelRequest(context.Background(), id, "alice")
-	if err != nil || view.Status != RequestCancelling {
-		t.Fatalf("repeated cancellation view=%+v err=%v", view, err)
+	if _, err = service.CancelRequest(context.Background(), id, "alice"); err == nil {
+		t.Fatal("failed identity-change cleanup was reported as cancelled")
 	}
 }
 
@@ -980,4 +979,81 @@ func TestCleanupRetriesTransientFailure(t *testing.T) {
 	if calls < 2 {
 		t.Fatalf("cleanup calls = %d, want retry", calls)
 	}
+}
+
+func TestCleanupPendingGenerationTransitionsThroughCleanup(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "cleanup-pending-generation"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	service.requestDone[id] = make(chan struct{})
+	service.requestWG.Add(1)
+	go func() {
+		defer service.requestWG.Done()
+		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
+				return PreviewResult{}, nil, err
+			}
+			return PreviewResult{}, nil, runtime.ErrCleanupPending
+		})
+	}()
+	view := waitRequest(t, service, id, "alice", RequestFailed)
+	if view.Error == "" {
+		t.Fatalf("cleanup-pending result = %+v", view)
+	}
+	fake.mu.Lock()
+	calls := len(fake.refs)
+	fake.mu.Unlock()
+	if calls == 0 {
+		t.Fatal("cleanup-pending generation was not reconciled")
+	}
+}
+
+func TestExpiredPendingRequestCleansBeforeExpiring(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const id = "expired-pending"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestPending,
+		CreatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), ExpiresAt: now.Add(-time.Hour).Format(time.RFC3339),
+	}}
+	service.requestDone[id] = make(chan struct{})
+	started := make(chan struct{})
+	service.requestWG.Add(1)
+	go func() {
+		defer service.requestWG.Done()
+		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+			close(started)
+			<-ctx.Done()
+			return PreviewResult{}, nil, ctx.Err()
+		})
+	}()
+	<-started
+	view, err := service.GetRequest(id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("expired active request view=%+v err=%v", view, err)
+	}
+	waitRequest(t, service, id, "alice", RequestExpired)
+}
+
+func TestCreateRequestDoesNotDeduplicateDifferentInstruction(t *testing.T) {
+	service, pattern := requestTestService(t)
+	first, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "mention IPv6", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("different instructions shared request %q", first.ID)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestReady)
+	waitRequest(t, service, second.ID, "alice", RequestFailed)
 }

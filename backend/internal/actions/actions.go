@@ -170,16 +170,17 @@ type Service struct {
 	previewStore        *previewStore
 	issueManagerFactory issueManagerFactory
 
-	rmu             sync.Mutex
-	requests        *actionRequestState
-	requestTimeout  time.Duration
-	requestNotify   RequestReadyNotifier
-	requestCancels  map[string]context.CancelFunc
-	requestConfirms map[string]struct{}
-	requestDone     map[string]chan struct{}
-	requestCleanups map[string]struct{}
-	requestWG       sync.WaitGroup
-	managedRuntime  func() (runtime.ManagedAgentRuntime, error)
+	rmu                sync.Mutex
+	requests           *actionRequestState
+	requestTimeout     time.Duration
+	requestNotify      RequestReadyNotifier
+	requestCancels     map[string]context.CancelFunc
+	requestConfirms    map[string]struct{}
+	requestDone        map[string]chan struct{}
+	requestCleanups    map[string]struct{}
+	requestsConfigured bool
+	requestWG          sync.WaitGroup
+	managedRuntime     func() (runtime.ManagedAgentRuntime, error)
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
