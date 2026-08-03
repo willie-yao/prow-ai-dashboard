@@ -54,7 +54,8 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if len(paths) == 0 {
 		return Result{State: StateInconclusive, Reason: "proposal has no grounded source paths"}, nil
 	}
-	definitions, calls := map[string]bool{}, map[string]bool{}
+	definitions := map[string]map[string]bool{}
+	calls := map[string]map[string]bool{}
 	read := 0
 	for _, path := range paths {
 		content, found, err := reader.ReadFile(ctx, path)
@@ -72,22 +73,28 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		if err != nil {
 			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
 		}
+		packageName := file.Name.Name
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch value := node.(type) {
 			case *ast.FuncDecl:
 				if symbols[value.Name.Name] {
-					definitions[value.Name.Name] = true
+					markPackage(definitions, value.Name.Name, packageName)
 				}
 			case *ast.CallExpr:
-				name := ""
+				name, callPackage := "", packageName
 				switch fun := value.Fun.(type) {
 				case *ast.Ident:
 					name = fun.Name
 				case *ast.SelectorExpr:
 					name = fun.Sel.Name
+					if qualifier, ok := fun.X.(*ast.Ident); ok {
+						callPackage = qualifier.Name
+					} else {
+						callPackage = ""
+					}
 				}
-				if symbols[name] {
-					calls[name] = true
+				if symbols[name] && callPackage != "" {
+					markPackage(calls, name, callPackage)
 				}
 			}
 			return true
@@ -97,7 +104,14 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		return Result{State: StateInconclusive, Reason: "none of the grounded source paths could be read"}, nil
 	}
 	for symbol := range symbols {
-		if !definitions[symbol] || !calls[symbol] {
+		matched := false
+		for packageName := range definitions[symbol] {
+			if calls[symbol][packageName] {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the grounded source"}, nil
 		}
 	}
@@ -108,6 +122,13 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	sort.Strings(names)
 	return Result{State: StateAlreadyPresent, Reason: fmt.Sprintf("%s are already defined and invoked at the grounded commit", strings.Join(names, ", "))}, nil
 }
+func markPackage(values map[string]map[string]bool, symbol, packageName string) {
+	if values[symbol] == nil {
+		values[symbol] = map[string]bool{}
+	}
+	values[symbol][packageName] = true
+}
+
 func compact(values []string) []string {
 	seen := map[string]bool{}
 	out := []string{}

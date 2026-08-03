@@ -49,3 +49,14 @@ func TestVerifyRequiresEveryProposedSymbol(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+func TestVerifyDoesNotMixUnrelatedSelectorPackage(t *testing.T) {
+	reader := fakeReader{
+		"a/helper.go": "package a\nfunc ReconcileThing() {}\n",
+		"b/use.go":    "package b\nfunc use(){ other.ReconcileThing() }\n",
+	}
+	result, err := Verify(context.Background(), reader, Input{Proposal: "Implement ReconcileThing.", RelevantFiles: []string{"a/helper.go", "b/use.go"}})
+	if err != nil || result.State != StateUnresolved {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

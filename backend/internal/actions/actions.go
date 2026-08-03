@@ -454,7 +454,11 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 			files = append(files, path)
 		}
 	} else if subject.Build != nil && subject.Build.Failure.AIAnalysis != nil {
-		revision, proposal = subject.Build.Build.Commit, subject.Build.Failure.AIAnalysis.SuggestedFix
+		source, ok := ai.ResolveBuildSource(subject.Build.Build, repo.Owner, repo.Name)
+		if !ok {
+			return fmt.Errorf("%w: build source repository revision could not be resolved", ErrRemediationInconclusive)
+		}
+		revision, proposal = source.Revision, subject.Build.Failure.AIAnalysis.SuggestedFix
 		files = append(files, subject.Build.RelevantFiles...)
 		for path := range subject.Build.Failure.AIAnalysis.FileLinks {
 			files = append(files, path)
