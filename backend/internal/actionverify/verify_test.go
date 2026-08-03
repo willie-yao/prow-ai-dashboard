@@ -427,3 +427,9 @@ func TestVerifyUngroundedCallbackReferenceIsInconclusive(t *testing.T) {
 		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/fix.go"},
 	}, StateInconclusive)
 }
+
+func TestVerifyIgnoresBacktickedArtifactPath(t *testing.T) {
+	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
+		Proposal: "Implement MissingHelper. Relevant artifact: `junit.xml`.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+}

@@ -62,7 +62,6 @@ var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 var quotedCodePattern = regexp.MustCompile(`^((?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*)(?:\(\))?$`)
 var backtickSpanPattern = regexp.MustCompile(`\x60[^\x60\n]+\x60`)
-var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
 var sourceExtensions = map[string]bool{
 	".bash": true, ".c": true, ".cc": true, ".cfg": true, ".conf": true, ".cpp": true,
 	".css": true, ".go": true, ".h": true, ".hpp": true, ".html": true, ".ini": true,
@@ -94,13 +93,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if ambiguousSymbols {
 		return Result{State: StateInconclusive, Reason: "proposal contains ambiguous implementation symbols"}, nil
 	}
-	groundedPaths := append([]string(nil), input.RelevantFiles...)
-	for _, match := range pathPattern.FindAllStringSubmatch(input.Proposal, -1) {
-		if proposalSourcePath(match[1]) {
-			groundedPaths = append(groundedPaths, match[1])
-		}
-	}
-	groundedPaths = compact(groundedPaths)
+	groundedPaths := compact(append([]string(nil), input.RelevantFiles...))
 	if len(groundedPaths) == 0 {
 		return Result{State: StateInconclusive, Reason: "proposal has no grounded source paths"}, nil
 	}
