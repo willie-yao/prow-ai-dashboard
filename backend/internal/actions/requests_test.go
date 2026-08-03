@@ -1124,3 +1124,25 @@ func TestOverlappingCleanupWaitsForGenerationExit(t *testing.T) {
 		t.Fatal("first cleanup did not finish after generation exit")
 	}
 }
+
+func TestWaitTracksShutdownWatcher(t *testing.T) {
+	service, _ := requestTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	service.ConfigureAsyncRequestsWithContext(ctx, time.Minute, nil)
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- service.Wait(context.Background()) }()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("Wait returned before shutdown: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not observe shutdown watcher completion")
+	}
+}

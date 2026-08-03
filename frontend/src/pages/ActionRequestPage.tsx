@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link as RouterLink, useNavigate, useParams } from "react-router-dom";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
@@ -77,6 +77,11 @@ export function ActionRequestPage() {
   const [refining, setRefining] = useState(false);
   const [instruction, setInstruction] = useState("");
   const requestStatus = request?.status;
+  const activeRequestID = useRef(requestID);
+
+  useEffect(() => {
+    activeRequestID.current = requestID;
+  }, [requestID]);
 
   useEffect(() => {
     if (!features.action_requests || status !== "authenticated" || !requestID)
@@ -190,6 +195,7 @@ export function ActionRequestPage() {
 
   async function cancel() {
     if (!request || request.status === "cancelling") return;
+    const startedRequestID = request.id;
     setCancelling(true);
     setError(null);
     try {
@@ -197,6 +203,7 @@ export function ActionRequestPage() {
       const latest = value.superseded_by
         ? await loadLatestActionRequest(API_BASE, value.id)
         : value;
+      if (activeRequestID.current !== startedRequestID) return;
       setRequest(latest);
       if (latest.id !== requestID) {
         navigate(`/action-request/${encodeURIComponent(latest.id)}`, {
@@ -204,6 +211,7 @@ export function ActionRequestPage() {
         });
       }
     } catch (e) {
+      if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
       setError(

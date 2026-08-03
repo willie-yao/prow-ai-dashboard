@@ -570,7 +570,9 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 		s.startCleanup(id)
 	}
 	if ctx != nil && ctx.Done() != nil {
+		s.requestWG.Add(1)
 		go func() {
+			defer s.requestWG.Done()
 			<-ctx.Done()
 			s.stopActiveRequests()
 		}()

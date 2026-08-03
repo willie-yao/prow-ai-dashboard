@@ -140,11 +140,12 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   const [instruction, setInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const activeFailureID = useRef(failureID);
-  const activeAction = useRef<Action | null>(null);
-  const storageOwner = actionRequestStorageOwner(login, mode);
   const requestID = request?.id;
   const requestStatus = request?.status;
+  const activeFailureID = useRef(failureID);
+  const activeRequestID = useRef<string | undefined>(requestID);
+  const activeAction = useRef<Action | null>(null);
+  const storageOwner = actionRequestStorageOwner(login, mode);
 
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const [resolveOpen, setResolveOpen] = useState(false);
@@ -155,8 +156,9 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   useLayoutEffect(() => {
     const failureChanged = activeFailureID.current !== failureID;
     activeFailureID.current = failureID;
+    activeRequestID.current = requestID;
     activeAction.current = failureChanged ? null : action;
-  }, [action, failureID]);
+  }, [action, failureID, requestID]);
 
   // Reset action state if this component is reused for a different failure.
   useEffect(() => {
@@ -369,7 +371,7 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   ): Promise<ActionRequest | null> {
     try {
       const value = await loadLatestActionRequest(API_BASE, id);
-      if (activeFailureID.current !== startedFailureID) return null;
+      if (activeFailureID.current !== startedFailureID || activeRequestID.current !== id) return null;
       activeAction.current = value.kind;
       setAction(value.kind);
       setRequest(value);
@@ -519,6 +521,7 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   async function cancelRequest() {
     if (!request || request.status === "cancelling") return;
     const startedFailureID = failureID;
+    const startedRequestID = request.id;
     setBusy("cancel");
     setError(null);
     try {
@@ -526,13 +529,14 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
       const latest = value.superseded_by
         ? await loadLatestActionRequest(API_BASE, value.id)
         : value;
-      if (activeFailureID.current !== startedFailureID) return;
+      if (activeFailureID.current !== startedFailureID || activeRequestID.current !== startedRequestID) return;
       activeAction.current = latest.kind;
       setAction(latest.kind);
       setRequest(latest);
       setPreview(latest.preview ?? null);
       setError(requestStateError(latest));
     } catch (e) {
+      if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id, startedFailureID);
       if (activeFailureID.current !== startedFailureID) return;
