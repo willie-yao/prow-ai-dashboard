@@ -212,6 +212,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		extra := sourceEvidence{
 			definitions:        map[string]map[string]bool{},
 			calls:              map[string]map[string]bool{},
+			references:         map[string]map[string]bool{},
 			ambiguousSelectors: map[string]bool{},
 		}
 		packageID, err := inspectGoSource(path, contents[path], symbols, resolver, &extra)

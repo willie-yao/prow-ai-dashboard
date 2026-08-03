@@ -425,3 +425,14 @@ func TestVerifyImportedCallbackReferenceIsInconclusive(t *testing.T) {
 		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/fix.go", "app/main.go"},
 	}, StateInconclusive)
 }
+
+func TestVerifyUngroundedCallbackReferenceIsInconclusive(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":        "module example\n",
+		"target/fix.go": "package target\nfunc ExistingFix(){}\n",
+		"app/main.go":   "package app\nimport \"example/target\"\nfunc register(func()){}\nfunc init(){ register(target.ExistingFix) }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/fix.go"},
+	}, StateInconclusive)
+}
