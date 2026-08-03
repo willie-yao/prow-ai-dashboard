@@ -5,7 +5,9 @@ import {
   actionRequestPath,
   buildFailurePath,
   jobPath,
+  jobRunPath,
   testPath,
+  testRunPath,
 } from "../src/lib/routes.js";
 
 test("route parameters remain encoded inside same-origin app paths", () => {
@@ -18,6 +20,14 @@ test("route parameters remain encoded inside same-origin app paths", () => {
   assert.equal(
     buildFailurePath("periodic/capz", "build/123"),
     "/job/periodic%2Fcapz/build/build%2F123/failure",
+  );
+  assert.equal(
+    jobRunPath("periodic/capz", "build/123"),
+    "/job/periodic%2Fcapz?run=build%2F123",
+  );
+  assert.equal(
+    testRunPath("periodic/capz", "[It] creates", "build/123"),
+    "/job/periodic%2Fcapz/test/%5BIt%5D%20creates?run=build%2F123",
   );
   assert.equal(
     actionRequestPath("//request\\id"),

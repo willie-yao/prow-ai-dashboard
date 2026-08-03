@@ -9,7 +9,7 @@ function source(path: string): string {
 
 test("entry documents use same-origin scripts and fonts", () => {
   const index = source("index.html");
-  const fallback = source("public/404.html");
+  const fallback = source("404.html");
   for (const [name, html] of [["index", index], ["404", fallback]] as const) {
     assert.doesNotMatch(html, /fonts\.(?:googleapis|gstatic)\.com/i, name);
     assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?<\/script>/i, name);
@@ -18,5 +18,5 @@ test("entry documents use same-origin scripts and fonts", () => {
     assert.match(html, /font-src 'self'/i, name);
   }
   assert.match(index, /src="\/spa-index-redirect\.js"/);
-  assert.match(fallback, /src="spa-404-redirect\.js"/);
+  assert.match(fallback, /src="\/spa-404-redirect\.js"/);
 });
