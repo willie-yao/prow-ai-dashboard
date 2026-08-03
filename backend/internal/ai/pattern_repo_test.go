@@ -87,7 +87,7 @@ func TestGitHubRepoReaderAuthenticatedPrivateAccess(t *testing.T) {
 	}
 }
 
-func TestGitHubRepoReaderBulkAccessIsCached(t *testing.T) {
+func TestGitHubRepoReaderBulkAccessDoesNotRetainFiles(t *testing.T) {
 	const token = "read-token-value"
 	archive := sourceArchive(t, map[string]string{
 		"go.mod":     "module example/repo\n",
@@ -117,8 +117,8 @@ func TestGitHubRepoReaderBulkAccessIsCached(t *testing.T) {
 			t.Fatalf("files=%v err=%v", files, err)
 		}
 	}
-	if archiveCalls != 1 {
-		t.Fatalf("archive calls = %d, want 1", archiveCalls)
+	if archiveCalls != 2 {
+		t.Fatalf("archive calls = %d, want 2", archiveCalls)
 	}
 }
 

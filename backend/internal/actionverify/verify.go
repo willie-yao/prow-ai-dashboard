@@ -57,7 +57,7 @@ type packageResolver struct {
 	modules []moduleRoot
 }
 
-var implementationClausePattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce)\b([^.!?;\n]{0,256})`)
+var implementationClausePattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce|call(?:ing)?|use|using|invoke|invoking)\b([^.!?;\n]{0,256})`)
 var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{3,}$`)
 var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
 var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]{3,})\x60`)
@@ -203,6 +203,11 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		}
 	}
 	return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the pinned source"}, nil
+}
+
+// HasImplementationSymbols reports whether proposal names code-like remediation symbols.
+func HasImplementationSymbols(proposal string) bool {
+	return len(implementationSymbols(proposal)) > 0
 }
 
 func implementationSymbols(proposal string) map[string]bool {

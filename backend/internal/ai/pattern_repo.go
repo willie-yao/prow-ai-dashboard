@@ -33,7 +33,6 @@ type githubRepoReader struct {
 	token  string
 	client *http.Client
 	mu     sync.Mutex
-	files  map[string]string
 	treeMu sync.Mutex
 	tree   []string
 }
@@ -203,8 +202,7 @@ const (
 	maxSourceFileBytes            = 8 << 20
 )
 
-// ReadFiles fetches pinned repository files from one archive request and caches
-// them for repeated verification against the same reader.
+// ReadFiles fetches pinned repository files from one archive request.
 func (r *githubRepoReader) ReadFiles(ctx context.Context, paths []string) (map[string]string, error) {
 	wanted := make(map[string]bool, len(paths))
 	for _, path := range paths {
@@ -214,38 +212,11 @@ func (r *githubRepoReader) ReadFiles(ctx context.Context, paths []string) (map[s
 		}
 		wanted[clean] = true
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.files == nil {
-		r.files = map[string]string{}
-	}
-	missing := make(map[string]bool, len(wanted))
-	for path := range wanted {
-		if _, ok := r.files[path]; !ok {
-			missing[path] = true
-		}
-	}
-	if len(missing) > 0 {
-		files, err := r.readArchive(ctx, missing)
-		if err != nil {
-			return nil, err
-		}
-		for path, content := range files {
-			r.files[path] = content
-		}
-	}
-	out := make(map[string]string, len(wanted))
-	for path := range wanted {
-		if content, ok := r.files[path]; ok {
-			out[path] = content
-		}
-	}
-	return out, nil
+	return r.readArchive(ctx, r.resolvedRef(), wanted)
 }
 
-func (r *githubRepoReader) readArchive(ctx context.Context, wanted map[string]bool) (map[string]string, error) {
-	u := fmt.Sprintf("%s/repos/%s/%s/tarball/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(r.ref))
+func (r *githubRepoReader) readArchive(ctx context.Context, ref string, wanted map[string]bool) (map[string]string, error) {
+	u := fmt.Sprintf("%s/repos/%s/%s/tarball/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

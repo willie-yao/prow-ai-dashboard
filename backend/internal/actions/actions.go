@@ -178,24 +178,24 @@ type Service struct {
 	previewStore        *previewStore
 	issueManagerFactory issueManagerFactory
 
-	rmu                  sync.Mutex
-	requests             *actionRequestState
-	requestTimeout       time.Duration
-	requestNotify        RequestReadyNotifier
-	requestNotifyCancels map[string]context.CancelFunc
-	requestCancels       map[string]context.CancelFunc
-	requestConfirms      map[string]struct{}
-	requestDone          map[string]chan struct{}
-	requestCleanups      map[string]struct{}
-	requestsConfigured   bool
-	stopping             bool
-	requestWG            sync.WaitGroup
-	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
-	requestStateWriter   func(string, any) error
-	sourceVerifier       func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
-	sourceReaderMu       sync.Mutex
-	sourceReaders        map[string]actionverify.Reader
-	sourceReaderOrder    []string
+	rmu                     sync.Mutex
+	requests                *actionRequestState
+	requestTimeout          time.Duration
+	requestNotify           RequestReadyNotifier
+	requestNotifyCancels    map[string]context.CancelFunc
+	requestCancels          map[string]context.CancelFunc
+	requestConfirms         map[string]struct{}
+	requestDone             map[string]chan struct{}
+	requestCleanups         map[string]struct{}
+	requestsConfigured      bool
+	stopping                bool
+	requestWG               sync.WaitGroup
+	managedRuntime          func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter      func(string, any) error
+	sourceVerifier          func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
+	sourceVerifyMu          sync.Mutex
+	sourceVerifications     map[string]actionverify.Result
+	sourceVerificationOrder []string
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -209,7 +209,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
-		sourceReaders: map[string]actionverify.Reader{},
+		sourceVerifications: map[string]actionverify.Result{},
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
@@ -444,25 +444,19 @@ func (s *Service) buildIssueSpecForBuild(subject *BuildActionSubject, id string)
 	return spec, eff.Repo.Owner + "/" + eff.Repo.Name, nil
 }
 
-func (s *Service) remediationSourceReader(owner, repo, revision string) actionverify.Reader {
-	const maxCachedReaders = 4
-	key := strings.ToLower(owner + "/" + repo + "@" + revision)
-	s.sourceReaderMu.Lock()
-	defer s.sourceReaderMu.Unlock()
-	if reader := s.sourceReaders[key]; reader != nil {
-		return reader
-	}
-	var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
-	if len(s.sourceReaderOrder) >= maxCachedReaders {
-		delete(s.sourceReaders, s.sourceReaderOrder[0])
-		s.sourceReaderOrder = s.sourceReaderOrder[1:]
-	}
-	s.sourceReaders[key] = reader
-	s.sourceReaderOrder = append(s.sourceReaderOrder, key)
-	return reader
+func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject) error {
+	return s.verifyRemediationProposal(ctx, subject, "")
 }
 
-func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject) error {
+func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *ActionSubject, proposal string) error {
+	proposal = strings.TrimSpace(proposal)
+	if proposal == "" || !actionverify.HasImplementationSymbols(proposal) {
+		return nil
+	}
+	return s.verifyRemediationProposal(ctx, subject, proposal)
+}
+
+func (s *Service) verifyRemediationProposal(ctx context.Context, subject *ActionSubject, override string) error {
 	if subject == nil || s.sourceVerifier == nil {
 		return nil
 	}
@@ -495,12 +489,16 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 		revision, proposal = source.Revision, subject.Build.Failure.AIAnalysis.SuggestedFix
 		files = verifiedSourceFiles(subject.Build.Failure.AIAnalysis.FileLinks, repo.Owner, repo.Name, revision)
 	}
+	if strings.TrimSpace(override) != "" {
+		proposal = override
+	}
 	if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(revision)) {
 		return fmt.Errorf("%w: source revision is not an immutable full commit", ErrRemediationInconclusive)
 	}
 	revision = strings.ToLower(revision)
-	reader := s.remediationSourceReader(repo.Owner, repo.Name, revision)
-	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
+	slices.Sort(files)
+	files = slices.Compact(files)
+	result, err := s.cachedSourceVerification(ctx, repo.Owner, repo.Name, revision, proposal, files)
 	if err != nil {
 		return fmt.Errorf("%w: pinned source could not be checked", ErrRemediationInconclusive)
 	}
@@ -512,6 +510,36 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 	default:
 		return fmt.Errorf("%w: %s; investigate the pinned source before filing", ErrRemediationInconclusive, result.Reason)
 	}
+}
+
+func (s *Service) cachedSourceVerification(
+	ctx context.Context, owner, repo, revision, proposal string, files []string,
+) (actionverify.Result, error) {
+	const maxCachedVerifications = 64
+	payload, _ := json.Marshal(struct {
+		Owner, Repo, Revision, Proposal string
+		Files                           []string
+	}{owner, repo, revision, proposal, files})
+	sum := sha256.Sum256(payload)
+	key := hex.EncodeToString(sum[:])
+
+	s.sourceVerifyMu.Lock()
+	defer s.sourceVerifyMu.Unlock()
+	if result, ok := s.sourceVerifications[key]; ok {
+		return result, nil
+	}
+	var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
+	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
+	if err != nil {
+		return actionverify.Result{}, err
+	}
+	if len(s.sourceVerificationOrder) >= maxCachedVerifications {
+		delete(s.sourceVerifications, s.sourceVerificationOrder[0])
+		s.sourceVerificationOrder = s.sourceVerificationOrder[1:]
+	}
+	s.sourceVerifications[key] = result
+	s.sourceVerificationOrder = append(s.sourceVerificationOrder, key)
+	return result, nil
 }
 
 // buildFixManager builds the fix-PR manager for the source repo using
@@ -603,6 +631,9 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		return PreviewResult{}, nil, err
 	}
+	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	var spec issues.IssueSpec
 	var targetRepo string
 	if subject.Kind == actionSubjectPattern {
@@ -644,6 +675,9 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		preview = PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body}
 		entry.spec = final
 	}
+	if err := s.verifyOptionalRemediation(ctx, subject, final.Title+"\n"+final.Body); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	return preview, entry, nil
 }
 
@@ -675,6 +709,9 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		return PreviewResult{}, nil, err
 	}
+	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	if subject.Kind == actionSubjectPattern {
 		return s.generateFixPreviewForPattern(ctx, *subject.Pattern, userToken, instruction, nil)
 	}
@@ -698,6 +735,9 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
 	}
+	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
+		return PreviewResult{}, nil, err
+	}
 	return PreviewResult{Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary, VerifyOutput: gf.Preview.Verify.Output},
 		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff), fix: gf}, nil
@@ -707,12 +747,12 @@ func (s *Service) generateFixPreviewForPattern(
 	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string,
 	generationContext *fixpr.GenerationContext,
 ) (PreviewResult, *previewEntry, error) {
+	verificationPattern := pattern
+	sourceFiles := []string(nil)
 	if generationContext != nil {
-		verificationPattern := pattern
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
 		}
-		sourceFiles := []string(nil)
 		if generationContext.Source != nil {
 			repo := s.cfg.EffectiveAnalysisSourceRepo()
 			verificationPattern.SourceRef = repo.Owner + "/" + repo.Name + "@" + generationContext.Source.Revision
@@ -722,10 +762,13 @@ func (s *Service) generateFixPreviewForPattern(
 				sourceFiles = append(sourceFiles, citation.Path)
 			}
 		}
-		subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles}
-		if err := s.verifyRemediation(ctx, subject); err != nil {
-			return PreviewResult{}, nil, err
-		}
+	}
+	subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles}
+	if err := s.verifyRemediation(ctx, subject); err != nil {
+		return PreviewResult{}, nil, err
+	}
+	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
+		return PreviewResult{}, nil, err
 	}
 	mgr, err := s.buildFixManager(ctx, userToken)
 	if err != nil {
@@ -739,6 +782,9 @@ func (s *Service) generateFixPreviewForPattern(
 	}
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
+	}
+	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
+		return PreviewResult{}, nil, err
 	}
 	return PreviewResult{
 			Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,

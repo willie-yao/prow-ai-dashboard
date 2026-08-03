@@ -1373,3 +1373,68 @@ func TestBuildSourceVerificationUsesOnlyPinnedLinks(t *testing.T) {
 		t.Fatalf("verification files = %v", got.RelevantFiles)
 	}
 }
+
+func TestSourcePreflightChecksInstructionAndCachesResult(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := models.PatternAnalysis{
+		SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
+		FileLinks: map[string]string{"main.go": "https://github.com/example/repo/blob/" + revision + "/main.go"},
+	}
+	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern}
+	service := NewService(&project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+	}}, t.TempDir(), AIConfig{})
+	reader := fakeActionSourceReader{
+		"go.mod":  "module example\n",
+		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+	}
+	calls := 0
+	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		calls++
+		return actionverify.Verify(ctx, reader, input)
+	}
+	for range 2 {
+		if err := service.verifyOptionalRemediation(t.Context(), subject, "instead call ExistingFix"); !errors.Is(err, ErrRemediationAlreadyPresent) {
+			t.Fatalf("instruction preflight error = %v", err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("verification calls = %d, want 1", calls)
+	}
+	if err := service.verifyOptionalRemediation(t.Context(), subject, "make the title concise"); err != nil || calls != 1 {
+		t.Fatalf("non-remediation instruction error = %v calls = %d", err, calls)
+	}
+}
+
+func TestIssuePreflightChecksFinalDraft(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-x", Systemic: true, SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
+		FileLinks: map[string]string{"main.go": "https://github.com/example/repo/blob/" + revision + "/main.go"},
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	service := NewService(&project.Config{
+		Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "example", Name: "issues"}},
+		AI:     &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}, dataDir, AIConfig{})
+	base, targetRepo, err := service.buildIssueSpecForPattern(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Body = "Instead call ExistingFix."
+	var proposals []string
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		proposals = append(proposals, input.Proposal)
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if _, _, err := service.generateIssuePreview(
+		t.Context(), pattern.ID, "token", "", &base, targetRepo, pattern.ContentHash,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(proposals) != 2 || proposals[0] != pattern.SuggestedFix || !strings.Contains(proposals[1], "ExistingFix") {
+		t.Fatalf("verified proposals = %v", proposals)
+	}
+}
