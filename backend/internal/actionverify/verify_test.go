@@ -39,7 +39,7 @@ func TestVerifyFindsInvocationOutsideGroundedPaths(t *testing.T) {
 	reader := fakeReader{
 		"go.mod":                          "module example\n",
 		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi_test.go":           "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+		"test/e2e/capi.go":                "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
 	}
 	verifyState(t, reader, Input{
 		Proposal:      "Implement `LabelCRDsForClusterctlUpgrade`.",
@@ -390,4 +390,18 @@ func TestVerifyAllowsMissingSymbolInConstrainedGroundedFile(t *testing.T) {
 	verifyState(t, reader, Input{
 		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"target/main_windows.go"},
 	}, StateUnresolved)
+}
+
+func TestVerifyIgnoresUngroundedTestInvocation(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":                "module example\n",
+		"target/helper.go":      "package target\nfunc ExistingFix(){}\n",
+		"target/helper_test.go": "package target\nfunc testUse(){ ExistingFix() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/helper.go"},
+	}, StateUnresolved)
+	verifyState(t, reader, Input{
+		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/helper.go", "target/helper_test.go"},
+	}, StateAlreadyPresent)
 }

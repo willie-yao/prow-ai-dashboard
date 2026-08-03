@@ -1527,3 +1527,29 @@ func TestSourceVerificationSurvivesLeaderCancellation(t *testing.T) {
 		t.Fatalf("waiter error = %v", err)
 	}
 }
+
+func TestSourcePreflightUsesBrandingRepositoryFallback(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := models.PatternAnalysis{
+		SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
+		FileLinks: map[string]string{"main.go": "https://github.com/example/repo/blob/" + revision + "/main.go"},
+	}
+	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern}
+	service := NewService(&project.Config{Branding: project.Branding{
+		SourceRepo: project.SourceRepo{Owner: "example", Name: "repo"},
+	}}, t.TempDir(), AIConfig{})
+	called := false
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		called = true
+		if len(input.RelevantFiles) != 1 || input.RelevantFiles[0] != "main.go" {
+			t.Fatalf("verification files = %v", input.RelevantFiles)
+		}
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if err := service.verifyRemediation(t.Context(), subject); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("branding source repository did not enable preflight")
+	}
+}

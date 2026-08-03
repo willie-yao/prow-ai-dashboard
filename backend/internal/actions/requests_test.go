@@ -31,7 +31,9 @@ func requestTestService(t *testing.T) (*Service, models.PatternAnalysis) {
 		Branding: project.Branding{SiteURL: "https://dash.example.com", SourceRepo: project.SourceRepo{Owner: "o", Name: "r"}},
 		Issues:   &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
 	}
-	return NewService(cfg, dataDir, AIConfig{}), pattern
+	service := NewService(cfg, dataDir, AIConfig{})
+	service.sourceVerifier = nil
+	return service, pattern
 }
 
 func waitRequest(t *testing.T, service *Service, id, owner string, want ...string) ActionRequestView {

@@ -470,10 +470,13 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	if subject == nil || s.sourceVerifier == nil {
 		return nil
 	}
-	if s.cfg == nil || s.cfg.AI == nil || s.cfg.AI.SourceRepo == nil {
+	if s.cfg == nil {
 		return nil
 	}
 	repo := s.cfg.EffectiveAnalysisSourceRepo()
+	if repo.Owner == "" && repo.Name == "" {
+		return nil
+	}
 	if repo.Owner == "" || repo.Name == "" {
 		return fmt.Errorf("%w: configured source repository is incomplete", ErrRemediationInconclusive)
 	}

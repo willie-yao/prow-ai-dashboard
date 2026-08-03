@@ -159,6 +159,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		ambiguousSelectors: map[string]bool{},
 	}
 	constrainedSymbols := map[string]bool{}
+	groundedTestDirs := map[string]bool{}
 	inspected := map[string]bool{}
 	anchors := map[string]map[string]bool{}
 	for symbol := range symbols {
@@ -167,6 +168,9 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	for _, path := range groundedPaths {
 		if !strings.HasSuffix(path, ".go") {
 			continue
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			groundedTestDirs[pathpkg.Dir(path)] = true
 		}
 		constrained := isBuildConstrained(path, contents[path])
 		target := &evidence
@@ -199,7 +203,8 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 		return alreadyPresentResult(symbols), nil
 	}
 	for _, path := range goPaths {
-		if inspected[path] || !containsCandidateIdentifier(contents[path], symbols) {
+		if inspected[path] || strings.HasSuffix(path, "_test.go") && !groundedTestDirs[pathpkg.Dir(path)] ||
+			!containsCandidateIdentifier(contents[path], symbols) {
 			continue
 		}
 		extra := sourceEvidence{
