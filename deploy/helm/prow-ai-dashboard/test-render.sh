@@ -1230,6 +1230,32 @@ if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
 fi
 grep -Fq 'networkPolicy.ingress requires networkPolicy.enabled=true' "$tmp/networkpolicy-disabled-ingress.yaml"
 
+cat > "$tmp/old-reuse-values.yaml" <<'VALUES'
+server:
+  service:
+    type: ClusterIP
+    port: 80
+    annotations: {}
+    internal: null
+    loadBalancerSourceRanges: null
+    externalTrafficPolicy: null
+    publicOriginAcknowledged: null
+networkPolicy:
+  enabled: true
+  ingress: null
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: legacy-ingress
+VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/old-reuse-values.yaml" > "$tmp/old-reuse-render.yaml"
+grep -Fq 'type: ClusterIP' "$tmp/old-reuse-render.yaml"
+grep -Fq 'kubernetes.io/metadata.name: legacy-ingress' "$tmp/old-reuse-render.yaml"
+grep -Fq 'port: 8080' "$tmp/old-reuse-render.yaml"
+helm install old-reuse-notes "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/old-reuse-values.yaml" \
+  --dry-run=client --debug > "$tmp/old-reuse-notes.yaml" 2>&1
+grep -Fq 'ClusterIP only' "$tmp/old-reuse-notes.yaml"
+
 for invalid_origin in ranges-on-clusterip universal-ipv4-range universal-ipv6-range empty-range internal-without-annotations acknowledgement-on-clusterip invalid-external-policy; do
   invalid_args=()
   want=

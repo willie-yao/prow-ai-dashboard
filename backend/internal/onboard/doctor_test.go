@@ -150,8 +150,9 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		want       DoctorStatus
 	}{
 		{name: "actions disabled", want: DoctorPass},
-		{name: "cluster ip", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorPass},
-		{name: "chat cluster ip", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorPass},
+		{name: "cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
+		{name: "cluster ip with network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n", want: DoctorPass},
+		{name: "chat cluster ip without network policy", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
 		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
 		{name: "chat public load balancer", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
 		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},

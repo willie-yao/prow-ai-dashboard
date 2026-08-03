@@ -1,8 +1,9 @@
 {{- include "prow-ai-dashboard.validateNetworkSecurity" . -}}
 {{- $service := .Values.server.service -}}
+{{- $internal := $service.internal | default dict -}}
 {{- $annotations := deepCopy ($service.annotations | default dict) -}}
-{{- if $service.internal.enabled -}}
-{{- $annotations = mergeOverwrite $annotations ($service.internal.annotations | default dict) -}}
+{{- if ($internal.enabled | default false) -}}
+{{- $annotations = mergeOverwrite $annotations ($internal.annotations | default dict) -}}
 {{- end -}}
 apiVersion: v1
 kind: Service

@@ -437,7 +437,11 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 	}
 	switch serviceType {
 	case "ClusterIP":
-		add("Kubernetes origin security", DoctorPass, "authenticated server features use a ClusterIP Service", "")
+		if values.NetworkPolicy.Enabled {
+			add("Kubernetes origin security", DoctorPass, "authenticated server features use a ClusterIP Service with NetworkPolicy", "")
+		} else {
+			add("Kubernetes origin security", DoctorWarn, "authenticated server features use a ClusterIP Service but NetworkPolicy is disabled", "Enable NetworkPolicy and allow only the expected ingress controller or authentication proxy path.")
+		}
 	case "LoadBalancer":
 		if values.Server.Service.Internal.Enabled && len(values.Server.Service.Internal.Annotations) == 0 {
 			add("Kubernetes origin security", DoctorWarn, "internal LoadBalancer is enabled without provider annotations", "Set server.service.internal.annotations for the cloud provider and verify that the resulting address is private.")
