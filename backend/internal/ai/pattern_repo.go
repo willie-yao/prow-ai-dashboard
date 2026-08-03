@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -31,6 +33,9 @@ type githubRepoReader struct {
 	token  string
 	client *http.Client
 	mu     sync.Mutex
+	files  map[string]string
+	treeMu sync.Mutex
+	tree   []string
 }
 
 func (r *githubRepoReader) SourceIdentity() (string, string, string) {
@@ -97,6 +102,11 @@ func NewGitHubRepoReader(owner, repo, ref, token string) tools.RepoReader {
 // ListTree returns the repo's blob paths at the bound ref via the recursive
 // git-trees API.
 func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
+	r.treeMu.Lock()
+	defer r.treeMu.Unlock()
+	if r.tree != nil {
+		return append([]string(nil), r.tree...), nil
+	}
 	ref := r.resolvedRef()
 	u := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", githubAPIBase,
 		r.owner, r.repo, url.PathEscape(ref))
@@ -134,6 +144,7 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 			paths = append(paths, e.Path)
 		}
 	}
+	r.tree = append([]string(nil), paths...)
 	return paths, nil
 }
 
@@ -180,6 +191,119 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 		return "", false, fmt.Errorf("reading %s: %w", path, err)
 	}
 	return string(body), true, nil
+}
+
+const (
+	maxSourceArchiveBytes         = 128 << 20
+	maxSourceArchiveExpandedBytes = 512 << 20
+	maxSourceFileBytes            = 8 << 20
+)
+
+// ReadFiles fetches pinned repository files from one archive request and caches
+// them for repeated verification against the same reader.
+func (r *githubRepoReader) ReadFiles(ctx context.Context, paths []string) (map[string]string, error) {
+	wanted := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		clean, err := artifacts.SafePath(strings.TrimSpace(path))
+		if err != nil || clean == "" {
+			return nil, fmt.Errorf("invalid repository path %q", path)
+		}
+		wanted[clean] = true
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.files == nil {
+		r.files = map[string]string{}
+	}
+	missing := make(map[string]bool, len(wanted))
+	for path := range wanted {
+		if _, ok := r.files[path]; !ok {
+			missing[path] = true
+		}
+	}
+	if len(missing) > 0 {
+		files, err := r.readArchive(ctx, missing)
+		if err != nil {
+			return nil, err
+		}
+		for path, content := range files {
+			r.files[path] = content
+		}
+	}
+	out := make(map[string]string, len(wanted))
+	for path := range wanted {
+		if content, ok := r.files[path]; ok {
+			out[path] = content
+		}
+	}
+	return out, nil
+}
+
+func (r *githubRepoReader) readArchive(ctx context.Context, wanted map[string]bool) (map[string]string, error) {
+	u := fmt.Sprintf("%s/repos/%s/%s/tarball/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(r.ref))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("reading %s/%s source archive: %s", r.owner, r.repo, resp.Status)
+	}
+	compressed := io.LimitReader(resp.Body, maxSourceArchiveBytes+1)
+	gzipReader, err := gzip.NewReader(compressed)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s/%s source archive: %w", r.owner, r.repo, err)
+	}
+	defer gzipReader.Close()
+
+	files := make(map[string]string, len(wanted))
+	totalBytes := int64(0)
+	expandedBytes := int64(0)
+	tarReader := tar.NewReader(gzipReader)
+	for len(files) < len(wanted) {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading %s/%s source archive: %w", r.owner, r.repo, err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		if header.Size < 0 || expandedBytes+header.Size > maxSourceArchiveExpandedBytes {
+			return nil, fmt.Errorf("source archive exceeds verification limits")
+		}
+		expandedBytes += header.Size
+		_, path, ok := strings.Cut(strings.TrimPrefix(header.Name, "./"), "/")
+		if !ok || !wanted[path] {
+			continue
+		}
+		if header.Size < 0 || header.Size > maxSourceFileBytes || totalBytes+header.Size > maxSourceArchiveBytes {
+			return nil, fmt.Errorf("source archive file %s exceeds verification limits", path)
+		}
+		body, err := io.ReadAll(io.LimitReader(tarReader, maxSourceFileBytes+1))
+		if err != nil {
+			return nil, fmt.Errorf("reading source archive file %s: %w", path, err)
+		}
+		if int64(len(body)) != header.Size {
+			return nil, fmt.Errorf("reading source archive file %s: incomplete content", path)
+		}
+		totalBytes += int64(len(body))
+		files[path] = string(body)
+	}
+	return files, nil
 }
 
 // mapSegments applies f to each element, used to escape path segments while

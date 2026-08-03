@@ -1,6 +1,9 @@
 package ai
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -35,8 +38,12 @@ func TestGitHubRepoReaderAnonymousPublicAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 1 || paths[0] != "config/source.yaml" || treeCalls != 1 {
-		t.Fatalf("paths=%v treeCalls=%d", paths, treeCalls)
+	cachedPaths, err := reader.ListTree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "config/source.yaml" || len(cachedPaths) != 1 || cachedPaths[0] != paths[0] || treeCalls != 1 {
+		t.Fatalf("paths=%v cached=%v treeCalls=%d", paths, cachedPaths, treeCalls)
 	}
 	content, found, err := reader.ReadFile(context.Background(), "config/source.yaml")
 	if err != nil || !found || content != "enabled: true\n" || fileCalls != 1 {
@@ -78,4 +85,63 @@ func TestGitHubRepoReaderAuthenticatedPrivateAccess(t *testing.T) {
 	if treeAuth != "Bearer "+token || fileAuth != "Bearer "+token {
 		t.Fatalf("authorization headers tree=%q file=%q", treeAuth, fileAuth)
 	}
+}
+
+func TestGitHubRepoReaderBulkAccessIsCached(t *testing.T) {
+	const token = "read-token-value"
+	archive := sourceArchive(t, map[string]string{
+		"go.mod":     "module example/repo\n",
+		"pkg/fix.go": "package fix\n",
+	})
+	archiveCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/private/tarball/commit-sha" {
+			http.NotFound(w, r)
+			return
+		}
+		archiveCalls++
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			t.Fatalf("archive authorization = %q", r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+	oldAPI := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = oldAPI })
+
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token).(*githubRepoReader)
+	for range 2 {
+		files, err := reader.ReadFiles(context.Background(), []string{"go.mod", "pkg/fix.go"})
+		if err != nil || files["go.mod"] != "module example/repo\n" || files["pkg/fix.go"] != "package fix\n" {
+			t.Fatalf("files=%v err=%v", files, err)
+		}
+	}
+	if archiveCalls != 1 {
+		t.Fatalf("archive calls = %d, want 1", archiveCalls)
+	}
+}
+
+func sourceArchive(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	gzipWriter := gzip.NewWriter(&output)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for path, content := range files {
+		if err := tarWriter.WriteHeader(&tar.Header{
+			Name: "owner-private-sha/" + path, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tarWriter.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
 }

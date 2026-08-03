@@ -134,6 +134,7 @@ type ActionSubject struct {
 	ContentHash string
 	Pattern     *models.PatternAnalysis
 	Build       *BuildActionSubject
+	SourceFiles []string
 }
 
 // BuildActionSubject is one analyzed build failure without a JUnit assertion.
@@ -192,6 +193,9 @@ type Service struct {
 	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
 	requestStateWriter   func(string, any) error
 	sourceVerifier       func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
+	sourceReaderMu       sync.Mutex
+	sourceReaders        map[string]actionverify.Reader
+	sourceReaderOrder    []string
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -205,6 +209,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
+		sourceReaders: map[string]actionverify.Reader{},
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
@@ -357,12 +362,19 @@ func buildSubjectHash(subject *BuildActionSubject) string {
 
 func verifiedBuildSourceFiles(subject *BuildActionSubject, owner, repo string) []string {
 	analysis := subject.Failure.AIAnalysis
-	if analysis == nil || len(analysis.FileLinks) == 0 {
+	if analysis == nil {
+		return nil
+	}
+	return verifiedSourceFiles(analysis.FileLinks, owner, repo, "")
+}
+
+func verifiedSourceFiles(fileLinks map[string]string, owner, repo, revision string) []string {
+	if len(fileLinks) == 0 {
 		return nil
 	}
 	var files []string
-	links := make([]string, 0, len(analysis.FileLinks))
-	for _, raw := range analysis.FileLinks {
+	links := make([]string, 0, len(fileLinks))
+	for _, raw := range fileLinks {
 		links = append(links, raw)
 	}
 	slices.Sort(links)
@@ -374,6 +386,10 @@ func verifiedBuildSourceFiles(subject *BuildActionSubject, owner, repo string) [
 		}
 		parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
 		if len(parts) < 5 || !strings.EqualFold(parts[0], owner) || !strings.EqualFold(parts[1], repo) || parts[2] != "blob" {
+			continue
+		}
+		linkRevision, err := url.PathUnescape(parts[3])
+		if err != nil || revision != "" && !strings.EqualFold(linkRevision, revision) {
 			continue
 		}
 		decoded, err := url.PathUnescape(strings.Join(parts[4:], "/"))
@@ -428,6 +444,24 @@ func (s *Service) buildIssueSpecForBuild(subject *BuildActionSubject, id string)
 	return spec, eff.Repo.Owner + "/" + eff.Repo.Name, nil
 }
 
+func (s *Service) remediationSourceReader(owner, repo, revision string) actionverify.Reader {
+	const maxCachedReaders = 4
+	key := strings.ToLower(owner + "/" + repo + "@" + revision)
+	s.sourceReaderMu.Lock()
+	defer s.sourceReaderMu.Unlock()
+	if reader := s.sourceReaders[key]; reader != nil {
+		return reader
+	}
+	var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
+	if len(s.sourceReaderOrder) >= maxCachedReaders {
+		delete(s.sourceReaders, s.sourceReaderOrder[0])
+		s.sourceReaderOrder = s.sourceReaderOrder[1:]
+	}
+	s.sourceReaders[key] = reader
+	s.sourceReaderOrder = append(s.sourceReaderOrder, key)
+	return reader
+}
+
 func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject) error {
 	if subject == nil || s.sourceVerifier == nil {
 		return nil
@@ -444,14 +478,14 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
 		revision, proposal = subject.Pattern.SourceRef, subject.Pattern.SuggestedFix
 		if sourceRepo, sourceRevision, ok := strings.Cut(revision, "@"); ok {
-			if sourceRepo != repo.Owner+"/"+repo.Name {
+			if !strings.EqualFold(sourceRepo, repo.Owner+"/"+repo.Name) {
 				return fmt.Errorf("%w: grounded repository does not match configured source", ErrRemediationInconclusive)
 			}
 			revision = sourceRevision
 		}
-		files = append(files, subject.Pattern.RelevantFiles...)
-		for path := range subject.Pattern.FileLinks {
-			files = append(files, path)
+		files = append(files, subject.SourceFiles...)
+		if len(files) == 0 {
+			files = verifiedSourceFiles(subject.Pattern.FileLinks, repo.Owner, repo.Name, revision)
 		}
 	} else if subject.Build != nil && subject.Build.Failure.AIAnalysis != nil {
 		source, ok := ai.ResolveBuildSource(subject.Build.Build, repo.Owner, repo.Name)
@@ -459,15 +493,13 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 			return fmt.Errorf("%w: build source repository revision could not be resolved", ErrRemediationInconclusive)
 		}
 		revision, proposal = source.Revision, subject.Build.Failure.AIAnalysis.SuggestedFix
-		files = append(files, subject.Build.RelevantFiles...)
-		for path := range subject.Build.Failure.AIAnalysis.FileLinks {
-			files = append(files, path)
-		}
+		files = verifiedSourceFiles(subject.Build.Failure.AIAnalysis.FileLinks, repo.Owner, repo.Name, revision)
 	}
 	if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(revision)) {
 		return fmt.Errorf("%w: source revision is not an immutable full commit", ErrRemediationInconclusive)
 	}
-	reader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, strings.ToLower(revision), s.ai.SourceToken)
+	revision = strings.ToLower(revision)
+	reader := s.remediationSourceReader(repo.Owner, repo.Name, revision)
 	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
 	if err != nil {
 		return fmt.Errorf("%w: pinned source could not be checked", ErrRemediationInconclusive)
@@ -680,15 +712,17 @@ func (s *Service) generateFixPreviewForPattern(
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
 		}
+		sourceFiles := []string(nil)
 		if generationContext.Source != nil {
 			repo := s.cfg.EffectiveAnalysisSourceRepo()
 			verificationPattern.SourceRef = repo.Owner + "/" + repo.Name + "@" + generationContext.Source.Revision
 			verificationPattern.RelevantFiles = nil
+			verificationPattern.FileLinks = nil
 			for _, citation := range generationContext.Source.Citations {
-				verificationPattern.RelevantFiles = append(verificationPattern.RelevantFiles, citation.Path)
+				sourceFiles = append(sourceFiles, citation.Path)
 			}
 		}
-		subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern}
+		subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles}
 		if err := s.verifyRemediation(ctx, subject); err != nil {
 			return PreviewResult{}, nil, err
 		}

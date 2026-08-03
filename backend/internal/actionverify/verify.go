@@ -2,6 +2,7 @@
 package actionverify
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"go/ast"
@@ -26,6 +27,11 @@ type Reader interface {
 	ListTree(context.Context) ([]string, error)
 	ReadFile(context.Context, string) (string, bool, error)
 }
+
+type bulkReader interface {
+	ReadFiles(context.Context, []string) (map[string]string, error)
+}
+
 type Input struct {
 	Proposal      string
 	RelevantFiles []string
@@ -39,6 +45,15 @@ type sourceEvidence struct {
 	definitions        map[string]map[string]bool
 	calls              map[string]map[string]bool
 	ambiguousSelectors map[string]bool
+}
+
+type moduleRoot struct {
+	dir  string
+	path string
+}
+
+type packageResolver struct {
+	modules []moduleRoot
 }
 
 var implementationPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?\s+(?:the\s+)?|add(?:ing)?\s+(?:a\s+)?(?:call\s+to\s+)?|create\s+|define\s+|introduce\s+)\x60?([A-Za-z_][A-Za-z0-9_]{3,})\x60?`)
@@ -56,55 +71,43 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	for _, match := range matches {
 		symbols[match[1]] = true
 	}
-	paths := append([]string(nil), input.RelevantFiles...)
+	groundedPaths := append([]string(nil), input.RelevantFiles...)
 	for _, match := range pathPattern.FindAllStringSubmatch(input.Proposal, -1) {
-		paths = append(paths, match[1])
+		groundedPaths = append(groundedPaths, match[1])
 	}
-	paths = compact(paths)
-	if len(paths) == 0 {
+	groundedPaths = compact(groundedPaths)
+	if len(groundedPaths) == 0 {
 		return Result{State: StateInconclusive, Reason: "proposal has no grounded source paths"}, nil
-	}
-
-	evidence := sourceEvidence{
-		definitions:        map[string]map[string]bool{},
-		calls:              map[string]map[string]bool{},
-		ambiguousSelectors: map[string]bool{},
-	}
-	readPaths := map[string]bool{}
-	groundedGoFiles := 0
-	for _, path := range paths {
-		content, found, err := reader.ReadFile(ctx, path)
-		if err != nil {
-			return Result{}, fmt.Errorf("read pinned source %s: %w", path, err)
-		}
-		if !found {
-			return Result{State: StateInconclusive, Reason: fmt.Sprintf("grounded source path %s was not found", path)}, nil
-		}
-		readPaths[path] = true
-		if !strings.HasSuffix(path, ".go") {
-			continue
-		}
-		groundedGoFiles++
-		if err := inspectGoSource(path, content, symbols, &evidence); err != nil {
-			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
-		}
-	}
-	if groundedGoFiles == 0 {
-		return Result{State: StateInconclusive, Reason: "none of the grounded source paths are Go source"}, nil
-	}
-	if allSymbolsMatched(symbols, evidence) {
-		return alreadyPresentResult(symbols), nil
 	}
 
 	tree, err := reader.ListTree(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("list pinned source tree: %w", err)
 	}
+	tree = compact(tree)
+	treeSet := make(map[string]bool, len(tree))
 	goPaths := make([]string, 0, len(tree))
-	for _, path := range compact(tree) {
+	modulePaths := make([]string, 0)
+	for _, path := range tree {
+		treeSet[path] = true
 		if strings.HasSuffix(path, ".go") {
 			goPaths = append(goPaths, path)
 		}
+		if pathpkg.Base(path) == "go.mod" {
+			modulePaths = append(modulePaths, path)
+		}
+	}
+	groundedGoFiles := 0
+	for _, path := range groundedPaths {
+		if !treeSet[path] {
+			return Result{State: StateInconclusive, Reason: fmt.Sprintf("grounded source path %s was not found", path)}, nil
+		}
+		if strings.HasSuffix(path, ".go") {
+			groundedGoFiles++
+		}
+	}
+	if groundedGoFiles == 0 {
+		return Result{State: StateInconclusive, Reason: "none of the grounded source paths are Go source"}, nil
 	}
 	if len(goPaths) == 0 {
 		return Result{State: StateInconclusive, Reason: "pinned source tree contains no Go source"}, nil
@@ -112,18 +115,41 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if len(goPaths) > maxExhaustiveGoFiles {
 		return Result{State: StateInconclusive, Reason: "pinned source tree is too large for exhaustive verification"}, nil
 	}
-	for _, path := range goPaths {
-		if readPaths[path] {
-			continue
-		}
-		content, found, err := reader.ReadFile(ctx, path)
-		if err != nil {
-			return Result{}, fmt.Errorf("read pinned source %s: %w", path, err)
-		}
-		if !found {
+
+	readPaths := compact(append(append([]string(nil), goPaths...), modulePaths...))
+	contents, err := readSourceFiles(ctx, reader, readPaths)
+	if err != nil {
+		return Result{}, err
+	}
+	for _, path := range readPaths {
+		if _, ok := contents[path]; !ok {
 			return Result{State: StateInconclusive, Reason: fmt.Sprintf("pinned source path %s was not found", path)}, nil
 		}
-		if err := inspectGoSource(path, content, symbols, &evidence); err != nil {
+	}
+	resolver := newPackageResolver(contents, modulePaths)
+	evidence := sourceEvidence{
+		definitions:        map[string]map[string]bool{},
+		calls:              map[string]map[string]bool{},
+		ambiguousSelectors: map[string]bool{},
+	}
+	inspected := map[string]bool{}
+	for _, path := range groundedPaths {
+		if !strings.HasSuffix(path, ".go") {
+			continue
+		}
+		if err := inspectGoSource(path, contents[path], symbols, resolver, &evidence); err != nil {
+			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
+		}
+		inspected[path] = true
+	}
+	if allSymbolsMatched(symbols, evidence) {
+		return alreadyPresentResult(symbols), nil
+	}
+	for _, path := range goPaths {
+		if inspected[path] {
+			continue
+		}
+		if err := inspectGoSource(path, contents[path], symbols, resolver, &evidence); err != nil {
 			return Result{State: StateInconclusive, Reason: "pinned Go source could not be parsed exhaustively"}, nil
 		}
 	}
@@ -141,12 +167,84 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the pinned source"}, nil
 }
 
-func inspectGoSource(path, content string, symbols map[string]bool, evidence *sourceEvidence) error {
+func readSourceFiles(ctx context.Context, reader Reader, paths []string) (map[string]string, error) {
+	if bulk, ok := reader.(bulkReader); ok {
+		contents, err := bulk.ReadFiles(ctx, paths)
+		if err != nil {
+			return nil, fmt.Errorf("read pinned source archive: %w", err)
+		}
+		return contents, nil
+	}
+	contents := make(map[string]string, len(paths))
+	for _, path := range paths {
+		content, found, err := reader.ReadFile(ctx, path)
+		if err != nil {
+			return nil, fmt.Errorf("read pinned source %s: %w", path, err)
+		}
+		if found {
+			contents[path] = content
+		}
+	}
+	return contents, nil
+}
+
+func newPackageResolver(contents map[string]string, modulePaths []string) packageResolver {
+	modules := make([]moduleRoot, 0, len(modulePaths))
+	for _, path := range modulePaths {
+		modulePath := parseModulePath(contents[path])
+		if modulePath == "" {
+			continue
+		}
+		dir := pathpkg.Dir(path)
+		if dir == "." {
+			dir = ""
+		}
+		modules = append(modules, moduleRoot{dir: dir, path: modulePath})
+	}
+	sort.Slice(modules, func(i, j int) bool { return len(modules[i].dir) > len(modules[j].dir) })
+	return packageResolver{modules: modules}
+}
+
+func parseModulePath(content string) string {
+	scanner := bufio.NewScanner(strings.NewReader(content))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 || fields[0] != "module" {
+			continue
+		}
+		value := fields[1]
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func (r packageResolver) packageID(filePath string) string {
+	dir := pathpkg.Dir(filePath)
+	if dir == "." {
+		dir = ""
+	}
+	for _, module := range r.modules {
+		if module.dir != "" && dir != module.dir && !strings.HasPrefix(dir, module.dir+"/") {
+			continue
+		}
+		relative := strings.TrimPrefix(strings.TrimPrefix(dir, module.dir), "/")
+		if relative == "" {
+			return "module:" + module.path
+		}
+		return "module:" + strings.TrimSuffix(module.path, "/") + "/" + relative
+	}
+	return "repo:" + dir
+}
+
+func inspectGoSource(path, content string, symbols map[string]bool, resolver packageResolver, evidence *sourceEvidence) error {
 	file, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
 	if err != nil {
 		return err
 	}
-	packageName := file.Name.Name
+	packageID := resolver.packageID(path) + "#" + file.Name.Name
 	imports := map[string]string{}
 	hasDotImport := false
 	for _, spec := range file.Imports {
@@ -163,14 +261,14 @@ func inspectGoSource(path, content string, symbols map[string]bool, evidence *so
 			hasDotImport = true
 		case "", "_":
 		default:
-			imports[alias] = pathpkg.Base(importPath)
+			imports[alias] = "module:" + importPath + "#" + pathpkg.Base(importPath)
 		}
 	}
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch value := node.(type) {
 		case *ast.FuncDecl:
 			if symbols[value.Name.Name] {
-				markPackage(evidence.definitions, value.Name.Name, packageName)
+				markPackage(evidence.definitions, value.Name.Name, packageID)
 			}
 		case *ast.CallExpr:
 			name, callPackage, ambiguous := "", "", false
@@ -183,7 +281,7 @@ func inspectGoSource(path, content string, symbols map[string]bool, evidence *so
 				case fun.Obj == nil && hasDotImport:
 					ambiguous = true
 				default:
-					callPackage = packageName
+					callPackage = packageID
 				}
 			case *ast.SelectorExpr:
 				name = fun.Sel.Name

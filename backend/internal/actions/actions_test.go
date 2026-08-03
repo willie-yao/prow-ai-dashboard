@@ -1243,7 +1243,13 @@ func TestPatternIssueAmbiguousWriteUsesOpenOnlyReconciliation(t *testing.T) {
 
 type fakeActionSourceReader map[string]string
 
-func (f fakeActionSourceReader) ListTree(context.Context) ([]string, error) { return nil, nil }
+func (f fakeActionSourceReader) ListTree(context.Context) ([]string, error) {
+	paths := make([]string, 0, len(f))
+	for path := range f {
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
 func (f fakeActionSourceReader) ReadFile(_ context.Context, path string) (string, bool, error) {
 	value, ok := f[path]
 	return value, ok, nil
@@ -1251,11 +1257,16 @@ func (f fakeActionSourceReader) ReadFile(_ context.Context, path string) (string
 
 func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	dataDir := t.TempDir()
+	const revision = "0123456789abcdef0123456789abcdef01234567"
 	pattern := models.PatternAnalysis{
 		JobID: "periodic-capz", Systemic: true,
 		SuggestedFix:  "Implement `LabelCRDsForClusterctlUpgrade`.",
-		RelevantFiles: []string{"internal/asomigration/labels.go", "test/e2e/capi_test.go"},
-		SourceRef:     "0123456789abcdef0123456789abcdef01234567",
+		RelevantFiles: []string{"sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go"},
+		FileLinks: map[string]string{
+			"internal/asomigration/labels.go": "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + revision + "/internal/asomigration/labels.go",
+			"test/e2e/capi_test.go":           "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + revision + "/test/e2e/capi_test.go",
+		},
+		SourceRef: revision,
 	}
 	models.AssignPatternIdentity(&pattern)
 	writeJobDetail(t, dataDir, "periodic-capz.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
@@ -1266,8 +1277,9 @@ func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	}
 	service := NewService(cfg, dataDir, AIConfig{})
 	reader := fakeActionSourceReader{
+		"go.mod":                          "module example\n",
 		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi_test.go":           "package e2e\nimport \"example/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+		"test/e2e/capi_test.go":           "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
 	}
 	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
 		return actionverify.Verify(ctx, reader, input)
@@ -1285,5 +1297,79 @@ func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
 	if view.Preview != nil || !strings.Contains(view.Error, "already") {
 		t.Fatalf("request remained actionable: %+v", view)
+	}
+}
+
+func TestVerifiedSourceFilesRequirePinnedRevision(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	links := map[string]string{
+		"current": "https://github.com/example/repo/blob/" + revision + "/current.go",
+		"stale":   "https://github.com/example/repo/blob/fedcba9876543210fedcba9876543210fedcba98/stale.go",
+	}
+	files := verifiedSourceFiles(links, "example", "repo", revision)
+	if len(files) != 1 || files[0] != "current.go" {
+		t.Fatalf("verified files = %v", files)
+	}
+}
+
+func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testing.T) {
+	const oldRevision = "0123456789abcdef0123456789abcdef01234567"
+	const newRevision = "fedcba9876543210fedcba9876543210fedcba98"
+	pattern := systemicPattern()
+	pattern.SuggestedFix = "Implement ExistingFix."
+	pattern.SourceRef = "example/repo@" + oldRevision
+	pattern.RelevantFiles = []string{"old.go"}
+	pattern.FileLinks = map[string]string{
+		"old.go": "https://github.com/example/repo/blob/" + oldRevision + "/old.go",
+	}
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	var got actionverify.Input
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		got = input
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	_, _, _ = service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
+		AssistantAnswer:   "selected answer",
+		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
+		Source: &fixpr.SourceContext{
+			Revision:  newRevision,
+			Citations: []fixpr.Evidence{{Path: "new.go", LineStart: 1, LineEnd: 1, Quote: "package source"}},
+		},
+	})
+	if len(got.RelevantFiles) != 1 || got.RelevantFiles[0] != "new.go" {
+		t.Fatalf("verification files = %v", got.RelevantFiles)
+	}
+}
+
+func TestBuildSourceVerificationUsesOnlyPinnedLinks(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	detail := analyzedBuildDetail(false)
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + revision}
+	failure := detail.Runs[0].TestCases[0]
+	failure.AIAnalysis.RelevantFiles = []string{"sigs.k8s.io/cluster-api/test@v1.13.3/framework/x.go"}
+	failure.AIAnalysis.FileLinks = map[string]string{
+		"templates/aks.yaml": "https://github.com/example/repo/blob/" + revision + "/templates/aks.yaml",
+	}
+	subject := &ActionSubject{Kind: actionSubjectBuild, Build: &BuildActionSubject{
+		JobID: detail.JobID, JobName: detail.Name, Build: detail.Runs[0].BuildInfo,
+		Failure: failure, RelevantFiles: failure.AIAnalysis.RelevantFiles,
+	}}
+	service := NewService(&project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+	}}, t.TempDir(), AIConfig{})
+	var got actionverify.Input
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		got = input
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if err := service.verifyRemediation(t.Context(), subject); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RelevantFiles) != 1 || got.RelevantFiles[0] != "templates/aks.yaml" {
+		t.Fatalf("verification files = %v", got.RelevantFiles)
 	}
 }

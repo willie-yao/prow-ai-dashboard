@@ -24,8 +24,9 @@ func (f fakeReader) ReadFile(_ context.Context, path string) (string, bool, erro
 
 func TestVerifyDetectsExistingImplementationAndCall(t *testing.T) {
 	reader := fakeReader{
+		"go.mod":                          "module example\n",
 		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi_test.go":           "package e2e\nimport \"example/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+		"test/e2e/capi_test.go":           "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
 	}
 	verifyState(t, reader, Input{
 		Proposal:      "Implement `LabelCRDsForClusterctlUpgrade`.",
@@ -35,8 +36,9 @@ func TestVerifyDetectsExistingImplementationAndCall(t *testing.T) {
 
 func TestVerifyFindsInvocationOutsideGroundedPaths(t *testing.T) {
 	reader := fakeReader{
+		"go.mod":                          "module example\n",
 		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi_test.go":           "package e2e\nimport \"example/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+		"test/e2e/capi_test.go":           "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
 	}
 	verifyState(t, reader, Input{
 		Proposal:      "Implement `LabelCRDsForClusterctlUpgrade`.",
@@ -72,8 +74,21 @@ func TestVerifyDoesNotMixUnrelatedSelectorPackage(t *testing.T) {
 	}, StateInconclusive)
 }
 
+func TestVerifyDoesNotMixPackagesWithSameDeclaredName(t *testing.T) {
+	reader := fakeReader{
+		"go.mod":         "module example\n",
+		"a/helper.go":    "package util\nfunc ReconcileThing() {}\n",
+		"b/use.go":       "package b\nimport \"example/c/util\"\nfunc use(){ util.ReconcileThing() }\n",
+		"c/util/util.go": "package util\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement ReconcileThing.", RelevantFiles: []string{"a/helper.go", "b/use.go"},
+	}, StateInconclusive)
+}
+
 func TestVerifyResolvesImportAliasToPackageBasename(t *testing.T) {
 	reader := fakeReader{
+		"go.mod":              "module example\n",
 		"asomigration/fix.go": "package asomigration\nfunc ExistingFix(){}\n",
 		"e2e/use.go":          "package e2e\nimport migration \"example/asomigration\"\nfunc x(){ migration.ExistingFix() }\n",
 	}
@@ -142,5 +157,40 @@ func verifyState(t *testing.T, reader Reader, input Input, want string) {
 	result, err := Verify(context.Background(), reader, input)
 	if err != nil || result.State != want {
 		t.Fatalf("result=%+v err=%v, want %s", result, err, want)
+	}
+}
+
+type bulkFakeReader struct {
+	fakeReader
+	bulkCalls int
+	readCalls int
+}
+
+func (r *bulkFakeReader) ReadFile(ctx context.Context, path string) (string, bool, error) {
+	r.readCalls++
+	return r.fakeReader.ReadFile(ctx, path)
+}
+
+func (r *bulkFakeReader) ReadFiles(_ context.Context, paths []string) (map[string]string, error) {
+	r.bulkCalls++
+	files := make(map[string]string, len(paths))
+	for _, path := range paths {
+		if content, ok := r.fakeReader[path]; ok {
+			files[path] = content
+		}
+	}
+	return files, nil
+}
+
+func TestVerifyUsesBulkPinnedSourceRead(t *testing.T) {
+	reader := &bulkFakeReader{fakeReader: fakeReader{
+		"go.mod":  "module example\n",
+		"main.go": "package main\n",
+	}}
+	verifyState(t, reader, Input{
+		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
+	}, StateUnresolved)
+	if reader.bulkCalls != 1 || reader.readCalls != 0 {
+		t.Fatalf("bulk calls = %d, file calls = %d", reader.bulkCalls, reader.readCalls)
 	}
 }
