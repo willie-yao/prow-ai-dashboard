@@ -637,8 +637,8 @@ func TestAgentRuntimeRecreatesFailedTask(t *testing.T) {
 	if _, err := r.Generate(context.Background(), spec()); err != nil {
 		t.Fatal(err)
 	}
-	if kube.deleteCalls != 1 {
-		t.Fatalf("delete calls = %d, want 1", kube.deleteCalls)
+	if kube.deleteCalls != 2 {
+		t.Fatalf("delete calls = %d, want 2", kube.deleteCalls)
 	}
 	taskSpec := kube.applied["spec"].(map[string]any)
 	retry := taskSpec["retryPolicy"].(map[string]any)
@@ -679,6 +679,9 @@ func TestAgentRuntimeReportsTaskIdentity(t *testing.T) {
 	}
 	if len(observed) != 2 || observed[0].UID != "" || observed[1].UID != "uid-1" {
 		t.Fatalf("observed work = %+v", observed)
+	}
+	if !kube.deleted {
+		t.Fatal("successful request-scoped Task was not removed")
 	}
 	metadata := kube.applied["metadata"].(map[string]any)
 	annotations := metadata["annotations"].(map[string]any)

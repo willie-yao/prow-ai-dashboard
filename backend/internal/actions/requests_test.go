@@ -740,6 +740,7 @@ type fakeManagedAgentRuntime struct {
 	started chan struct{}
 	release chan struct{}
 	err     error
+	errs    []error
 	once    sync.Once
 }
 
@@ -760,6 +761,13 @@ func (f *fakeManagedAgentRuntime) Cleanup(ctx context.Context, ref runtime.WorkR
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		return err
 	}
 	return f.err
 }
@@ -947,5 +955,29 @@ func TestCreateRequestAllowsDifferentOwner(t *testing.T) {
 	waitRequest(t, service, second.ID, "bob", RequestReady)
 	if err := service.Wait(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCleanupRetriesTransientFailure(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{errs: []error{runtime.ErrCleanupPending, nil}}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "retry-cleanup"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+	}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
+	}
+	waitRequest(t, service, id, "alice", RequestCancelled)
+	fake.mu.Lock()
+	calls := len(fake.refs)
+	fake.mu.Unlock()
+	if calls < 2 {
+		t.Fatalf("cleanup calls = %d, want retry", calls)
 	}
 }

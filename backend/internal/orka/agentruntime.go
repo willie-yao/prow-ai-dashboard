@@ -216,11 +216,7 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 			return runtime.GenerateResult{}, errors.Join(fmt.Errorf("recording observed fix Task: %w", err), cleanupErr)
 		}
 	}
-	cleanupOnCancel := true
 	defer func() {
-		if !cleanupOnCancel || ctx.Err() == nil {
-			return
-		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
 		cleanupErr := r.Cleanup(cleanupCtx, work)
 		cancel()
@@ -234,7 +230,6 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 		return runtime.GenerateResult{}, err
 	}
 	if phase != "Succeeded" {
-		cleanupOnCancel = false
 		return runtime.GenerateResult{}, fmt.Errorf("orka fix Task %s ended %s", name, phase)
 	}
 
@@ -250,7 +245,6 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("orka fix Task %s: %w", name, err)
 	}
 	if strings.TrimSpace(parsed.Diff) == "" {
-		cleanupOnCancel = false
 		return runtime.GenerateResult{Output: parsed.Summary}, nil
 	}
 
@@ -265,7 +259,6 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 	if err := validateResultFiles(parsed.Files, files); err != nil {
 		return runtime.GenerateResult{Output: parsed.Summary}, fmt.Errorf("orka fix Task %s: %w", name, err)
 	}
-	cleanupOnCancel = false
 	return runtime.GenerateResult{Files: files, Diff: diff, Output: parsed.Summary}, nil
 }
 
@@ -306,9 +299,6 @@ func (r *AgentRuntime) Cleanup(ctx context.Context, work runtime.WorkRef) error 
 			uid = state.UID
 		} else if state.UID != uid {
 			return fmt.Errorf("%w: Task %s UID changed", runtime.ErrWorkIdentityChanged, work.Name)
-		}
-		if state.Phase == "Cancelled" {
-			return nil
 		}
 		_, err = r.kube.DeleteTaskIfIdentity(ctx, namespace, work.Name, uid, state.ResourceVersion)
 		if err != nil {

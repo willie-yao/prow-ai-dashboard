@@ -177,6 +177,7 @@ type Service struct {
 	requestCancels  map[string]context.CancelFunc
 	requestConfirms map[string]struct{}
 	requestDone     map[string]chan struct{}
+	requestCleanups map[string]struct{}
 	requestWG       sync.WaitGroup
 	managedRuntime  func() (runtime.ManagedAgentRuntime, error)
 }
@@ -190,7 +191,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		issueManagerFactory: func(token, owner, repo string) issuePreviewManager {
 			return issues.NewManager(issues.NewClient(token, owner, repo), filepath.Join(dataDir, "issue_state.json"), owner+"/"+repo, issues.Options{MaxNewPerRun: 1})
 		},
-		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{},
+		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{},
 		requestTimeout: defaultRequestTimeout,
 	}
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {

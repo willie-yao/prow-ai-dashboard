@@ -311,15 +311,60 @@ func (s *Service) finishGeneration(id string) {
 }
 
 func (s *Service) startCleanup(id string) {
+	s.rmu.Lock()
+	if s.requestCleanups == nil {
+		s.requestCleanups = map[string]struct{}{}
+	}
+	if _, running := s.requestCleanups[id]; running {
+		s.rmu.Unlock()
+		return
+	}
+	s.requestCleanups[id] = struct{}{}
+	s.rmu.Unlock()
 	s.requestWG.Add(1)
 	go func() {
 		defer s.requestWG.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRuntimeCleanupTimeout)
-		defer cancel()
-		if _, err := s.cleanupRequest(ctx, id); err != nil {
-			log.Printf("action request %s: runtime cleanup setup failed: %v", id, err)
+		defer func() {
+			s.rmu.Lock()
+			delete(s.requestCleanups, id)
+			s.rmu.Unlock()
+		}()
+		backoff := 250 * time.Millisecond
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRuntimeCleanupTimeout)
+			view, err := s.cleanupRequest(ctx, id)
+			cancel()
+			if view.Status != RequestCancelling {
+				return
+			}
+			if errors.Is(err, runtime.ErrWorkIdentityChanged) {
+				s.markCleanupBlocked(id)
+				return
+			}
+			if err != nil {
+				log.Printf("action request %s: runtime cleanup retry: %v", id, err)
+			}
+			time.Sleep(backoff)
+			if backoff < 5*time.Second {
+				backoff *= 2
+				if backoff > 5*time.Second {
+					backoff = 5 * time.Second
+				}
+			}
 		}
 	}()
+}
+
+func (s *Service) markCleanupBlocked(id string) {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestCancelling {
+		return
+	}
+	request.Warning = "Runtime work identity changed. Cancellation requires operator review."
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	_ = s.saveRequestsLocked()
 }
 
 func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestView, error) {
@@ -349,15 +394,14 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 
 		if work != nil {
 			if s.managedRuntime == nil {
-				return s.currentRequestView(id), nil
+				return s.currentRequestView(id), runtime.ErrUnavailable
 			}
 			cleaner, err := s.managedRuntime()
 			if err != nil || cleaner == nil {
 				return s.currentRequestView(id), err
 			}
 			if err := cleaner.Cleanup(ctx, *work); err != nil {
-				log.Printf("action request %s: runtime cleanup pending: %v", id, err)
-				return s.currentRequestView(id), nil
+				return s.currentRequestView(id), err
 			}
 			if work.UID == "" && done != nil && !generationDone {
 				select {
@@ -365,7 +409,7 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 					generationDone = true
 					continue
 				case <-ctx.Done():
-					return s.currentRequestView(id), nil
+					return s.currentRequestView(id), ctx.Err()
 				}
 			}
 			return s.finalizeCleanup(id)
@@ -379,7 +423,7 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 			generationDone = true
 			continue
 		case <-ctx.Done():
-			return s.currentRequestView(id), nil
+			return s.currentRequestView(id), ctx.Err()
 		}
 	}
 }
@@ -1035,10 +1079,19 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 	if request.Status == RequestCancelled || request.Status == RequestCancelling {
 		view := request.ActionRequestView
 		s.rmu.Unlock()
-		if view.Status == RequestCancelling {
-			return s.cleanupRequest(ctx, id)
+		if view.Status != RequestCancelling {
+			return view, nil
 		}
-		return view, nil
+		view, cleanupErr := s.cleanupRequest(ctx, id)
+		if cleanupErr != nil && view.Status == RequestCancelling {
+			if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
+				s.markCleanupBlocked(id)
+			} else {
+				s.startCleanup(id)
+			}
+			return s.currentRequestView(id), nil
+		}
+		return view, cleanupErr
 	}
 	if request.Status != RequestPending && request.Status != RequestReady {
 		status := request.Status
@@ -1053,7 +1106,16 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 	if cancel != nil {
 		cancel()
 	}
-	return s.cleanupRequest(ctx, id)
+	view, cleanupErr := s.cleanupRequest(ctx, id)
+	if cleanupErr != nil && view.Status == RequestCancelling {
+		if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
+			s.markCleanupBlocked(id)
+		} else {
+			s.startCleanup(id)
+		}
+		return s.currentRequestView(id), nil
+	}
+	return view, cleanupErr
 }
 
 func (s *Service) expireRequestsLocked(now time.Time) bool {
