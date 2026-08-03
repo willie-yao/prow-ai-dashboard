@@ -14,6 +14,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -1481,5 +1482,24 @@ func TestPreviewStoreInvalidatesLegacyVerificationVersion(t *testing.T) {
 	}
 	if loaded.Version != previewStateVersion || len(loaded.Previews) != 0 {
 		t.Fatalf("loaded legacy previews = %+v", loaded)
+	}
+}
+
+func TestPreviewIssueRecordsUsageOperation(t *testing.T) {
+	dataDir := t.TempDir()
+	pattern := systemicPattern()
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pattern}})
+	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{UsageRecorder: usage})
+	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "token", ""); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := usage.Snapshot()
+	if len(snapshot.Days) != 1 || snapshot.RecentOperations[0].Feature != aiusage.FeatureIssueDraft {
+		t.Fatalf("usage = %+v", snapshot)
 	}
 }
