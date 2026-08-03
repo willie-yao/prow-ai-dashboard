@@ -19,8 +19,8 @@ type Operation struct {
 	finished bool
 }
 
-// Begin installs one operation in ctx. Missing IDs are generated from
-// cryptographic randomness so retries can be deduplicated after transport.
+// Begin installs one operation in ctx. Callers should reuse a stable ID for
+// retries; missing IDs use cryptographic randomness for uniqueness only.
 func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.Context, *Operation) {
 	if ctx == nil {
 		ctx = context.Background()
