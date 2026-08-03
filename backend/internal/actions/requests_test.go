@@ -366,6 +366,45 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnsafeLegacyReadyIssue(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	key := issues.KeyPrefixPattern + pattern.JobID
+	unsafeBody := "The user wants me to revise this.\nI need to expose the planning.\nLet me draft it.\n\n## What happened\nunsafe\n\n" + issues.MarkerFor(key)
+	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+		"unsafe-ready": {
+			ActionRequestView: ActionRequestView{
+				ID: "unsafe-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+				Preview: &PreviewResult{Kind: "issue", Title: "Unsafe", Body: unsafeBody},
+			},
+			Issue: &issues.IssueSpec{Key: key, Title: "Unsafe", Body: unsafeBody},
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("unsafe-ready", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != RequestFailed || view.Error == "" || view.Preview != nil {
+		t.Fatalf("unsafe request remained confirmable: %+v", view)
+	}
+	reloaded.rmu.Lock()
+	persisted := reloaded.requests.Requests["unsafe-ready"]
+	reloaded.rmu.Unlock()
+	if persisted.Issue != nil {
+		t.Fatal("unsafe persisted issue was retained")
+	}
+	if _, err := reloaded.ConfirmRequest(context.Background(), "unsafe-ready", "alice", "token"); err == nil {
+		t.Fatal("unsafe legacy request remained confirmable")
+	}
+}
+
 func TestCancelReadyRequest(t *testing.T) {
 	service, pattern := requestTestService(t)
 	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
@@ -385,13 +424,17 @@ func TestCancelReadyRequest(t *testing.T) {
 func TestConfigureAsyncRequestsRetriesPersistedReadyEmail(t *testing.T) {
 	service, pattern := requestTestService(t)
 	now := time.Now().UTC()
+	key := issues.KeyPrefixPattern + pattern.JobID
+	spec := &issues.IssueSpec{Key: key, Title: "Ready", Body: "## Summary\nBody\n\n" + issues.MarkerFor(key)}
 	state := actionRequestState{Version: 1, Requests: map[string]*actionRequest{
-		"request-ready": {ActionRequestView: ActionRequestView{
-			ID: "request-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
-			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
-			ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
-			Preview:   &PreviewResult{Kind: "issue", Title: "Ready", Body: "Body"},
-		}},
+		"request-ready": {
+			ActionRequestView: ActionRequestView{
+				ID: "request-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
+				ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+			},
+			Issue: spec,
+		},
 	}}
 	data, _ := json.Marshal(state)
 	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {

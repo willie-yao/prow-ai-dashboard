@@ -8,11 +8,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
@@ -110,6 +112,28 @@ func (s *Service) loadActionRequests() {
 	changed := s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
+		if request.Status != RequestReady {
+			continue
+		}
+		preview, err := validatedReadyPreview(request)
+		if err != nil {
+			request.Status = RequestFailed
+			request.Error = "saved draft did not pass current safety validation"
+			request.Warning = ""
+			request.Preview = nil
+			request.Issue = nil
+			request.Fix = nil
+			request.Instruction = ""
+			request.UpdatedAt = nowText
+			changed = true
+			continue
+		}
+		if !reflect.DeepEqual(request.Preview, preview) {
+			request.Preview = preview
+			changed = true
+		}
+	}
+	for _, request := range state.Requests {
 		if request.Status != RequestPending {
 			continue
 		}
@@ -129,6 +153,33 @@ func (s *Service) loadActionRequests() {
 		if err := statefile.WriteJSON(s.requestStatePath(), state); err != nil {
 			log.Printf("Warning: failed to save recovered action request state: %v", err)
 		}
+	}
+}
+
+func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
+	switch request.Kind {
+	case "create-issue":
+		if request.Issue == nil || strings.TrimSpace(request.Issue.Key) == "" {
+			return nil, fmt.Errorf("ready issue request has no issue draft")
+		}
+		body := strings.ReplaceAll(request.Issue.Body, issues.MarkerFor(request.Issue.Key), "")
+		if err := actiondraft.ValidateTitleBody(request.Issue.Title, body); err != nil {
+			return nil, err
+		}
+		return &PreviewResult{Kind: "issue", Title: request.Issue.Title, Body: request.Issue.Body}, nil
+	case "propose-fix":
+		if request.Fix == nil {
+			return nil, fmt.Errorf("ready fix request has no fix draft")
+		}
+		if err := actiondraft.ValidateTitleBody(request.Fix.Title, request.Fix.Description); err != nil {
+			return nil, err
+		}
+		return &PreviewResult{
+			Kind: "fix", Title: request.Fix.Title, Body: request.Fix.Description, Diff: request.Fix.Diff,
+			VerifyStatus: string(request.Fix.Verify.Status), VerifySummary: request.Fix.Verify.Summary, VerifyOutput: request.Fix.Verify.Output,
+		}, nil
+	default:
+		return nil, fmt.Errorf("ready request has unsupported action %q", request.Kind)
 	}
 }
 
