@@ -58,7 +58,8 @@ type Correlation struct {
 
 // Metadata identifies one accounting operation.
 type Metadata struct {
-	ID               string
+	LogicalID        string
+	ExecutionID      string
 	Origin           Origin
 	Feature          Feature
 	ModelFingerprint string
@@ -85,6 +86,7 @@ type UsageTotals struct {
 // OperationUsage is one completed, content-free accounting operation.
 type OperationUsage struct {
 	ID                 string      `json:"id"`
+	LogicalID          string      `json:"logical_id,omitempty"`
 	Origin             Origin      `json:"origin"`
 	Feature            Feature     `json:"feature"`
 	StartedAt          string      `json:"started_at"`
@@ -114,14 +116,14 @@ type DailyUsage struct {
 
 // UsageLedger is one writer-owned private usage snapshot.
 type UsageLedger struct {
-	Version           int              `json:"version"`
-	UpdatedAt         string           `json:"updated_at"`
-	Currency          string           `json:"currency,omitempty"`
-	RetentionDays     int              `json:"retention_days"`
-	DroppedOperations int              `json:"dropped_operations,omitempty"`
-	Days              []DailyUsage     `json:"days"`
-	RecentOperations  []OperationUsage `json:"recent_operations"`
-	DedupeOperations  []OperationUsage `json:"dedupe_operations,omitempty"`
+	Version           int                       `json:"version"`
+	UpdatedAt         string                    `json:"updated_at"`
+	Currency          string                    `json:"currency,omitempty"`
+	RetentionDays     int                       `json:"retention_days"`
+	DroppedOperations int                       `json:"dropped_operations,omitempty"`
+	Days              []DailyUsage              `json:"days"`
+	RecentOperations  []OperationUsage          `json:"recent_operations"`
+	DedupeOperations  map[string]OperationUsage `json:"dedupe_operations,omitempty"`
 }
 
 func validFeature(value Feature) bool {

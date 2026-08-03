@@ -26,20 +26,25 @@ func testRecorder(t *testing.T, path string, now time.Time, recent int) *Recorde
 	return recorder
 }
 
-func TestBeginHashesOpaqueStableIDs(t *testing.T) {
+func TestBeginSeparatesLogicalAndExecutionIDs(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 10)
-	_, first := Begin(t.Context(), recorder, Metadata{ID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
-	_, second := Begin(t.Context(), recorder, Metadata{ID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
-	if first == nil || second == nil || first.usage.ID != second.usage.ID || first.usage.ID == "request-123" || len(first.usage.ID) != 32 {
+	_, first := Begin(t.Context(), recorder, Metadata{LogicalID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	_, second := Begin(t.Context(), recorder, Metadata{LogicalID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	if first == nil || second == nil || first.usage.LogicalID != second.usage.LogicalID || first.usage.ID == second.usage.ID || first.usage.LogicalID == "request-123" {
 		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	_, replay := Begin(t.Context(), recorder, Metadata{LogicalID: "request-123", ExecutionID: "execution-456", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	_, sameReplay := Begin(t.Context(), recorder, Metadata{LogicalID: "request-123", ExecutionID: "execution-456", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	if replay.usage.ID != sameReplay.usage.ID || replay.usage.ID == "execution-456" {
+		t.Fatalf("replay=%+v sameReplay=%+v", replay, sameReplay)
 	}
 }
 
 func TestOperationRecordsProviderUsage(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 10)
-	ctx, operation := Begin(t.Context(), recorder, Metadata{ID: "0011223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: now})
+	ctx, operation := Begin(t.Context(), recorder, Metadata{LogicalID: "0011223344556677", ExecutionID: "1111223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: now})
 	ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: 100, CachedInputTokens: 20, OutputTokens: 10, ReasoningTokens: 4})
 	ObserveModelRequest(ctx, TokenUsage{})
 	got := operation.Finish(OutcomeSuccess)
@@ -56,7 +61,8 @@ func TestOperationRecordsProviderUsage(t *testing.T) {
 	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.ModelRequests != 2 || len(snapshot.RecentOperations) != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
-	if len(snapshot.DedupeOperations) != 1 || snapshot.DedupeOperations[0].StartedAt != "" || snapshot.DedupeOperations[0].Correlation != (Correlation{}) {
+	dedupe := snapshot.DedupeOperations[got.ID]
+	if len(snapshot.DedupeOperations) != 1 || dedupe.StartedAt != "" || dedupe.Correlation != (Correlation{}) {
 		t.Fatalf("dedupe operation = %+v", snapshot.DedupeOperations)
 	}
 }
@@ -64,7 +70,7 @@ func TestOperationRecordsProviderUsage(t *testing.T) {
 func TestOperationFinishIsIdempotent(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 10)
-	ctx, operation := Begin(t.Context(), recorder, Metadata{ID: "0011223344556677", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	ctx, operation := Begin(t.Context(), recorder, Metadata{LogicalID: "0011223344556677", ExecutionID: "1111223344556677", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
 	ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: 10})
 	operation.Finish(OutcomeSuccess)
 	operation.Finish(OutcomeSuccess)
@@ -265,5 +271,47 @@ func TestRecorderDeduplicatesEntireRetentionWindow(t *testing.T) {
 	snapshot := recorder.Snapshot()
 	if snapshot.Days[0].Totals.Operations != 1001 || snapshot.Days[0].Totals.InputTokens != 1010 || len(snapshot.DedupeOperations) != 1001 {
 		t.Fatalf("totals=%+v dedupe=%d", snapshot.Days[0].Totals, len(snapshot.DedupeOperations))
+	}
+}
+
+func TestRecorderCountsRetriedExecutionsSeparately(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 10)
+	ctx, first := Begin(t.Context(), recorder, Metadata{LogicalID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: 5})
+	firstUsage := first.Finish(OutcomeError)
+	ctx, retry := Begin(t.Context(), recorder, Metadata{LogicalID: "request-123", Origin: OriginServer, Feature: FeatureAnalysisChat, StartedAt: now})
+	ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: 7})
+	retry.Finish(OutcomeSuccess)
+	recorder.Record(firstUsage)
+	snapshot := recorder.Snapshot()
+	if snapshot.Days[0].Totals.Operations != 2 || snapshot.Days[0].Totals.InputTokens != 12 || len(snapshot.DedupeOperations) != 2 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestRecorderAllowsCurrencyChangeAfterPricedDataExpires(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "usage.json")
+	usd, err := NewPriceTable(Rates{Currency: "USD", InputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, err := NewRecorder(path, RecorderOptions{RetentionDays: 3, RecentOperations: 10, Pricing: usd, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.AddDate(0, 0, -2).Format(time.RFC3339Nano)
+	recorder.Record(OperationUsage{ID: "0011223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: old, CompletedAt: old, Outcome: OutcomeSuccess, ReportedRequests: 1, InputTokens: 10})
+	eur, err := NewPriceTable(Rates{Currency: "EUR", InputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := NewRecorder(path, RecorderOptions{RetentionDays: 1, RecentOperations: 10, Pricing: eur, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := changed.Snapshot(); snapshot.Currency != "EUR" || len(snapshot.Days) != 0 || len(snapshot.DedupeOperations) != 0 {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }

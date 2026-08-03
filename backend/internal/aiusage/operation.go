@@ -20,8 +20,8 @@ type Operation struct {
 	finished bool
 }
 
-// Begin installs one operation in ctx. Callers should reuse a stable ID for
-// retries; missing IDs use cryptographic randomness for uniqueness only.
+// Begin installs one execution in ctx. LogicalID groups retries, while a stable
+// ExecutionID deduplicates only exact persistence replays.
 func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.Context, *Operation) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -33,9 +33,13 @@ func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.
 	if started.IsZero() {
 		started = time.Now().UTC()
 	}
-	id := safeOperationID(metadata.ID)
-	if id == "" {
-		id = randomID()
+	logicalID := safeOperationID(metadata.LogicalID)
+	executionID := safeOperationID(metadata.ExecutionID)
+	if executionID == "" {
+		executionID = randomID()
+	}
+	if logicalID == "" {
+		logicalID = executionID
 	}
 	feature := metadata.Feature
 	if !validFeature(feature) {
@@ -46,7 +50,7 @@ func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.
 		origin = OriginUnknown
 	}
 	op := &Operation{recorder: recorder, usage: OperationUsage{
-		ID: id, Origin: origin, Feature: feature,
+		ID: executionID, LogicalID: logicalID, Origin: origin, Feature: feature,
 		StartedAt:        started.Format(time.RFC3339Nano),
 		ModelFingerprint: safeFingerprint(metadata.ModelFingerprint),
 		Correlation:      metadata.Correlation,

@@ -71,7 +71,7 @@ func TestClientCallModelRecordsUsageOperation(t *testing.T) {
 	}
 	transport := &recordingTransport{result: &modelResponse{Usage: aiusage.TokenUsage{Reported: true, InputTokens: 9, OutputTokens: 4}}}
 	client := &Client{model: "model-a", transport: transport}
-	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{ID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
+	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
 	if _, err := client.callModel(ctx, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestClientCallModelRecordsUnreportedUsage(t *testing.T) {
 	}
 	transport := &recordingTransport{err: errors.New("provider failed")}
 	client := &Client{model: "model-a", transport: transport}
-	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{ID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
+	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
 	if _, err := client.callModel(ctx, nil, nil, nil); err == nil {
 		t.Fatal("expected provider error")
 	}

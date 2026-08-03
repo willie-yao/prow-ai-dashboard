@@ -64,9 +64,6 @@ func NewRecorder(path string, options RecorderOptions) (*Recorder, error) {
 	if ledger.Currency != "" && !validCurrency(ledger.Currency) {
 		return nil, fmt.Errorf("usage ledger currency %q is invalid", ledger.Currency)
 	}
-	if ledger.Currency != "" && currency != "" && ledger.Currency != currency {
-		return nil, fmt.Errorf("usage ledger currency %q does not match configured currency %q", ledger.Currency, currency)
-	}
 	if ledger.Currency == "" {
 		ledger.Currency = currency
 	}
@@ -76,6 +73,12 @@ func NewRecorder(path string, options RecorderOptions) (*Recorder, error) {
 	}
 	recorder.pruneLocked()
 	recorder.truncateRecentLocked()
+	if ledger.Currency != "" && currency != "" && ledger.Currency != currency {
+		if recorder.hasRetainedCostLocked() {
+			return nil, fmt.Errorf("usage ledger currency %q does not match configured currency %q", ledger.Currency, currency)
+		}
+		recorder.ledger.Currency = currency
+	}
 	if existed {
 		recorder.ledger.UpdatedAt = recorder.now().UTC().Format(time.RFC3339Nano)
 		if err := recorder.write(path, recorder.ledger); err != nil {
@@ -86,7 +89,7 @@ func NewRecorder(path string, options RecorderOptions) (*Recorder, error) {
 }
 
 func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
-	fresh := UsageLedger{Version: LedgerVersion, RetentionDays: retentionDays, Days: []DailyUsage{}, RecentOperations: []OperationUsage{}, DedupeOperations: []OperationUsage{}}
+	fresh := UsageLedger{Version: LedgerVersion, RetentionDays: retentionDays, Days: []DailyUsage{}, RecentOperations: []OperationUsage{}, DedupeOperations: map[string]OperationUsage{}}
 	if path == "" {
 		return fresh, false, nil
 	}
@@ -113,7 +116,10 @@ func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
 		ledger.RecentOperations = []OperationUsage{}
 	}
 	if ledger.DedupeOperations == nil {
-		ledger.DedupeOperations = append([]OperationUsage(nil), ledger.RecentOperations...)
+		ledger.DedupeOperations = map[string]OperationUsage{}
+		for _, operation := range ledger.RecentOperations {
+			ledger.DedupeOperations[operation.ID] = dedupeOperation(operation)
+		}
 	}
 	return ledger, true, nil
 }
@@ -167,15 +173,11 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 }
 
 func (r *Recorder) recordLocked(operation OperationUsage) {
-	for i, existing := range r.ledger.DedupeOperations {
-		if existing.ID == operation.ID {
-			r.applyLocked(existing, -1)
-			r.ledger.DedupeOperations = append(r.ledger.DedupeOperations[:i], r.ledger.DedupeOperations[i+1:]...)
-			break
-		}
+	if existing, ok := r.ledger.DedupeOperations[operation.ID]; ok {
+		r.applyLocked(existing, -1)
 	}
 	r.applyLocked(operation, 1)
-	r.ledger.DedupeOperations = append([]OperationUsage{dedupeOperation(operation)}, r.ledger.DedupeOperations...)
+	r.ledger.DedupeOperations[operation.ID] = dedupeOperation(operation)
 	for i, existing := range r.ledger.RecentOperations {
 		if existing.ID == operation.ID {
 			r.ledger.RecentOperations = append(r.ledger.RecentOperations[:i], r.ledger.RecentOperations[i+1:]...)
@@ -255,20 +257,27 @@ func (r *Recorder) pruneLocked() {
 		}
 	}
 	r.ledger.RecentOperations = kept
-	keptDedupe := r.ledger.DedupeOperations[:0]
-	for _, operation := range r.ledger.DedupeOperations {
+	for id, operation := range r.ledger.DedupeOperations {
 		completed, err := time.Parse(time.RFC3339Nano, operation.CompletedAt)
-		if err == nil && completed.UTC().Format(time.DateOnly) >= cutoff {
-			keptDedupe = append(keptDedupe, operation)
+		if err != nil || completed.UTC().Format(time.DateOnly) < cutoff {
+			delete(r.ledger.DedupeOperations, id)
 		}
 	}
-	r.ledger.DedupeOperations = keptDedupe
+}
+
+func (r *Recorder) hasRetainedCostLocked() bool {
+	for _, day := range r.ledger.Days {
+		if day.Totals.EstimatedCostNanos != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Snapshot returns an independent deterministic copy of the current ledger.
 func (r *Recorder) Snapshot() UsageLedger {
 	if r == nil {
-		return UsageLedger{Version: LedgerVersion, Days: []DailyUsage{}, RecentOperations: []OperationUsage{}, DedupeOperations: []OperationUsage{}}
+		return UsageLedger{Version: LedgerVersion, Days: []DailyUsage{}, RecentOperations: []OperationUsage{}, DedupeOperations: map[string]OperationUsage{}}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -282,6 +291,10 @@ func normalizeOperation(operation OperationUsage, now time.Time) OperationUsage 
 	operation.ID = safeOperationID(operation.ID)
 	if operation.ID == "" {
 		operation.ID = randomID()
+	}
+	operation.LogicalID = safeOperationID(operation.LogicalID)
+	if operation.LogicalID == "" {
+		operation.LogicalID = operation.ID
 	}
 	if !validFeature(operation.Feature) {
 		operation.Feature = FeatureUnknown
