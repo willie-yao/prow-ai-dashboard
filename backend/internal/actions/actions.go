@@ -203,6 +203,7 @@ type Service struct {
 	sourceVerifications     map[string]actionverify.Result
 	sourceVerificationOrder []string
 	sourceVerificationCalls map[string]*sourceVerificationCall
+	sourceVerifyQueue       chan struct{}
 	sourceVerifySlots       chan struct{}
 }
 
@@ -219,6 +220,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
 		sourceVerifications:     map[string]actionverify.Result{},
 		sourceVerificationCalls: map[string]*sourceVerificationCall{},
+		sourceVerifyQueue:       make(chan struct{}, 8),
 		sourceVerifySlots:       make(chan struct{}, 2),
 	}
 	s.sourceVerifier = actionverify.Verify
@@ -540,13 +542,36 @@ func (s *Service) cachedSourceVerification(
 		s.sourceVerifyMu.Unlock()
 		return result, nil
 	}
-	call := s.sourceVerificationCalls[key]
-	if call == nil {
-		call = &sourceVerificationCall{done: make(chan struct{})}
-		s.sourceVerificationCalls[key] = call
-		go s.runSourceVerification(context.WithoutCancel(ctx), key, call, owner, repo, revision, proposal, files)
+	if call := s.sourceVerificationCalls[key]; call != nil {
+		s.sourceVerifyMu.Unlock()
+		return waitSourceVerification(ctx, call)
 	}
 	s.sourceVerifyMu.Unlock()
+
+	select {
+	case s.sourceVerifyQueue <- struct{}{}:
+	case <-ctx.Done():
+		return actionverify.Result{}, ctx.Err()
+	}
+	s.sourceVerifyMu.Lock()
+	if result, ok := s.sourceVerifications[key]; ok {
+		s.sourceVerifyMu.Unlock()
+		<-s.sourceVerifyQueue
+		return result, nil
+	}
+	if call := s.sourceVerificationCalls[key]; call != nil {
+		s.sourceVerifyMu.Unlock()
+		<-s.sourceVerifyQueue
+		return waitSourceVerification(ctx, call)
+	}
+	call := &sourceVerificationCall{done: make(chan struct{})}
+	s.sourceVerificationCalls[key] = call
+	s.sourceVerifyMu.Unlock()
+	go s.runSourceVerification(context.WithoutCancel(ctx), key, call, owner, repo, revision, proposal, files)
+	return waitSourceVerification(ctx, call)
+}
+
+func waitSourceVerification(ctx context.Context, call *sourceVerificationCall) (actionverify.Result, error) {
 	select {
 	case <-ctx.Done():
 		return actionverify.Result{}, ctx.Err()
@@ -559,6 +584,7 @@ func (s *Service) runSourceVerification(
 	parent context.Context, key string, call *sourceVerificationCall,
 	owner, repo, revision, proposal string, files []string,
 ) {
+	defer func() { <-s.sourceVerifyQueue }()
 	const (
 		maxCachedVerifications = 64
 		verificationTimeout    = 2 * time.Minute

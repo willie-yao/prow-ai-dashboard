@@ -1553,3 +1553,37 @@ func TestSourcePreflightUsesBrandingRepositoryFallback(t *testing.T) {
 		t.Fatal("branding source repository did not enable preflight")
 	}
 }
+
+func TestSourceVerificationQueueIsBounded(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	service.sourceVerifyQueue = make(chan struct{}, 1)
+	service.sourceVerifySlots = make(chan struct{}, 1)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		close(started)
+		<-release
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement FirstHelper.", []string{"main.go"})
+		firstDone <- err
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := service.cachedSourceVerification(ctx, "example", "repo", strings.Repeat("a", 40), "Implement SecondHelper.", []string{"main.go"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("overflow verification error = %v", err)
+	}
+	service.sourceVerifyMu.Lock()
+	active := len(service.sourceVerificationCalls)
+	service.sourceVerifyMu.Unlock()
+	if active != 1 {
+		t.Fatalf("active source verifications = %d, want 1", active)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
