@@ -63,7 +63,7 @@ func TestOperationRecordsProviderUsage(t *testing.T) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	dedupe := snapshot.DedupeOperations[got.ID]
-	if len(snapshot.DedupeOperations) != 1 || dedupe.StartedAt != "" || dedupe.Correlation != (Correlation{}) {
+	if len(snapshot.DedupeOperations) != 1 || dedupe.Date != "2026-08-03" || len(dedupe.Digest) != 32 {
 		t.Fatalf("dedupe operation = %+v", snapshot.DedupeOperations)
 	}
 }
@@ -81,14 +81,14 @@ func TestOperationFinishIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRecorderUpsertsByID(t *testing.T) {
+func TestRecorderRejectsConflictingExecutionIDReuse(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 10)
 	completed := now.Format(time.RFC3339Nano)
 	recorder.Record(OperationUsage{ID: "0011223344556677", Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: completed, CompletedAt: completed, Outcome: OutcomeSuccess, ModelRequests: 1, ReportedRequests: 1, InputTokens: 10})
 	recorder.Record(OperationUsage{ID: "0011223344556677", Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: completed, CompletedAt: completed, Outcome: OutcomeSuccess, ModelRequests: 1, ReportedRequests: 1, InputTokens: 20})
 	snapshot := recorder.Snapshot()
-	if snapshot.Days[0].Totals.Operations != 1 || snapshot.Days[0].Totals.InputTokens != 20 || len(snapshot.RecentOperations) != 1 {
+	if snapshot.Days[0].Totals.Operations != 1 || snapshot.Days[0].Totals.InputTokens != 10 || len(snapshot.RecentOperations) != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
@@ -265,12 +265,16 @@ func TestRecorderDeduplicatesEntireRetentionWindow(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 0)
 	stamp := now.Format(time.RFC3339Nano)
+	var first OperationUsage
 	for i := 0; i < 1001; i++ {
-		recorder.Record(OperationUsage{ID: fmt.Sprintf("%016x", i), Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, InputTokens: 1})
+		operation := recorder.Record(OperationUsage{ID: fmt.Sprintf("%016x", i), Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, InputTokens: 1})
+		if i == 0 {
+			first = operation
+		}
 	}
-	recorder.Record(OperationUsage{ID: "0000000000000000", Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, InputTokens: 10})
+	recorder.Record(first)
 	snapshot := recorder.Snapshot()
-	if snapshot.Days[0].Totals.Operations != 1001 || snapshot.Days[0].Totals.InputTokens != 1010 || len(snapshot.DedupeOperations) != 1001 {
+	if snapshot.Days[0].Totals.Operations != 1001 || snapshot.Days[0].Totals.InputTokens != 1001 || len(snapshot.DedupeOperations) != 1001 {
 		t.Fatalf("totals=%+v dedupe=%d", snapshot.Days[0].Totals, len(snapshot.DedupeOperations))
 	}
 }

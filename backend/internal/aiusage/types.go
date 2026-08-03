@@ -110,21 +110,28 @@ type OperationUsage struct {
 
 // DailyUsage is one UTC day of totals and feature breakdowns.
 type DailyUsage struct {
-	Date     string                  `json:"date"`
-	Totals   UsageTotals             `json:"totals"`
-	Features map[Feature]UsageTotals `json:"features"`
+	Date          string                  `json:"date"`
+	Totals        UsageTotals             `json:"totals"`
+	Features      map[Feature]UsageTotals `json:"features"`
+	PricingHashes []string                `json:"pricing_hashes,omitempty"`
+}
+
+// DedupeEntry is the minimal state needed to ignore exact persistence replays.
+type DedupeEntry struct {
+	Date   string `json:"date"`
+	Digest string `json:"digest"`
 }
 
 // UsageLedger is one writer-owned private usage snapshot.
 type UsageLedger struct {
-	Version           int                       `json:"version"`
-	UpdatedAt         string                    `json:"updated_at"`
-	Currency          string                    `json:"currency,omitempty"`
-	RetentionDays     int                       `json:"retention_days"`
-	DroppedOperations int                       `json:"dropped_operations,omitempty"`
-	Days              []DailyUsage              `json:"days"`
-	RecentOperations  []OperationUsage          `json:"recent_operations"`
-	DedupeOperations  map[string]OperationUsage `json:"dedupe_operations,omitempty"`
+	Version           int                    `json:"version"`
+	UpdatedAt         string                 `json:"updated_at"`
+	Currency          string                 `json:"currency,omitempty"`
+	RetentionDays     int                    `json:"retention_days"`
+	DroppedOperations int                    `json:"dropped_operations,omitempty"`
+	Days              []DailyUsage           `json:"days"`
+	RecentOperations  []OperationUsage       `json:"recent_operations"`
+	DedupeOperations  map[string]DedupeEntry `json:"dedupe_operations,omitempty"`
 }
 
 func validFeature(value Feature) bool {
