@@ -473,6 +473,46 @@ func TestLoadRejectsUnsafeLegacyReadyIssue(t *testing.T) {
 	}
 }
 
+func TestLoadHidesUnsafeUnknownDraftWithoutChangingOutcome(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	key := issues.KeyPrefixPattern + pattern.JobID
+	unsafeBody := "The user wants me to revise this. I need to expose the plan. Let me draft it.\n\n" + issues.MarkerFor(key)
+	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+		"unsafe-unknown": {
+			ActionRequestView: ActionRequestView{
+				ID: "unsafe-unknown", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestUnknown,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+				Preview: &PreviewResult{Kind: "issue", Title: "Unsafe", Body: unsafeBody},
+			},
+			Issue: &issues.IssueSpec{Key: key, Title: "Unsafe", Body: unsafeBody},
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("unsafe-unknown", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != RequestUnknown || view.Preview != nil {
+		t.Fatalf("unknown request was exposed or changed: %+v", view)
+	}
+	reloaded.rmu.Lock()
+	persisted := reloaded.requests.Requests["unsafe-unknown"]
+	reloaded.rmu.Unlock()
+	if persisted.Issue == nil {
+		t.Fatal("unknown outcome payload was removed before reconciliation")
+	}
+	duplicate, err := reloaded.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil || duplicate.ID != "unsafe-unknown" || duplicate.Status != RequestUnknown {
+		t.Fatalf("unknown request no longer prevented duplicates: view=%+v err=%v", duplicate, err)
+	}
+}
+
 func TestCancelReadyRequest(t *testing.T) {
 	service, pattern := requestTestService(t)
 	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")

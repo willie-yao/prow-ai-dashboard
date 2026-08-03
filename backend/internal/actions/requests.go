@@ -112,11 +112,18 @@ func (s *Service) loadActionRequests() {
 	changed := s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
-		if request.Status != RequestReady {
+		if request.Status != RequestReady && request.Status != RequestUnknown {
 			continue
 		}
 		preview, err := validatedReadyPreview(request)
 		if err != nil {
+			if request.Status == RequestUnknown {
+				if request.Preview != nil {
+					request.Preview = nil
+					changed = true
+				}
+				continue
+			}
 			request.Status = RequestFailed
 			request.Error = "saved draft did not pass current safety validation"
 			request.Warning = ""

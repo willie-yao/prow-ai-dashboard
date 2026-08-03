@@ -661,9 +661,11 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
-	if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {
-		_ = s.previewStore.discard(userToken, token, attemptID)
-		return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
+	if !reconcile {
+		if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {
+			_ = s.previewStore.discard(userToken, token, attemptID)
+			return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
+		}
 	}
 	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
