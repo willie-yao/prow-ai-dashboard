@@ -33,3 +33,19 @@ func TestVerifyAllowsMissingImplementation(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+func TestVerifyIgnoresCommentedAndStringSymbols(t *testing.T) {
+	reader := fakeReader{"main.go": "package p\n// func ExistingFix() {}\nvar x = \"ExistingFix()\"\n"}
+	result, err := Verify(context.Background(), reader, Input{Proposal: "Implement ExistingFix.", RelevantFiles: []string{"main.go"}})
+	if err != nil || result.State != StateUnresolved {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestVerifyRequiresEveryProposedSymbol(t *testing.T) {
+	reader := fakeReader{"main.go": "package p\nfunc Foo() {}\nfunc x(){ Foo() }\n"}
+	result, err := Verify(context.Background(), reader, Input{Proposal: "Implement FooHelper and add BarHelper.", RelevantFiles: []string{"main.go"}})
+	if err != nil || result.State != StateUnresolved {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}

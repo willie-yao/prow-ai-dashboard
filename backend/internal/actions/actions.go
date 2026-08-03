@@ -432,9 +432,12 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 	if subject == nil || s.sourceVerifier == nil {
 		return nil
 	}
+	if s.cfg == nil || s.cfg.AI == nil || s.cfg.AI.SourceRepo == nil {
+		return nil
+	}
 	repo := s.cfg.EffectiveAnalysisSourceRepo()
 	if repo.Owner == "" || repo.Name == "" {
-		return nil
+		return fmt.Errorf("%w: configured source repository is incomplete", ErrRemediationInconclusive)
 	}
 	var revision, proposal string
 	var files []string
@@ -458,7 +461,7 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 		}
 	}
 	if !regexp.MustCompile(`^[0-9a-fA-F]{40}$`).MatchString(strings.TrimSpace(revision)) {
-		return nil
+		return fmt.Errorf("%w: source revision is not an immutable full commit", ErrRemediationInconclusive)
 	}
 	reader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, strings.ToLower(revision), s.ai.SourceToken)
 	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
@@ -669,7 +672,17 @@ func (s *Service) generateFixPreviewForPattern(
 	generationContext *fixpr.GenerationContext,
 ) (PreviewResult, *previewEntry, error) {
 	if generationContext != nil {
-		subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &pattern}
+		verificationPattern := pattern
+		if generationContext.ProposedRevision != nil {
+			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
+		}
+		if generationContext.Source != nil {
+			verificationPattern.RelevantFiles = nil
+			for _, citation := range generationContext.Source.Citations {
+				verificationPattern.RelevantFiles = append(verificationPattern.RelevantFiles, citation.Path)
+			}
+		}
+		subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern}
 		if err := s.verifyRemediation(ctx, subject); err != nil {
 			return PreviewResult{}, nil, err
 		}

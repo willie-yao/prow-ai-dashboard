@@ -4,6 +4,9 @@ package actionverify
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,12 +22,10 @@ type Reader interface {
 	ListTree(context.Context) ([]string, error)
 	ReadFile(context.Context, string) (string, bool, error)
 }
-
 type Input struct {
 	Proposal      string
 	RelevantFiles []string
 }
-
 type Result struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
@@ -53,9 +54,7 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if len(paths) == 0 {
 		return Result{State: StateInconclusive, Reason: "proposal has no grounded source paths"}, nil
 	}
-
-	definitions := map[string]bool{}
-	calls := map[string]bool{}
+	definitions, calls := map[string]bool{}, map[string]bool{}
 	read := 0
 	for _, path := range paths {
 		content, found, err := reader.ReadFile(ctx, path)
@@ -66,44 +65,58 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 			continue
 		}
 		read++
-		for symbol := range symbols {
-			definition := regexp.MustCompile(`\bfunc\s+(?:\([^)]*\)\s*)?` + regexp.QuoteMeta(symbol) + `\s*\(`)
-			call := regexp.MustCompile(`\b` + regexp.QuoteMeta(symbol) + `\s*\(`)
-			if definition.MatchString(content) {
-				definitions[symbol] = true
-			}
-			if call.MatchString(content) && !onlyDefinition(content, definition, call) {
-				calls[symbol] = true
-			}
+		if !strings.HasSuffix(path, ".go") {
+			continue
 		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, content, 0)
+		if err != nil {
+			return Result{State: StateInconclusive, Reason: "grounded Go source could not be parsed"}, nil
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch value := node.(type) {
+			case *ast.FuncDecl:
+				if symbols[value.Name.Name] {
+					definitions[value.Name.Name] = true
+				}
+			case *ast.CallExpr:
+				name := ""
+				switch fun := value.Fun.(type) {
+				case *ast.Ident:
+					name = fun.Name
+				case *ast.SelectorExpr:
+					name = fun.Sel.Name
+				}
+				if symbols[name] {
+					calls[name] = true
+				}
+			}
+			return true
+		})
 	}
 	if read == 0 {
 		return Result{State: StateInconclusive, Reason: "none of the grounded source paths could be read"}, nil
 	}
 	for symbol := range symbols {
-		if definitions[symbol] && calls[symbol] {
-			return Result{State: StateAlreadyPresent, Reason: fmt.Sprintf("%s is already defined and invoked at the grounded commit", symbol)}, nil
+		if !definitions[symbol] || !calls[symbol] {
+			return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the grounded source"}, nil
 		}
 	}
-	return Result{State: StateUnresolved, Reason: "the proposed implementation is not already defined and invoked in the grounded source"}, nil
+	names := make([]string, 0, len(symbols))
+	for symbol := range symbols {
+		names = append(names, symbol)
+	}
+	sort.Strings(names)
+	return Result{State: StateAlreadyPresent, Reason: fmt.Sprintf("%s are already defined and invoked at the grounded commit", strings.Join(names, ", "))}, nil
 }
-
-func onlyDefinition(content string, definition, call *regexp.Regexp) bool {
-	defs := definition.FindAllStringIndex(content, -1)
-	calls := call.FindAllStringIndex(content, -1)
-	return len(calls) <= len(defs)
-}
-
 func compact(values []string) []string {
 	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
+	out := []string{}
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
 		}
-		seen[value] = true
-		out = append(out, value)
 	}
 	sort.Strings(out)
 	return out
