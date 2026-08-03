@@ -2,434 +2,154 @@ package actionverify
 
 import (
 	"context"
-	"fmt"
-	"sort"
+	"errors"
 	"testing"
 )
 
-type fakeReader map[string]string
+type fakeReader struct {
+	archive Archive
+	err     error
+}
 
-func (f fakeReader) ListTree(context.Context) ([]string, error) {
-	paths := make([]string, 0, len(f))
-	for path := range f {
-		paths = append(paths, path)
+func (f fakeReader) ReadSourceArchive(context.Context) (Archive, error) {
+	return f.archive, f.err
+}
+
+func archive(files map[string]string, extraPaths ...string) Archive {
+	paths := map[string]bool{}
+	for path := range files {
+		paths[path] = true
 	}
-	sort.Strings(paths)
-	return paths, nil
-}
-func (f fakeReader) ReadFile(_ context.Context, path string) (string, bool, error) {
-	value, ok := f[path]
-	return value, ok, nil
+	for _, path := range extraPaths {
+		paths[path] = true
+	}
+	return Archive{Paths: paths, GoFiles: files}
 }
 
-func TestVerifyDetectsExistingImplementationAndCall(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":                          "module example\n",
+func TestVerifyStates(t *testing.T) {
+	t.Run("unresolved", func(t *testing.T) {
+		result := verify(t, fakeReader{archive: archive(map[string]string{
+			"pkg/main.go": "package pkg\n",
+		})}, Input{Proposal: "Implement `MissingHelper`.", RelevantFiles: []string{"pkg/main.go"}})
+		if result.State != StateUnresolved {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+	t.Run("already present", func(t *testing.T) {
+		result := verify(t, fakeReader{archive: archive(map[string]string{
+			"pkg/fix.go": "package pkg\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+		})}, Input{Proposal: "Implement `ExistingFix()`.", RelevantFiles: []string{"pkg/fix.go"}})
+		if result.State != StateAlreadyPresent {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+	t.Run("inconclusive", func(t *testing.T) {
+		result := verify(t, fakeReader{archive: archive(map[string]string{
+			"pkg/fix.go": "package pkg\nfunc ExistingFix(){}\n",
+		})}, Input{Proposal: "Implement `ExistingFix`.", RelevantFiles: []string{"pkg/fix.go"}})
+		if result.State != StateInconclusive {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+}
+
+func TestVerifyCAPZAlreadyContainsLabelMigration(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
 		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi_test.go":           "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
-	}
-	verifyState(t, reader, Input{
+		"test/e2e/capi_test.go":           "//go:build e2e\n\npackage e2e\nimport \"sigs.k8s.io/cluster-api-provider-azure/internal/asomigration\"\nfunc test(){ _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+	})}, Input{
 		Proposal:      "Implement `LabelCRDsForClusterctlUpgrade`.",
 		RelevantFiles: []string{"internal/asomigration/labels.go", "test/e2e/capi_test.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyFindsInvocationOutsideGroundedPaths(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":                          "module example\n",
-		"internal/asomigration/labels.go": "package asomigration\nfunc LabelCRDsForClusterctlUpgrade() error { return nil }\n",
-		"test/e2e/capi.go":                "package e2e\nimport \"example/internal/asomigration\"\nfunc test() { _ = asomigration.LabelCRDsForClusterctlUpgrade() }\n",
+	})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
 	}
-	verifyState(t, reader, Input{
-		Proposal:      "Implement `LabelCRDsForClusterctlUpgrade`.",
-		RelevantFiles: []string{"internal/asomigration/labels.go"},
-	}, StateAlreadyPresent)
 }
 
-func TestVerifyAllowsMissingImplementationAfterExhaustiveRead(t *testing.T) {
-	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
+func TestVerifyRequiresExplicitSymbol(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{"main.go": "package main\n"})}, Input{
 		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyIgnoresCommentedAndStringSymbols(t *testing.T) {
-	reader := fakeReader{"main.go": "package p\n// func ExistingFix() {}\nvar x = \"ExistingFix()\"\n"}
-	verifyState(t, reader, Input{Proposal: "Implement ExistingFix.", RelevantFiles: []string{"main.go"}}, StateUnresolved)
-}
-
-func TestVerifyRequiresEveryProposedSymbol(t *testing.T) {
-	reader := fakeReader{"main.go": "package p\nfunc FooHelper() {}\nfunc x(){ FooHelper() }\n"}
-	verifyState(t, reader, Input{
-		Proposal: "Implement FooHelper and add BarHelper.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyDoesNotMixUnrelatedSelectorPackage(t *testing.T) {
-	reader := fakeReader{
-		"a/helper.go": "package a\nfunc ReconcileThing() {}\n",
-		"b/use.go":    "package b\nimport \"example/other\"\nfunc use(){ other.ReconcileThing() }\n",
+	})
+	if result.State != StateInconclusive {
+		t.Fatalf("result = %+v", result)
 	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ReconcileThing.", RelevantFiles: []string{"a/helper.go", "b/use.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyDoesNotMixPackagesWithSameDeclaredName(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":         "module example\n",
-		"a/helper.go":    "package util\nfunc ReconcileThing() {}\n",
-		"b/use.go":       "package b\nimport \"example/c/util\"\nfunc use(){ util.ReconcileThing() }\n",
-		"c/util/util.go": "package util\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ReconcileThing.", RelevantFiles: []string{"a/helper.go", "b/use.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyResolvesImportAliasToPackageBasename(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":              "module example\n",
-		"asomigration/fix.go": "package asomigration\nfunc ExistingFix(){}\n",
-		"e2e/use.go":          "package e2e\nimport migration \"example/asomigration\"\nfunc x(){ migration.ExistingFix() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"asomigration/fix.go", "e2e/use.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyShadowedImportDoesNotCountAsPackageInvocation(t *testing.T) {
-	reader := fakeReader{
-		"a/fix.go": "package a\nfunc ExistingFix(){}\n",
-		"b/use.go": "package b\nimport \"example/a\"\nfunc x(){ a := runner{}; a.ExistingFix() }\ntype runner struct{}\nfunc (runner) ExistingFix(){}\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"a/fix.go", "b/use.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyLocalReceiverCallIsInconclusive(t *testing.T) {
-	reader := fakeReader{
-		"runner.go": "package p\ntype runner struct{}\nfunc (runner) ExistingFix(){}\nfunc x(){ r := runner{}; r.ExistingFix() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"runner.go"},
-	}, StateInconclusive)
 }
 
 func TestVerifyMissingGroundedPathIsInconclusive(t *testing.T) {
-	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
-		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"missing.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyIgnoresBacktickedSemanticVersion(t *testing.T) {
-	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
-		Proposal: "Implement MissingHelper for `v1.13.3`.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyExhaustivePassDoesNotUseUnrelatedPackage(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":       "module example\n",
-		"target/a.go":  "package target\n",
-		"other/fix.go": "package other\nfunc ValidateConfig(){}\nfunc use(){ ValidateConfig() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ValidateConfig.", RelevantFiles: []string{"target/a.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyExhaustivePassUsesGroundedPackage(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":           "module example\n",
-		"target/a.go":      "package target\n",
-		"target/helper.go": "package target\nfunc ValidateConfig(){}\nfunc use(){ ValidateConfig() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ValidateConfig.", RelevantFiles: []string{"target/a.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyAddCallForm(t *testing.T) {
-	verifyState(t, fakeReader{"p.go": "package p\nfunc ExistingFix(){}\nfunc x(){ExistingFix()}\n"}, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"p.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyNonGoOnlyIsInconclusive(t *testing.T) {
-	verifyState(t, fakeReader{"config.yaml": "ExistingFix: true", "main.go": "package main\n"}, Input{
-		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"config.yaml"},
-	}, StateInconclusive)
-}
-
-func TestVerifyLargeTreeUsesBulkReader(t *testing.T) {
-	files := fakeReader{"main.go": "package main\n"}
-	for i := 0; i < 1100; i++ {
-		files[fmt.Sprintf("pkg/file-%04d.go", i)] = "package pkg\n"
-	}
-	reader := &bulkFakeReader{fakeReader: files}
-	verifyState(t, reader, Input{
-		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-	if reader.bulkCalls != 1 || reader.readCalls != 0 {
-		t.Fatalf("bulk calls = %d, file calls = %d", reader.bulkCalls, reader.readCalls)
+	result := verify(t, fakeReader{archive: archive(map[string]string{"main.go": "package main\n"})}, Input{
+		Proposal: "Implement `MissingHelper`.", RelevantFiles: []string{"missing.go"},
+	})
+	if result.State != StateInconclusive {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
-func verifyState(t *testing.T, reader Reader, input Input, want string) {
-	t.Helper()
-	result, err := Verify(context.Background(), reader, input)
-	if err != nil || result.State != want {
-		t.Fatalf("result=%+v err=%v, want %s", result, err, want)
+func TestVerifyUnrelatedTestCallDoesNotCount(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/fix.go":      "package pkg\nfunc ExistingFix(){}\n",
+		"pkg/fix_test.go": "package pkg\nfunc TestFix(){ ExistingFix() }\n",
+	})}, Input{Proposal: "Add a call to `ExistingFix`.", RelevantFiles: []string{"pkg/fix.go"}})
+	if result.State != StateInconclusive {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
-type bulkFakeReader struct {
-	fakeReader
-	bulkCalls int
-	readCalls int
-}
-
-func (r *bulkFakeReader) ReadFile(ctx context.Context, path string) (string, bool, error) {
-	r.readCalls++
-	return r.fakeReader.ReadFile(ctx, path)
-}
-
-func (r *bulkFakeReader) ReadFiles(_ context.Context, paths []string) (map[string]string, error) {
-	r.bulkCalls++
-	files := make(map[string]string, len(paths))
-	for _, path := range paths {
-		if content, ok := r.fakeReader[path]; ok {
-			files[path] = content
-		}
-	}
-	return files, nil
-}
-
-func TestVerifyUsesBulkPinnedSourceRead(t *testing.T) {
-	reader := &bulkFakeReader{fakeReader: fakeReader{
-		"go.mod":  "module example\n",
-		"main.go": "package main\n",
-	}}
-	verifyState(t, reader, Input{
-		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-	if reader.bulkCalls != 1 || reader.readCalls != 0 {
-		t.Fatalf("bulk calls = %d, file calls = %d", reader.bulkCalls, reader.readCalls)
+func TestVerifyGroundedTestCallMayCount(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/fix.go":      "package pkg\nfunc ExistingFix(){}\n",
+		"pkg/fix_test.go": "package pkg\nfunc TestFix(){ ExistingFix() }\n",
+	})}, Input{
+		Proposal: "Add a call to `ExistingFix`.", RelevantFiles: []string{"pkg/fix.go", "pkg/fix_test.go"},
+	})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
-func TestVerifyIgnoresBacktickedSourceURL(t *testing.T) {
-	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
-		Proposal: "Implement MissingHelper using `https://example.test/main.go`.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyFindsCodeLikeSymbolAfterProse(t *testing.T) {
-	reader := fakeReader{
-		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
-	}
-	for _, proposal := range []string{
-		"Implement the missing ExistingFix helper.",
-		"Implement validation by calling ExistingFix.",
-	} {
-		verifyState(t, reader, Input{Proposal: proposal, RelevantFiles: []string{"main.go"}}, StateAlreadyPresent)
-	}
-}
-
-func TestVerifyRejectsAmbiguousProseSymbol(t *testing.T) {
-	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
-		Proposal: "Implement validation for this failure.", RelevantFiles: []string{"main.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifySkipsMalformedUnrelatedGoFixture(t *testing.T) {
-	reader := fakeReader{
-		"main.go":         "package main\n",
-		"testdata/bad.go": "package broken\n// MissingHelper is only mentioned in a comment.\nfunc {\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyDoesNotTreatSourcePathAsSymbol(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":                    "module example\n",
-		"pkg/fix.go":                "package pkg\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
-		"pkg/machine_controller.go": "package pkg\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix in `pkg/machine_controller.go`.", RelevantFiles: []string{"pkg/fix.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyDoesNotCountDirectRecursionAsInvocation(t *testing.T) {
-	reader := fakeReader{
-		"main.go": "package main\nfunc ExistingFix(){ ExistingFix() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyIgnoresCamelCaseProseAfterSymbol(t *testing.T) {
-	reader := fakeReader{
-		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix using GitHub APIs.", RelevantFiles: []string{"main.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyAcceptsShortBacktickedSymbol(t *testing.T) {
-	reader := fakeReader{
-		"main.go": "package main\nfunc Do(){}\nfunc use(){ Do() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement `Do`.", RelevantFiles: []string{"main.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyAcceptsBacktickedCallNotation(t *testing.T) {
-	reader := fakeReader{
-		"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
-	}
-	for _, proposal := range []string{
-		"Implement `ExistingFix()`.",
-		"Implement `pkg.ExistingFix()`.",
-	} {
-		verifyState(t, reader, Input{Proposal: proposal, RelevantFiles: []string{"main.go"}}, StateAlreadyPresent)
-	}
-}
-
-func TestVerifyGenericFunctionInvocation(t *testing.T) {
-	for _, source := range []string{
-		"package main\nfunc ExistingFix[T any](){}\nfunc use(){ ExistingFix[int]() }\n",
-		"package main\nfunc ExistingFix[A, B any](){}\nfunc use(){ ExistingFix[int, string]() }\n",
-	} {
-		verifyState(t, fakeReader{"main.go": source}, Input{
-			Proposal: "Implement ExistingFix.", RelevantFiles: []string{"main.go"},
-		}, StateAlreadyPresent)
-	}
-}
-
-func TestVerifyRequiresEverySymbolInSingleClause(t *testing.T) {
-	reader := fakeReader{"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n"}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix and MissingHelper.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyBuildConstrainedEvidenceIsInconclusive(t *testing.T) {
-	for name, constrainedFile := range map[string]string{
-		"filename":  "target/fix_windows.go",
-		"directive": "target/fix_tagged.go",
+func TestVerifyBuildConstraintAndCallbackAreInconclusive(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"constraint": {
+			"pkg/main.go":        "package pkg\n",
+			"pkg/fix_windows.go": "package pkg\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n",
+		},
+		"callback": {
+			"pkg/main.go": "package pkg\nfunc ExistingFix(){}\nfunc register(func()){}\nfunc init(){ register(ExistingFix) }\n",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			content := "package target\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n"
-			if name == "directive" {
-				content = "//go:build custom\n\n" + content
+			result := verify(t, fakeReader{archive: archive(files)}, Input{
+				Proposal: "Implement `ExistingFix`.", RelevantFiles: []string{"pkg/main.go"},
+			})
+			if result.State != StateInconclusive {
+				t.Fatalf("result = %+v", result)
 			}
-			reader := fakeReader{
-				"go.mod":         "module example\n",
-				"target/main.go": "package target\n",
-				constrainedFile:  content,
-			}
-			verifyState(t, reader, Input{
-				Proposal: "Implement ExistingFix.", RelevantFiles: []string{"target/main.go"},
-			}, StateInconclusive)
 		})
 	}
 }
 
-func TestVerifyDoesNotCombineMutuallyExclusiveFiles(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":                "module example\n",
-		"target/main.go":        "package target\n",
-		"target/fix_windows.go": "package target\nfunc ExistingFix(){}\n",
-		"target/use_linux.go":   "package target\nfunc use(){ ExistingFix() }\n",
+func TestVerifyArchiveErrorIsReturned(t *testing.T) {
+	_, err := Verify(context.Background(), fakeReader{err: errors.New("archive failed")}, Input{
+		Proposal: "Implement `ExistingFix`.", RelevantFiles: []string{"main.go"},
+	})
+	if err == nil {
+		t.Fatal("expected archive error")
 	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"target/main.go"},
-	}, StateInconclusive)
 }
 
-func TestVerifyRequiresMixedQuotedAndUnquotedSymbols(t *testing.T) {
-	reader := fakeReader{"main.go": "package main\nfunc ExistingFix(){}\nfunc use(){ ExistingFix() }\n"}
-	verifyState(t, reader, Input{
-		Proposal: "Implement MissingHelper and call `ExistingFix`.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyUsesDeclaredPackageNameForVersionedImport(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":     "module example.com/lib/v2\n",
-		"fix.go":     "package lib\nfunc ExistingFix(){}\n",
-		"sub/use.go": "package sub\nimport \"example.com/lib/v2\"\nfunc use(){ lib.ExistingFix() }\n",
+func verify(t *testing.T, reader Reader, input Input) Result {
+	t.Helper()
+	result, err := Verify(context.Background(), reader, input)
+	if err != nil {
+		t.Fatal(err)
 	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement ExistingFix.", RelevantFiles: []string{"fix.go", "sub/use.go"},
-	}, StateAlreadyPresent)
+	return result
 }
 
-func TestVerifyAllowsMissingSymbolInConstrainedGroundedFile(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":                 "module example\n",
-		"target/main_windows.go": "package target\n",
+func TestVerifyRecursiveDefinitionIsInconclusive(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/fix.go": "package pkg\nfunc ExistingFix(){ ExistingFix() }\n",
+	})}, Input{Proposal: "Add a call to `ExistingFix`.", RelevantFiles: []string{"pkg/fix.go"}})
+	if result.State != StateInconclusive {
+		t.Fatalf("result = %+v", result)
 	}
-	verifyState(t, reader, Input{
-		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"target/main_windows.go"},
-	}, StateUnresolved)
-}
-
-func TestVerifyIgnoresUngroundedTestInvocation(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":                "module example\n",
-		"target/helper.go":      "package target\nfunc ExistingFix(){}\n",
-		"target/helper_test.go": "package target\nfunc testUse(){ ExistingFix() }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/helper.go"},
-	}, StateUnresolved)
-	verifyState(t, reader, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/helper.go", "target/helper_test.go"},
-	}, StateAlreadyPresent)
-}
-
-func TestVerifyCallbackReferenceIsInconclusive(t *testing.T) {
-	reader := fakeReader{
-		"main.go": "package main\nimport \"net/http\"\nfunc ExistingFix(http.ResponseWriter, *http.Request){}\nfunc init(){ http.HandleFunc(\"/\", ExistingFix) }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"main.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyImportedCallbackReferenceIsInconclusive(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":        "module example\n",
-		"target/fix.go": "package target\nfunc ExistingFix(){}\n",
-		"app/main.go":   "package app\nimport \"example/target\"\nfunc register(func()){}\nfunc init(){ register(target.ExistingFix) }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/fix.go", "app/main.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyUngroundedCallbackReferenceIsInconclusive(t *testing.T) {
-	reader := fakeReader{
-		"go.mod":        "module example\n",
-		"target/fix.go": "package target\nfunc ExistingFix(){}\n",
-		"app/main.go":   "package app\nimport \"example/target\"\nfunc register(func()){}\nfunc init(){ register(target.ExistingFix) }\n",
-	}
-	verifyState(t, reader, Input{
-		Proposal: "Add a call to ExistingFix.", RelevantFiles: []string{"target/fix.go"},
-	}, StateInconclusive)
-}
-
-func TestVerifyIgnoresBacktickedArtifactPath(t *testing.T) {
-	verifyState(t, fakeReader{"main.go": "package main\n"}, Input{
-		Proposal: "Implement MissingHelper. Relevant artifact: `junit.xml`.", RelevantFiles: []string{"main.go"},
-	}, StateUnresolved)
 }

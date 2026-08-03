@@ -73,6 +73,7 @@ var ErrPreviewNotFound = errors.New("preview not found or expired")
 
 // previewTTL bounds how long a generated draft is held for confirmation.
 const previewTTL = 15 * time.Minute
+const sourceVerificationVersion = 1
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
@@ -111,13 +112,14 @@ type PreviewResult struct {
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
 // fix is set per kind, and patternHash stores the selected subject content hash.
 type previewEntry struct {
-	failureID    string
-	patternHash  string
-	kind         string
-	targetRepo   string
-	targetConfig string
-	spec         issues.IssueSpec    // issue drafts
-	fix          *fixpr.GeneratedFix // fix drafts
+	failureID           string
+	patternHash         string
+	kind                string
+	targetRepo          string
+	targetConfig        string
+	verificationVersion int
+	spec                issues.IssueSpec    // issue drafts
+	fix                 *fixpr.GeneratedFix // fix drafts
 }
 
 type actionSubjectKind string
@@ -163,12 +165,6 @@ type issuePreviewManager interface {
 
 type issueManagerFactory func(userToken, owner, repo string) issuePreviewManager
 
-type sourceVerificationCall struct {
-	done   chan struct{}
-	result actionverify.Result
-	err    error
-}
-
 // Service runs on-demand actions against the data written to DataDir. It reads
 // jobs/*.json to resolve a failure id and reuses the issue and fix-PR state
 // files alongside them. A mutex serializes state read-modify-write so
@@ -184,35 +180,26 @@ type Service struct {
 	previewStore        *previewStore
 	issueManagerFactory issueManagerFactory
 
-	rmu                     sync.Mutex
-	requests                *actionRequestState
-	requestTimeout          time.Duration
-	requestNotify           RequestReadyNotifier
-	requestNotifyCancels    map[string]context.CancelFunc
-	requestCancels          map[string]context.CancelFunc
-	requestConfirms         map[string]struct{}
-	requestDone             map[string]chan struct{}
-	requestCleanups         map[string]struct{}
-	requestsConfigured      bool
-	stopping                bool
-	requestWG               sync.WaitGroup
-	managedRuntime          func() (runtime.ManagedAgentRuntime, error)
-	requestStateWriter      func(string, any) error
-	sourceVerifier          func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
-	sourceVerifyMu          sync.Mutex
-	sourceVerifications     map[string]actionverify.Result
-	sourceVerificationOrder []string
-	sourceVerificationCalls map[string]*sourceVerificationCall
-	sourceVerifyQueue       chan struct{}
-	sourceVerifySlots       chan struct{}
-	sourceContext           context.Context
-	sourceCancel            context.CancelFunc
+	rmu                  sync.Mutex
+	requests             *actionRequestState
+	requestTimeout       time.Duration
+	requestNotify        RequestReadyNotifier
+	requestNotifyCancels map[string]context.CancelFunc
+	requestCancels       map[string]context.CancelFunc
+	requestConfirms      map[string]struct{}
+	requestDone          map[string]chan struct{}
+	requestCleanups      map[string]struct{}
+	requestsConfigured   bool
+	stopping             bool
+	requestWG            sync.WaitGroup
+	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter   func(string, any) error
+	sourceVerifier       func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
 // jobs/*.json and the *_state.json files.
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
-	sourceContext, sourceCancel := context.WithCancel(context.Background())
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
 		previewStore: newPreviewStore(dataDir),
@@ -221,12 +208,6 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
-		sourceVerifications:     map[string]actionverify.Result{},
-		sourceVerificationCalls: map[string]*sourceVerificationCall{},
-		sourceVerifyQueue:       make(chan struct{}, 8),
-		sourceVerifySlots:       make(chan struct{}, 2),
-		sourceContext:           sourceContext,
-		sourceCancel:            sourceCancel,
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
@@ -518,7 +499,12 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	revision = strings.ToLower(revision)
 	slices.Sort(files)
 	files = slices.Compact(files)
-	result, err := s.cachedSourceVerification(ctx, repo.Owner, repo.Name, revision, proposal, files)
+	rawReader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, revision, s.ai.SourceToken)
+	reader, ok := rawReader.(actionverify.Reader)
+	if !ok {
+		return fmt.Errorf("%w: pinned source archive reader is unavailable", ErrRemediationInconclusive)
+	}
+	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
 	if err != nil {
 		return fmt.Errorf("%w: pinned source could not be checked: %w", ErrRemediationInconclusive, err)
 	}
@@ -530,97 +516,6 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	default:
 		return fmt.Errorf("%w: %s; investigate the pinned source before filing", ErrRemediationInconclusive, result.Reason)
 	}
-}
-
-func (s *Service) cachedSourceVerification(
-	ctx context.Context, owner, repo, revision, proposal string, files []string,
-) (actionverify.Result, error) {
-	payload, _ := json.Marshal(struct {
-		Owner, Repo, Revision, Proposal string
-		Files                           []string
-	}{owner, repo, revision, proposal, files})
-	sum := sha256.Sum256(payload)
-	key := hex.EncodeToString(sum[:])
-
-	s.sourceVerifyMu.Lock()
-	if result, ok := s.sourceVerifications[key]; ok {
-		s.sourceVerifyMu.Unlock()
-		return result, nil
-	}
-	if call := s.sourceVerificationCalls[key]; call != nil {
-		s.sourceVerifyMu.Unlock()
-		return waitSourceVerification(ctx, call)
-	}
-	s.sourceVerifyMu.Unlock()
-
-	select {
-	case s.sourceVerifyQueue <- struct{}{}:
-	case <-ctx.Done():
-		return actionverify.Result{}, ctx.Err()
-	}
-	s.sourceVerifyMu.Lock()
-	if result, ok := s.sourceVerifications[key]; ok {
-		s.sourceVerifyMu.Unlock()
-		<-s.sourceVerifyQueue
-		return result, nil
-	}
-	if call := s.sourceVerificationCalls[key]; call != nil {
-		s.sourceVerifyMu.Unlock()
-		<-s.sourceVerifyQueue
-		return waitSourceVerification(ctx, call)
-	}
-	call := &sourceVerificationCall{done: make(chan struct{})}
-	s.sourceVerificationCalls[key] = call
-	s.sourceVerifyMu.Unlock()
-	s.requestWG.Add(1)
-	go func() {
-		defer s.requestWG.Done()
-		s.runSourceVerification(s.sourceContext, key, call, owner, repo, revision, proposal, files)
-	}()
-	return waitSourceVerification(ctx, call)
-}
-
-func waitSourceVerification(ctx context.Context, call *sourceVerificationCall) (actionverify.Result, error) {
-	select {
-	case <-ctx.Done():
-		return actionverify.Result{}, ctx.Err()
-	case <-call.done:
-		return call.result, call.err
-	}
-}
-
-func (s *Service) runSourceVerification(
-	parent context.Context, key string, call *sourceVerificationCall,
-	owner, repo, revision, proposal string, files []string,
-) {
-	defer func() { <-s.sourceVerifyQueue }()
-	const (
-		maxCachedVerifications = 64
-		verificationTimeout    = 2 * time.Minute
-	)
-	ctx, cancel := context.WithTimeout(parent, verificationTimeout)
-	defer cancel()
-	select {
-	case s.sourceVerifySlots <- struct{}{}:
-		var reader actionverify.Reader = ai.NewGitHubRepoReader(owner, repo, revision, s.ai.SourceToken)
-		call.result, call.err = s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files})
-		<-s.sourceVerifySlots
-	case <-ctx.Done():
-		call.err = ctx.Err()
-	}
-
-	s.sourceVerifyMu.Lock()
-	if call.err == nil {
-		if len(s.sourceVerificationOrder) >= maxCachedVerifications {
-			delete(s.sourceVerifications, s.sourceVerificationOrder[0])
-			s.sourceVerificationOrder = s.sourceVerificationOrder[1:]
-		}
-		s.sourceVerifications[key] = call.result
-		s.sourceVerificationOrder = append(s.sourceVerificationOrder, key)
-	}
-	delete(s.sourceVerificationCalls, key)
-	close(call.done)
-	s.sourceVerifyMu.Unlock()
 }
 
 // buildFixManager builds the fix-PR manager for the source repo using
@@ -742,7 +637,7 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 		final = issues.IssueSpec{Key: spec.Key, Title: title, Body: body, Labels: spec.Labels}
 	}
 	preview := PreviewResult{Kind: "issue", Title: final.Title, Body: final.Body}
-	entry := &previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: "issue", targetRepo: targetRepo, spec: final}
+	entry := &previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: "issue", targetRepo: targetRepo, verificationVersion: sourceVerificationVersion, spec: final}
 	if strings.TrimSpace(instruction) != "" {
 		c := s.aiClient()
 		if c == nil {
@@ -821,7 +716,7 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	}
 	return PreviewResult{Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary, VerifyOutput: gf.Preview.Verify.Output},
-		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff), fix: gf}, nil
+		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff), verificationVersion: sourceVerificationVersion, fix: gf}, nil
 }
 
 func (s *Service) generateFixPreviewForPattern(
@@ -932,6 +827,10 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(userToken, token, lease)
 	if err != nil || resultURL != "" {
 		return resultURL, err
+	}
+	if !reconcile && entry.failureID != "" && entry.verificationVersion != sourceVerificationVersion {
+		_ = s.previewStore.discard(userToken, token, attemptID)
+		return "", ErrPreviewTargetChanged
 	}
 	if !reconcile {
 		if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {

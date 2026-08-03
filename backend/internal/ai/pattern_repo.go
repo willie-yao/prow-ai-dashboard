@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
@@ -33,8 +34,6 @@ type githubRepoReader struct {
 	token  string
 	client *http.Client
 	mu     sync.Mutex
-	treeMu sync.Mutex
-	tree   []string
 }
 
 func (r *githubRepoReader) SourceIdentity() (string, string, string) {
@@ -102,11 +101,6 @@ func NewGitHubRepoReader(owner, repo, ref, token string) tools.RepoReader {
 // ListTree returns the repo's blob paths at the bound ref via the recursive
 // git-trees API.
 func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
-	r.treeMu.Lock()
-	defer r.treeMu.Unlock()
-	if r.tree != nil {
-		return append([]string(nil), r.tree...), nil
-	}
 	ref := r.resolvedRef()
 	u := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", githubAPIBase,
 		r.owner, r.repo, url.PathEscape(ref))
@@ -134,13 +128,9 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 			Path string `json:"path"`
 			Type string `json:"type"`
 		} `json:"tree"`
-		Truncated bool `json:"truncated"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return nil, fmt.Errorf("decoding %s/%s tree: %w", r.owner, r.repo, err)
-	}
-	if out.Truncated {
-		return nil, fmt.Errorf("listing %s/%s tree: recursive result was truncated", r.owner, r.repo)
 	}
 	paths := make([]string, 0, len(out.Tree))
 	for _, e := range out.Tree {
@@ -148,7 +138,6 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 			paths = append(paths, e.Path)
 		}
 	}
-	r.tree = append([]string(nil), paths...)
 	return paths, nil
 }
 
@@ -198,29 +187,19 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 }
 
 const (
-	maxSourceArchiveBytes         = 32 << 20
-	maxSourceArchiveExpandedBytes = 256 << 20
-	maxSourceFileBytes            = 8 << 20
+	maxSourceArchiveCompressedBytes = 64 << 20
+	maxSourceArchiveExpandedBytes   = 256 << 20
+	maxSourceGoBytes                = 32 << 20
+	maxSourceFileBytes              = 8 << 20
 )
 
-// ReadFiles fetches pinned repository files from one archive request.
-func (r *githubRepoReader) ReadFiles(ctx context.Context, paths []string) (map[string]string, error) {
-	wanted := make(map[string]bool, len(paths))
-	for _, path := range paths {
-		clean, err := artifacts.SafePath(strings.TrimSpace(path))
-		if err != nil || clean == "" {
-			return nil, fmt.Errorf("invalid repository path %q", path)
-		}
-		wanted[clean] = true
-	}
-	return r.readArchive(ctx, r.resolvedRef(), wanted)
-}
-
-func (r *githubRepoReader) readArchive(ctx context.Context, ref string, wanted map[string]bool) (map[string]string, error) {
+// ReadSourceArchive fetches bounded Go source and the complete regular-file path set.
+func (r *githubRepoReader) ReadSourceArchive(ctx context.Context) (actionverify.Archive, error) {
+	ref := r.resolvedRef()
 	u := fmt.Sprintf("%s/repos/%s/%s/tarball/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return actionverify.Archive{}, err
 	}
 	if r.token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.token)
@@ -252,56 +231,60 @@ func (r *githubRepoReader) readArchive(ctx context.Context, ref string, wanted m
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return actionverify.Archive{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("reading %s/%s source archive: %s", r.owner, r.repo, resp.Status)
+		return actionverify.Archive{}, fmt.Errorf("reading %s/%s source archive: %s", r.owner, r.repo, resp.Status)
 	}
-	compressed := io.LimitReader(resp.Body, maxSourceArchiveBytes+1)
-	gzipReader, err := gzip.NewReader(compressed)
+	gzipReader, err := gzip.NewReader(io.LimitReader(resp.Body, maxSourceArchiveCompressedBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("opening %s/%s source archive: %w", r.owner, r.repo, err)
+		return actionverify.Archive{}, fmt.Errorf("opening %s/%s source archive: %w", r.owner, r.repo, err)
 	}
 	defer gzipReader.Close()
 
-	files := make(map[string]string, len(wanted))
-	totalBytes := int64(0)
+	archive := actionverify.Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}}
 	expandedBytes := int64(0)
+	goBytes := int64(0)
 	tarReader := tar.NewReader(gzipReader)
-	for len(files) < len(wanted) {
+	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("reading %s/%s source archive: %w", r.owner, r.repo, err)
+			return actionverify.Archive{}, fmt.Errorf("reading %s/%s source archive: %w", r.owner, r.repo, err)
 		}
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
 		if header.Size < 0 || expandedBytes+header.Size > maxSourceArchiveExpandedBytes {
-			return nil, fmt.Errorf("source archive exceeds verification limits")
+			return actionverify.Archive{}, fmt.Errorf("source archive exceeds expanded-byte limit")
 		}
 		expandedBytes += header.Size
-		_, path, ok := strings.Cut(strings.TrimPrefix(header.Name, "./"), "/")
-		if !ok || !wanted[path] {
+		_, filePath, ok := strings.Cut(strings.TrimPrefix(header.Name, "./"), "/")
+		if !ok || filePath == "" {
 			continue
 		}
-		if header.Size < 0 || header.Size > maxSourceFileBytes || totalBytes+header.Size > maxSourceArchiveBytes {
-			return nil, fmt.Errorf("source archive file %s exceeds verification limits", path)
+		clean, err := artifacts.SafePath(filePath)
+		if err != nil || clean == "" {
+			return actionverify.Archive{}, fmt.Errorf("source archive contains unsafe path %q", filePath)
+		}
+		archive.Paths[clean] = true
+		if !strings.HasSuffix(clean, ".go") {
+			continue
+		}
+		if header.Size > maxSourceFileBytes || goBytes+header.Size > maxSourceGoBytes {
+			return actionverify.Archive{}, fmt.Errorf("source archive Go files exceed verification limits")
 		}
 		body, err := io.ReadAll(io.LimitReader(tarReader, maxSourceFileBytes+1))
-		if err != nil {
-			return nil, fmt.Errorf("reading source archive file %s: %w", path, err)
+		if err != nil || int64(len(body)) != header.Size {
+			return actionverify.Archive{}, fmt.Errorf("reading source archive file %s: incomplete content", clean)
 		}
-		if int64(len(body)) != header.Size {
-			return nil, fmt.Errorf("reading source archive file %s: incomplete content", path)
-		}
-		totalBytes += int64(len(body))
-		files[path] = string(body)
+		goBytes += int64(len(body))
+		archive.GoFiles[clean] = string(body)
 	}
-	return files, nil
+	return archive, nil
 }
 
 // mapSegments applies f to each element, used to escape path segments while

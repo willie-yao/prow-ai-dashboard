@@ -1107,7 +1107,7 @@ func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
 		ID: "request", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
-	}, Issue: &spec, TargetRepo: targetRepo}
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
 	if _, err := service.ConfirmRequest(t.Context(), "request", "alice", "token"); !errors.Is(err, ErrPreviewOutcomeUnknown) {
 		t.Fatalf("first confirmation error = %v", err)
 	}
@@ -1141,7 +1141,7 @@ func TestAsyncBuildIssuePrewriteFailureRemainsRetryable(t *testing.T) {
 		ID: "request-prewrite", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
-	}, Issue: &spec, TargetRepo: targetRepo}
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
 	if _, err := service.ConfirmRequest(t.Context(), "request-prewrite", "alice", "token"); err == nil || errors.Is(err, ErrPreviewOutcomeUnknown) {
 		t.Fatalf("prewrite error = %v", err)
 	}
@@ -1165,7 +1165,7 @@ func TestAsyncConfirmationPersistsUnknownBeforeExternalWrite(t *testing.T) {
 	service.requests.Requests["request-crash"] = &actionRequest{ActionRequestView: ActionRequestView{
 		ID: "request-crash", FailureID: id, PatternHash: subject.ContentHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
-	}, Issue: &spec, TargetRepo: targetRepo}
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
 	done := make(chan error, 1)
 	go func() {
 		_, err := service.ConfirmRequest(context.Background(), "request-crash", "alice", "token")
@@ -1243,16 +1243,15 @@ func TestPatternIssueAmbiguousWriteUsesOpenOnlyReconciliation(t *testing.T) {
 
 type fakeActionSourceReader map[string]string
 
-func (f fakeActionSourceReader) ListTree(context.Context) ([]string, error) {
-	paths := make([]string, 0, len(f))
-	for path := range f {
-		paths = append(paths, path)
+func (f fakeActionSourceReader) ReadSourceArchive(context.Context) (actionverify.Archive, error) {
+	archive := actionverify.Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}}
+	for path, content := range f {
+		archive.Paths[path] = true
+		if strings.HasSuffix(path, ".go") {
+			archive.GoFiles[path] = content
+		}
 	}
-	return paths, nil
-}
-func (f fakeActionSourceReader) ReadFile(_ context.Context, path string) (string, bool, error) {
-	value, ok := f[path]
-	return value, ok, nil
+	return archive, nil
 }
 
 func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
@@ -1374,7 +1373,7 @@ func TestBuildSourceVerificationUsesOnlyPinnedLinks(t *testing.T) {
 	}
 }
 
-func TestSourcePreflightChecksInstructionAndCachesResult(t *testing.T) {
+func TestSourcePreflightChecksInstruction(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	pattern := models.PatternAnalysis{
 		SuggestedFix: "Implement MissingHelper.", SourceRef: revision,
@@ -1393,10 +1392,8 @@ func TestSourcePreflightChecksInstructionAndCachesResult(t *testing.T) {
 		calls++
 		return actionverify.Verify(ctx, reader, input)
 	}
-	for range 2 {
-		if err := service.verifyOptionalRemediation(t.Context(), subject, "instead call ExistingFix"); !errors.Is(err, ErrRemediationAlreadyPresent) {
-			t.Fatalf("instruction preflight error = %v", err)
-		}
+	if err := service.verifyOptionalRemediation(t.Context(), subject, "instead call `ExistingFix`"); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("instruction preflight error = %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("verification calls = %d, want 1", calls)
@@ -1423,7 +1420,7 @@ func TestIssuePreflightChecksFinalDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base.Body = "Instead call ExistingFix."
+	base.Body = "Instead call `ExistingFix`."
 	var proposals []string
 	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
 		proposals = append(proposals, input.Proposal)
@@ -1436,95 +1433,6 @@ func TestIssuePreflightChecksFinalDraft(t *testing.T) {
 	}
 	if len(proposals) != 2 || proposals[0] != pattern.SuggestedFix || !strings.Contains(proposals[1], "ExistingFix") {
 		t.Fatalf("verified proposals = %v", proposals)
-	}
-}
-
-func TestSourceVerificationRunsIndependentKeysConcurrently(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	started := make(chan struct{}, 2)
-	release := make(chan struct{})
-	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
-		started <- struct{}{}
-		<-release
-		return actionverify.Result{State: actionverify.StateUnresolved}, nil
-	}
-	errs := make(chan error, 2)
-	for _, proposal := range []string{"Implement FirstHelper.", "Implement SecondHelper."} {
-		proposal := proposal
-		go func() {
-			_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), proposal, []string{"main.go"})
-			errs <- err
-		}()
-	}
-	for range 2 {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("independent source verification did not start concurrently")
-		}
-	}
-	close(release)
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestSourceVerificationWaitHonorsContext(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	started := make(chan struct{})
-	release := make(chan struct{})
-	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
-		close(started)
-		<-release
-		return actionverify.Result{State: actionverify.StateUnresolved}, nil
-	}
-	leaderDone := make(chan error, 1)
-	go func() {
-		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
-		leaderDone <- err
-	}()
-	<-started
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
-	defer cancel()
-	if _, err := service.cachedSourceVerification(ctx, "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("waiting verification error = %v", err)
-	}
-	close(release)
-	if err := <-leaderDone; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSourceVerificationSurvivesLeaderCancellation(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	started := make(chan struct{})
-	release := make(chan struct{})
-	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
-		close(started)
-		<-release
-		return actionverify.Result{State: actionverify.StateUnresolved}, nil
-	}
-	leaderCtx, cancelLeader := context.WithCancel(t.Context())
-	leaderDone := make(chan error, 1)
-	go func() {
-		_, err := service.cachedSourceVerification(leaderCtx, "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
-		leaderDone <- err
-	}()
-	<-started
-	waiterDone := make(chan error, 1)
-	go func() {
-		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
-		waiterDone <- err
-	}()
-	cancelLeader()
-	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("leader error = %v", err)
-	}
-	close(release)
-	if err := <-waiterDone; err != nil {
-		t.Fatalf("waiter error = %v", err)
 	}
 }
 
@@ -1554,61 +1462,24 @@ func TestSourcePreflightUsesBrandingRepositoryFallback(t *testing.T) {
 	}
 }
 
-func TestSourceVerificationQueueIsBounded(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	service.sourceVerifyQueue = make(chan struct{}, 1)
-	service.sourceVerifySlots = make(chan struct{}, 1)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
-		close(started)
-		<-release
-		return actionverify.Result{State: actionverify.StateUnresolved}, nil
-	}
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement FirstHelper.", []string{"main.go"})
-		firstDone <- err
-	}()
-	<-started
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
-	defer cancel()
-	if _, err := service.cachedSourceVerification(ctx, "example", "repo", strings.Repeat("a", 40), "Implement SecondHelper.", []string{"main.go"}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("overflow verification error = %v", err)
-	}
-	service.sourceVerifyMu.Lock()
-	active := len(service.sourceVerificationCalls)
-	service.sourceVerifyMu.Unlock()
-	if active != 1 {
-		t.Fatalf("active source verifications = %d, want 1", active)
-	}
-	close(release)
-	if err := <-firstDone; err != nil {
+func TestPreviewStoreInvalidatesLegacyVerificationVersion(t *testing.T) {
+	store := newPreviewStore(t.TempDir())
+	state := previewState{Version: 2, Previews: map[string]*persistedPreview{
+		"legacy": {
+			Owner: "owner", Kind: "issue", FailureID: "failure", PatternHash: "hash",
+			TargetRepo: "example/issues", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: previewStatusReady,
+			Issue: &issues.IssueSpec{Key: "pattern::legacy", Title: "Legacy", Body: "## Summary\nBody\n\n" + issues.MarkerFor("pattern::legacy")},
+		},
+	}}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(store.path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestSourceVerificationStopsWithService(t *testing.T) {
-	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	started := make(chan struct{})
-	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, _ actionverify.Input) (actionverify.Result, error) {
-		close(started)
-		<-ctx.Done()
-		return actionverify.Result{}, ctx.Err()
-	}
-	callerDone := make(chan error, 1)
-	go func() {
-		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
-		callerDone <- err
-	}()
-	<-started
-	service.stopActiveRequests()
-	waitCtx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	if err := service.Wait(waitCtx); err != nil {
+	loaded, err := store.load()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-callerDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("caller error = %v", err)
+	if loaded.Version != previewStateVersion || len(loaded.Previews) != 0 {
+		t.Fatalf("loaded legacy previews = %+v", loaded)
 	}
 }

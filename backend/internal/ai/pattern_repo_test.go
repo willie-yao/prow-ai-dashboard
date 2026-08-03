@@ -39,12 +39,8 @@ func TestGitHubRepoReaderAnonymousPublicAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cachedPaths, err := reader.ListTree(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(paths) != 1 || paths[0] != "config/source.yaml" || len(cachedPaths) != 1 || cachedPaths[0] != paths[0] || treeCalls != 1 {
-		t.Fatalf("paths=%v cached=%v treeCalls=%d", paths, cachedPaths, treeCalls)
+	if len(paths) != 1 || paths[0] != "config/source.yaml" || treeCalls != 1 {
+		t.Fatalf("paths=%v treeCalls=%d", paths, treeCalls)
 	}
 	content, found, err := reader.ReadFile(context.Background(), "config/source.yaml")
 	if err != nil || !found || content != "enabled: true\n" || fileCalls != 1 {
@@ -88,23 +84,21 @@ func TestGitHubRepoReaderAuthenticatedPrivateAccess(t *testing.T) {
 	}
 }
 
-func TestGitHubRepoReaderBulkAccessDoesNotRetainFiles(t *testing.T) {
+func TestGitHubRepoReaderReadsBoundedSourceArchive(t *testing.T) {
 	const token = "read-token-value"
-	archive := sourceArchive(t, map[string]string{
+	body := sourceArchive(t, map[string]string{
 		"go.mod":     "module example/repo\n",
 		"pkg/fix.go": "package fix\n",
 	})
-	archiveCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/owner/private/tarball/commit-sha" {
 			http.NotFound(w, r)
 			return
 		}
-		archiveCalls++
 		if r.Header.Get("Authorization") != "Bearer "+token {
 			t.Fatalf("archive authorization = %q", r.Header.Get("Authorization"))
 		}
-		_, _ = w.Write(archive)
+		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
 	oldAPI := githubAPIBase
@@ -112,14 +106,12 @@ func TestGitHubRepoReaderBulkAccessDoesNotRetainFiles(t *testing.T) {
 	t.Cleanup(func() { githubAPIBase = oldAPI })
 
 	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token).(*githubRepoReader)
-	for range 2 {
-		files, err := reader.ReadFiles(context.Background(), []string{"go.mod", "pkg/fix.go"})
-		if err != nil || files["go.mod"] != "module example/repo\n" || files["pkg/fix.go"] != "package fix\n" {
-			t.Fatalf("files=%v err=%v", files, err)
-		}
+	archive, err := reader.ReadSourceArchive(context.Background())
+	if err != nil || !archive.Paths["go.mod"] || !archive.Paths["pkg/fix.go"] || archive.GoFiles["pkg/fix.go"] != "package fix\n" {
+		t.Fatalf("archive=%v err=%v", archive, err)
 	}
-	if archiveCalls != 2 {
-		t.Fatalf("archive calls = %d, want 2", archiveCalls)
+	if _, ok := archive.GoFiles["go.mod"]; ok {
+		t.Fatal("non-Go file content was retained")
 	}
 }
 
@@ -147,21 +139,6 @@ func sourceArchive(t *testing.T, files map[string]string) []byte {
 	return output.Bytes()
 }
 
-func TestGitHubRepoReaderRejectsTruncatedTree(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"truncated":true,"tree":[{"path":"partial.go","type":"blob"}]}`))
-	}))
-	defer srv.Close()
-	oldAPI := githubAPIBase
-	githubAPIBase = srv.URL
-	t.Cleanup(func() { githubAPIBase = oldAPI })
-
-	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "")
-	if _, err := reader.ListTree(context.Background()); err == nil || !strings.Contains(err.Error(), "truncated") {
-		t.Fatalf("ListTree error = %v", err)
-	}
-}
-
 func TestGitHubRepoReaderForwardsPrivateTokenToCodeload(t *testing.T) {
 	const token = "read-token-value"
 	archive := sourceArchive(t, map[string]string{"go.mod": "module example/repo\n"})
@@ -186,9 +163,9 @@ func TestGitHubRepoReaderForwardsPrivateTokenToCodeload(t *testing.T) {
 	t.Cleanup(func() { githubAPIBase, githubArchiveHost = oldAPI, oldArchiveHost })
 	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token).(*githubRepoReader)
 	reader.client = archiveServer.Client()
-	files, err := reader.ReadFiles(context.Background(), []string{"go.mod"})
-	if err != nil || files["go.mod"] != "module example/repo\n" {
-		t.Fatalf("files=%v err=%v", files, err)
+	archiveResult, err := reader.ReadSourceArchive(context.Background())
+	if err != nil || !archiveResult.Paths["go.mod"] {
+		t.Fatalf("archive=%v err=%v", archiveResult, err)
 	}
 	if apiAuth != "Bearer "+token || archiveAuth != "Bearer "+token {
 		t.Fatalf("authorization api=%q archive=%q", apiAuth, archiveAuth)
@@ -211,8 +188,8 @@ func TestGitHubRepoReaderRejectsUnexpectedPrivateArchiveRedirect(t *testing.T) {
 	t.Cleanup(func() { githubAPIBase, githubArchiveHost = oldAPI, oldArchiveHost })
 	reader := NewGitHubRepoReader("owner", "private", "commit-sha", "read-token-value").(*githubRepoReader)
 	reader.client = archiveServer.Client()
-	if _, err := reader.ReadFiles(context.Background(), []string{"go.mod"}); err == nil || !strings.Contains(err.Error(), "refusing authenticated source archive redirect") {
-		t.Fatalf("ReadFiles error = %v", err)
+	if _, err := reader.ReadSourceArchive(context.Background()); err == nil || !strings.Contains(err.Error(), "refusing authenticated source archive redirect") {
+		t.Fatalf("ReadSourceArchive error = %v", err)
 	}
 	if redirected {
 		t.Fatal("unexpected redirect received authenticated request")
