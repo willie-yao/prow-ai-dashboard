@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -163,25 +162,17 @@ func TestVerifyNonGoOnlyIsInconclusive(t *testing.T) {
 	}, StateInconclusive)
 }
 
-type oversizedReader struct {
-	fakeReader
-}
-
-func (r oversizedReader) ListTree(context.Context) ([]string, error) {
-	paths := make([]string, maxExhaustiveGoFiles+1)
-	paths[0] = "main.go"
-	for i := 1; i < len(paths); i++ {
-		paths[i] = fmt.Sprintf("pkg/file-%04d.go", i)
+func TestVerifyLargeTreeUsesBulkReader(t *testing.T) {
+	files := fakeReader{"main.go": "package main\n"}
+	for i := 0; i < 1100; i++ {
+		files[fmt.Sprintf("pkg/file-%04d.go", i)] = "package pkg\n"
 	}
-	return paths, nil
-}
-
-func TestVerifyOversizedTreeIsInconclusive(t *testing.T) {
-	result, err := Verify(context.Background(), oversizedReader{fakeReader{"main.go": "package main\n"}}, Input{
+	reader := &bulkFakeReader{fakeReader: files}
+	verifyState(t, reader, Input{
 		Proposal: "Implement MissingHelper.", RelevantFiles: []string{"main.go"},
-	})
-	if err != nil || result.State != StateInconclusive || !strings.Contains(result.Reason, "too large") {
-		t.Fatalf("result=%+v err=%v", result, err)
+	}, StateUnresolved)
+	if reader.bulkCalls != 1 || reader.readCalls != 0 {
+		t.Fatalf("bulk calls = %d, file calls = %d", reader.bulkCalls, reader.readCalls)
 	}
 }
 

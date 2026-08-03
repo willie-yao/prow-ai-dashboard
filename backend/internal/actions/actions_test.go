@@ -1587,3 +1587,28 @@ func TestSourceVerificationQueueIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSourceVerificationStopsWithService(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	started := make(chan struct{})
+	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, _ actionverify.Input) (actionverify.Result, error) {
+		close(started)
+		<-ctx.Done()
+		return actionverify.Result{}, ctx.Err()
+	}
+	callerDone := make(chan error, 1)
+	go func() {
+		_, err := service.cachedSourceVerification(t.Context(), "example", "repo", strings.Repeat("a", 40), "Implement ExistingFix.", []string{"main.go"})
+		callerDone <- err
+	}()
+	<-started
+	service.stopActiveRequests()
+	waitCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := service.Wait(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-callerDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller error = %v", err)
+	}
+}

@@ -598,6 +598,7 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 }
 
 func (s *Service) stopActiveRequests() {
+	s.sourceCancel()
 	s.rmu.Lock()
 	s.stopping = true
 	var ids []string

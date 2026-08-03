@@ -205,11 +205,14 @@ type Service struct {
 	sourceVerificationCalls map[string]*sourceVerificationCall
 	sourceVerifyQueue       chan struct{}
 	sourceVerifySlots       chan struct{}
+	sourceContext           context.Context
+	sourceCancel            context.CancelFunc
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
 // jobs/*.json and the *_state.json files.
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
+	sourceContext, sourceCancel := context.WithCancel(context.Background())
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
 		previewStore: newPreviewStore(dataDir),
@@ -222,6 +225,8 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		sourceVerificationCalls: map[string]*sourceVerificationCall{},
 		sourceVerifyQueue:       make(chan struct{}, 8),
 		sourceVerifySlots:       make(chan struct{}, 2),
+		sourceContext:           sourceContext,
+		sourceCancel:            sourceCancel,
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
@@ -567,7 +572,11 @@ func (s *Service) cachedSourceVerification(
 	call := &sourceVerificationCall{done: make(chan struct{})}
 	s.sourceVerificationCalls[key] = call
 	s.sourceVerifyMu.Unlock()
-	go s.runSourceVerification(context.WithoutCancel(ctx), key, call, owner, repo, revision, proposal, files)
+	s.requestWG.Add(1)
+	go func() {
+		defer s.requestWG.Done()
+		s.runSourceVerification(s.sourceContext, key, call, owner, repo, revision, proposal, files)
+	}()
 	return waitSourceVerification(ctx, call)
 }
 

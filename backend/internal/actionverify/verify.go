@@ -20,8 +20,6 @@ const (
 	StateUnresolved     = "unresolved"
 	StateAlreadyPresent = "already_present"
 	StateInconclusive   = "inconclusive"
-
-	maxExhaustiveGoFiles = 1000
 )
 
 type Reader interface {
@@ -139,10 +137,6 @@ func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
 	if len(goPaths) == 0 {
 		return Result{State: StateInconclusive, Reason: "pinned source tree contains no Go source"}, nil
 	}
-	if len(goPaths) > maxExhaustiveGoFiles {
-		return Result{State: StateInconclusive, Reason: "pinned source tree is too large for exhaustive verification"}, nil
-	}
-
 	readPaths := compact(append(append([]string(nil), goPaths...), modulePaths...))
 	contents, err := readSourceFiles(ctx, reader, readPaths)
 	if err != nil {
