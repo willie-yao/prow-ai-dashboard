@@ -334,12 +334,15 @@ func (s *Service) startCleanup(id string) {
 			ctx, cancel := context.WithTimeout(context.Background(), defaultRuntimeCleanupTimeout)
 			view, err := s.cleanupRequest(ctx, id)
 			cancel()
-			if view.Status != RequestCancelling {
+			current := s.currentRequestView(id)
+			if current.Status != RequestCancelling && view.Status != RequestCancelling {
 				return
 			}
 			if errors.Is(err, runtime.ErrWorkIdentityChanged) {
-				s.markCleanupBlocked(id)
-				return
+				if s.markCleanupBlocked(id) {
+					return
+				}
+				err = runtime.ErrCleanupPending
 			}
 			if err != nil {
 				log.Printf("action request %s: runtime cleanup retry: %v", id, err)
@@ -355,25 +358,29 @@ func (s *Service) startCleanup(id string) {
 	}()
 }
 
-func (s *Service) markCleanupBlocked(id string) {
+func (s *Service) markCleanupBlocked(id string) bool {
 	s.rmu.Lock()
 	request := s.requests.Requests[id]
 	if request == nil || request.Status != RequestCancelling {
 		s.rmu.Unlock()
-		return
+		return true
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	previous := *request
 	request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "runtime work identity changed during cleanup", RequestedAt: now}
 	request.UpdatedAt = now
 	if err := s.saveRequestsLocked(); err != nil {
+		*request = previous
 		log.Printf("action request %s: persist identity-change cleanup: %v", id, err)
 		s.rmu.Unlock()
-		return
+		return false
 	}
 	s.rmu.Unlock()
 	if _, err := s.finalizeCleanup(id); err != nil {
 		log.Printf("action request %s: finalize identity-change cleanup: %v", id, err)
+		return false
 	}
+	return true
 }
 
 func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestView, error) {
@@ -1101,9 +1108,10 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 			return view, nil
 		}
 		view, cleanupErr := s.cleanupRequest(ctx, id)
-		if cleanupErr != nil && view.Status == RequestCancelling {
+		current := s.currentRequestView(id)
+		if cleanupErr != nil && current.Status == RequestCancelling {
 			if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
-				s.markCleanupBlocked(id)
+				_ = s.markCleanupBlocked(id)
 			} else {
 				s.startCleanup(id)
 			}
@@ -1125,9 +1133,10 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		cancel()
 	}
 	view, cleanupErr := s.cleanupRequest(ctx, id)
-	if cleanupErr != nil && view.Status == RequestCancelling {
+	current := s.currentRequestView(id)
+	if cleanupErr != nil && current.Status == RequestCancelling {
 		if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
-			s.markCleanupBlocked(id)
+			_ = s.markCleanupBlocked(id)
 		} else {
 			s.startCleanup(id)
 		}
@@ -1220,7 +1229,11 @@ func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ..
 }
 
 func (s *Service) saveRequestsLocked() error {
-	if err := statefile.WritePrivateJSONDurable(s.requestStatePath(), s.requests); err != nil {
+	write := s.requestStateWriter
+	if write == nil {
+		write = statefile.WritePrivateJSONDurable
+	}
+	if err := write(s.requestStatePath(), s.requests); err != nil {
 		return fmt.Errorf("saving action request state: %w", err)
 	}
 	return nil

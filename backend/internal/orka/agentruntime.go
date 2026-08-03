@@ -192,7 +192,10 @@ func (r *AgentRuntime) Generate(ctx context.Context, spec runtime.GenerateSpec) 
 		}
 	}
 	if err := r.kube.Apply(ctx, TasksGVR, r.opts.Namespace, r.buildTask(name, spec)); err != nil {
-		return runtime.GenerateResult{}, fmt.Errorf("%w: applying fix Task: %v", runtime.ErrUnavailable, err)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultFixCleanupTimeout)
+		cleanupErr := r.Cleanup(cleanupCtx, work)
+		cancel()
+		return runtime.GenerateResult{}, errors.Join(fmt.Errorf("%w: applying fix Task: %v", runtime.ErrUnavailable, err), cleanupErr)
 	}
 	state, err = r.kube.TaskState(ctx, r.opts.Namespace, name)
 	if err != nil || !state.Exists || strings.TrimSpace(state.UID) == "" {

@@ -33,6 +33,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 // ErrNotFound means no pattern in the published data matched the given id.
@@ -181,6 +182,7 @@ type Service struct {
 	requestsConfigured bool
 	requestWG          sync.WaitGroup
 	managedRuntime     func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter func(string, any) error
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -193,7 +195,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 			return issues.NewManager(issues.NewClient(token, owner, repo), filepath.Join(dataDir, "issue_state.json"), owner+"/"+repo, issues.Options{MaxNewPerRun: 1})
 		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{},
-		requestTimeout: defaultRequestTimeout,
+		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
 	}
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
 		eff := s.cfg.EffectiveFixPRs()

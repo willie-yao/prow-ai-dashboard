@@ -17,6 +17,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
 func requestTestService(t *testing.T) (*Service, models.PatternAnalysis) {
@@ -1144,5 +1145,30 @@ func TestWaitTracksShutdownWatcher(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Wait did not observe shutdown watcher completion")
+	}
+}
+
+func TestCleanupRetriesFinalStateWriteFailure(t *testing.T) {
+	service, pattern := requestTestService(t)
+	var writes atomic.Int32
+	service.requestStateWriter = func(path string, value any) error {
+		if writes.Add(1) == 2 {
+			return errors.New("transient state write failure")
+		}
+		return statefile.WritePrivateJSONDurable(path, value)
+	}
+	now := time.Now().UTC()
+	const id = "final-write-retry"
+	service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+		ID: id, FailureID: pattern.ID, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+	}}
+	view, err := service.CancelRequest(context.Background(), id, "alice")
+	if err != nil || view.Status != RequestCancelling {
+		t.Fatalf("initial cancellation view=%+v err=%v", view, err)
+	}
+	waitRequest(t, service, id, "alice", RequestCancelled)
+	if writes.Load() < 3 {
+		t.Fatalf("state writes = %d, want retry", writes.Load())
 	}
 }

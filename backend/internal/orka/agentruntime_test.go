@@ -284,9 +284,14 @@ func TestAgentRuntime_ApplyUnavailable(t *testing.T) {
 	r := &AgentRuntime{kube: kube, results: results, opts: AgentOptions{AgentRef: "codex-fixer", PollEvery: time.Millisecond},
 		applyDiff: stubApply(nil, nil)}
 
-	_, err := r.Generate(context.Background(), spec())
+	s := spec()
+	s.ExecutionID = "request-apply-unknown"
+	_, err := r.Generate(context.Background(), s)
 	if err == nil || !isUnavailable(err) {
 		t.Errorf("apply failure should surface ErrUnavailable, got %v", err)
+	}
+	if !kube.deleted {
+		t.Fatal("accepted Task with a lost apply response was not cleaned")
 	}
 }
 
