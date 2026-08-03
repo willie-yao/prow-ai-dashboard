@@ -59,6 +59,37 @@ func TestAnalysisCitationValidation(t *testing.T) {
 	}
 }
 
+func TestWideCitationDoesNotValidateDifferentProseLine(t *testing.T) {
+	lines := make(map[int]string, 200)
+	for line := 1; line <= 200; line++ {
+		lines[line] = "context"
+	}
+	lines[150] = "error execution phase etcd-join"
+	parsed := analysisResponse{
+		RootCause: "The failure is shown at line 73.",
+		EvidenceCitations: []models.EvidenceCitation{{
+			Path: "build-log.txt", LineStart: 1, LineEnd: 200, Quote: "error execution phase etcd-join",
+		}},
+	}
+	context := analysisCitationContext{Evidence: map[string]*analysisChatEvidence{"build-log.txt": {Lines: lines}}}
+	out := critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, context)
+	if out.Passed || len(out.CitationIssues) == 0 {
+		t.Fatalf("wide citation validated the wrong prose line: %+v", out)
+	}
+	if sanitized := sanitizePublishedCitations(parsed, context); strings.Contains(sanitized.RootCause, "line 73") {
+		t.Fatalf("wrong line survived sanitization: %+v", sanitized)
+	}
+}
+
+func TestEvidenceCitationRangeOverflowIsRejected(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	citation := models.EvidenceCitation{Path: "build-log.txt", LineStart: 1, LineEnd: maxInt, Quote: "error text"}
+	evidence := map[string]*analysisChatEvidence{"build-log.txt": {Lines: map[int]string{1: "error text"}}}
+	if issue := evidenceCitationIssue(citation, evidence); !strings.Contains(issue, "invalid line range") {
+		t.Fatalf("overflowing range issue = %q", issue)
+	}
+}
+
 func TestKernelTimestampIsNotLineClaim(t *testing.T) {
 	parsed := analysisResponse{
 		Summary: "kernel delay", RootCause: "The kernel timestamp 73.123 seconds precedes the timeout.",
@@ -102,6 +133,18 @@ func TestPreparePublishedAnalysisFiltersPathsAndCLIFlags(t *testing.T) {
 	}
 	if strings.Contains(got.RootCause, "--enable-long-term-support") || !strings.Contains(got.RootCause, "AKS lifecycle configuration") {
 		t.Fatalf("root cause was not safely preserved: %q", got.RootCause)
+	}
+}
+
+func TestQualifiedArtifactPathRequiresExactRead(t *testing.T) {
+	state := &agentState{
+		readArtifactsFull: map[string]bool{"artifacts/observed.yaml": true},
+		readArtifactsBase: map[string]bool{"observed.yaml": true},
+	}
+	parsed := analysisResponse{RootCause: "config/observed.yaml shows the failure; observed.yaml confirms it."}
+	got := state.preparePublishedAnalysis(parsed).RootCause
+	if strings.Contains(got, "config/observed.yaml") || !strings.Contains(got, "observed.yaml confirms") {
+		t.Fatalf("qualified artifact path used a basename-only read: %q", got)
 	}
 }
 

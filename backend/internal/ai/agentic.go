@@ -1265,6 +1265,9 @@ func (s *agentState) removeUngroundedSourcePaths(text, replacement string, allow
 
 func readsArtifact(candidate string, full, base map[string]bool) bool {
 	normalized := NormalizeArtifactCitation(candidate)
+	if strings.Contains(normalized, "/") {
+		return full[normalized]
+	}
 	return full[normalized] || base[path.Base(normalized)]
 }
 

@@ -493,7 +493,7 @@ func validateAnalysisCitations(parsed analysisResponse, context analysisCitation
 }
 
 func citationSupportsLineClaim(citation models.EvidenceCitation, claim proseLineClaim) bool {
-	if citation.LineStart > claim.Start || citation.LineEnd < claim.End {
+	if citation.LineStart != claim.Start || citation.LineEnd != claim.End {
 		return false
 	}
 	if claim.Path != "" && isSourceCitation(claim.Path) && len(ArtifactCitations(claim.Path)) == 0 {
@@ -511,7 +511,7 @@ func evidenceCitationIssue(citation models.EvidenceCitation, evidenceByPath map[
 	if evidence == nil {
 		return "names an unread artifact"
 	}
-	if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart+1 > 200 {
+	if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart >= 200 {
 		return "has an invalid line range"
 	}
 	quote := strings.TrimSpace(citation.Quote)
