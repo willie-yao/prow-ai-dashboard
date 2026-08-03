@@ -19,13 +19,18 @@ const (
 var headingPattern = regexp.MustCompile(`^#{1,3}[ \t]+(.+?)[ \t]*#*[ \t]*$`)
 var numberedDraftPattern = regexp.MustCompile(`(?im)^[ \t]*(?:draft|version|option)[ \t]+[12][:.][ \t]*`)
 
-var rejectedPhrases = []string{
+var reasoningPhrases = []string{
 	"the user wants me",
 	"i need to",
 	"let me draft",
 	"current structure",
 	"this looks good",
 	"one final check",
+	"final answer:",
+	"revised issue body:",
+}
+
+var promptEchoPhrases = []string{
 	"maintainer instruction:",
 	"current issue body:",
 	"description to fit into the template:",
@@ -34,8 +39,6 @@ var rejectedPhrases = []string{
 	"pull request template:",
 	"system prompt:",
 	"developer instruction:",
-	"final answer:",
-	"revised issue body:",
 	"<!-- prow-ai-dashboard-key:",
 }
 
@@ -47,11 +50,8 @@ func ValidateBody(body string) error {
 	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("body is empty")
 	}
-	if err := validateNoRejectedPhrases("body", body); err != nil {
+	if err := validatePromptAndReasoning("body", body, 2); err != nil {
 		return err
-	}
-	if len(numberedDraftPattern.FindAllStringIndex(body, -1)) > 1 {
-		return fmt.Errorf("body contains multiple draft variants")
 	}
 	if err := validateUniqueSections(body); err != nil {
 		return err
@@ -70,20 +70,54 @@ func ValidateTitleBody(title, body string) error {
 	if utf8.RuneCountInString(title) > MaxTitleRunes {
 		return fmt.Errorf("title exceeds %d characters", MaxTitleRunes)
 	}
-	if err := validateNoRejectedPhrases("title", title); err != nil {
+	if err := validatePromptAndReasoning("title", title, 1); err != nil {
 		return err
 	}
 	return ValidateBody(body)
 }
 
-func validateNoRejectedPhrases(field, value string) error {
+func validatePromptAndReasoning(field, value string, minSignals int) error {
 	lower := strings.ToLower(value)
-	for _, phrase := range rejectedPhrases {
+	for _, phrase := range promptEchoPhrases {
 		if strings.Contains(lower, phrase) {
-			return fmt.Errorf("%s contains model reasoning or prompt text", field)
+			return fmt.Errorf("%s contains prompt text", field)
 		}
 	}
+	preamble := strings.ToLower(reasoningPreamble(value))
+	signals := 0
+	for _, phrase := range reasoningPhrases {
+		if strings.Contains(preamble, phrase) {
+			signals++
+		}
+	}
+	if signals >= minSignals {
+		return fmt.Errorf("%s contains model reasoning", field)
+	}
+	if len(numberedDraftPattern.FindAllStringIndex(preamble, -1)) > 1 {
+		return fmt.Errorf("%s contains multiple draft variants", field)
+	}
 	return nil
+}
+
+func reasoningPreamble(value string) string {
+	const maxPreambleBytes = 2048
+	lines := strings.Split(value, "\n")
+	var preamble strings.Builder
+	for _, line := range lines {
+		if headingPattern.MatchString(line) {
+			break
+		}
+		if preamble.Len()+len(line)+1 > maxPreambleBytes {
+			remaining := maxPreambleBytes - preamble.Len()
+			if remaining > 0 {
+				preamble.WriteString(line[:min(remaining, len(line))])
+			}
+			break
+		}
+		preamble.WriteString(line)
+		preamble.WriteByte('\n')
+	}
+	return preamble.String()
 }
 
 func validateText(field, value string, maxBytes int) error {

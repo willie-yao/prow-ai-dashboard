@@ -18,6 +18,16 @@ The build failed.`
 	}
 }
 
+func TestValidateBodyAllowsOrdinaryReasoningPhrasesInDraftContent(t *testing.T) {
+	body := "## What happened\nI need to restart the worker, and this looks good after the retry.\n"
+	if err := ValidateBody(body); err != nil {
+		t.Fatalf("ordinary draft content rejected: %v", err)
+	}
+	if err := ValidateBody("I need to restart the worker."); err != nil {
+		t.Fatalf("single preamble signal rejected: %v", err)
+	}
+}
+
 func TestValidateBodyRejectsRepeatedSections(t *testing.T) {
 	body := "## Affected builds\n- 1\n\n## Affected builds\n- 2\n"
 	if err := ValidateBody(body); err == nil {

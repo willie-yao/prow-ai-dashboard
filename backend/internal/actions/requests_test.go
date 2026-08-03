@@ -104,7 +104,7 @@ func TestRejectedRefinementRetainsSafePreviewWithoutConfirmation(t *testing.T) {
 	}}
 	service.rmu.Unlock()
 
-	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string) (PreviewResult, *previewEntry, error) {
+	service.generateRequestWith(requestID, "token", func(context.Context, string, string, string, string, *issues.IssueSpec, string) (PreviewResult, *previewEntry, error) {
 		return PreviewResult{Kind: "issue", Title: safeSpec.Title, Body: safeSpec.Body}, &previewEntry{
 			failureID: pattern.ID, patternHash: pattern.ContentHash, kind: "issue", targetRepo: "o/r", spec: safeSpec,
 		}, ErrDraftRefinementRejected
@@ -128,6 +128,38 @@ func TestRejectedRefinementRetainsSafePreviewWithoutConfirmation(t *testing.T) {
 	}
 	if _, err := service.ConfirmRequest(context.Background(), requestID, "alice", "token"); err == nil || !strings.Contains(err.Error(), RequestFailed) {
 		t.Fatalf("ConfirmRequest() error = %v", err)
+	}
+}
+
+func TestRejectedRefinementUsesSupersededIssueSnapshot(t *testing.T) {
+	service, pattern := requestTestService(t)
+	now := time.Now().UTC()
+	const priorID = "prior-ready"
+	prior := issues.IssueSpec{
+		Key: issues.KeyPrefixPattern + pattern.JobID, Title: "Previously reviewed title",
+		Body: "## What happened\nPreviously reviewed body\n\n" + issues.MarkerFor(issues.KeyPrefixPattern+pattern.JobID),
+	}
+	service.rmu.Lock()
+	service.requests.Requests[priorID] = &actionRequest{
+		ActionRequestView: ActionRequestView{
+			ID: priorID, FailureID: pattern.ID, PatternHash: pattern.ContentHash, Kind: "create-issue", Owner: "alice",
+			Status: RequestReady, CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
+			ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Preview: &PreviewResult{Kind: "issue", Title: prior.Title, Body: prior.Body},
+		},
+		Issue: &prior, TargetRepo: "o/r",
+	}
+	service.rmu.Unlock()
+
+	replacement, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "tighten it", priorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := waitRequest(t, service, replacement.ID, "alice", RequestFailed)
+	if view.Warning == "" || view.Preview == nil {
+		t.Fatalf("replacement = %+v", view)
+	}
+	if view.Preview.Title != prior.Title || view.Preview.Body != prior.Body {
+		t.Fatalf("fallback changed prior draft: got=%+v want=%+v", view.Preview, prior)
 	}
 }
 
@@ -186,7 +218,7 @@ func TestCreateRequestSupersedesPendingRequest(t *testing.T) {
 
 	started := make(chan struct{})
 	generatorDone := make(chan struct{})
-	go service.generateRequestWith(blockedID, "token", func(ctx context.Context, _, _, _, _ string) (PreviewResult, *previewEntry, error) {
+	go service.generateRequestWith(blockedID, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _ string) (PreviewResult, *previewEntry, error) {
 		close(started)
 		<-ctx.Done()
 		close(generatorDone)
