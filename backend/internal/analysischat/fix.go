@@ -104,7 +104,12 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			if record.View.Result == nil || sourceinvestigation.ValidateVerifiedResult(*record.View.Result) != nil {
 				return changed, sourceinvestigation.ErrInvalidResult
 			}
+			revision, ok := exactRepoRevision(record.Revision)
+			if !ok {
+				return changed, sourceinvestigation.ErrUnavailable
+			}
 			candidate.SourceRequestID = sourceRequestID
+			candidate.SourceRevision = revision
 			candidate.SourceResult = sourceinvestigation.CloneResult(record.View.Result)
 			return changed, nil
 		default:
@@ -122,13 +127,6 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		return FixCandidate{}, ErrPatternChanged
 	}
 	analysis := resolved.testCase.AIAnalysis
-	if candidate.SourceResult != nil {
-		revision, ok := repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name)
-		if !ok {
-			return FixCandidate{}, sourceinvestigation.ErrUnavailable
-		}
-		candidate.SourceRevision = revision
-	}
 	if candidate.Analysis.Scope != ScopePattern && (analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis))) {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
