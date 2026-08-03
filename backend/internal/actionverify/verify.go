@@ -58,9 +58,9 @@ type packageResolver struct {
 }
 
 var implementationVerbPattern = regexp.MustCompile(`(?i)\b(?:implement(?:ing)?|add(?:ing)?|create|define|introduce|call(?:ing)?|invoke|invoking)\b`)
-var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{3,}$`)
+var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var identifierTokenPattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{3,}`)
-var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]{3,})\x60`)
+var quotedIdentifierPattern = regexp.MustCompile(`\x60([A-Za-z_][A-Za-z0-9_]*)\x60`)
 var backtickSpanPattern = regexp.MustCompile(`\x60[^\x60\n]+\x60`)
 var pathPattern = regexp.MustCompile(`\x60([^\x60\n]+\.[A-Za-z0-9]{1,8})\x60`)
 var sourceExtensions = map[string]bool{

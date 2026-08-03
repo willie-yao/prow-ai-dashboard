@@ -290,3 +290,12 @@ func TestVerifyIgnoresCamelCaseProseAfterSymbol(t *testing.T) {
 		Proposal: "Implement ExistingFix using GitHub APIs.", RelevantFiles: []string{"main.go"},
 	}, StateAlreadyPresent)
 }
+
+func TestVerifyAcceptsShortBacktickedSymbol(t *testing.T) {
+	reader := fakeReader{
+		"main.go": "package main\nfunc Do(){}\nfunc use(){ Do() }\n",
+	}
+	verifyState(t, reader, Input{
+		Proposal: "Implement `Do`.", RelevantFiles: []string{"main.go"},
+	}, StateAlreadyPresent)
+}
