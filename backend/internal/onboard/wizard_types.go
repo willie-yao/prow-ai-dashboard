@@ -92,6 +92,7 @@ type jobSweeper interface {
 // remoteDetector reads the current checkout's GitHub origin, when present.
 type remoteDetector interface {
 	Origin(context.Context) (string, error)
+	Root(context.Context) (string, error)
 }
 
 // promptBuilder renders or drafts prompts/system.md.

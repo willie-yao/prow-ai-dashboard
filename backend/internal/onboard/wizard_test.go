@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -71,12 +72,24 @@ func (f *fakeSweeper) Discover(_ context.Context, _ *project.Config, _ bool) ([]
 }
 
 type fakeRemoteDetector struct {
-	remote string
-	err    error
+	remote  string
+	err     error
+	root    string
+	rootErr error
 }
 
 func (f fakeRemoteDetector) Origin(context.Context) (string, error) {
 	return f.remote, f.err
+}
+
+func (f fakeRemoteDetector) Root(context.Context) (string, error) {
+	if f.rootErr != nil {
+		return "", f.rootErr
+	}
+	if f.root != "" {
+		return f.root, nil
+	}
+	return os.Getwd()
 }
 
 type fakePromptBuilder struct {
@@ -1236,5 +1249,13 @@ func TestRun_DryRunShowsCreateReplaceAndStaleFiles(t *testing.T) {
 	}
 	if writer.writes != 0 {
 		t.Fatalf("writes = %d", writer.writes)
+	}
+}
+
+func TestSiblingDashboardConsumerDirUsesCheckoutRoot(t *testing.T) {
+	got := siblingDashboardConsumerDir("/workspace/source", "/workspace/source/backend", "project-prow-ai-dashboard")
+	want := filepath.Join("..", "..", "project-prow-ai-dashboard")
+	if got != want {
+		t.Fatalf("sibling directory = %q, want %q", got, want)
 	}
 }

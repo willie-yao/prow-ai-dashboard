@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -38,9 +39,14 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, err
 	}
 	var detectedRepo *Repo
+	sourceCheckoutRoot := ""
 	if detectedFromGit {
 		original := repo
 		detectedRepo = &original
+		sourceCheckoutRoot, err = deps.remotes.Root(ctx)
+		if err != nil {
+			return nil, opts, err
+		}
 		metadata, metadataErr := deps.repositories.Repository(ctx, repo, opts.GitHubToken)
 		if metadataErr != nil {
 			return nil, opts, metadataErr
@@ -222,7 +228,11 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		defaultOut := dashboardRepo.Name
 		description := "Relative directory where the dashboard consumer repository scaffold will be created."
 		if detectedFromGit {
-			defaultOut = filepath.Join("..", dashboardRepo.Name)
+			workingDir, err := os.Getwd()
+			if err != nil {
+				return nil, opts, fmt.Errorf("reading current working directory: %w", err)
+			}
+			defaultOut = siblingDashboardConsumerDir(sourceCheckoutRoot, workingDir, dashboardRepo.Name)
 			description = "Sibling directory for the dashboard consumer repository. It may be a new directory or an existing checkout."
 		}
 		opts.OutDir, err = prompt.Input(ctx, inputPrompt{
@@ -288,6 +298,15 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, ErrCancelled
 	}
 	return plan, opts, nil
+}
+
+func siblingDashboardConsumerDir(sourceRoot, workingDir, dashboardName string) string {
+	sibling := filepath.Join(filepath.Dir(filepath.Clean(sourceRoot)), dashboardName)
+	relative, err := filepath.Rel(filepath.Clean(workingDir), sibling)
+	if err != nil {
+		return sibling
+	}
+	return filepath.Clean(relative)
 }
 
 func validateDashboardConsumerDir(opts Options) error {
