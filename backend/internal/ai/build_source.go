@@ -50,7 +50,7 @@ func ResolveBuildSource(build models.BuildInfo, owner, name string) (BuildSource
 			if !ok {
 				return BuildSource{}, false
 			}
-		case configuredMutableRef:
+		case configuredMutableRef && len(build.RepoRefs) == 1:
 			var ok bool
 			revision, ok = exactCheckoutRevision(build.Commit, build.RepoVersion)
 			if !ok {

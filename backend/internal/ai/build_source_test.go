@@ -18,7 +18,7 @@ func TestResolveBuildSource(t *testing.T) {
 		{name: "periodic repo refs", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + sha}}, ok: true},
 		{name: "exact repo version fallback", build: models.BuildInfo{RepoVersion: sha}, ok: true},
 		{name: "mutable ref with matching checkout", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}, Commit: sha, RepoVersion: sha}, ok: true},
-		{name: "mutable ref with parallel repo", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main", "kubernetes-sigs/cloud-provider-azure": "master"}, Commit: sha, RepoVersion: sha}, ok: true},
+		{name: "mutable ref with parallel repo", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main", "kubernetes-sigs/cloud-provider-azure": "master"}, Commit: sha, RepoVersion: sha}},
 		{name: "mutable ref missing checkout commit", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}}},
 		{name: "mutable ref mismatched checkout metadata", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}, Commit: sha, RepoVersion: other}},
 		{name: "composite presubmit", build: models.BuildInfo{RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + sha + ",123:" + sha}, Commit: sha, RepoVersion: sha}},
