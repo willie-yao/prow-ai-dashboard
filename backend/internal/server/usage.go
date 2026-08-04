@@ -35,6 +35,7 @@ type usageReport struct {
 	SelectedModel     string                   `json:"selected_model,omitempty"`
 	PricingRule       string                   `json:"pricing_rule,omitempty"`
 	PricingConfigured bool                     `json:"pricing_configured"`
+	RangePriced       bool                     `json:"range_priced"`
 }
 
 type usageReportRange struct {
@@ -271,17 +272,18 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		break
 	}
 	status := "complete"
-	if totals.ModelRequests == 0 || currency == "" || len(pricingHashes) == 0 {
+	if totals.ModelRequests == 0 || totals.ReportedRequests == 0 {
 		status = "unavailable"
-	} else if totals.UnreportedRequests > 0 || totals.ExternalUnmeteredOperations > 0 || len(currencies) > 1 {
+	} else if totals.UnreportedRequests > 0 || totals.ExternalUnmeteredOperations > 0 {
 		status = "partial"
 	}
 	return usageReport{
 		Version: aiusage.LedgerVersion, GeneratedAt: generatedAt.Format(time.RFC3339Nano),
 		Range:    usageReportRange{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
 		Currency: currency, MixedCurrency: len(currencies) > 1, MixedPricing: len(pricingHashes) > 1,
-		Coverage: usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
-		Totals:   reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
+		RangePriced: currency != "" && len(pricingHashes) > 0,
+		Coverage:    usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
+		Totals:      reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
 	}
 }
 

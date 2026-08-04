@@ -134,3 +134,14 @@ func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 }
+
+func TestBuildUsageReportSeparatesCoverageFromPricing(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Days: []aiusage.DailyUsage{{
+		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 10},
+	}}}}, start, end, nil, end)
+	if report.Coverage.Status != "complete" || report.RangePriced {
+		t.Fatalf("report = %+v", report)
+	}
+}
