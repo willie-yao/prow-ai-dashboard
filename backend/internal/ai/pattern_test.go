@@ -818,7 +818,7 @@ func TestPatternResponseFormatRequiresAllStrictTargetFields(t *testing.T) {
 	targets := properties["remediation_targets"].(map[string]any)
 	item := targets["items"].(map[string]any)
 	required := item["required"].([]string)
-	if !slices.Equal(required, []string{"intent", "symbol", "path", "value"}) {
+	if strings.Join(required, ",") != "intent,symbol,path,value" {
 		t.Fatalf("target required fields = %v", required)
 	}
 }
