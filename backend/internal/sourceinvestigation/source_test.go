@@ -3,6 +3,8 @@ package sourceinvestigation
 import (
 	"errors"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func TestValidateRepositoryRequiresPinnedCommit(t *testing.T) {
@@ -29,5 +31,28 @@ func TestValidateResultRejectsUnsafeCitations(t *testing.T) {
 		if err := ValidateResult(unsafe); !errors.Is(err, ErrInvalidResult) {
 			t.Fatalf("ValidateResult(%q) = %v", value, err)
 		}
+	}
+}
+
+func TestValidateResultRequiresStateTargetAlignment(t *testing.T) {
+	base := Result{
+		State:   StateActionableCodeChange,
+		Target:  &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry"},
+		Finding: "The retry loop masks the original error.", Confidence: ConfidenceHigh,
+		Relationship: RelationshipRefines, Direction: "Inspect the retry termination path.",
+		Citations: []Citation{{Path: "pkg/retry.go", LineStart: 10, LineEnd: 12, Quote: "return err"}},
+	}
+	if err := ValidateResult(base); err != nil {
+		t.Fatalf("ValidateResult(actionable) = %v", err)
+	}
+	invalid := base
+	invalid.State = StateActionableConfigurationChange
+	if err := ValidateResult(invalid); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("ValidateResult(mismatched state) = %v", err)
+	}
+	inconclusive := base
+	inconclusive.State = StateInconclusive
+	if err := ValidateResult(inconclusive); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("ValidateResult(inconclusive target) = %v", err)
 	}
 }
