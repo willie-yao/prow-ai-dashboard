@@ -153,11 +153,9 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"}],
 		"proposed_revision":null
 	}`))
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
 	server.push(200, chatRespFinal(`{
-		"answer":"After reading the log, the controller exit supports the analysis.","assessment":"supports",
-		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"}],
-		"proposed_revision":null
+		"answer":"I cannot support that claim without reading the artifact.","assessment":"inconclusive",
+		"citations":[],"proposed_revision":null
 	}`))
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 4, Timeout: time.Second})
@@ -166,7 +164,7 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.ToolCalls != 1 || reply.Assessment != "supports" {
+	if reply.ToolCalls != 0 || reply.Assessment != "inconclusive" {
 		t.Fatalf("reply = %+v", reply)
 	}
 	server.mu.Lock()

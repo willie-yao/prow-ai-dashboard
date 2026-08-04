@@ -94,11 +94,11 @@ func analysisChatStructuredFormat() ResponseFormat {
 						"type": "object", "additionalProperties": false,
 						"properties": map[string]any{
 							"path":       map[string]any{"type": "string"},
-							"line_start": map[string]any{"type": "integer", "minimum": 1},
-							"line_end":   map[string]any{"type": "integer", "minimum": 1},
+							"line_start": map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1}, map[string]any{"type": "null"}}},
+							"line_end":   map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1}, map[string]any{"type": "null"}}},
 							"quote":      map[string]any{"type": "string"},
 						},
-						"required": []string{"path", "quote"},
+						"required": []string{"path", "line_start", "line_end", "quote"},
 					},
 				},
 				"assessment":        map[string]any{"oneOf": stringOrNull},
@@ -291,6 +291,14 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
 		}
 		message := response.Message
+		if validationRetries > 0 && len(message.ToolCalls) > 0 {
+			if fallback.usable(evidenceRevision) {
+				recordAnalysisChatResponseFallback(loopCtx, "validation_retry_tools", modelCalls, providerAttempts, response, analysisChatParseStats{}, "response_contract")
+				return completeAnalysisChatReply(fallback.reply, state, start), nil
+			}
+			recordAnalysisChatResponseFailure(loopCtx, "validation_retry_tools", modelCalls, providerAttempts, response, analysisChatParseStats{}, "response_contract")
+			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
+		}
 		messageContent := ""
 		if message.Content != nil {
 			messageContent = *message.Content

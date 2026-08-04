@@ -536,7 +536,11 @@ export function AnalysisChat({
     setError(null);
     setTurnLimitRejected(false);
     setPendingTurn(null);
+    setContinueMode(false);
     setProgressPhase("queued");
+    setProgressStartedAt(undefined);
+    setValidationRetries(0);
+    setMaxValidationRetries(0);
     setCancelling(false);
     setCorrectionPreview(null);
     setCorrectionOpen(false);
@@ -691,6 +695,10 @@ export function AnalysisChat({
     controllerRef.current = controller;
     setBusy(true);
     setError(null);
+    setProgressPhase("queued");
+    setProgressStartedAt(undefined);
+    setValidationRetries(0);
+    setMaxValidationRetries(0);
     let activeSession = session;
     let activeTurn = pendingTurn;
     try {
@@ -711,7 +719,6 @@ export function AnalysisChat({
         setPendingTurn(activeTurn);
         setQuestion(value);
       }
-      setProgressPhase("queued");
       const updated = await streamAnalysisChatMessage(
         activeTurn.sessionID,
         activeTurn.question,
