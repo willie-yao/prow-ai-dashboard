@@ -84,7 +84,7 @@ type Citation struct {
 
 // Result is the structured source investigation result.
 type Result struct {
-	State        string                    `json:"state"`
+	State        string                    `json:"state,omitempty"`
 	Target       *models.RemediationTarget `json:"target,omitempty"`
 	Finding      string                    `json:"finding"`
 	Confidence   string                    `json:"confidence"`
