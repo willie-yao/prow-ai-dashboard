@@ -203,6 +203,9 @@ func ValidateResult(result Result) error {
 		return fmt.Errorf("%w: citations must contain 1-10 entries", ErrInvalidResult)
 	}
 	totalBytes := len(result.Finding) + len(result.Direction)
+	if result.Target != nil {
+		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.Value)
+	}
 	seen := map[string]struct{}{}
 	for i, citation := range result.Citations {
 		clean := path.Clean(strings.TrimSpace(citation.Path))

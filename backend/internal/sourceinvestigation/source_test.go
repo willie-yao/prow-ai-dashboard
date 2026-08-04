@@ -2,6 +2,7 @@ package sourceinvestigation
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -54,5 +55,17 @@ func TestValidateResultRequiresStateTargetAlignment(t *testing.T) {
 	inconclusive.State = StateInconclusive
 	if err := ValidateResult(inconclusive); !errors.Is(err, ErrInvalidResult) {
 		t.Fatalf("ValidateResult(inconclusive target) = %v", err)
+	}
+}
+
+func TestValidateResultBoundsTargetMetadata(t *testing.T) {
+	result := Result{
+		State:   StateActionableCodeChange,
+		Target:  &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "Name" + strings.Repeat("x", 30<<10)},
+		Finding: "finding", Confidence: ConfidenceHigh, Relationship: RelationshipRefines, Direction: "direction",
+		Citations: []Citation{{Path: "pkg/retry.go", LineStart: 1, LineEnd: 1, Quote: "Name"}},
+	}
+	if err := ValidateResult(result); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("ValidateResult(oversized target) = %v", err)
 	}
 }
