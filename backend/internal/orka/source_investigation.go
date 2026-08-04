@@ -29,28 +29,30 @@ const (
 
 // SourceInvestigationOptions configures read-only Orka agent Tasks.
 type SourceInvestigationOptions struct {
-	Namespace  string
-	AgentRef   string
-	GitSecret  string
-	Version    string
-	MaxRetries int
-	MaxTurns   int
-	PollEvery  time.Duration
+	Namespace         string
+	AgentRef          string
+	GitSecret         string
+	Version           string
+	MaxRetries        int
+	MaxTurns          int
+	AdmissionIdentity string
+	PollEvery         time.Duration
 }
 
 // SourceInvestigationFromEnvConfig configures NewSourceInvestigatorFromEnv.
 type SourceInvestigationFromEnvConfig struct {
-	Namespace        string
-	AgentRef         string
-	API              string
-	APIToken         string
-	GitSecret        string
-	Version          string
-	MaxRetries       int
-	MaxTurns         int
-	KubeContext      string
-	GitHubToken      string
-	GitHubRawBaseURL string
+	Namespace         string
+	AgentRef          string
+	API               string
+	APIToken          string
+	GitSecret         string
+	Version           string
+	MaxRetries        int
+	MaxTurns          int
+	AdmissionIdentity string
+	KubeContext       string
+	GitHubToken       string
+	GitHubRawBaseURL  string
 }
 
 // SourceInvestigator runs one read-only OpenCode Task at a pinned commit.
@@ -111,7 +113,7 @@ func NewSourceInvestigatorFromEnv(cfg SourceInvestigationFromEnvConfig) (*Source
 		SourceInvestigationOptions{
 			Namespace: cfg.Namespace, AgentRef: cfg.AgentRef,
 			GitSecret: strings.TrimSpace(cfg.GitSecret), Version: strings.TrimSpace(cfg.Version),
-			MaxRetries: cfg.MaxRetries, MaxTurns: cfg.MaxTurns,
+			MaxRetries: cfg.MaxRetries, MaxTurns: cfg.MaxTurns, AdmissionIdentity: strings.TrimSpace(cfg.AdmissionIdentity),
 		},
 	), nil
 }
@@ -133,6 +135,7 @@ func normalizeSourceInvestigationOptions(opts SourceInvestigationOptions) Source
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 30
 	}
+	opts.AdmissionIdentity = strings.TrimSpace(opts.AdmissionIdentity)
 	return opts
 }
 
@@ -339,16 +342,19 @@ func (r *SourceInvestigator) buildSourceTask(name string, request sourceinvestig
 	taskSpec["timeout"] = request.Timeout.String()
 	taskSpec["priority"] = int64(500)
 	taskSpec["retryPolicy"] = map[string]any{"maxRetries": int64(r.opts.MaxRetries)}
+	annotations := map[string]any{
+		orkaWorkspaceInitAnnotation: "true", orkaAgentReadOnlyAnnotation: "true",
+		"orka.ai/disable-coordination-tool-injection": "true",
+	}
+	if r.opts.AdmissionIdentity != "" {
+		annotations["prow-ai-dashboard/source-admission"] = r.opts.AdmissionIdentity
+	}
 	return map[string]any{
 		"apiVersion": "core.orka.ai/v1alpha1", "kind": "Task",
 		"metadata": map[string]any{
 			"name": name, "namespace": r.opts.Namespace,
-			"labels": map[string]any{ManagedByLabel: SourceInvestigatorManagedByValue},
-			"annotations": map[string]any{
-				orkaWorkspaceInitAnnotation:                   "true",
-				orkaAgentReadOnlyAnnotation:                   "true",
-				"orka.ai/disable-coordination-tool-injection": "true",
-			},
+			"labels":      map[string]any{ManagedByLabel: SourceInvestigatorManagedByValue},
+			"annotations": annotations,
 		},
 		"spec": taskSpec,
 	}
@@ -413,7 +419,7 @@ func SourceInvestigationTaskName(request sourceinvestigation.Request, opts Sourc
 	opts = normalizeSourceInvestigationOptions(opts)
 	subject, _ := json.Marshal(request.Subject)
 	data := strings.Join([]string{
-		request.ID, string(subject), opts.AgentRef, opts.GitSecret, opts.Version,
+		request.ID, string(subject), opts.AgentRef, opts.GitSecret, opts.Version, opts.AdmissionIdentity,
 		fmt.Sprintf("%d", opts.MaxRetries), fmt.Sprintf("%d", opts.MaxTurns), request.Timeout.String(),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(data))
