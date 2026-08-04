@@ -1437,6 +1437,22 @@ func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testin
 	}
 }
 
+func TestContextSourceRepositoryMustMatchFixTarget(t *testing.T) {
+	pattern := systemicPattern()
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "source", Name: "repo"},
+		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "fix", Name: "repo"}},
+	}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
+		AssistantAnswer: "answer", ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
+		Source: &fixpr.SourceContext{Repository: "source/repo", State: sourceinvestigation.StateActionableCodeChange, Target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "main.go", Symbol: "Fix"}, Revision: "0123456789abcdef0123456789abcdef01234567", Finding: "finding", Citations: []fixpr.Evidence{{Path: "main.go", Quote: "Fix"}}},
+	})
+	if !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("repository mismatch error = %v", err)
+	}
+}
+
 func TestBuildSourceVerificationUsesOnlyPinnedLinks(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	detail := analyzedBuildDetail(false)

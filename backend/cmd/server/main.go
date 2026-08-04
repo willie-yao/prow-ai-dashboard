@@ -164,7 +164,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
-	if actionService != nil && chatService != nil {
+	if actionService != nil && chatService != nil && features.SourceInvestigation {
 		opts.ChatFix = chatfix.NewService(chatService, actionService)
 		opts.Capabilities.Features.ChatFixMinConfidence = cfg.EffectiveFixPRs().MinConfidence
 		log.Printf("🛠️ analysis chat fix previews enabled")
