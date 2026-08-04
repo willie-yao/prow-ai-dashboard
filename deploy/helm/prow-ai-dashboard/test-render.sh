@@ -450,7 +450,7 @@ grep -Fq 'object.metadata.namespace == \"orka-system\"' "$tmp/fix-admission.yaml
 grep -Fq 'object.spec.agentRef.name == \"codex-fixer\"' "$tmp/fix-admission.yaml"
 grep -Fq 'object.spec.agentRef.namespace == \"orka-system\"' "$tmp/fix-admission.yaml"
 grep -Fq 'object.spec.agentRuntime.workspace.gitRepo == \"https://github.com/example/repo.git\"' "$tmp/fix-admission.yaml"
-grep -Fq "object.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}([0-9a-f]{24})?$')" "$tmp/fix-admission.yaml"
+grep -Fq "object.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}$')" "$tmp/fix-admission.yaml"
 grep -Fq 'object.spec.agentRuntime.maxTurns == 30' "$tmp/fix-admission.yaml"
 grep -Fq 'object.spec.agentRuntime.allowBash == true' "$tmp/fix-admission.yaml"
 grep -Fq 'duration(object.spec.timeout) == duration(\"15m\")' "$tmp/fix-admission.yaml"
