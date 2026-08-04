@@ -24,5 +24,5 @@ export interface AIUsageReport {
   daily: Array<{ date: string; totals: AIUsageTotals }>;
   features: Array<{ feature: AIUsageFeature; totals: AIUsageTotals }>;
   recent_operations: AIUsageOperation[];
-  selected_model?: string; pricing_rule?: string; pricing_configured: boolean; range_priced: boolean;
+  selected_model?: string; pricing_rule?: string; pricing_configured: boolean; range_priced: boolean; pricing_coverage: "complete" | "partial" | "unavailable" | "unknown";
 }

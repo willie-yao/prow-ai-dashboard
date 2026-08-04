@@ -36,6 +36,7 @@ type usageReport struct {
 	PricingRule       string                   `json:"pricing_rule,omitempty"`
 	PricingConfigured bool                     `json:"pricing_configured"`
 	RangePriced       bool                     `json:"range_priced"`
+	PricingCoverage   string                   `json:"pricing_coverage"`
 }
 
 type usageReportRange struct {
@@ -273,6 +274,17 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		currency = value
 		break
 	}
+	pricingCoverage := "unavailable"
+	if totals.ReportedRequests > 0 {
+		switch {
+		case totals.PricedReportedRequests == totals.ReportedRequests:
+			pricingCoverage = "complete"
+		case totals.PricedReportedRequests > 0:
+			pricingCoverage = "partial"
+		case currency != "" && len(pricingHashes) > 0:
+			pricingCoverage = "unknown"
+		}
+	}
 	status := "complete"
 	if totals.ModelRequests == 0 || totals.ReportedRequests == 0 {
 		status = "unavailable"
@@ -283,9 +295,9 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		Version: aiusage.LedgerVersion, GeneratedAt: generatedAt.Format(time.RFC3339Nano),
 		Range:    usageReportRange{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
 		Currency: currency, MixedCurrency: len(currencies) > 1, MixedPricing: len(pricingHashes) > 1,
-		RangePriced: totals.ReportedRequests > 0 && totals.PricedReportedRequests == totals.ReportedRequests,
-		Coverage:    usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
-		Totals:      reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
+		RangePriced: pricingCoverage == "complete", PricingCoverage: pricingCoverage,
+		Coverage: usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, PricedReportedRequests: totals.PricedReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
+		Totals:   reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
 	}
 }
 
@@ -309,7 +321,7 @@ func reportTotals(value aiusage.UsageTotals) usageReportTotals {
 	return usageReportTotals{
 		Operations: value.Operations, CacheHits: value.CacheHits, Failures: value.Failures,
 		ExternalUnmeteredOperations: value.ExternalUnmeteredOperations,
-		ModelRequests:               value.ModelRequests, ReportedRequests: value.ReportedRequests, UnreportedRequests: value.UnreportedRequests,
+		ModelRequests:               value.ModelRequests, ReportedRequests: value.ReportedRequests, PricedReportedRequests: value.PricedReportedRequests, UnreportedRequests: value.UnreportedRequests,
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens,
 		OutputTokens: value.OutputTokens, ReasoningTokens: value.ReasoningTokens,
 		EstimatedCostNanos: strconv.FormatInt(value.EstimatedCostNanos, 10),

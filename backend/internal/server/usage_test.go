@@ -141,7 +141,45 @@ func TestBuildUsageReportSeparatesCoverageFromPricing(t *testing.T) {
 	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Days: []aiusage.DailyUsage{{
 		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 10},
 	}}}}, start, end, nil, end)
-	if report.Coverage.Status != "complete" || report.RangePriced {
+	if report.Coverage.Status != "complete" || report.RangePriced || report.PricingCoverage != "unavailable" {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:   "2026-08-02",
+		Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{
+			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
+		},
+		PricingHashes: []string{"price"},
+	}}}}, start, end, nil, end)
+	if report.PricingCoverage != "partial" || report.RangePriced || report.Totals.PricedReportedRequests != 1 || report.Coverage.PricedReportedRequests != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(report.Daily) != 1 || report.Daily[0].Totals.PricedReportedRequests != 1 {
+		t.Fatalf("daily = %+v", report.Daily)
+	}
+	pricedByFeature := map[aiusage.Feature]int{}
+	for _, feature := range report.Features {
+		pricedByFeature[feature.Feature] = feature.Totals.PricedReportedRequests
+	}
+	if len(report.Features) != 2 || pricedByFeature[aiusage.FeatureFailureAnalysis] != 1 || pricedByFeature[aiusage.FeatureAnalysisChat] != 0 {
+		t.Fatalf("features = %+v", report.Features)
+	}
+}
+
+func TestBuildUsageReportMarksLegacyPricingUnknown(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"legacy-price"},
+	}}}}, start, end, nil, end)
+	if report.PricingCoverage != "unknown" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
 	}
 }
