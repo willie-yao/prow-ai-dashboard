@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +22,7 @@ const benchmarkManifestVersion = 1
 
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
+var benchmarkCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type benchmarkManifest struct {
 	Version int                     `json:"version"`
@@ -39,6 +41,9 @@ type benchmarkManifestCase struct {
 	BuildID             string                    `json:"build_id"`
 	PullNumber          string                    `json:"pull_number,omitempty"`
 	WebURL              string                    `json:"web_url"`
+	Commit              string                    `json:"commit"`
+	RepoVersion         string                    `json:"repo_version"`
+	RepoRefs            map[string]string         `json:"repo_refs"`
 	SourceOwner         string                    `json:"source_owner"`
 	SourceName          string                    `json:"source_name"`
 	TestName            string                    `json:"test_name"`
@@ -106,6 +111,21 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if _, err := strconv.ParseUint(item.BuildID, 10, 64); err != nil {
 			return nil, fmt.Errorf("benchmark manifest case %q has invalid build_id", item.ID)
 		}
+		if !benchmarkCommitRE.MatchString(item.Commit) || item.RepoVersion != item.Commit {
+			return nil, fmt.Errorf("benchmark manifest case %q requires matching exact commit and repo_version", item.ID)
+		}
+		if len(item.RepoRefs) == 0 || len(item.RepoRefs) > 8 {
+			return nil, fmt.Errorf("benchmark manifest case %q repo_refs count must be 1..8", item.ID)
+		}
+		sourceKey := item.SourceOwner + "/" + item.SourceName
+		if _, ok := item.RepoRefs[sourceKey]; !ok {
+			return nil, fmt.Errorf("benchmark manifest case %q repo_refs omit configured source", item.ID)
+		}
+		for repo, ref := range item.RepoRefs {
+			if repo == "" || ref == "" || len(repo) > 256 || len(ref) > 256 || strings.ContainsAny(repo+ref, "\r\n\x00") {
+				return nil, fmt.Errorf("benchmark manifest case %q has invalid repo_refs", item.ID)
+			}
+		}
 		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" || item.SourceOwner == "" || item.SourceName == "" {
 			return nil, fmt.Errorf("benchmark manifest case %q is missing required identity", item.ID)
 		}
@@ -150,6 +170,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			name: item.ID, stableID: item.StableID, bucket: item.Bucket, fixtureAsset: item.FixtureAsset,
 			fixtureSHA256: item.FixtureSHA256, jobType: item.JobType, repo: item.Repo, jobName: item.JobName,
 			buildID: item.BuildID, pullNumber: item.PullNumber, webURL: item.WebURL,
+			commit: item.Commit, repoVersion: item.RepoVersion, repoRefs: maps.Clone(item.RepoRefs),
 			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
 			oppositeDiagnosis: item.OppositeDiagnosis, signals: signals,
@@ -165,6 +186,7 @@ type benchmarkJSONLResult struct {
 	ModelLabel      string                    `json:"model_label"`
 	JobName         string                    `json:"job_name"`
 	BuildID         string                    `json:"build_id"`
+	SourceCommit    string                    `json:"source_commit"`
 	TestName        string                    `json:"test_name"`
 	ElapsedMS       int64                     `json:"elapsed_ms"`
 	Usable          bool                      `json:"usable"`
@@ -208,7 +230,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
-		JobName: bc.jobName, BuildID: bc.buildID, TestName: bc.testName, ElapsedMS: elapsed.Milliseconds(),
+		JobName: bc.jobName, BuildID: bc.buildID, SourceCommit: bc.commit, TestName: bc.testName, ElapsedMS: elapsed.Milliseconds(),
 		FileLinks: map[string]string{}, SignalTotal: len(bc.signals), SelectedAttempt: selectedAttempt,
 		Trace: benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
 	}
@@ -280,6 +302,9 @@ func TestLoadBenchmarkManifest(t *testing.T) {
     "job_name": "periodic-example",
     "build_id": "123456789",
     "web_url": "https://example.invalid/build/123456789/",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "repo_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "repo_refs": {"example/project":"main"},
     "source_owner": "example",
     "source_name": "project",
     "test_name": "Example test",
@@ -326,6 +351,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
 		name: "case-one", stableID: "0123456789abcdef0123", jobName: "job", buildID: "123", testName: "test",
+		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": "main"},
 		signals: []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
 	}
 	tc := &models.TestCase{
