@@ -180,27 +180,29 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 }
 
 type benchmarkJSONLResult struct {
-	CaseID          string                    `json:"case_id"`
-	StableID        string                    `json:"stable_id"`
-	Repetition      int                       `json:"repetition"`
-	ModelLabel      string                    `json:"model_label"`
-	JobName         string                    `json:"job_name"`
-	BuildID         string                    `json:"build_id"`
-	SourceCommit    string                    `json:"source_commit"`
-	TestName        string                    `json:"test_name"`
-	ElapsedMS       int64                     `json:"elapsed_ms"`
-	Usable          bool                      `json:"usable"`
-	Summary         string                    `json:"summary,omitempty"`
-	RootCause       string                    `json:"root_cause,omitempty"`
-	SuggestedFix    string                    `json:"suggested_fix,omitempty"`
-	Severity        string                    `json:"severity,omitempty"`
-	Evidence        []models.EvidenceCitation `json:"evidence_citations,omitempty"`
-	FileLinks       map[string]string         `json:"file_links,omitempty"`
-	SignalHits      int                       `json:"signal_hits"`
-	SignalTotal     int                       `json:"signal_total"`
-	MissingMust     []string                  `json:"missing_must,omitempty"`
-	SelectedAttempt int                       `json:"selected_attempt,omitempty"`
-	Trace           benchmarkJSONLTrace       `json:"trace"`
+	CaseID            string                    `json:"case_id"`
+	StableID          string                    `json:"stable_id"`
+	Repetition        int                       `json:"repetition"`
+	ModelLabel        string                    `json:"model_label"`
+	JobName           string                    `json:"job_name"`
+	BuildID           string                    `json:"build_id"`
+	CheckoutCommit    string                    `json:"checkout_commit"`
+	SourceRevision    string                    `json:"source_revision,omitempty"`
+	SourceUnavailable bool                      `json:"source_unavailable,omitempty"`
+	TestName          string                    `json:"test_name"`
+	ElapsedMS         int64                     `json:"elapsed_ms"`
+	Usable            bool                      `json:"usable"`
+	Summary           string                    `json:"summary,omitempty"`
+	RootCause         string                    `json:"root_cause,omitempty"`
+	SuggestedFix      string                    `json:"suggested_fix,omitempty"`
+	Severity          string                    `json:"severity,omitempty"`
+	Evidence          []models.EvidenceCitation `json:"evidence_citations,omitempty"`
+	FileLinks         map[string]string         `json:"file_links,omitempty"`
+	SignalHits        int                       `json:"signal_hits"`
+	SignalTotal       int                       `json:"signal_total"`
+	MissingMust       []string                  `json:"missing_must,omitempty"`
+	SelectedAttempt   int                       `json:"selected_attempt,omitempty"`
+	Trace             benchmarkJSONLTrace       `json:"trace"`
 }
 
 type benchmarkJSONLTrace struct {
@@ -230,9 +232,15 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
-		JobName: bc.jobName, BuildID: bc.buildID, SourceCommit: bc.commit, TestName: bc.testName, ElapsedMS: elapsed.Milliseconds(),
+		JobName: bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, ElapsedMS: elapsed.Milliseconds(),
 		FileLinks: map[string]string{}, SignalTotal: len(bc.signals), SelectedAttempt: selectedAttempt,
 		Trace: benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
+	}
+	build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
+	if source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1]); ok {
+		result.SourceRevision = source.Revision
+	} else {
+		result.SourceUnavailable = true
 	}
 	if tc != nil && tc.AIAnalysis != nil && tc.AISummary != nil {
 		result.Usable = true
@@ -380,7 +388,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 {
+	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	info, err := os.Stat(path)
