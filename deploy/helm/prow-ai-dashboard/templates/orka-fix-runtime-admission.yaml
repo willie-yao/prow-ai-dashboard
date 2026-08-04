@@ -26,6 +26,8 @@ spec:
     - name: fix-namespace
       expression: {{ printf "object.metadata.namespace == %s" (toJson .Values.orka.namespace) | quote }}
   validations:
+    - expression: "request.operation != 'UPDATE' || (object.spec == oldObject.spec && object.metadata.labels == oldObject.metadata.labels && object.metadata.annotations == oldObject.metadata.annotations)"
+      message: "dashboard fix Task contracts are immutable after creation"
     - expression: "object.spec.type == 'agent'"
       message: "dashboard fix Tasks must use type agent"
     - expression: "(!has(object.spec.image) || object.spec.image == '') && (!has(object.spec.command) || size(object.spec.command) == 0) && (!has(object.spec.args) || size(object.spec.args) == 0)"
