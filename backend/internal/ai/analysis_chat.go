@@ -256,7 +256,8 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	modelCalls := 0
 	providerAttempts := 0
 	validationRetries := 0
-	for iter := 0; iter < a.opts.MaxIters; iter++ {
+	maxLoopIters := a.opts.MaxIters
+	for iter := 0; iter < maxLoopIters; iter++ {
 		if iter > 0 && validationRetries == 0 {
 			turn.ReportProgress(analysischat.PhaseEvaluating)
 		}
@@ -317,8 +318,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				return completeAnalysisChatReply(reply, state, start), nil
 			}
 			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_validation", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
-			if validationRetries < analysisChatMaxValidationRetries && iter+1 < a.opts.MaxIters {
+			if validationRetries < analysisChatMaxValidationRetries {
 				validationRetries++
+				maxLoopIters++
 				turn.ReportProgress(analysischat.PhaseValidationRetrying)
 				messages = append(messages,
 					modelMessage{Role: "assistant", Content: message.Content, ProviderItems: message.ProviderItems},
