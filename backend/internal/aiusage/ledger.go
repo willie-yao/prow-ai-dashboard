@@ -160,6 +160,7 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 		})
 		if err != nil {
 			r.logf("⚠ AI usage cost estimate failed: %v", err)
+			operation.PricingHash = ""
 		} else {
 			operation.Currency = r.pricing.Currency()
 			operation.EstimatedCostNanos = cost

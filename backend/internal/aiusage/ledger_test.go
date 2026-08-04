@@ -331,6 +331,13 @@ func TestOperationMarksOverflowUnreported(t *testing.T) {
 	if got.ModelRequests != 2 || got.ReportedRequests != 1 || got.UnreportedRequests != 1 || got.InputTokens != int64(math.MaxInt) || !got.UsageInvalid {
 		t.Fatalf("operation = %+v", got)
 	}
+	if got.EstimatedCostNanos != 0 || got.PricingHash != "" {
+		t.Fatalf("failed pricing provenance = %+v", got)
+	}
+	snapshot := recorder.Snapshot()
+	if snapshot.Days[0].Totals.PricedReportedRequests != 0 || len(snapshot.Days[0].PricingHashes) != 0 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
 }
 
 func TestSnapshotExpiresIdleLedgerAndPersistsIt(t *testing.T) {
