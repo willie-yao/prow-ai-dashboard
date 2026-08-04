@@ -360,7 +360,8 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	bc := benchCase{
 		name: "case-one", stableID: "0123456789abcdef0123", jobName: "job", buildID: "123", testName: "test",
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": "main"},
-		signals: []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
+		sourceRepo: [2]string{"example", "project"},
+		signals:    []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
 	}
 	tc := &models.TestCase{
 		AISummary: &models.AISummary{Summary: "summary"},
