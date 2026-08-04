@@ -291,6 +291,7 @@ fallback, export the reviewed provider coordinates and add the strict flag:
 
 ```bash
 export AI_TOKEN="..."
+export AI_API="responses"
 export AI_ENDPOINT="https://provider.example/v1/responses"
 export AI_MODEL="reviewed-model"
 fetcher onboard \

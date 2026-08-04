@@ -251,7 +251,10 @@ func newHTTPAPIClient(endpoint, token string, extraHeaders map[string]string) *h
 
 func modelRedirectPolicy(endpoint string) func(*http.Request, []*http.Request) error {
 	configured, err := url.Parse(endpoint)
-	return func(next *http.Request, _ []*http.Request) error {
+	return func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("model endpoint stopped after 10 redirects")
+		}
 		if err != nil || !strings.EqualFold(next.URL.Scheme, configured.Scheme) || !strings.EqualFold(next.URL.Host, configured.Host) {
 			return fmt.Errorf("model endpoint redirected to a different origin")
 		}

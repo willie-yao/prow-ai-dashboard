@@ -3,6 +3,7 @@ package onboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,6 +112,8 @@ func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo R
 	attempted := make(map[string]bool)
 	sources := make([]promptSource, 0, maxPromptSources)
 	total := 0
+	fetchFailures := 0
+	var lastFetchErr error
 	for attempts := 0; attempts < maxPromptSourceAttempts && len(sources) < maxPromptSources && total < maxPromptSourceTotalBytes; attempts++ {
 		sortPromptSourceCandidates(candidates, references, selectedKinds, len(sources))
 		var candidate promptSourceCandidate
@@ -127,7 +130,16 @@ func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo R
 		attempted[candidate.Path] = true
 		result.Attempts++
 		text, err := fetchRawSource(ctx, client, repo.Owner, repo.Name, revision, candidate.Path, token)
-		if err != nil || strings.TrimSpace(text) == "" || !isPromptSourceText(text) {
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				result.ExcerptDuration = time.Since(excerptStart)
+				return result, sourcePromptFailure(promptStageSourceExcerpt, err)
+			}
+			fetchFailures++
+			lastFetchErr = err
+			continue
+		}
+		if strings.TrimSpace(text) == "" || !isPromptSourceText(text) {
 			continue
 		}
 		text = redactPromptText(text, credentials...)
@@ -152,6 +164,9 @@ func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo R
 	result.ExcerptDuration = time.Since(excerptStart)
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Path < sources[j].Path })
 	result.Sources = sources
+	if len(sources) == 0 && result.Attempts > 0 && fetchFailures == result.Attempts {
+		return result, sourcePromptFailure(promptStageSourceExcerpt, lastFetchErr)
+	}
 	return result, nil
 }
 

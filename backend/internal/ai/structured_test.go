@@ -201,3 +201,22 @@ func TestCompleteStructuredDoesNotSendTokenAcrossRedirect(t *testing.T) {
 		t.Fatalf("redirect error exposed sensitive details: %v", err)
 	}
 }
+
+func TestCompleteStructuredStopsSameOriginRedirectLoop(t *testing.T) {
+	requests := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Redirect(w, r, server.URL+"/v1/responses", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+
+	client := NewClientWithOptions(Options{Token: "fixture-token", API: APIResponses, Endpoint: server.URL + "/v1/responses", Model: "model"})
+	err := client.CompleteStructured(context.Background(), "system", "user", structuredBodyFormat(), bodyValidator("safe"))
+	if err == nil {
+		t.Fatal("same-origin redirect loop was accepted")
+	}
+	if requests != 10 {
+		t.Fatalf("redirect requests = %d, want 10", requests)
+	}
+}
