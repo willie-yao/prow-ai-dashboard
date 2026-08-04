@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -218,15 +219,27 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	if !opts.OpenPR && opts.OutDir == "" {
+		defaultOut := dashboardRepo.Name
+		description := "Relative directory where the dashboard consumer repository scaffold will be created."
+		if detectedFromGit {
+			defaultOut = filepath.Join("..", dashboardRepo.Name)
+			description = "Sibling directory for the dashboard consumer repository. It may be a new directory or an existing checkout."
+		}
 		opts.OutDir, err = prompt.Input(ctx, inputPrompt{
-			Title:       "Output directory",
-			Description: "New directory where the validated scaffold will be written.",
-			Value:       dashboardRepo.Name,
+			Title:       "Dashboard consumer directory",
+			Description: description,
+			Value:       defaultOut,
 			Required:    true,
+			Validate: func(value string) error {
+				candidate := opts
+				candidate.OutDir = value
+				return validateDashboardConsumerDir(candidate)
+			},
 		})
 		if err != nil {
 			return nil, opts, err
 		}
+		opts.OutDir = filepath.Clean(opts.OutDir)
 	}
 
 	planning := planningContext{discovery: &report, selected: selected}
@@ -252,15 +265,19 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 			return nil, opts, err
 		}
 	}
-	if err := preflightPlan(plan, deps); err != nil {
+	if err := prepareInteractiveDestination(ctx, prompt, &opts, plan, deps); err != nil {
 		return nil, opts, err
 	}
 	printReview(deps.terminal.Out, plan)
 	if opts.DryRun {
 		return plan, opts, nil
 	}
+	confirmationTitle := "Create this scaffold?"
+	if hasDestinationReplacements(plan.Destination.Files) {
+		confirmationTitle = "Create and update these scaffold files?"
+	}
 	confirmed, err := prompt.Confirm(ctx, confirmPrompt{
-		Title:       "Create this scaffold?",
+		Title:       confirmationTitle,
 		Description: "This is the first prompt that permits a filesystem or GitHub write.",
 		Value:       false,
 	})
@@ -271,6 +288,66 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		return nil, opts, ErrCancelled
 	}
 	return plan, opts, nil
+}
+
+func validateDashboardConsumerDir(opts Options) error {
+	if strings.TrimSpace(opts.OutDir) == "" {
+		return fmt.Errorf("dashboard consumer directory is required")
+	}
+	if err := validateCredentialSeparation(opts); err != nil {
+		return err
+	}
+	return nil
+}
+
+func prepareInteractiveDestination(ctx context.Context, prompt wizardUI, opts *Options, plan *Plan, deps dependencies) error {
+	for {
+		if err := inspectPlanDestination(plan, deps); err != nil {
+			return err
+		}
+		if plan.Destination.OpenPR || !hasDestinationReplacements(plan.Destination.Files) || plan.Destination.UpdateExisting {
+			return nil
+		}
+		choice, err := prompt.Select(ctx, selectPrompt{
+			Title:       "Dashboard consumer directory contains generated files",
+			Description: "Choose another directory, explicitly update known scaffold files, or cancel.",
+			Options: []selectOption{
+				{Value: "another", Label: "Choose another directory", Description: "Keep every existing file unchanged."},
+				{Value: "update", Label: "Update known scaffold files", Description: "Replace only the generated files listed in the review."},
+				{Value: "cancel", Label: "Cancel onboarding", Description: "Stop without writing files."},
+			},
+			Value: "another",
+		})
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "another":
+			value, err := prompt.Input(ctx, inputPrompt{
+				Title:       "Dashboard consumer directory",
+				Description: "Choose a different directory for the dashboard consumer repository.",
+				Required:    true,
+				Validate: func(value string) error {
+					candidate := *opts
+					candidate.OutDir = value
+					return validateDashboardConsumerDir(candidate)
+				},
+			})
+			if err != nil {
+				return err
+			}
+			opts.OutDir = filepath.Clean(value)
+			opts.UpdateExisting = false
+			plan.Destination.OutDir = opts.OutDir
+			plan.Destination.UpdateExisting = false
+		case "update":
+			opts.UpdateExisting = true
+			plan.Destination.UpdateExisting = true
+			return nil
+		default:
+			return ErrCancelled
+		}
+	}
 }
 
 func buildPlanWithPromptRecovery(ctx context.Context, opts Options, planning planningContext, deps dependencies, prompt wizardUI) (*Plan, error) {
