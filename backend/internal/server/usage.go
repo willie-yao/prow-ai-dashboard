@@ -290,8 +290,6 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 			pricingCoverage = "complete"
 		case totals.PricedReportedRequests > 0:
 			pricingCoverage = "partial"
-		case currency != "" && len(pricingHashes) > 0:
-			pricingCoverage = "unknown"
 		}
 	}
 	status := "complete"
