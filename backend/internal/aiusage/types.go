@@ -75,6 +75,7 @@ type UsageTotals struct {
 	ExternalUnmeteredOperations int   `json:"external_unmetered_operations,omitempty"`
 	ModelRequests               int   `json:"model_requests,omitempty"`
 	ReportedRequests            int   `json:"reported_requests,omitempty"`
+	PricedReportedRequests      int   `json:"priced_reported_requests,omitempty"`
 	UnreportedRequests          int   `json:"unreported_requests,omitempty"`
 	InputTokens                 int64 `json:"input_tokens,omitempty"`
 	CachedInputTokens           int64 `json:"cached_input_tokens,omitempty"`

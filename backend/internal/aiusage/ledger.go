@@ -376,6 +376,9 @@ func operationTotals(operation OperationUsage) UsageTotals {
 		OutputTokens: operation.OutputTokens, ReasoningTokens: operation.ReasoningTokens,
 		EstimatedCostNanos: operation.EstimatedCostNanos,
 	}
+	if operation.PricingHash != "" && operation.Currency != "" {
+		totals.PricedReportedRequests = operation.ReportedRequests
+	}
 	if operation.Outcome == OutcomeCacheHit {
 		totals.CacheHits = 1
 	}
@@ -395,6 +398,7 @@ func applyTotals(target *UsageTotals, value UsageTotals, direction int64) {
 	target.ExternalUnmeteredOperations += int(int64(value.ExternalUnmeteredOperations) * direction)
 	target.ModelRequests += int(int64(value.ModelRequests) * direction)
 	target.ReportedRequests += int(int64(value.ReportedRequests) * direction)
+	target.PricedReportedRequests += int(int64(value.PricedReportedRequests) * direction)
 	target.UnreportedRequests += int(int64(value.UnreportedRequests) * direction)
 	target.InputTokens += value.InputTokens * direction
 	target.CachedInputTokens += value.CachedInputTokens * direction

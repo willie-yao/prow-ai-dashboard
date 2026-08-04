@@ -47,6 +47,7 @@ type usageReportCoverage struct {
 	Status                      string `json:"status"`
 	ModelRequests               int    `json:"model_requests"`
 	ReportedRequests            int    `json:"reported_requests"`
+	PricedReportedRequests      int    `json:"priced_reported_requests"`
 	UnreportedRequests          int    `json:"unreported_requests"`
 	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
 }
@@ -58,6 +59,7 @@ type usageReportTotals struct {
 	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
 	ModelRequests               int    `json:"model_requests"`
 	ReportedRequests            int    `json:"reported_requests"`
+	PricedReportedRequests      int    `json:"priced_reported_requests"`
 	UnreportedRequests          int    `json:"unreported_requests"`
 	InputTokens                 int64  `json:"input_tokens"`
 	CachedInputTokens           int64  `json:"cached_input_tokens"`
@@ -281,7 +283,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		Version: aiusage.LedgerVersion, GeneratedAt: generatedAt.Format(time.RFC3339Nano),
 		Range:    usageReportRange{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
 		Currency: currency, MixedCurrency: len(currencies) > 1, MixedPricing: len(pricingHashes) > 1,
-		RangePriced: currency != "" && len(pricingHashes) > 0,
+		RangePriced: totals.ReportedRequests > 0 && totals.PricedReportedRequests == totals.ReportedRequests,
 		Coverage:    usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
 		Totals:      reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
 	}
@@ -294,6 +296,7 @@ func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) {
 	target.ExternalUnmeteredOperations += value.ExternalUnmeteredOperations
 	target.ModelRequests += value.ModelRequests
 	target.ReportedRequests += value.ReportedRequests
+	target.PricedReportedRequests += value.PricedReportedRequests
 	target.UnreportedRequests += value.UnreportedRequests
 	target.InputTokens += value.InputTokens
 	target.CachedInputTokens += value.CachedInputTokens
