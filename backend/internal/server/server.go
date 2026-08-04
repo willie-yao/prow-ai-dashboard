@@ -549,6 +549,7 @@ type actionEligibilityFunc func(context.Context, string) (actions.Eligibility, e
 
 func actionEligibilityHandler(timeout time.Duration, run actionEligibilityFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		eligibility, err := run(ctx, r.PathValue("id"))
@@ -562,7 +563,6 @@ func actionEligibilityHandler(timeout time.Duration, run actionEligibilityFunc) 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(eligibility)
 	})
 }

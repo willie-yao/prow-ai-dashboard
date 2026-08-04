@@ -874,7 +874,21 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if unauthEligibility.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated eligibility = %d, want 401", unauthEligibility.StatusCode)
 	}
+	if !strings.Contains(unauthEligibility.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("unauthenticated eligibility cache=%q", unauthEligibility.Header.Get("Cache-Control"))
+	}
 	_ = unauthEligibility.Body.Close()
+
+	missingEligibilityReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/failures/missing/eligibility", nil)
+	missingEligibilityReq.Header.Set("Authorization", "ok")
+	missingEligibility, err := http.DefaultClient.Do(missingEligibilityReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingEligibility.StatusCode != http.StatusNotFound || !strings.Contains(missingEligibility.Header.Get("Cache-Control"), "no-store") {
+		t.Fatalf("missing eligibility = %d cache=%q", missingEligibility.StatusCode, missingEligibility.Header.Get("Cache-Control"))
+	}
+	_ = missingEligibility.Body.Close()
 
 	eligibilityReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/failures/abc/eligibility", nil)
 	eligibilityReq.Header.Set("Authorization", "ok")
@@ -887,7 +901,7 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = eligibilityResp.Body.Close()
-	if eligibilityResp.StatusCode != http.StatusOK || eligibility.State != actions.EligibilityActionable || eligibilityResp.Header.Get("Cache-Control") != "no-store" {
+	if eligibilityResp.StatusCode != http.StatusOK || eligibility.State != actions.EligibilityActionable || !strings.Contains(eligibilityResp.Header.Get("Cache-Control"), "no-store") {
 		t.Fatalf("eligibility response = %d %+v cache=%q", eligibilityResp.StatusCode, eligibility, eligibilityResp.Header.Get("Cache-Control"))
 	}
 

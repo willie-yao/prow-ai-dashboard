@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -30,6 +31,11 @@ func (s *Service) ActionEligibility(ctx context.Context, failureID string) (Elig
 		targets := subject.Pattern.RemediationTargets
 		if len(targets) == 0 {
 			return moreEvidenceEligibility(), nil
+		}
+		for _, target := range targets {
+			if actionverify.InvalidTargetReason(target) != "" {
+				return moreEvidenceEligibility(), nil
+			}
 		}
 		for _, target := range targets {
 			if target.Intent == models.RemediationIntentInvestigate {

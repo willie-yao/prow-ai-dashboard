@@ -14,7 +14,9 @@ test("pattern action eligibility handles deterministic blocked states", () => {
   assert.equal(patternActionEligibilityHint([{ intent: "investigate" }])?.state, "investigation_required");
   assert.equal(patternActionEligibilityHint([{ intent: "add_symbol", path: "main.go" }])?.state, "more_evidence_required");
   assert.equal(patternActionEligibilityHint([actionableTarget]), null);
-  assert.equal(patternActionEligibilityHint([actionableTarget], "verified_fixed")?.state, "already_present");
+  const existing = patternActionEligibilityHint([actionableTarget], "open");
+  assert.equal(existing?.state, "already_present");
+  assert.match(existing?.reason ?? "", /attempt already exists/);
 });
 
 test("build action eligibility requires current quality and verified files", () => {

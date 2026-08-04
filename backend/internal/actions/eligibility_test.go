@@ -34,6 +34,14 @@ func TestActionEligibilityClassifiesStructuredTargets(t *testing.T) {
 		}
 	})
 
+	t.Run("malformed investigation", func(t *testing.T) {
+		service, id := eligibilityService(t, []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate, Path: "main.go"}})
+		got, err := service.ActionEligibility(t.Context(), id)
+		if err != nil || got.State != EligibilityMoreEvidenceRequired {
+			t.Fatalf("eligibility = %+v, err=%v", got, err)
+		}
+	})
+
 	t.Run("investigation", func(t *testing.T) {
 		service, id := eligibilityService(t, []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}})
 		called := false

@@ -57,7 +57,10 @@ export function patternActionEligibilityHint(
   remediationStatus?: string,
 ): ActionEligibility | null {
   if (remediationStatus && remediationExistsStatuses.has(remediationStatus)) {
-    return eligibilityForState("already_present");
+    return {
+      state: "already_present",
+      reason: "A remediation attempt already exists for this pattern.",
+    };
   }
   if (!targets?.length) return eligibilityForState("more_evidence_required");
   if (!targets.every(targetIsComplete)) return eligibilityForState("more_evidence_required");
