@@ -32,6 +32,7 @@ import { useSearchParams } from "react-router-dom";
 import { ActionDraftPreview } from "./ActionDraftPreview";
 import type {
   Action,
+  ActionEligibility,
   ActionRequest,
   ActionPreview,
 } from "../types/actions";
@@ -52,6 +53,7 @@ import {
   readStoredActionRequestID,
   syncStoredActionRequest,
 } from "../lib/actionRequests";
+import { actionEligibilityTitle, eligibilityForState } from "../lib/actionEligibility";
 
 function requestedAction(value: string | null): Action | null {
   return value === "create-issue" || value === "propose-fix" ? value : null;
@@ -130,7 +132,15 @@ function DialogHeader({
   );
 }
 
-export function FailureActions({ failureID, resolvable = true }: { failureID: string; resolvable?: boolean }) {
+export function FailureActions({
+  failureID,
+  resolvable = true,
+  eligibilityHint = null,
+}: {
+  failureID: string;
+  resolvable?: boolean;
+  eligibilityHint?: ActionEligibility | null;
+}) {
   const { features } = useCapabilities();
   const { status, signIn, login, mode } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -146,6 +156,11 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   const [instruction, setInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
+  const [eligibility, setEligibility] = useState<ActionEligibility | null>(eligibilityHint);
+  const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const eligibilityHintState = eligibilityHint?.state;
+  const eligibilityHintReason = eligibilityHint?.reason;
+  const hasEligibilityHint = eligibilityHintState !== undefined;
   const requestID = request?.id;
   const requestStatus = request?.status;
   const activeFailureID = useRef(failureID);
@@ -178,6 +193,54 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
     setUrl(null);
   }, [failureID]);
 
+  useEffect(() => {
+    setEligibility(eligibilityHintState
+      ? { state: eligibilityHintState, reason: eligibilityHintReason ?? "" }
+      : null);
+    setEligibilityLoading(false);
+  }, [eligibilityHintReason, eligibilityHintState, failureID]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || hasEligibilityHint || !features.actions) return;
+    if (!features.action_eligibility) {
+      setEligibility({
+        ...eligibilityForState("more_evidence_required"),
+        reason: "This deployment cannot confirm action eligibility before draft generation.",
+      });
+      return;
+    }
+    const controller = new AbortController();
+    setEligibilityLoading(true);
+    setEligibility(null);
+    fetch(`${API_BASE}api/failures/${encodeURIComponent(failureID)}/eligibility`, {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await actionErrorMessage(response));
+        return response.json() as Promise<ActionEligibility>;
+      })
+      .then((value) => {
+        if (!controller.signal.aborted) setEligibility(value);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setEligibility({
+          ...eligibilityForState("more_evidence_required"),
+          reason: cause instanceof Error
+            ? `Action eligibility could not be confirmed: ${cause.message}`
+            : "Action eligibility could not be confirmed.",
+        });
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEligibilityLoading(false);
+      });
+    return () => controller.abort();
+  }, [failureID, features.action_eligibility, features.actions, hasEligibilityHint, status]);
+
+  const canStartActions = eligibility?.state === "actionable";
+
   // Email action links are inert GETs. After authentication, they open a local
   // intent dialog that requires an explicit click before a request is created.
   useEffect(() => {
@@ -185,16 +248,21 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
       !features.action_requests ||
       status !== "authenticated" ||
       linkedFailure !== failureID ||
-      !linkedAction
+      !linkedAction ||
+      eligibilityLoading ||
+      !eligibility
     ) {
       return;
     }
-    setReviewIntent(linkedAction);
     const next = new URLSearchParams(searchParams);
+    if (canStartActions) setReviewIntent(linkedAction);
     next.delete("failure");
     next.delete("action");
     setSearchParams(next, { replace: true });
   }, [
+    canStartActions,
+    eligibility,
+    eligibilityLoading,
     failureID,
     features.action_requests,
     linkedAction,
@@ -410,6 +478,10 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
     prompt = "",
     previousRequestID?: string,
   ) {
+    if (!canStartActions) {
+      setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
+      return;
+    }
     if (!features.action_requests) {
       activeAction.current = requested;
       setAction(requested);
@@ -469,6 +541,10 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
   }
 
   function open(requested: Action) {
+    if (!canStartActions) {
+      setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
+      return;
+    }
     setInstruction("");
     setError(null);
     const activeRequest = request && actionRequestIsActive(request) ? request : null;
@@ -628,7 +704,7 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
         spacing={1}
         sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}
       >
-        {features.action_requests && (
+        {features.action_requests && canStartActions && (
           <>
             <Button
               size="small"
@@ -679,6 +755,22 @@ export function FailureActions({ failureID, resolvable = true }: { failureID: st
           </Button>
         ))}
       </Stack>
+
+      {eligibilityLoading && (
+        <Stack direction="row" spacing={1} role="status" sx={{ alignItems: "center", mt: 1 }}>
+          <CircularProgress size={14} />
+          <Typography variant="caption" color="text.secondary">Checking action eligibility...</Typography>
+        </Stack>
+      )}
+
+      {!eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
+        <Alert severity={eligibility.state === "already_present" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 650 }}>
+            {actionEligibilityTitle(eligibility, Boolean(features.source_investigation))}
+          </Typography>
+          <Typography variant="body2">{eligibility.reason}</Typography>
+        </Alert>
+      )}
 
       {resolvable && resolveError && (
         <Alert severity="error" sx={{ mt: 1 }}>
