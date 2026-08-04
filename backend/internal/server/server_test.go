@@ -332,6 +332,9 @@ func TestHandler_Capabilities(t *testing.T) {
 	if got.Mode != "server" {
 		t.Errorf("Mode = %q, want server", got.Mode)
 	}
+	if got.Engine.Version != "dev" || got.Engine.Commit != "dev" || got.Engine.ImageTag != "dev" {
+		t.Fatalf("Engine = %+v, want dev fallback", got.Engine)
+	}
 	if got.Features.Actions || got.Features.AnalysisTraces {
 		t.Errorf("Features = %+v, want all false at read parity", got.Features)
 	}

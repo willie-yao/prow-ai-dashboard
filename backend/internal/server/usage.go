@@ -21,17 +21,20 @@ import (
 const maxAIUsageFileBytes = 64 << 20
 
 type usageReport struct {
-	Version          int                      `json:"version"`
-	GeneratedAt      string                   `json:"generated_at"`
-	Range            usageReportRange         `json:"range"`
-	Currency         string                   `json:"currency,omitempty"`
-	MixedCurrency    bool                     `json:"mixed_currency,omitempty"`
-	MixedPricing     bool                     `json:"mixed_pricing,omitempty"`
-	Coverage         usageReportCoverage      `json:"coverage"`
-	Totals           usageReportTotals        `json:"totals"`
-	Daily            []usageReportDay         `json:"daily"`
-	Features         []usageReportFeature     `json:"features"`
-	RecentOperations []aiusage.OperationUsage `json:"recent_operations"`
+	Version           int                      `json:"version"`
+	GeneratedAt       string                   `json:"generated_at"`
+	Range             usageReportRange         `json:"range"`
+	Currency          string                   `json:"currency,omitempty"`
+	MixedCurrency     bool                     `json:"mixed_currency,omitempty"`
+	MixedPricing      bool                     `json:"mixed_pricing,omitempty"`
+	Coverage          usageReportCoverage      `json:"coverage"`
+	Totals            usageReportTotals        `json:"totals"`
+	Daily             []usageReportDay         `json:"daily"`
+	Features          []usageReportFeature     `json:"features"`
+	RecentOperations  []aiusage.OperationUsage `json:"recent_operations"`
+	SelectedModel     string                   `json:"selected_model,omitempty"`
+	PricingRule       string                   `json:"pricing_rule,omitempty"`
+	PricingConfigured bool                     `json:"pricing_configured"`
 }
 
 type usageReportRange struct {
@@ -72,7 +75,7 @@ type usageReportFeature struct {
 	Totals  usageReportTotals `json:"totals"`
 }
 
-func aiUsageHandler(dataDir string, attachment bool, now func() time.Time) http.Handler {
+func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model, pricingRule string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.SetPrivateResponseHeaders(w.Header())
 		start, end, features, err := parseUsageQuery(r, now().UTC())
@@ -91,6 +94,9 @@ func aiUsageHandler(dataDir string, attachment bool, now func() time.Time) http.
 			return
 		}
 		report := buildUsageReport(ledgers, start, end, features, now().UTC())
+		report.SelectedModel = strings.TrimSpace(model)
+		report.PricingRule = strings.TrimSpace(pricingRule)
+		report.PricingConfigured = report.PricingRule != ""
 		w.Header().Set("Content-Type", "application/json")
 		if attachment {
 			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="ai-usage-%s-to-%s.json"`, report.Range.Start, report.Range.End))

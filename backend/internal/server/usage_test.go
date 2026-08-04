@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	if err := statefile.WritePrivateJSONDurable(filepath.Join(dataDir, output.AIUsageServerFilename), serverLedger); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AIUsageEnabled: true})
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AIUsageEnabled: true, AIUsageModel: "provider/model", AIUsagePricingRule: "USD input=1 output=2 per million tokens"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +52,9 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	var got usageReport
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatal(err)
+	}
+	if got.SelectedModel != "provider/model" || !got.PricingConfigured || !strings.Contains(got.PricingRule, "USD") {
+		t.Fatalf("usage metadata = %+v", got)
 	}
 	if got.Currency != "USD" || got.Coverage.Status != "partial" || got.Totals.Operations != 2 || got.Totals.InputTokens != 100 || got.Totals.EstimatedCostNanos != "1200" || len(got.Daily) != 2 || len(got.RecentOperations) != 2 {
 		t.Fatalf("report = %+v", got)

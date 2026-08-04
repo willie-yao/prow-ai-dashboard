@@ -38,7 +38,7 @@ remains identical.
 | Path | Purpose |
 | --- | --- |
 | `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json` with its bounded build-failure index, `search-index.json`. |
-| `GET /api/capabilities` | Deploy descriptor, for example `{"mode":"server","features":{"actions":false}}`. |
+| `GET /api/capabilities` | Deploy descriptor with feature flags and safe engine version, commit, and image-tag identity. |
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/fetch-status` | Admin-gated aggregate fetch progress, freshness, and next scheduled pass. `HEAD` is also supported. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
@@ -361,6 +361,10 @@ and finalization decisions. The trace API and download include content-free
 pattern candidate counts, scan truncation, safe stages, safe failure categories,
 and repair outcomes. Each trace links back to the matching test and build.
 
+Trace responses and downloads include the same safe engine identity advertised by
+`/api/capabilities`, so operators can tie a private diagnostic artifact to the
+exact engine commit without exposing registry credentials or cluster metadata.
+
 The API decodes the known trace schema rather than serving the file directly.
 Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both
 endpoints require the same admin identity used by actions. A missing trace file
@@ -614,3 +618,11 @@ merges the private fetcher and server ledgers. The default range is the latest
 parameters filter AI features. `GET /api/ai-usage/download` downloads the same
 filtered report. Cost nanounits are serialized as strings. Coverage is
 `complete`, `partial`, or `unavailable`.
+
+
+## AI usage observability
+
+The authenticated report includes the selected model and operator-supplied
+`ai.usage.pricing` rule. Complete, partial, and unavailable coverage distinguish
+fully reported, incompletely reported, and absent token accounting. Raw ledgers
+remain inaccessible through `/data/*`.
