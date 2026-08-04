@@ -469,6 +469,7 @@ export function AnalysisChat({
   const [error, setError] = useState<string | null>(null);
   const [turnLimitRejected, setTurnLimitRejected] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
+  const [continueMode, setContinueMode] = useState(false);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [progressStartedAt, setProgressStartedAt] = useState<string | undefined>();
   const [validationRetries, setValidationRetries] = useState(0);
@@ -591,12 +592,15 @@ export function AnalysisChat({
         if (restoredState === "answered" || restoredState === "succeeded") {
           setQuestion("");
           setPendingTurn(null);
+          setContinueMode(false);
           setError(null);
         } else if (restoredState === "terminal") {
           setPendingTurn(null);
           setError(null);
         } else {
           setPendingTurn(null);
+          setQuestion(restoredTurn?.question ?? "");
+          setContinueMode(true);
           setError("The restored question ended without an answer. Select Continue to try again.");
         }
       } catch (restoreError) {
@@ -629,6 +633,7 @@ export function AnalysisChat({
         }
         if (restoredTurn && isAmbiguousAnalysisChatFailure(restoreError)) {
           setPendingTurn(restoredTurn);
+          setContinueMode(true);
           setError("The restored question may still be running. Select Continue to reconnect.");
         } else {
           setPendingTurn(null);
@@ -680,6 +685,7 @@ export function AnalysisChat({
     }
     if (auth.status !== "authenticated") return;
 
+    setContinueMode(false);
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -762,10 +768,12 @@ export function AnalysisChat({
       const ambiguousFailure = isAmbiguousAnalysisChatFailure(requestError);
       if (activeSession && activeTurn && ambiguousFailure) {
         setPendingTurn(activeTurn);
+        setContinueMode(true);
         setError("The question may still be running. Select Continue to reconnect to the same request.");
         return;
       }
       if (!activeSession && ambiguousFailure) {
+        setContinueMode(true);
         setError("The conversation may have been created. Select Continue to reconnect to the same session.");
         return;
       }
@@ -1115,7 +1123,10 @@ export function AnalysisChat({
                     minRows={1}
                     maxRows={5}
                     value={question}
-                    onChange={(event) => setQuestion(limitAnalysisChatQuestion(event.target.value))}
+                    onChange={(event) => {
+                      setContinueMode(false);
+                      setQuestion(limitAnalysisChatQuestion(event.target.value));
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                         event.preventDefault();
@@ -1135,11 +1146,11 @@ export function AnalysisChat({
                       htmlInput: { "aria-label": "Ask about this analysis" },
                     }}
                   />
-                  <Tooltip title={pendingTurn ? "Continue" : "Send question"}>
+                  <Tooltip title={pendingTurn || continueMode ? "Continue" : "Send question"}>
                     <span>
                       <IconButton
                         color="primary"
-                        aria-label={pendingTurn ? "Continue" : "Send question"}
+                        aria-label={pendingTurn || continueMode ? "Continue" : "Send question"}
                         onClick={() => void submit()}
                         disabled={restoring || busy || (pendingTurn?.question ?? question).trim() === ""}
                         sx={{

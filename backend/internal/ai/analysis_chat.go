@@ -104,7 +104,7 @@ func analysisChatStructuredFormat() ResponseFormat {
 				"assessment":        map[string]any{"oneOf": stringOrNull},
 				"proposed_revision": map[string]any{"oneOf": revisionOrNull},
 			},
-			"required": []string{"answer", "citations"},
+			"required": []string{"answer", "citations", "assessment", "proposed_revision"},
 		},
 	}
 }
@@ -266,12 +266,15 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		var response *modelResponse
 		if validationRetries > 0 {
-			response, err = a.callAnalysisChatFinal(loopCtx, messages)
+			var calls, attempts int
+			response, calls, attempts, err = a.callAnalysisChatFinal(loopCtx, messages)
+			modelCalls += calls
+			providerAttempts += attempts
 		} else {
 			response, err = a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
+			modelCalls++
+			providerAttempts += analysisChatResponseAttempts(response)
 		}
-		modelCalls++
-		providerAttempts += analysisChatResponseAttempts(response)
 		if err != nil {
 			category := analysisChatRequestErrorCategory(err)
 			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
@@ -315,7 +318,11 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				)
 				continue
 			}
-			break
+			if fallback.usable(evidenceRevision) {
+				recordAnalysisChatResponseFallback(loopCtx, "validation_retry", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
+				return completeAnalysisChatReply(fallback.reply, state, start), nil
+			}
+			return analysischat.Reply{}, analysisChatSafeValidationError(validationErr)
 		}
 
 		turn.ReportProgress(analysischat.PhaseReadingEvidence)
@@ -360,9 +367,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		return analysischat.Reply{}, err
 	}
-	response, err := a.callAnalysisChatFinal(loopCtx, messages)
-	modelCalls++
-	providerAttempts += analysisChatResponseAttempts(response)
+	response, calls, attempts, err := a.callAnalysisChatFinal(loopCtx, messages)
+	modelCalls += calls
+	providerAttempts += attempts
 	if err != nil {
 		category := analysisChatRequestErrorCategory(err)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -398,17 +405,19 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	return completeAnalysisChatReply(reply, state, start), nil
 }
 
-func (a *AnalysisChatAgent) callAnalysisChatFinal(ctx context.Context, messages []modelMessage) (*modelResponse, error) {
+func (a *AnalysisChatAgent) callAnalysisChatFinal(ctx context.Context, messages []modelMessage) (*modelResponse, int, int, error) {
 	request := modelRequest{
 		Model: a.client.model, Messages: messages, ResponseFormat: ptrAnalysisChatFormat(analysisChatStructuredFormat()),
 		MaxResponseBytes: analysisChatMaxResponseBytes, OmitReasoning: true,
 	}
 	response, err := a.client.callModelRequest(ctx, request)
+	calls, attempts := 1, max(1, analysisChatResponseAttempts(response))
 	if err == nil || !structuredFallbackAllowed(err) {
-		return response, err
+		return response, calls, attempts, err
 	}
 	request.ResponseFormat = nil
-	return a.client.callModelRequest(ctx, request)
+	fallback, fallbackErr := a.client.callModelRequest(ctx, request)
+	return fallback, calls + 1, attempts + max(1, analysisChatResponseAttempts(fallback)), fallbackErr
 }
 
 func ptrAnalysisChatFormat(format ResponseFormat) *ResponseFormat { return &format }
