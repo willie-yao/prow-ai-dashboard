@@ -166,3 +166,23 @@ func TestWriteFilesRejectsUnreviewedReplacement(t *testing.T) {
 		t.Fatalf("unreviewed replacement occurred: %q %v", content, readErr)
 	}
 }
+
+func TestWriteFilesUsesTheInspectedNormalizedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	filename := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(filename, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := "  " + dir + "  "
+	expected := []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionReplace}}
+	if err := writeFiles(outDir, map[string]string{"project.yaml": "new"}, true, expected); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filename)
+	if err != nil || string(content) != "new" {
+		t.Fatalf("normalized destination content = %q, %v", content, err)
+	}
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatalf("untrimmed destination was used: %v", err)
+	}
+}

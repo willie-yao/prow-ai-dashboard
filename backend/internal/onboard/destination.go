@@ -26,13 +26,10 @@ func (e *destinationConflictError) Error() string {
 }
 
 func inspectFileDestination(outDir string, files map[string]string) ([]DestinationFilePlan, []string, error) {
-	rawOutDir := strings.TrimSpace(outDir)
-	if rawOutDir == "" {
-		return nil, nil, fmt.Errorf("dashboard consumer directory is required")
-	}
-	outDir = filepath.Clean(rawOutDir)
-	if strings.IndexFunc(outDir, unicode.IsControl) >= 0 {
-		return nil, nil, fmt.Errorf("dashboard consumer directory must not contain control characters")
+	var err error
+	outDir, err = normalizeDashboardConsumerDir(outDir)
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := inspectDestinationRoot(outDir); err != nil {
 		return nil, nil, err
@@ -77,6 +74,17 @@ func inspectFileDestination(outDir string, files map[string]string) ([]Destinati
 		}
 	}
 	return actions, stale, nil
+}
+
+func normalizeDashboardConsumerDir(outDir string) (string, error) {
+	outDir = strings.TrimSpace(outDir)
+	if outDir == "" {
+		return "", fmt.Errorf("dashboard consumer directory is required")
+	}
+	if strings.IndexFunc(outDir, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("dashboard consumer directory must not contain control characters")
+	}
+	return filepath.Clean(outDir), nil
 }
 
 func inspectDestinationRoot(outDir string) error {
@@ -142,6 +150,11 @@ func destinationReplacementPaths(files []DestinationFilePlan) []string {
 }
 
 func writeFiles(outDir string, files map[string]string, updateExisting bool, expected []DestinationFilePlan) error {
+	var err error
+	outDir, err = normalizeDashboardConsumerDir(outDir)
+	if err != nil {
+		return err
+	}
 	actions, _, err := inspectFileDestination(outDir, files)
 	if err != nil {
 		return err

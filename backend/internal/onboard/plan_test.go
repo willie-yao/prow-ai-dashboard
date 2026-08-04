@@ -355,3 +355,19 @@ func TestBuildPlanDoesNotRenderMachineSpecificOutputPath(t *testing.T) {
 		}
 	}
 }
+
+func TestValidatePlanRejectsUnnormalizedDestination(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatalf("buildPlan: %v", err)
+	}
+	plan.Destination.OutDir = " out "
+	if err := validatePlan(plan); err == nil || !strings.Contains(err.Error(), "not normalized") {
+		t.Fatalf("validatePlan error = %v", err)
+	}
+}

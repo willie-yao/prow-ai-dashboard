@@ -299,8 +299,14 @@ func validatePlan(planValue *Plan) error {
 	if normalizedRepo.Owner != planValue.DashboardRepo.Owner || normalizedRepo.Name != planValue.DashboardRepo.Name {
 		return fmt.Errorf("onboarding plan dashboard repo fields do not match full_name")
 	}
-	if !planValue.Destination.OpenPR && strings.TrimSpace(planValue.Destination.OutDir) == "" {
-		return fmt.Errorf("onboarding plan output directory is required")
+	if !planValue.Destination.OpenPR {
+		normalizedOutDir, err := normalizeDashboardConsumerDir(planValue.Destination.OutDir)
+		if err != nil {
+			return err
+		}
+		if normalizedOutDir != planValue.Destination.OutDir {
+			return fmt.Errorf("onboarding plan dashboard consumer directory is not normalized")
+		}
 	}
 	if planValue.Destination.OpenPR && planValue.Destination.UpdateExisting {
 		return fmt.Errorf("onboarding plan cannot combine open-PR and local update modes")
