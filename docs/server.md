@@ -361,9 +361,11 @@ and finalization decisions. The trace API and download include content-free
 pattern candidate counts, scan truncation, safe stages, safe failure categories,
 and repair outcomes. Each trace links back to the matching test and build.
 
-Trace responses and downloads include the same safe engine identity advertised by
-`/api/capabilities`, so operators can tie a private diagnostic artifact to the
-exact engine commit without exposing registry credentials or cluster metadata.
+Trace responses and downloads include the safe identity persisted by the
+fetcher or worker that produced the trace snapshot. This keeps the diagnostic
+artifact tied to its producer across server rollouts. Legacy files report an
+explicit `legacy` and `unknown` fallback instead of borrowing the serving
+process identity. Registry credentials and cluster metadata are never included.
 
 The API decodes the known trace schema rather than serving the file directly.
 Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both

@@ -205,9 +205,9 @@ func Handler(opts Options) (http.Handler, error) {
 			reg.Register(mux)
 		}
 		mux.Handle("GET /api/analysis-traces",
-			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false, caps.Engine)))
+			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false)))
 		mux.Handle("GET /api/analysis-traces/download",
-			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true, caps.Engine)))
+			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
 		if opts.AIUsageEnabled {
 			caps.Features.AIUsage = true
 			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule)))
