@@ -811,3 +811,14 @@ func TestAnalyzePatternValidationRepairPreservesProviderFailure(t *testing.T) {
 		t.Fatalf("model calls = %d, want 2", got)
 	}
 }
+
+func TestPatternResponseFormatRequiresAllStrictTargetFields(t *testing.T) {
+	format := patternResponseFormat()
+	properties := format.Schema["properties"].(map[string]any)
+	targets := properties["remediation_targets"].(map[string]any)
+	item := targets["items"].(map[string]any)
+	required := item["required"].([]string)
+	if !slices.Equal(required, []string{"intent", "symbol", "path", "value"}) {
+		t.Fatalf("target required fields = %v", required)
+	}
+}

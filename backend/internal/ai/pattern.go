@@ -328,7 +328,7 @@ func patternResponseFormat() ResponseFormat {
 							}},
 							"symbol": stringProperty(), "path": stringProperty(), "value": stringProperty(),
 						},
-						"required": []string{"intent"}, "additionalProperties": false,
+						"required": []string{"intent", "symbol", "path", "value"}, "additionalProperties": false,
 					},
 				},
 				"summary": stringProperty(),
