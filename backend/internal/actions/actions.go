@@ -810,6 +810,7 @@ func (s *Service) generateFixPreviewForPattern(
 			}
 		}
 		if generationContext.Source != nil {
+			verificationPattern.RemediationTargets = []models.RemediationTarget{generationContext.Source.Target}
 			repo := s.cfg.EffectiveAnalysisSourceRepo()
 			verificationPattern.SourceRef = repo.Owner + "/" + repo.Name + "@" + generationContext.Source.Revision
 			verificationPattern.RelevantFiles = nil

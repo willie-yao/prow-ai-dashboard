@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -1425,6 +1426,8 @@ func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testin
 		AssistantAnswer:   "selected answer",
 		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
 		Source: &fixpr.SourceContext{
+			Repository: "example/repo", State: sourceinvestigation.StateActionableCodeChange,
+			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "new.go", Symbol: "ExistingFix"},
 			Revision:  newRevision,
 			Citations: []fixpr.Evidence{{Path: "new.go", LineStart: 1, LineEnd: 1, Quote: "package source"}},
 		},
