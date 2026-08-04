@@ -669,11 +669,17 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced a recurring-pattern contract that failed deterministic validation. Validation category: %s. Validation issue: %s. Correct the contract without weakening or omitting any required field. Do not add an explanation or code fence. Return the corrected contract.\n\nPrior output:\n%s", patternRepairVersion, category, issue, output)
 	started := time.Now()
 	var parsed patternResponse
+	var acceptedStats patternParseStats
 	var parseStats patternParseStats
 	var parseErr error
 	validate := func(raw json.RawMessage) error {
-		parsed, parseStats, parseErr = parsePatternResponseWithStats(string(raw), buildIDs)
-		return parseErr
+		candidate, stats, err := parsePatternResponseWithStats(string(raw), buildIDs)
+		if err != nil {
+			parseStats, parseErr = stats, err
+			return err
+		}
+		parsed, acceptedStats = candidate, stats
+		return nil
 	}
 	err := s.client.CompleteStructured(ctx, "Return exactly one valid recurring-pattern contract.", prompt, patternResponseFormat(), validate)
 	if err != nil {
@@ -691,7 +697,7 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 		}
 		return patternResponse{}, err
 	}
-	recordPatternParseTrace(ctx, "repair", parseStats, nil)
+	recordPatternParseTrace(ctx, "repair", acceptedStats, nil)
 	recordTrace(ctx, TraceEvent{Kind: "pattern_repair", Status: "validation", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
 	if observe != nil {
 		observe(PatternRepairAttempt{Succeeded: true})

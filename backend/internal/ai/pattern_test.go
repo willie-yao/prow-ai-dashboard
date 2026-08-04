@@ -471,7 +471,7 @@ func TestAnalyzePatternRepairsAmbiguityOnce(t *testing.T) {
 	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"private-shared-cause","shared_builds":["abuild","bbuild"],"suggested_fix":"update config/controller.yaml","remediation_targets":[{"intent":"investigate"}],"summary":"same summary"}`
 	ambiguous := valid + "\n" + strings.Replace(valid, "private-shared-cause", "private-other-cause", 1)
 	srv.push(200, chatRespFinal(ambiguous))
-	srv.push(200, chatRespFinal(valid))
+	srv.push(200, chatRespFinal("```json\n"+valid+"\n```"))
 	s := newPatternTestService(t, srv.URL)
 	traceStore := NewTraceStore()
 	s.SetTraceStore(traceStore)
