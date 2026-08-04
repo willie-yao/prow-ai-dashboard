@@ -10,6 +10,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -61,18 +62,38 @@ var promptSourceKeywords = map[string]int{
 	"machine": 40, "cluster": 35, "prow": 50,
 }
 
+type promptSourceFetchResult struct {
+	Sources          []promptSource
+	RevisionDuration time.Duration
+	TreeDuration     time.Duration
+	ExcerptDuration  time.Duration
+	Attempts         int
+}
+
 func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, jobs []promptJobSummary, token string, credentials ...string) ([]promptSource, error) {
+	result, err := fetchPromptSourcesDetailed(ctx, client, repo, jobs, token, credentials...)
+	return result.Sources, err
+}
+
+func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo Repo, jobs []promptJobSummary, token string, credentials ...string) (promptSourceFetchResult, error) {
+	var result promptSourceFetchResult
+	revisionStart := time.Now()
 	branch, err := defaultBranch(ctx, client, repo.Owner, repo.Name, token)
 	if err != nil {
-		return nil, err
+		result.RevisionDuration = time.Since(revisionStart)
+		return result, sourcePromptFailure(promptStageSourceRevision, err)
 	}
 	revision, err := resolvePromptSourceRevision(ctx, client, repo.Owner, repo.Name, branch, token)
+	result.RevisionDuration = time.Since(revisionStart)
 	if err != nil {
-		return nil, err
+		return result, sourcePromptFailure(promptStageSourceRevision, err)
 	}
+
+	treeStart := time.Now()
 	candidates, err := listPromptSourceCandidates(ctx, client, repo.Owner, repo.Name, revision, token)
+	result.TreeDuration = time.Since(treeStart)
 	if err != nil {
-		return nil, err
+		return result, sourcePromptFailure(promptStageSourceTree, err)
 	}
 	candidatePaths := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
@@ -85,6 +106,7 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 		}
 	}
 
+	excerptStart := time.Now()
 	selectedKinds := make(map[string]int)
 	attempted := make(map[string]bool)
 	sources := make([]promptSource, 0, maxPromptSources)
@@ -103,6 +125,7 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 			break
 		}
 		attempted[candidate.Path] = true
+		result.Attempts++
 		text, err := fetchRawSource(ctx, client, repo.Owner, repo.Name, revision, candidate.Path, token)
 		if err != nil || strings.TrimSpace(text) == "" || !isPromptSourceText(text) {
 			continue
@@ -126,8 +149,18 @@ func fetchPromptSources(ctx context.Context, client *http.Client, repo Repo, job
 			}
 		}
 	}
+	result.ExcerptDuration = time.Since(excerptStart)
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Path < sources[j].Path })
-	return sources, nil
+	result.Sources = sources
+	return result, nil
+}
+
+func sourcePromptFailure(stage promptPreparationStage, err error) *promptPreparationFailure {
+	category := promptFailureSourceUnavailable
+	if isPromptDeadline(err) {
+		category = promptFailureTimedOut
+	}
+	return &promptPreparationFailure{Stage: stage, Category: category, cause: err}
 }
 
 func listPromptSourceCandidates(ctx context.Context, client *http.Client, owner, repo, branch, token string) ([]promptSourceCandidate, error) {

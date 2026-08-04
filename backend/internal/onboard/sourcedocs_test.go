@@ -3,6 +3,7 @@ package onboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -308,7 +309,8 @@ func TestFetchPromptSourcesRejectsTruncatedTree(t *testing.T) {
 	t.Cleanup(func() { githubAPIBaseURL = oldAPI })
 
 	_, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
-	if err == nil || !strings.Contains(err.Error(), "truncated") {
+	var failure *promptPreparationFailure
+	if !errors.As(err, &failure) || failure.Stage != promptStageSourceTree || failure.Category != promptFailureSourceUnavailable {
 		t.Fatalf("error = %v", err)
 	}
 }
