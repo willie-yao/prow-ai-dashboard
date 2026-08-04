@@ -222,7 +222,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				addUsageTotals(&featureTotal, values)
 				featureTotals[feature] = featureTotal
 				if len(featureFilter) > 0 {
-					if !day.PricingCountsKnown && values.ReportedRequests > 0 && values.EstimatedCostNanos > 0 {
+					if !day.PricingCountsKnown && values.ReportedRequests > 0 && (values.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
 						pricingCountsUnknown = true
 					}
 					if values.Operations > 0 && ledger.Currency != "" {

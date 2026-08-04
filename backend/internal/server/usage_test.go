@@ -135,6 +135,23 @@ func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
 	}
 }
 
+func TestBuildUsageReportMarksFilteredLegacyPricingUnknown(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-01")
+	end, _ := time.Parse(time.DateOnly, "2026-08-03")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:   "2026-08-02",
+		Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{
+			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
+			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
+		},
+		PricingHashes: []string{"zero-price"},
+	}}}}, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end)
+	if report.PricingCoverage != "unknown" || report.RangePriced {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
 func TestBuildUsageReportSeparatesCoverageFromPricing(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
