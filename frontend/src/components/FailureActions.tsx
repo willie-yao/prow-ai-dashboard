@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -156,11 +157,20 @@ export function FailureActions({
   const [instruction, setInstruction] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const [eligibility, setEligibility] = useState<ActionEligibility | null>(eligibilityHint);
-  const [eligibilityLoading, setEligibilityLoading] = useState(false);
+  const [fetchedEligibility, setFetchedEligibility] = useState<{
+    failureID: string;
+    value: ActionEligibility;
+  } | null>(null);
   const eligibilityHintState = eligibilityHint?.state;
   const eligibilityHintReason = eligibilityHint?.reason;
   const hasEligibilityHint = eligibilityHintState !== undefined;
+  const eligibility = useMemo(() => (hasEligibilityHint
+    ? { state: eligibilityHintState, reason: eligibilityHintReason ?? "" }
+    : fetchedEligibility?.failureID === failureID
+      ? fetchedEligibility.value
+      : null), [eligibilityHintReason, eligibilityHintState, failureID, fetchedEligibility, hasEligibilityHint]);
+  const eligibilityLoading =
+    status === "authenticated" && features.actions && !hasEligibilityHint && eligibility === null;
   const requestID = request?.id;
   const requestStatus = request?.status;
   const activeFailureID = useRef(failureID);
@@ -194,24 +204,19 @@ export function FailureActions({
   }, [failureID]);
 
   useEffect(() => {
-    setEligibility(eligibilityHintState
-      ? { state: eligibilityHintState, reason: eligibilityHintReason ?? "" }
-      : null);
-    setEligibilityLoading(false);
-  }, [eligibilityHintReason, eligibilityHintState, failureID]);
-
-  useEffect(() => {
     if (status !== "authenticated" || hasEligibilityHint || !features.actions) return;
     if (!features.action_eligibility) {
-      setEligibility({
-        ...eligibilityForState("more_evidence_required"),
-        reason: "This deployment cannot confirm action eligibility before draft generation.",
+      setFetchedEligibility({
+        failureID,
+        value: {
+          ...eligibilityForState("more_evidence_required"),
+          reason: "This deployment cannot confirm action eligibility before draft generation.",
+        },
       });
       return;
     }
     const controller = new AbortController();
-    setEligibilityLoading(true);
-    setEligibility(null);
+    setFetchedEligibility((current) => current?.failureID === failureID ? null : current);
     fetch(`${API_BASE}api/failures/${encodeURIComponent(failureID)}/eligibility`, {
       credentials: "same-origin",
       cache: "no-store",
@@ -222,20 +227,20 @@ export function FailureActions({
         return response.json() as Promise<ActionEligibility>;
       })
       .then((value) => {
-        if (!controller.signal.aborted) setEligibility(value);
+        if (!controller.signal.aborted) setFetchedEligibility({ failureID, value });
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
-        setEligibility({
-          ...eligibilityForState("more_evidence_required"),
-          reason: cause instanceof Error
-            ? `Action eligibility could not be confirmed: ${cause.message}`
-            : "Action eligibility could not be confirmed.",
+        setFetchedEligibility({
+          failureID,
+          value: {
+            ...eligibilityForState("more_evidence_required"),
+            reason: cause instanceof Error
+              ? `Action eligibility could not be confirmed: ${cause.message}`
+              : "Action eligibility could not be confirmed.",
+          },
         });
       })
-      .finally(() => {
-        if (!controller.signal.aborted) setEligibilityLoading(false);
-      });
     return () => controller.abort();
   }, [failureID, features.action_eligibility, features.actions, hasEligibilityHint, status]);
 
