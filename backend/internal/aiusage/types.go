@@ -111,10 +111,11 @@ type OperationUsage struct {
 
 // DailyUsage is one UTC day of totals and feature breakdowns.
 type DailyUsage struct {
-	Date          string                  `json:"date"`
-	Totals        UsageTotals             `json:"totals"`
-	Features      map[Feature]UsageTotals `json:"features"`
-	PricingHashes []string                `json:"pricing_hashes,omitempty"`
+	Date               string                  `json:"date"`
+	Totals             UsageTotals             `json:"totals"`
+	Features           map[Feature]UsageTotals `json:"features"`
+	PricingHashes      []string                `json:"pricing_hashes,omitempty"`
+	PricingCountsKnown bool                    `json:"pricing_counts_known,omitempty"`
 }
 
 // DedupeEntry is the minimal state needed to ignore exact persistence replays.

@@ -59,7 +59,7 @@ func TestOperationRecordsProviderUsage(t *testing.T) {
 		t.Fatalf("pricing = %+v", got)
 	}
 	snapshot := recorder.Snapshot()
-	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.ModelRequests != 2 || len(snapshot.RecentOperations) != 1 {
+	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.ModelRequests != 2 || !snapshot.Days[0].PricingCountsKnown || len(snapshot.RecentOperations) != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	dedupe := snapshot.DedupeOperations[got.ID]

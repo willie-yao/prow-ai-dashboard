@@ -150,8 +150,9 @@ func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
 	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
-		Date:   "2026-08-02",
-		Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+		Date:               "2026-08-02",
+		PricingCountsKnown: true,
+		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{
 			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100},
 			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
@@ -173,12 +174,13 @@ func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
 	}
 }
 
-func TestBuildUsageReportMarksLegacyPricingUnknown(t *testing.T) {
+func TestBuildUsageReportMarksMixedLegacyPricingUnknown(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
-		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"legacy-price"},
-	}}}}, start, end, nil, end)
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{
+		{Date: "2026-08-01", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"legacy-price"}},
+		{Date: "2026-08-02", PricingCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"current-price"}},
+	}}}, start, end, nil, end)
 	if report.PricingCoverage != "unknown" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
 	}

@@ -246,7 +246,7 @@ func (r *Recorder) applyLocked(operation OperationUsage, direction int64) {
 		}
 		r.ledger.Days = append(r.ledger.Days, DailyUsage{})
 		copy(r.ledger.Days[index+1:], r.ledger.Days[index:])
-		r.ledger.Days[index] = DailyUsage{Date: date, Features: map[Feature]UsageTotals{}}
+		r.ledger.Days[index] = DailyUsage{Date: date, Features: map[Feature]UsageTotals{}, PricingCountsKnown: true}
 	}
 	day := &r.ledger.Days[index]
 	if day.Features == nil {

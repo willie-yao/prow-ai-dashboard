@@ -190,6 +190,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	featureTotals := map[aiusage.Feature]aiusage.UsageTotals{}
 	currencies := map[string]bool{}
 	pricingHashes := map[string]bool{}
+	pricingCountsUnknown := false
 	var recent []aiusage.OperationUsage
 	for _, ledger := range ledgers {
 		for _, day := range ledger.Days {
@@ -198,6 +199,9 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				continue
 			}
 			if len(featureFilter) == 0 {
+				if !day.PricingCountsKnown && day.Totals.ReportedRequests > 0 && (day.Totals.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
+					pricingCountsUnknown = true
+				}
 				if day.Totals.Operations > 0 && ledger.Currency != "" {
 					currencies[ledger.Currency] = true
 				}
@@ -218,6 +222,9 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				addUsageTotals(&featureTotal, values)
 				featureTotals[feature] = featureTotal
 				if len(featureFilter) > 0 {
+					if !day.PricingCountsKnown && values.ReportedRequests > 0 && values.EstimatedCostNanos > 0 {
+						pricingCountsUnknown = true
+					}
 					if values.Operations > 0 && ledger.Currency != "" {
 						currencies[ledger.Currency] = true
 					}
@@ -277,6 +284,8 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	pricingCoverage := "unavailable"
 	if totals.ReportedRequests > 0 {
 		switch {
+		case pricingCountsUnknown:
+			pricingCoverage = "unknown"
 		case totals.PricedReportedRequests == totals.ReportedRequests:
 			pricingCoverage = "complete"
 		case totals.PricedReportedRequests > 0:
