@@ -1,6 +1,7 @@
 package onboard
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path"
@@ -165,32 +166,113 @@ func writeFiles(outDir string, files map[string]string, updateExisting bool, exp
 	if replacements := destinationReplacementPaths(actions); len(replacements) > 0 && !updateExisting {
 		return &destinationConflictError{paths: replacements}
 	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("creating dashboard consumer directory %s: %w", outDir, err)
+	}
+	if err := inspectDestinationRoot(outDir); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(outDir)
+	if err != nil {
+		return fmt.Errorf("opening dashboard consumer directory %s: %w", outDir, err)
+	}
+	defer root.Close()
 	for _, action := range actions {
-		full := filepath.Join(outDir, filepath.FromSlash(action.Path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return fmt.Errorf("creating directory for %s: %w", action.Path, err)
-		}
-		if err := inspectDestinationRoot(outDir); err != nil {
+		if err := writeReviewedFileAtRoot(root, action, []byte(files[action.Path])); err != nil {
 			return err
-		}
-		if err := inspectDestinationParents(outDir, action.Path); err != nil {
-			return err
-		}
-		if action.Action == destinationActionReplace {
-			if err := replaceFileAtomic(full, []byte(files[action.Path])); err != nil {
-				return fmt.Errorf("replacing %s: %w", action.Path, err)
-			}
-			continue
-		}
-		if err := createFileExclusive(full, []byte(files[action.Path])); err != nil {
-			return fmt.Errorf("creating %s: %w", action.Path, err)
 		}
 	}
 	return nil
 }
 
-func createFileExclusive(filename string, content []byte) error {
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+func writeReviewedFile(outDir string, reviewed DestinationFilePlan, content []byte) error {
+	outDir, err := normalizeDashboardConsumerDir(outDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("creating dashboard consumer directory %s: %w", outDir, err)
+	}
+	if err := inspectDestinationRoot(outDir); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(outDir)
+	if err != nil {
+		return fmt.Errorf("opening dashboard consumer directory %s: %w", outDir, err)
+	}
+	defer root.Close()
+	return writeReviewedFileAtRoot(root, reviewed, content)
+}
+
+func writeReviewedFileAtRoot(root *os.Root, reviewed DestinationFilePlan, content []byte) error {
+	if err := ensureDestinationParents(root, reviewed.Path); err != nil {
+		return err
+	}
+	actual, err := currentDestinationAction(root, reviewed.Path)
+	if err != nil {
+		return err
+	}
+	if actual != reviewed.Action {
+		return fmt.Errorf("dashboard consumer directory changed after review; %s is now %s instead of %s", reviewed.Path, actual, reviewed.Action)
+	}
+	if reviewed.Action == destinationActionReplace {
+		if err := replaceFileAtomic(root, reviewed.Path, content); err != nil {
+			return fmt.Errorf("replacing %s: %w", reviewed.Path, err)
+		}
+		return nil
+	}
+	if err := createFileExclusive(root, reviewed.Path, content); err != nil {
+		return fmt.Errorf("creating %s: %w", reviewed.Path, err)
+	}
+	return nil
+}
+
+func ensureDestinationParents(root *os.Root, rel string) error {
+	parent := path.Dir(rel)
+	if parent == "." {
+		return nil
+	}
+	current := ""
+	for _, part := range strings.Split(parent, "/") {
+		if current == "" {
+			current = part
+		} else {
+			current = path.Join(current, part)
+		}
+		info, err := root.Lstat(current)
+		if os.IsNotExist(err) {
+			if err := root.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
+				return fmt.Errorf("creating generated file parent %s: %w", current, err)
+			}
+			info, err = root.Lstat(current)
+		}
+		if err != nil {
+			return fmt.Errorf("checking generated file parent %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("generated file parent %s conflicts with a non-directory filesystem entry", current)
+		}
+	}
+	return nil
+}
+
+func currentDestinationAction(root *os.Root, rel string) (string, error) {
+	info, err := root.Lstat(rel)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("generated file path %s conflicts with a non-regular filesystem entry", rel)
+		}
+		return destinationActionReplace, nil
+	case os.IsNotExist(err):
+		return destinationActionCreate, nil
+	default:
+		return "", fmt.Errorf("checking %s: %w", rel, err)
+	}
+}
+
+func createFileExclusive(root *os.Root, filename string, content []byte) error {
+	file, err := root.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
@@ -201,12 +283,15 @@ func createFileExclusive(filename string, content []byte) error {
 		if complete || created == nil {
 			return
 		}
-		current, err := os.Lstat(filename)
+		current, err := root.Lstat(filename)
 		if err == nil && os.SameFile(created, current) {
-			_ = os.Remove(filename)
+			_ = root.Remove(filename)
 		}
 	}()
 	if _, err := file.Write(content); err != nil {
+		return err
+	}
+	if err := file.Chmod(0o644); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
@@ -216,31 +301,52 @@ func createFileExclusive(filename string, content []byte) error {
 	return nil
 }
 
-func replaceFileAtomic(filename string, content []byte) error {
-	temp, err := os.CreateTemp(filepath.Dir(filename), ".prow-ai-dashboard-*")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	cleanup := true
-	defer func() {
-		_ = temp.Close()
-		if cleanup {
-			_ = os.Remove(tempName)
+func replaceFileAtomic(root *os.Root, filename string, content []byte) error {
+	parent := path.Dir(filename)
+	for attempt := 0; attempt < 10; attempt++ {
+		var suffix [8]byte
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return err
 		}
-	}()
-	if err := temp.Chmod(0o644); err != nil {
-		return err
+		tempName := fmt.Sprintf(".prow-ai-dashboard-%x", suffix[:])
+		if parent != "." {
+			tempName = path.Join(parent, tempName)
+		}
+		temp, err := root.OpenFile(tempName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		cleanup := true
+		defer func() {
+			_ = temp.Close()
+			if cleanup {
+				_ = root.Remove(tempName)
+			}
+		}()
+		if _, err := temp.Write(content); err != nil {
+			return err
+		}
+		if err := temp.Chmod(0o644); err != nil {
+			return err
+		}
+		if err := temp.Close(); err != nil {
+			return err
+		}
+		actual, err := currentDestinationAction(root, filename)
+		if err != nil {
+			return err
+		}
+		if actual != destinationActionReplace {
+			return fmt.Errorf("dashboard consumer directory changed after review; %s is now %s instead of replace", filename, actual)
+		}
+		if err := root.Rename(tempName, filename); err != nil {
+			return err
+		}
+		cleanup = false
+		return nil
 	}
-	if _, err := temp.Write(content); err != nil {
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tempName, filename); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return fmt.Errorf("could not allocate a temporary scaffold file")
 }

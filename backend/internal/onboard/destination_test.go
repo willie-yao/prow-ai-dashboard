@@ -186,3 +186,41 @@ func TestWriteFilesUsesTheInspectedNormalizedDirectory(t *testing.T) {
 		t.Fatalf("untrimmed destination was used: %v", err)
 	}
 }
+
+func TestWriteReviewedFileRejectsReplacementThatDisappeared(t *testing.T) {
+	dir := t.TempDir()
+	err := writeReviewedFile(dir, DestinationFilePlan{Path: "project.yaml", Action: destinationActionReplace}, []byte("new"))
+	if err == nil || !strings.Contains(err.Error(), "now create instead of replace") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "project.yaml")); !os.IsNotExist(statErr) {
+		t.Fatalf("file was created without review: %v", statErr)
+	}
+}
+
+func TestWriteReviewedFileDoesNotFollowSymlinkedParent(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, ".github")); err != nil {
+		t.Fatal(err)
+	}
+	err := writeReviewedFile(dir, DestinationFilePlan{Path: ".github/workflows/deploy.yml", Action: destinationActionCreate}, []byte("workflow"))
+	if err == nil || !strings.Contains(err.Error(), "non-directory") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "workflows")); !os.IsNotExist(statErr) {
+		t.Fatalf("directory was created outside the destination: %v", statErr)
+	}
+}
+
+func TestWriteReviewedFileCreatesParentsWithoutBulkMkdir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dashboard")
+	action := DestinationFilePlan{Path: ".github/workflows/deploy.yml", Action: destinationActionCreate}
+	if err := writeReviewedFile(dir, action, []byte("workflow")); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, ".github", "workflows", "deploy.yml"))
+	if err != nil || string(content) != "workflow" {
+		t.Fatalf("content = %q, %v", content, err)
+	}
+}
