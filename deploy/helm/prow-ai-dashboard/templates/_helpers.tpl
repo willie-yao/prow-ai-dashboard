@@ -305,7 +305,9 @@ Validate AI provider configuration.
   {{- if not $cfg.repository.owner -}}{{- fail "server.chat.sourceInvestigation.admission.repository.owner is required" -}}{{- end -}}
   {{- if not $cfg.repository.name -}}{{- fail "server.chat.sourceInvestigation.admission.repository.name is required" -}}{{- end -}}
   {{- if not $cfg.gitSecret -}}{{- fail "server.chat.sourceInvestigation.admission.gitSecret is required and must be read-only" -}}{{- end -}}
-  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "server.chat.sourceInvestigation.admission.timeout must be whole minutes from 1m through 30m" -}}{{- end -}}
+  {{- $goDurationPattern := "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$" -}}
+  {{- $timeout := printf "%v" $cfg.timeout -}}
+  {{- if or (not (regexMatch $goDurationPattern $timeout)) (not (regexMatch "[1-9]" $timeout)) -}}{{- fail "server.chat.sourceInvestigation.admission.timeout must be a positive Go duration" -}}{{- end -}}
   {{- if and (not .Values.orka.rbac.create) (not .Values.server.chat.sourceInvestigation.serviceAccountName) -}}{{- fail "server.chat.sourceInvestigation.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
 {{- end -}}
 {{- end -}}

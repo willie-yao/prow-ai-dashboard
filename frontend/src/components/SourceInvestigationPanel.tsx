@@ -595,7 +595,7 @@ export function SourceInvestigationPanel({
         </Button>
         <Typography variant="caption" color="text.secondary">
           Starts a separate read-only coding-agent Task with a larger cost and security boundary.
-          {repository ? ` Pinned to ${repository.owner}/${repository.name}@${repository.revision}.` : " The exact repository revision will be shown before results are accepted."}
+          {repository ? ` Pinned to ${repository.owner}/${repository.name}@${repository.revision}.` : " The server will still require and verify an immutable repository revision before starting."}
         </Typography>
       </Stack>
     );

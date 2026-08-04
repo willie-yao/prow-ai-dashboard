@@ -22,7 +22,7 @@ spec:
         scope: Namespaced
   matchConditions:
     - name: source-requester
-      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (request.userInfo.username == %s || (has(oldObject.metadata.labels) && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-source-investigator'))" (toJson $requester) (toJson $requester) | quote }}
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (request.userInfo.username == %s || (has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-source-investigator'))" (toJson $requester) (toJson $requester) | quote }}
     - name: source-namespace
       expression: {{ printf "object.metadata.namespace == %s" (toJson .Values.orka.namespace) | quote }}
   validations:

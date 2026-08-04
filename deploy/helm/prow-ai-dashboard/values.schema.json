@@ -920,7 +920,7 @@
                     },
                     "timeout": {
                       "type": "string",
-                      "pattern": "^([1-9]|[12][0-9]|30)m$"
+                      "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
                     },
                     "retries": {
                       "type": "integer",
