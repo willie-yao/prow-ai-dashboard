@@ -428,6 +428,10 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   "${fix_admission_args[@]}" \
   --show-only templates/orka-fix-runtime-admission.yaml > "$tmp/fix-admission.yaml"
 grep -Fq 'request.userInfo.username == \"system:serviceaccount:dashboard-test:test-prow-ai-dashboard-orka\"' "$tmp/fix-admission.yaml"
+grep -Fq "request.operation == 'CREATE'" "$tmp/fix-admission.yaml"
+grep -Fq "oldObject.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1'" "$tmp/fix-admission.yaml"
+grep -Fq 'size(object.metadata.labels) == 2' "$tmp/fix-admission.yaml"
+grep -Fq "size(object.metadata.annotations) == (('prow-ai-dashboard/action-request' in object.metadata.annotations) ? 2 : 1)" "$tmp/fix-admission.yaml"
 grep -Fq 'object.metadata.namespace == \"orka-system\"' "$tmp/fix-admission.yaml"
 grep -Fq 'object.spec.agentRef.name == \"codex-fixer\"' "$tmp/fix-admission.yaml"
 grep -Fq 'object.spec.agentRef.namespace == \"orka-system\"' "$tmp/fix-admission.yaml"

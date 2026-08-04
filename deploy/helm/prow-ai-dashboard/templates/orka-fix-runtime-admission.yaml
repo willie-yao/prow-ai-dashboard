@@ -22,7 +22,7 @@ spec:
         scope: Namespaced
   matchConditions:
     - name: dashboard-fix-requester
-      expression: {{ printf "request.userInfo.username == %s" (toJson $requester) | quote }}
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (request.userInfo.username == %s || (has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && 'prow-ai-dashboard/runtime' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-fixer' && oldObject.metadata.labels['prow-ai-dashboard/runtime'] == 'fix-generation' && has(oldObject.metadata.annotations) && 'prow-ai-dashboard/fix-contract' in oldObject.metadata.annotations && oldObject.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1'))" (toJson $requester) (toJson $requester) | quote }}
     - name: fix-namespace
       expression: {{ printf "object.metadata.namespace == %s" (toJson .Values.orka.namespace) | quote }}
   validations:
@@ -60,9 +60,9 @@ spec:
       message: "dashboard fix Tasks must not add alternate AI, workspace, or transaction fields"
     - expression: "has(object.spec.prompt) && object.spec.prompt != ''"
       message: "dashboard fix Tasks must include a generation prompt"
-    - expression: "has(object.metadata.labels) && 'app.kubernetes.io/managed-by' in object.metadata.labels && 'prow-ai-dashboard/runtime' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-fixer' && object.metadata.labels['prow-ai-dashboard/runtime'] == 'fix-generation'"
+    - expression: "has(object.metadata.labels) && size(object.metadata.labels) == 2 && 'app.kubernetes.io/managed-by' in object.metadata.labels && 'prow-ai-dashboard/runtime' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-fixer' && object.metadata.labels['prow-ai-dashboard/runtime'] == 'fix-generation'"
       message: "dashboard fix Tasks must carry the fix lifecycle labels"
-    - expression: "has(object.metadata.annotations) && 'prow-ai-dashboard/fix-contract' in object.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1' && (!('prow-ai-dashboard/action-request' in object.metadata.annotations) || object.metadata.annotations['prow-ai-dashboard/action-request'] != '')"
+    - expression: "has(object.metadata.annotations) && size(object.metadata.annotations) == (('prow-ai-dashboard/action-request' in object.metadata.annotations) ? 2 : 1) && 'prow-ai-dashboard/fix-contract' in object.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1' && (!('prow-ai-dashboard/action-request' in object.metadata.annotations) || object.metadata.annotations['prow-ai-dashboard/action-request'] != '')"
       message: "dashboard fix Tasks must carry the fix contract annotation"
 ---
 apiVersion: admissionregistration.k8s.io/v1

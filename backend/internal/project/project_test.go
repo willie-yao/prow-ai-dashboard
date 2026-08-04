@@ -991,12 +991,30 @@ func TestValidateFixPRsOrkaRuntime(t *testing.T) {
 	}
 	c.AI.FixPRs.AgentRuntime.MaxTurns = 1000
 	c.AI.FixPRs.AgentRuntime.Timeout = "31m"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "at most 30m") {
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
 		t.Fatalf("oversized Orka timeout error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.Timeout = "90s"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
+		t.Fatalf("fractional-minute Orka timeout error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.Timeout = "0s"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
+		t.Fatalf("zero Orka timeout error = %v", err)
 	}
 	c.AI.FixPRs.AgentRuntime.Timeout = "30m"
 	if err := c.Validate(); err != nil {
 		t.Fatalf("Orka runtime boundary rejected: %v", err)
+	}
+}
+
+func TestValidateLocalFixRuntimeKeepsExistingBounds(t *testing.T) {
+	c := validConfig()
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
+		Type: "opencode", MaxTurns: 1001, Timeout: "90s",
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("local runtime bounds changed: %v", err)
 	}
 }
 

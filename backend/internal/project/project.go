@@ -1249,29 +1249,39 @@ func (c *Config) Validate() error {
 			}
 		}
 		if ar := f.AgentRuntime; ar != nil {
-			switch strings.TrimSpace(ar.Type) {
+			runtimeType := strings.TrimSpace(ar.Type)
+			if ar.OrkaRetries != nil && *ar.OrkaRetries < 0 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be >= 0")
+			}
+			if ar.MaxTurns < 0 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be >= 0")
+			}
+			var timeout time.Duration
+			hasTimeout := strings.TrimSpace(ar.Timeout) != ""
+			if value := strings.TrimSpace(ar.Timeout); value != "" {
+				var err error
+				timeout, err = time.ParseDuration(value)
+				if err != nil {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout %q is not a valid duration", ar.Timeout)
+				}
+			}
+			switch runtimeType {
 			case "", "opencode":
 			case "orka":
 				if strings.TrimSpace(ar.OrkaAgentRef) == "" || strings.TrimSpace(ar.OrkaAPI) == "" {
 					return fmt.Errorf("ai.fix_prs.agent_runtime type %q requires agent_ref and api", "orka")
 				}
+				if ar.OrkaRetries != nil && *ar.OrkaRetries > 2 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be between 0 and 2")
+				}
+				if ar.MaxTurns > 1000 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
+				}
+				if hasTimeout && (timeout < time.Minute || timeout > 30*time.Minute || timeout%time.Minute != 0) {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must use whole minutes from 1m through 30m")
+				}
 			default:
 				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (only %q or %q)", ar.Type, "opencode", "orka")
-			}
-			if ar.OrkaRetries != nil && (*ar.OrkaRetries < 0 || *ar.OrkaRetries > 2) {
-				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be between 0 and 2")
-			}
-			if ar.MaxTurns < 0 || ar.MaxTurns > 1000 {
-				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
-			}
-			if s := strings.TrimSpace(ar.Timeout); s != "" {
-				timeout, err := time.ParseDuration(s)
-				if err != nil {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout %q is not a valid duration", ar.Timeout)
-				}
-				if timeout <= 0 || timeout > 30*time.Minute {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must be greater than zero and at most 30m")
-				}
 			}
 		}
 	}
