@@ -414,9 +414,13 @@ func TestAIBenchmark(t *testing.T) {
 			t.Fatalf("BENCH_MANIFEST=%s: %v", path, err)
 		}
 	}
-	repetitions := benchEnvInt("BENCH_REPETITIONS", 1)
-	if repetitions < 1 || repetitions > 10 {
-		t.Fatalf("BENCH_REPETITIONS must be 1..10")
+	repetitions := 1
+	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 10 {
+			t.Fatalf("BENCH_REPETITIONS must be 1..10")
+		}
+		repetitions = value
 	}
 	cacheMode := strings.TrimSpace(os.Getenv("BENCH_CACHE_MODE"))
 	if cacheMode != "" && cacheMode != "cold" {

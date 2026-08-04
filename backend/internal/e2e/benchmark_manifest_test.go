@@ -62,7 +62,14 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		return nil, err
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(bufio.NewReader(io.LimitReader(file, 2<<20)))
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > 2<<20 {
+		return nil, fmt.Errorf("benchmark manifest exceeds 2 MiB")
+	}
+	decoder := json.NewDecoder(bufio.NewReader(file))
 	decoder.DisallowUnknownFields()
 	var manifest benchmarkManifest
 	if err := decoder.Decode(&manifest); err != nil {
@@ -90,10 +97,16 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if item.JobType != models.JobTypePeriodic && item.JobType != models.JobTypePresubmit {
 			return nil, fmt.Errorf("benchmark manifest case %q has invalid job_type", item.ID)
 		}
+		if item.JobType == models.JobTypePresubmit && (item.Repo == "" || item.PullNumber == "") {
+			return nil, fmt.Errorf("benchmark manifest presubmit case %q requires repo and pull_number", item.ID)
+		}
+		if item.ConsecutiveFailures < 0 {
+			return nil, fmt.Errorf("benchmark manifest case %q has invalid consecutive_failures", item.ID)
+		}
 		if _, err := strconv.ParseUint(item.BuildID, 10, 64); err != nil {
 			return nil, fmt.Errorf("benchmark manifest case %q has invalid build_id", item.ID)
 		}
-		if item.Bucket == "" || item.JobName == "" || item.TestName == "" || item.FailureMessage == "" || item.SourceOwner == "" || item.SourceName == "" {
+		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" || item.SourceOwner == "" || item.SourceName == "" {
 			return nil, fmt.Errorf("benchmark manifest case %q is missing required identity", item.ID)
 		}
 		for label, value := range map[string]string{
@@ -185,6 +198,9 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	t.Helper()
 	if path == "" {
 		return
+	}
+	if !benchmarkStableIDRE.MatchString(bc.stableID) {
+		t.Fatalf("external benchmark results require a stable case id")
 	}
 	label := strings.TrimSpace(os.Getenv("BENCH_MODEL_LABEL"))
 	if !benchmarkCaseIDRE.MatchString(label) {
