@@ -12,18 +12,19 @@ import (
 )
 
 type stubCompleter struct {
-	out     string
-	err     error
-	outputs []string
-	errs    []error
-	gotSys  string
-	gotUser string
-	systems []string
-	users   []string
-	calls   int
+	out          string
+	err          error
+	outputs      []string
+	errs         []error
+	physicalErrs []error
+	gotSys       string
+	gotUser      string
+	systems      []string
+	users        []string
+	calls        int
 }
 
-func (s *stubCompleter) CompleteStructured(_ context.Context, system, user string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
+func (s *stubCompleter) CompleteStructured(_ context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) error {
 	index := s.calls
 	s.calls++
 	s.systems = append(s.systems, system)
@@ -31,15 +32,22 @@ func (s *stubCompleter) CompleteStructured(_ context.Context, system, user strin
 	if index == 0 {
 		s.gotSys, s.gotUser = system, user
 	}
-	if index < len(s.errs) && s.errs[index] != nil {
-		return s.errs[index]
+	if index < len(s.physicalErrs) && s.physicalErrs[index] != nil {
+		return s.physicalErrs[index]
+	}
+	logicalIndex := index
+	if strings.HasPrefix(format.Name, "return_prompt_evidence_") || format.Name == "return_prompt_evidence" {
+		logicalIndex = index / len(promptExtractionPhases)
+	}
+	if logicalIndex < len(s.errs) && s.errs[logicalIndex] != nil {
+		return s.errs[logicalIndex]
 	}
 	if s.err != nil {
 		return s.err
 	}
 	out := s.out
-	if index < len(s.outputs) {
-		out = s.outputs[index]
+	if logicalIndex < len(s.outputs) {
+		out = s.outputs[logicalIndex]
 	}
 	return validate(json.RawMessage(out))
 }
