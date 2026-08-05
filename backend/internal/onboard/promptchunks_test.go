@@ -294,6 +294,12 @@ func TestValidatePromptEvidenceRevisionRequiresExactClaims(t *testing.T) {
 		t.Fatal("broadened claim was accepted")
 	}
 
+	revised = clonePromptEvidence(initial)
+	revised.Unresolved = []string{"Investigate an invented dependency."}
+	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
+		t.Fatal("new unresolved text was accepted")
+	}
+
 	reorganized := clonePromptEvidence(initial)
 	reorganized.Architecture = []evidenceClaim{}
 	reorganized.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}

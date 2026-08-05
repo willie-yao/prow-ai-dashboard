@@ -298,6 +298,9 @@ func validatePromptEvidenceRevision(initial, revised promptEvidence) error {
 			return revisionContentError("transient_rules")
 		}
 	}
+	if !evidenceStringsSubset(revised.Unresolved, initial.Unresolved) {
+		return revisionContentError("unresolved")
+	}
 	return nil
 }
 
