@@ -31,17 +31,24 @@ func Validate(prompt string) error {
 	var headingLines []int
 	inFence := false
 	var fence byte
+	fenceLength := 0
 	for i, line := range lines {
 		trimmed := strings.TrimLeft(line, " ")
 		indent := len(line) - len(trimmed)
-		if indent <= 3 && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")) {
+		if indent <= 3 && len(trimmed) >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') {
 			marker := trimmed[0]
-			if !inFence {
-				inFence, fence = true, marker
-			} else if marker == fence {
-				inFence = false
+			run := 0
+			for run < len(trimmed) && trimmed[run] == marker {
+				run++
 			}
-			continue
+			if run >= 3 {
+				if !inFence {
+					inFence, fence, fenceLength = true, marker, run
+				} else if marker == fence && run >= fenceLength && strings.TrimSpace(trimmed[run:]) == "" {
+					inFence = false
+				}
+				continue
+			}
 		}
 		if inFence || indent > 3 {
 			continue
@@ -63,19 +70,10 @@ func Validate(prompt string) error {
 			return fmt.Errorf("prompt author: section %d is %q, want %q", i+1, headings[i], heading)
 		}
 	}
-	for _, index := range []int{0, 1} {
+	for index, heading := range requiredHeadings {
 		if sectionLinesEmpty(lines, headingLines, index) {
-			return fmt.Errorf("prompt author: %s is empty", requiredHeadings[index])
+			return fmt.Errorf("prompt author: %s is empty or placeholder-only", heading)
 		}
-	}
-	operational := 0
-	for _, index := range []int{3, 4, 6} {
-		if !sectionLinesEmpty(lines, headingLines, index) {
-			operational++
-		}
-	}
-	if operational == 0 {
-		return fmt.Errorf("prompt author: generated prompt has no operational evidence section")
 	}
 	return nil
 }

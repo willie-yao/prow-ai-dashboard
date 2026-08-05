@@ -85,9 +85,21 @@ func TestValidatePromptQuality(t *testing.T) {
 	if err := Validate(oversized); err == nil {
 		t.Fatal("leading whitespace bypassed the byte limit")
 	}
+	fencedMismatch := "````markdown\n" + validPrompt() + "```\n"
+	if err := Validate(fencedMismatch); err == nil {
+		t.Fatal("shorter fence closer was accepted")
+	}
+	fencedAnnotatedClose := "```markdown\n" + validPrompt() + "```go\n"
+	if err := Validate(fencedAnnotatedClose); err == nil {
+		t.Fatal("annotated fence closer was accepted")
+	}
 	fenced := "```markdown\n" + validPrompt() + "```\n"
 	if err := Validate(fenced); err == nil {
 		t.Fatal("fenced prompt was accepted")
+	}
+	otherTODO := strings.Replace(validPrompt(), "## Test and job flavors\n\n- Grounded project-specific guidance.", "## Test and job flavors\n\n- TODO: fill this.", 1)
+	if err := Validate(otherTODO); err == nil {
+		t.Fatal("TODO-only secondary section was accepted")
 	}
 	inline := strings.Replace(validPrompt(), "# Project prompt", "# Project prompt\nSee ## Architecture below.", 1)
 	inline = strings.Replace(inline, "## Architecture\n\n- Grounded project-specific guidance.", "## Architecture\n", 1)
