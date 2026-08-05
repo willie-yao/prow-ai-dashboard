@@ -374,6 +374,19 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		t.Fatalf("cases=%+v", cases)
 	}
 
+	buildValue := strings.Replace(valid, `"junit_file": "junit.xml",`, `"test_source": "build",`, 1)
+	buildPath := filepath.Join(t.TempDir(), "build-manifest.json")
+	if err := os.WriteFile(buildPath, []byte(buildValue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buildCases, err := loadBenchmarkManifest(buildPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buildCases) != 1 || buildCases[0].testSource != models.TestCaseSourceBuild || buildCases[0].junitFile != "" {
+		t.Fatalf("build cases = %+v", buildCases)
+	}
+
 	for name, mutate := range map[string]func(string) string{
 		"unknown field": func(value string) string {
 			return strings.Replace(value, `"version": 1`, `"version": 1, "extra": true`, 1)
