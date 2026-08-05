@@ -271,7 +271,7 @@ func TestAgentic_SemanticRevisionRejectedKeepsPassingDraftCacheable(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cached.CacheHit || atomic.LoadInt32(&srv.calls) != 3 {
+	if !cached.CacheHit || !cached.JudgeRan || !cached.JudgeObjected || cached.JudgeRevised || atomic.LoadInt32(&srv.calls) != 3 {
 		t.Fatalf("cached=%+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
 	}
 }
