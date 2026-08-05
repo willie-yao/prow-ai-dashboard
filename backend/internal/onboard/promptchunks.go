@@ -69,6 +69,26 @@ func chunkPromptSources(sources []promptSource) ([]promptSourceChunk, error) {
 }
 
 func mergePromptEvidence(chunks []promptEvidence) promptEvidence {
+	merged := mergePromptEvidenceUntrimmed(chunks)
+	trimMergedPromptEvidence(&merged)
+	return merged
+}
+
+func mergePromptEvidencePrioritized(primary, secondary promptEvidence) promptEvidence {
+	primary = mergePromptEvidence([]promptEvidence{primary})
+	secondary = mergePromptEvidence([]promptEvidence{secondary})
+	for {
+		merged := mergePromptEvidenceUntrimmed([]promptEvidence{primary, secondary})
+		if promptEvidenceEncodedSize(merged) <= maxPromptEvidenceText {
+			return merged
+		}
+		if !removeLastPromptEvidenceItem(&secondary) {
+			return primary
+		}
+	}
+}
+
+func mergePromptEvidenceUntrimmed(chunks []promptEvidence) promptEvidence {
 	merged := emptyPromptEvidence()
 	architecture := map[string]int{}
 	lifecycle := map[string]int{}
@@ -102,7 +122,6 @@ func mergePromptEvidence(chunks []promptEvidence) promptEvidence {
 		}
 	}
 
-	trimMergedPromptEvidence(&merged)
 	return merged
 }
 
@@ -218,29 +237,36 @@ func normalizedEvidenceKey(value string) string {
 
 func trimMergedPromptEvidence(e *promptEvidence) {
 	for promptEvidenceEncodedSize(*e) > maxPromptEvidenceText {
-		switch {
-		case len(e.Unresolved) > 0:
-			e.Unresolved = e.Unresolved[:len(e.Unresolved)-1]
-		case len(e.Repositories) > 0:
-			e.Repositories = e.Repositories[:len(e.Repositories)-1]
-		case len(e.TriageOrder) > 0:
-			e.TriageOrder = e.TriageOrder[:len(e.TriageOrder)-1]
-		case len(e.TransientRules) > 0:
-			e.TransientRules = e.TransientRules[:len(e.TransientRules)-1]
-		case len(e.FailurePatterns) > 0:
-			e.FailurePatterns = e.FailurePatterns[:len(e.FailurePatterns)-1]
-		case len(e.Artifacts) > 0:
-			e.Artifacts = e.Artifacts[:len(e.Artifacts)-1]
-		case len(e.TestFlavors) > 0:
-			e.TestFlavors = e.TestFlavors[:len(e.TestFlavors)-1]
-		case len(e.DiagnosticLifecycle) > 0:
-			e.DiagnosticLifecycle = e.DiagnosticLifecycle[:len(e.DiagnosticLifecycle)-1]
-		case len(e.Architecture) > 0:
-			e.Architecture = e.Architecture[:len(e.Architecture)-1]
-		default:
+		if !removeLastPromptEvidenceItem(e) {
 			return
 		}
 	}
+}
+
+func removeLastPromptEvidenceItem(e *promptEvidence) bool {
+	switch {
+	case len(e.Unresolved) > 0:
+		e.Unresolved = e.Unresolved[:len(e.Unresolved)-1]
+	case len(e.Repositories) > 0:
+		e.Repositories = e.Repositories[:len(e.Repositories)-1]
+	case len(e.TriageOrder) > 0:
+		e.TriageOrder = e.TriageOrder[:len(e.TriageOrder)-1]
+	case len(e.TransientRules) > 0:
+		e.TransientRules = e.TransientRules[:len(e.TransientRules)-1]
+	case len(e.FailurePatterns) > 0:
+		e.FailurePatterns = e.FailurePatterns[:len(e.FailurePatterns)-1]
+	case len(e.Artifacts) > 0:
+		e.Artifacts = e.Artifacts[:len(e.Artifacts)-1]
+	case len(e.TestFlavors) > 0:
+		e.TestFlavors = e.TestFlavors[:len(e.TestFlavors)-1]
+	case len(e.DiagnosticLifecycle) > 0:
+		e.DiagnosticLifecycle = e.DiagnosticLifecycle[:len(e.DiagnosticLifecycle)-1]
+	case len(e.Architecture) > 0:
+		e.Architecture = e.Architecture[:len(e.Architecture)-1]
+	default:
+		return false
+	}
+	return true
 }
 
 func promptEvidenceEncodedSize(e promptEvidence) int {

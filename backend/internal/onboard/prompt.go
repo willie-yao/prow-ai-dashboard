@@ -222,7 +222,7 @@ func generatePromptBodyDetailed(ctx context.Context, c structuredCompleter, inpu
 		failure.Debug.Phase = "merged-extraction"
 		return result, failure
 	}
-	initial = mergePromptEvidence([]promptEvidence{initial, promptMetadataEvidence(input, includedJobs, credentials)})
+	initial = mergePromptEvidencePrioritized(promptMetadataEvidence(input, includedJobs, credentials), initial)
 	limitPromptUnresolved(&initial, maxPromptUnresolvedItems)
 	if err := validatePromptEvidence(initial, validationInput, credentials); err != nil {
 		result.ExtractionDuration = time.Since(extractionStart)

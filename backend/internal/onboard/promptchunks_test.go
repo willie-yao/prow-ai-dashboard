@@ -231,6 +231,32 @@ func TestMergePromptEvidenceCombinesDuplicateReferences(t *testing.T) {
 	}
 }
 
+func TestMergePromptEvidencePrioritizesEngineMetadataNearByteCap(t *testing.T) {
+	metadata := emptyPromptEvidence()
+	metadata.Repositories = []evidenceClaim{{Text: "example/project", Sources: []evidenceRef{{Path: "engine://source-repository", StartLine: 1, EndLine: 1}}}}
+	metadata.TestFlavors = []evidenceClaim{{Text: "Name: periodic-project-main; Type: periodic", Sources: []evidenceRef{{Path: "engine://prow-jobs", StartLine: 1, EndLine: 1}}}}
+
+	model := emptyPromptEvidence()
+	model.Repositories = []evidenceClaim{{Text: "EXAMPLE/PROJECT", Sources: []evidenceRef{{Path: "docs/repo.md", StartLine: 1, EndLine: 1}}}}
+	for i := 0; i < maxPromptEvidenceItems; i++ {
+		model.Architecture = append(model.Architecture, evidenceClaim{
+			Text:    fmt.Sprintf("Model architecture %02d %s", i, strings.Repeat("detail ", 190)),
+			Sources: []evidenceRef{{Path: fmt.Sprintf("docs/%02d.md", i), StartLine: 1, EndLine: 1}},
+		})
+	}
+
+	merged := mergePromptEvidencePrioritized(metadata, model)
+	if size := promptEvidenceEncodedSize(merged); size > maxPromptEvidenceText {
+		t.Fatalf("merged evidence bytes = %d, limit %d", size, maxPromptEvidenceText)
+	}
+	if len(merged.Repositories) == 0 || merged.Repositories[0].Text != "example/project" {
+		t.Fatalf("authoritative repository was not preserved: %+v", merged.Repositories)
+	}
+	if len(merged.TestFlavors) == 0 || !strings.Contains(merged.TestFlavors[0].Text, "periodic-project-main") {
+		t.Fatalf("representative job was not preserved: %+v", merged.TestFlavors)
+	}
+}
+
 func TestMergePromptEvidenceEnforcesCaps(t *testing.T) {
 	chunk := emptyPromptEvidence()
 	for i := 0; i < maxPromptEvidenceItems+20; i++ {
