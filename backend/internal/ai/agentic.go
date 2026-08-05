@@ -2087,9 +2087,6 @@ func (c *Client) cacheAcceptedAnalysis(cacheKey string, parsed analysisResponse,
 	if opts.CritiqueMaxRetries > 0 && !critiquePassed {
 		return
 	}
-	if state.judgeObjected && !state.judgeRevised {
-		return
-	}
 	skillHash := ""
 	if state.skillSet != nil {
 		skillHash = state.skillSet.Hash()
