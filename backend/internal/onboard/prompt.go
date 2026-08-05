@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,11 @@ type structuredCompleter interface {
 const (
 	maxPromptJobs     = 60
 	maxPromptJobBytes = 16_000
+)
+
+var (
+	promptMetadataNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	promptMetadataRefPattern  = regexp.MustCompile(`^[A-Za-z0-9._/+^$*?()\[\]{}|\\-]+$`)
 )
 
 var requiredPromptHeadings = []string{
@@ -374,8 +380,8 @@ func promptMetadataEvidence(input promptDraftInput, jobs []promptJobSummary, cre
 		if _, ok := seen[key]; ok {
 			continue
 		}
-		text := redactPromptText(promptJobMetadataLine(job), credentials...)
-		if !safePromptMetadataClaim(text) {
+		text, ok := safePromptJobMetadataLine(job, credentials)
+		if !ok {
 			continue
 		}
 		seen[key] = struct{}{}
@@ -388,6 +394,57 @@ func promptMetadataEvidence(input promptDraftInput, jobs []promptJobSummary, cre
 		}
 	}
 	return evidence
+}
+
+func safePromptJobMetadataLine(job promptJobSummary, credentials []string) (string, bool) {
+	name := redactPromptText(strings.TrimSpace(job.Name), credentials...)
+	typeName := strings.ToLower(redactPromptText(strings.TrimSpace(job.Type), credentials...))
+	if !promptMetadataNamePattern.MatchString(name) || (typeName != "periodic" && typeName != "presubmit") {
+		return "", false
+	}
+	fields := []string{"Name: " + name, "Type: " + typeName}
+	if config := redactPromptText(strings.TrimSpace(job.ConfigFile), credentials...); safePromptMetadataPath(config) {
+		fields = append(fields, "Config file: "+config)
+	}
+	if rawRepo := redactPromptText(strings.TrimSpace(job.Repo), credentials...); rawRepo != "" {
+		if repo, err := NormalizeGitHubRepo(rawRepo); err == nil {
+			fields = append(fields, "Repository under test: "+repo.FullName)
+		}
+	}
+	if branches := safePromptMetadataValues(job.Branches, credentials, promptMetadataRefPattern); len(branches) > 0 {
+		fields = append(fields, "Branches or refs: "+strings.Join(branches, ", "))
+	}
+	if dashboards := safePromptMetadataValues(job.Dashboards, credentials, promptMetadataNamePattern); len(dashboards) > 0 {
+		fields = append(fields, "TestGrid dashboards: "+strings.Join(dashboards, ", "))
+	}
+	text := strings.Join(fields, "; ")
+	if !safePromptMetadataClaim(text) {
+		return "", false
+	}
+	return text, true
+}
+
+func safePromptMetadataValues(values, credentials []string, pattern *regexp.Regexp) []string {
+	var safe []string
+	for _, value := range sortedUniqueStrings(values) {
+		value = redactPromptText(strings.TrimSpace(value), credentials...)
+		if pattern.MatchString(value) {
+			safe = append(safe, value)
+		}
+	}
+	return safe
+}
+
+func safePromptMetadataPath(value string) bool {
+	if value == "" || strings.HasPrefix(value, "/") || containsControl(value) {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." || !promptMetadataNamePattern.MatchString(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func safePromptMetadataClaim(text string) bool {
