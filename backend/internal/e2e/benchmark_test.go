@@ -576,6 +576,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
+	if benchmarkPersistentCacheEnabled() {
+		if err := client.Cache().Save(); err != nil {
+			t.Fatalf("save benchmark cache: %v", err)
+		}
+	}
 	cacheVerification := benchmarkCacheVerification{}
 	if benchmarkCacheReuseEnabled() {
 		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run)
@@ -592,13 +597,25 @@ func benchmarkCacheGenerationFingerprint(configValue string) (string, error) {
 	return project.AICacheGenerationFingerprint(value), nil
 }
 
+func benchmarkCacheCaseKey(bc benchCase) string {
+	if bc.stableID != "" {
+		return bc.stableID
+	}
+	sum := sha256.Sum256([]byte(bc.name))
+	return fmt.Sprintf("case-%x", sum[:10])
+}
+
+func benchmarkPersistentCacheEnabled() bool {
+	return strings.TrimSpace(os.Getenv("BENCH_CACHE_DIR")) != ""
+}
+
 func benchmarkCacheDir(t *testing.T, bc benchCase, repetition int) string {
 	t.Helper()
 	root := strings.TrimSpace(os.Getenv("BENCH_CACHE_DIR"))
 	if root == "" {
 		return t.TempDir()
 	}
-	dir := filepath.Join(root, bc.stableID, fmt.Sprintf("rep-%02d", repetition))
+	dir := filepath.Join(root, benchmarkCacheCaseKey(bc), fmt.Sprintf("rep-%02d", repetition))
 	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err == nil {
 		t.Fatalf("BENCH_CACHE_DIR is not cold: %s", dir)
 	} else if !os.IsNotExist(err) {
@@ -1482,5 +1499,39 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 	got := verifyBenchmarkCacheReuse(t, client, clientOptions, service, generation, jobID, bc, run)
 	if !got.Attempted || !got.Saved || !got.Accepted || !got.CacheHit || got.ProviderRequests != 0 || !got.GCSFloorRetryExhausted || got.RejectionReason != ai.CacheAccepted {
 		t.Fatalf("verification = %+v", got)
+	}
+}
+
+func TestBenchmarkCacheCaseKeyFallsBackForBuiltInCases(t *testing.T) {
+	withStable := benchmarkCacheCaseKey(benchCase{name: "case", stableID: "0123456789abcdef0123"})
+	if withStable != "0123456789abcdef0123" {
+		t.Fatalf("stable key = %q", withStable)
+	}
+	first := benchmarkCacheCaseKey(benchCase{name: "first-case"})
+	second := benchmarkCacheCaseKey(benchCase{name: "second-case"})
+	if first == "" || first == second || first != benchmarkCacheCaseKey(benchCase{name: "first-case"}) {
+		t.Fatalf("fallback keys = %q, %q", first, second)
+	}
+}
+
+func TestBenchmarkPersistentCacheSavesWithoutReloadVerification(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BENCH_CACHE_DIR", root)
+	t.Setenv("BENCH_VERIFY_CACHE_REUSE", "")
+	if !benchmarkPersistentCacheEnabled() || benchmarkCacheReuseEnabled() {
+		t.Fatal("cache option detection is inconsistent")
+	}
+	bc := benchCase{name: "built-in-case"}
+	dir := benchmarkCacheDir(t, bc, 1)
+	client := ai.NewClientWithOptions(ai.Options{CacheDir: dir})
+	entry := ai.CacheEntry{Key: "key", CreatedAt: time.Now(), Data: []byte(`{"summary":"cached"}`)}
+	if err := client.Cache().StoreEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Cache().Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err != nil {
+		t.Fatalf("persistent cache was not saved: %v", err)
 	}
 }
