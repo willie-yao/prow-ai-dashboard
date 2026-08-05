@@ -283,6 +283,43 @@ func TestValidatePromptEvidenceRevisionRejectsNewContentAndReferences(t *testing
 	}
 }
 
+func TestValidatePromptEvidenceRevisionKeepsKeyedFieldsLocal(t *testing.T) {
+	firstRef := []evidenceRef{{Path: "docs/runbook.md", StartLine: 1, EndLine: 10}}
+	secondRef := []evidenceRef{{Path: "docs/runbook.md", StartLine: 11, EndLine: 20}}
+	initial := emptyPromptEvidence()
+	initial.Artifacts = []artifactEvidence{
+		{PathPattern: "artifacts/a.log", Purpose: "Shows controller A failures.", Sources: firstRef},
+		{PathPattern: "artifacts/b.log", Purpose: "Shows controller B failures.", Sources: secondRef},
+	}
+	initial.FailurePatterns = []failurePatternEvidence{
+		{Name: "Pattern A", Signal: "Signal A", RequiredEvidence: []string{"Evidence A"}, DoNotConclude: "Guard A", RemediationLimit: "Limit A", Sources: firstRef},
+		{Name: "Pattern B", Signal: "Signal B", RequiredEvidence: []string{"Evidence B"}, DoNotConclude: "Guard B", RemediationLimit: "Limit B", Sources: secondRef},
+	}
+	initial.TransientRules = []transientEvidence{
+		{Class: "Class A", OnlyIf: "Recovery A", NotTransientIf: "Persistence A", Sources: firstRef},
+		{Class: "Class B", OnlyIf: "Recovery B", NotTransientIf: "Persistence B", Sources: secondRef},
+	}
+
+	tests := map[string]func(*promptEvidence){
+		"artifact purpose":   func(e *promptEvidence) { e.Artifacts[0].Purpose = e.Artifacts[1].Purpose },
+		"artifact reference": func(e *promptEvidence) { e.Artifacts[0].Sources = e.Artifacts[1].Sources },
+		"failure fields": func(e *promptEvidence) {
+			e.FailurePatterns[0].Signal = e.FailurePatterns[1].Signal
+			e.FailurePatterns[0].RequiredEvidence = e.FailurePatterns[1].RequiredEvidence
+		},
+		"transient fields": func(e *promptEvidence) { e.TransientRules[0].OnlyIf = e.TransientRules[1].OnlyIf },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			revised := clonePromptEvidence(initial)
+			mutate(&revised)
+			if err := validatePromptEvidenceRevision(initial, revised); err == nil {
+				t.Fatal("cross-item revision was accepted")
+			}
+		})
+	}
+}
+
 func twoChunkPromptInput() (promptDraftInput, promptEvidence, promptEvidence) {
 	firstSource := promptSource{
 		Path: "docs/a.md", Kind: "markdown", StartLine: 1, EndLine: 1,

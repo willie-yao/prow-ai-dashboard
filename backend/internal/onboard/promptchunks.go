@@ -263,32 +263,39 @@ func validatePromptEvidenceRevision(initial, revised promptEvidence) error {
 	if err := validateRevisedClaims(initialText, revised.Architecture, revised.DiagnosticLifecycle, revised.TestFlavors, revised.TriageOrder); err != nil {
 		return err
 	}
-	initialRepositories := evidenceClaimKeySet(initial.Repositories)
+	initialRepositories := evidenceClaimsByKey(initial.Repositories)
 	for _, claim := range revised.Repositories {
-		if _, ok := initialRepositories[normalizedEvidenceKey(claim.Text)]; !ok {
+		matched, ok := initialRepositories[normalizedEvidenceKey(claim.Text)]
+		if !ok || !evidenceRefsSubset(claim.Sources, matched.Sources) {
 			return revisionContentError("repositories")
 		}
 	}
-	initialArtifacts := artifactKeySet(initial.Artifacts)
+	initialArtifacts := artifactsByKey(initial.Artifacts)
 	for _, item := range revised.Artifacts {
-		if _, ok := initialArtifacts[artifactEvidenceKey(item.PathPattern)]; !ok || !substantiveClaimGrounded(item.Purpose, initialText) {
+		matched, ok := initialArtifacts[artifactEvidenceKey(item.PathPattern)]
+		if !ok || !evidenceRefsSubset(item.Sources, matched.Sources) || normalizedEvidenceKey(item.Purpose) != normalizedEvidenceKey(matched.Purpose) {
 			return revisionContentError("artifacts")
 		}
 	}
-	initialPatterns := failurePatternKeySet(initial.FailurePatterns)
+	initialPatterns := failurePatternsByKey(initial.FailurePatterns)
 	for _, item := range revised.FailurePatterns {
-		if _, ok := initialPatterns[normalizedEvidenceKey(item.Name)]; !ok {
+		matched, ok := initialPatterns[normalizedEvidenceKey(item.Name)]
+		if !ok || !evidenceRefsSubset(item.Sources, matched.Sources) {
 			return revisionContentError("failure_patterns")
 		}
-		for _, value := range append([]string{item.Signal, item.DoNotConclude, item.RemediationLimit}, item.RequiredEvidence...) {
-			if !substantiveClaimGrounded(value, initialText) {
-				return revisionContentError("failure_patterns")
-			}
+		if normalizedEvidenceKey(item.Signal) != normalizedEvidenceKey(matched.Signal) ||
+			normalizedEvidenceKey(item.DoNotConclude) != normalizedEvidenceKey(matched.DoNotConclude) ||
+			normalizedEvidenceKey(item.RemediationLimit) != normalizedEvidenceKey(matched.RemediationLimit) ||
+			!evidenceStringsSubset(item.RequiredEvidence, matched.RequiredEvidence) {
+			return revisionContentError("failure_patterns")
 		}
 	}
-	initialTransients := transientKeySet(initial.TransientRules)
+	initialTransients := transientRulesByKey(initial.TransientRules)
 	for _, item := range revised.TransientRules {
-		if _, ok := initialTransients[normalizedEvidenceKey(item.Class)]; !ok || !substantiveClaimGrounded(item.OnlyIf, initialText) || !substantiveClaimGrounded(item.NotTransientIf, initialText) {
+		matched, ok := initialTransients[normalizedEvidenceKey(item.Class)]
+		if !ok || !evidenceRefsSubset(item.Sources, matched.Sources) ||
+			normalizedEvidenceKey(item.OnlyIf) != normalizedEvidenceKey(matched.OnlyIf) ||
+			normalizedEvidenceKey(item.NotTransientIf) != normalizedEvidenceKey(matched.NotTransientIf) {
 			return revisionContentError("transient_rules")
 		}
 	}
@@ -334,38 +341,64 @@ func allPromptEvidenceRefs(e promptEvidence) []evidenceRef {
 	return refs
 }
 
-func evidenceClaimKeySet(values []evidenceClaim) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
+func evidenceClaimsByKey(values []evidenceClaim) map[string]evidenceClaim {
+	out := make(map[string]evidenceClaim, len(values))
 	for _, value := range values {
-		out[normalizedEvidenceKey(value.Text)] = struct{}{}
+		out[normalizedEvidenceKey(value.Text)] = value
 	}
 	return out
 }
 
-func artifactKeySet(values []artifactEvidence) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
+func artifactsByKey(values []artifactEvidence) map[string]artifactEvidence {
+	out := make(map[string]artifactEvidence, len(values))
 	for _, value := range values {
-		out[artifactEvidenceKey(value.PathPattern)] = struct{}{}
+		out[artifactEvidenceKey(value.PathPattern)] = value
 	}
 	return out
+}
+
+func failurePatternsByKey(values []failurePatternEvidence) map[string]failurePatternEvidence {
+	out := make(map[string]failurePatternEvidence, len(values))
+	for _, value := range values {
+		out[normalizedEvidenceKey(value.Name)] = value
+	}
+	return out
+}
+
+func transientRulesByKey(values []transientEvidence) map[string]transientEvidence {
+	out := make(map[string]transientEvidence, len(values))
+	for _, value := range values {
+		out[normalizedEvidenceKey(value.Class)] = value
+	}
+	return out
+}
+
+func evidenceRefsSubset(values, allowed []evidenceRef) bool {
+	allowedKeys := make(map[string]struct{}, len(allowed))
+	for _, ref := range allowed {
+		allowedKeys[evidenceRefKey(ref)] = struct{}{}
+	}
+	for _, ref := range values {
+		if _, ok := allowedKeys[evidenceRefKey(ref)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func evidenceStringsSubset(values, allowed []string) bool {
+	allowedKeys := make(map[string]struct{}, len(allowed))
+	for _, value := range allowed {
+		allowedKeys[normalizedEvidenceKey(value)] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := allowedKeys[normalizedEvidenceKey(value)]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func artifactEvidenceKey(value string) string {
 	return strings.TrimSpace(value)
-}
-
-func failurePatternKeySet(values []failurePatternEvidence) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		out[normalizedEvidenceKey(value.Name)] = struct{}{}
-	}
-	return out
-}
-
-func transientKeySet(values []transientEvidence) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		out[normalizedEvidenceKey(value.Class)] = struct{}{}
-	}
-	return out
 }
