@@ -168,7 +168,7 @@ func generatePromptBodyDetailed(ctx context.Context, c structuredCompleter, inpu
 					}
 					return err
 				})
-				if err == nil || !retryPromptExtraction(err, phaseValidation) {
+				if err == nil || !retryPromptExtraction(err) {
 					break
 				}
 			}
@@ -292,12 +292,9 @@ func generatePromptBodyDetailed(ctx context.Context, c structuredCompleter, inpu
 	return result, nil
 }
 
-func retryPromptExtraction(err error, validation *promptEvidenceValidationError) bool {
+func retryPromptExtraction(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
-	}
-	if validation != nil {
-		return true
 	}
 	return classifyPromptFailure(promptStageEvidenceExtraction, err).Category == promptFailureInvalidStructured
 }
