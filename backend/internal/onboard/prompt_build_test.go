@@ -27,7 +27,12 @@ func TestBuildSystemPromptUsesEvidenceWithoutLeakingTokens(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		modelRequests = append(modelRequests, string(body))
-		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, validPromptEvidenceJSON())
+		response := validPromptEvidenceJSON()
+		if len(modelRequests) <= len(promptExtractionPhases) {
+			phase := promptExtractionPhases[len(modelRequests)-1]
+			response = projectStubStructuredOutput(response, promptEvidencePhaseResponseFormat(phase, maxPromptChunkEvidenceItems, maxPromptChunkNestedItems))
+		}
+		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}]}`, response)
 	}))
 	defer model.Close()
 

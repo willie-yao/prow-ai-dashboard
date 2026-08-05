@@ -49,7 +49,35 @@ func (s *stubCompleter) CompleteStructured(_ context.Context, system, user strin
 	if logicalIndex < len(s.outputs) {
 		out = s.outputs[logicalIndex]
 	}
+	out = projectStubStructuredOutput(out, format)
 	return validate(json.RawMessage(out))
+}
+
+func projectStubStructuredOutput(out string, format ai.ResponseFormat) string {
+	if !strings.HasPrefix(format.Name, "return_prompt_evidence_") {
+		return out
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &fields); err != nil {
+		return out
+	}
+	properties, ok := format.Schema["properties"].(map[string]any)
+	if !ok {
+		return out
+	}
+	projected := make(map[string]json.RawMessage, len(properties))
+	for field := range properties {
+		value, ok := fields[field]
+		if !ok {
+			return out
+		}
+		projected[field] = value
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		return out
+	}
+	return string(encoded)
 }
 
 func validPromptEvidenceJSON() string {

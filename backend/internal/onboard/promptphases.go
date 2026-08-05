@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 )
@@ -31,12 +32,6 @@ var promptExtractionPhases = []promptExtractionPhase{
 		Fields:      []string{"failure_patterns", "transient_rules", "unresolved"},
 		Instruction: "Return only grounded failure patterns, transient boundaries, and important unresolved details for this chunk.",
 	},
-}
-
-var promptEvidenceFieldNames = map[string]struct{}{
-	"architecture": {}, "diagnostic_lifecycle": {}, "test_flavors": {},
-	"artifacts": {}, "failure_patterns": {}, "transient_rules": {},
-	"triage_order": {}, "repositories": {}, "unresolved": {},
 }
 
 func promptEvidencePhaseResponseFormat(phase promptExtractionPhase, sectionMaxItems, nestedMaxItems int) ai.ResponseFormat {
@@ -72,13 +67,13 @@ func limitPromptSchemaStrings(value any, maxLength int) {
 
 func validatePromptEvidenceStringLimit(e promptEvidence, maxLength int) error {
 	for _, value := range promptEvidenceStrings(e) {
-		if len(value) > maxLength {
-			return fmt.Errorf("prompt evidence string has %d bytes, limit %d", len(value), maxLength)
+		if length := utf8.RuneCountInString(value); length > maxLength {
+			return fmt.Errorf("prompt evidence string has %d characters, limit %d", length, maxLength)
 		}
 	}
 	for _, ref := range allPromptEvidenceRefs(e) {
-		if len(ref.Path) > maxLength {
-			return fmt.Errorf("prompt evidence source path has %d bytes, limit %d", len(ref.Path), maxLength)
+		if length := utf8.RuneCountInString(ref.Path); length > maxLength {
+			return fmt.Errorf("prompt evidence source path has %d characters, limit %d", length, maxLength)
 		}
 	}
 	return nil
@@ -93,9 +88,13 @@ func decodeAndValidatePromptEvidencePhase(raw json.RawMessage, phase promptExtra
 	if err := ensureJSONEOF(decoder); err != nil {
 		return &promptEvidenceValidationError{stage: promptStageEvidenceExtraction, code: "decode", field: phase.Name, cause: err}
 	}
+	allowedFields := make(map[string]struct{}, len(phase.Fields))
+	for _, field := range phase.Fields {
+		allowedFields[field] = struct{}{}
+	}
 	for field := range fields {
-		if _, ok := promptEvidenceFieldNames[field]; !ok {
-			return &promptEvidenceValidationError{stage: promptStageEvidenceExtraction, code: "decode", field: field, cause: fmt.Errorf("unknown prompt evidence field")}
+		if _, ok := allowedFields[field]; !ok {
+			return &promptEvidenceValidationError{stage: promptStageEvidenceExtraction, code: "decode", field: field, cause: fmt.Errorf("field is not allowed in %s phase", phase.Name)}
 		}
 	}
 

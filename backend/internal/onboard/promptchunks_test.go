@@ -52,6 +52,35 @@ func TestChunkPromptSourcesRejectsOversizedSerializedSource(t *testing.T) {
 	}
 }
 
+func TestPromptEvidencePhaseRejectsFieldsFromAnotherPhase(t *testing.T) {
+	input := promptTestInput("Project", []promptSource{{Path: "docs/a.md", Kind: "markdown", StartLine: 1, EndLine: 1, Text: "Project docs."}})
+	raw := []byte(`{"architecture":[],"diagnostic_lifecycle":[],"repositories":[],"artifacts":[]}`)
+	var target promptEvidence
+	err := decodeAndValidatePromptEvidencePhase(raw, promptExtractionPhases[0], input, nil, maxPromptChunkEvidenceItems, maxPromptChunkNestedItems, &target)
+	var validation *promptEvidenceValidationError
+	if !errors.As(err, &validation) || validation.code != "decode" || validation.field != "artifacts" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestPromptEvidencePhaseStringLimitCountsUnicodeCharacters(t *testing.T) {
+	ref := evidenceRef{Path: strings.Repeat("é", maxPromptChunkStringLength), StartLine: 1, EndLine: 1}
+	evidence := emptyPromptEvidence()
+	evidence.Architecture = []evidenceClaim{{Text: strings.Repeat("é", maxPromptChunkStringLength), Sources: []evidenceRef{ref}}}
+	if err := validatePromptEvidenceStringLimit(evidence, maxPromptChunkStringLength); err != nil {
+		t.Fatalf("300 Unicode characters rejected: %v", err)
+	}
+	evidence.Architecture[0].Text += "é"
+	if err := validatePromptEvidenceStringLimit(evidence, maxPromptChunkStringLength); err == nil {
+		t.Fatal("301 Unicode characters were accepted")
+	}
+	evidence.Architecture[0].Text = "short"
+	evidence.Architecture[0].Sources[0].Path += "é"
+	if err := validatePromptEvidenceStringLimit(evidence, maxPromptChunkStringLength); err == nil {
+		t.Fatal("301-character source path was accepted")
+	}
+}
+
 func TestChunkEvidenceLimitIsValidatedWithoutSchemaSupport(t *testing.T) {
 	input := promptTestInput("Project", []promptSource{{Path: "docs/a.md", Kind: "markdown", StartLine: 1, EndLine: 1, Text: "grounded source"}})
 	evidence := emptyPromptEvidence()
