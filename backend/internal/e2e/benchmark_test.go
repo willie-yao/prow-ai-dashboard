@@ -92,6 +92,7 @@ type benchCase struct {
 	repoRefs      map[string]string
 	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
 	testName      string
+	testSource    string
 	junitFile     string
 	failureMsg    string
 	// consecutiveFailures is how many consecutive builds this test had failed at
@@ -1180,6 +1181,7 @@ func TestBenchCasesRejectOppositeDiagnoses(t *testing.T) {
 func benchTestCase(bc benchCase) *models.TestCase {
 	return &models.TestCase{
 		Name:           bc.testName,
+		Source:         bc.testSource,
 		Status:         "failed",
 		FailureMessage: bc.failureMsg,
 		JUnitFile:      bc.junitFile,
@@ -1533,5 +1535,12 @@ func TestBenchmarkPersistentCacheSavesWithoutReloadVerification(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ai.CacheFilename)); err != nil {
 		t.Fatalf("persistent cache was not saved: %v", err)
+	}
+}
+
+func TestBenchTestCasePreservesBuildSource(t *testing.T) {
+	tc := benchTestCase(benchCase{testName: "Prow job execution", testSource: models.TestCaseSourceBuild, failureMsg: "failed"})
+	if tc.Source != models.TestCaseSourceBuild || tc.JUnitFile != "" {
+		t.Fatalf("test case = %+v", tc)
 	}
 }
