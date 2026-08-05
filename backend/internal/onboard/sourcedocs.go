@@ -163,7 +163,7 @@ func fetchPromptSourcesDetailed(ctx context.Context, client *http.Client, repo R
 		if strings.TrimSpace(source.Text) == "" {
 			continue
 		}
-		contentKey := sha256.Sum256([]byte(strings.Join(strings.Fields(source.Text), " ")))
+		contentKey := sha256.Sum256([]byte(source.Text))
 		if _, duplicateContent := selectedContent[contentKey]; duplicateContent {
 			continue
 		}
@@ -312,7 +312,7 @@ func promptSourceScore(candidate promptSourceCandidate, references map[string]st
 }
 
 func promptSourceFamily(filename string) string {
-	parts := strings.Split(strings.ToLower(filename), "/")
+	parts := strings.Split(filename, "/")
 	for i, part := range parts {
 		if promptVersionPathComponent.MatchString(part) {
 			parts[i] = "<version>"

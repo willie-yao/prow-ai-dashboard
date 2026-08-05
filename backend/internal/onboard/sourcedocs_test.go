@@ -425,6 +425,9 @@ func TestPromptSourceFamilyCollapsesVersionedSnapshots(t *testing.T) {
 	if got := promptSourceFamily("test/e2e/data/infrastructure-azure/v1.26.0/cluster-template-windows.yaml"); got == family {
 		t.Fatalf("distinct template collapsed into family %q", family)
 	}
+	if promptSourceFamily("docs/Foo.md") == promptSourceFamily("docs/foo.md") {
+		t.Fatal("case-distinct Git paths shared a source family")
+	}
 }
 
 func TestPromptSourceScorePrefersDiagnosticDocsOverVersionedTemplates(t *testing.T) {
@@ -508,6 +511,44 @@ func TestFetchPromptSourcesSkipsDuplicateExcerptContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(sources) != 1 {
+		t.Fatalf("sources = %+v", sources)
+	}
+}
+
+func TestFetchPromptSourcesPreservesWhitespaceDistinctContent(t *testing.T) {
+	contents := map[string]string{
+		"config/a.yaml": "spec:\n  containers:\n  - name: controller\n",
+		"config/b.yaml": "spec:\ncontainers:\n- name: controller\n",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servePromptSourceRevision(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/repos/example/project":
+			_, _ = w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/example/project/git/trees/" + promptSourceTestSHA:
+			_, _ = w.Write([]byte(`{"tree":[{"path":"config/a.yaml","type":"blob","size":50},{"path":"config/b.yaml","type":"blob","size":50}]}`))
+		default:
+			for path, content := range contents {
+				if r.URL.Path == "/example/project/"+promptSourceTestSHA+"/"+path {
+					_, _ = w.Write([]byte(content))
+					return
+				}
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI, oldRaw := githubAPIBaseURL, githubRawBaseURL
+	githubAPIBaseURL, githubRawBaseURL = srv.URL, srv.URL
+	t.Cleanup(func() { githubAPIBaseURL, githubRawBaseURL = oldAPI, oldRaw })
+
+	sources, err := fetchPromptSources(context.Background(), srv.Client(), Repo{Owner: "example", Name: "project"}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 {
 		t.Fatalf("sources = %+v", sources)
 	}
 }
