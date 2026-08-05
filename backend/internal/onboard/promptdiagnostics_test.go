@@ -287,6 +287,15 @@ func TestPromptPlanRecordsReviewedTimeout(t *testing.T) {
 	if err := validatePromptPlan(plan); err != nil {
 		t.Fatal(err)
 	}
+	var review bytes.Buffer
+	printReview(&review, &Plan{
+		SourceRepo: Repo{FullName: "example/project"}, DashboardRepo: Repo{FullName: "example/dashboard"},
+		Project: project.Config{ID: "example", Name: "Example"}, Prompt: plan,
+		Files: map[string]string{"prompts/system.md": "prompt"},
+	})
+	if !strings.Contains(review.String(), "Prompt timeout:       30m0s") {
+		t.Fatalf("review omitted prompt timeout:\n%s", review.String())
+	}
 	plan.Timeout = "30 seconds"
 	if err := validatePromptPlan(plan); err == nil {
 		t.Fatal("invalid prompt timeout was accepted")
