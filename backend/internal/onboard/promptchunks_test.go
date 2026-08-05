@@ -341,14 +341,61 @@ func TestValidatePromptEvidenceRevisionRequiresExactClaims(t *testing.T) {
 	reorganized := clonePromptEvidence(initial)
 	reorganized.Architecture = []evidenceClaim{}
 	reorganized.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}
-	if err := validatePromptEvidenceRevision(initial, reorganized); err != nil {
-		t.Fatalf("exact claim reorganization was rejected: %v", err)
+	if err := validatePromptEvidenceRevision(initial, reorganized); err == nil {
+		t.Fatal("cross-section claim move was accepted")
+	}
+
+	initial.Architecture = append(initial.Architecture, evidenceClaim{Text: "Controller watches Machines.", Sources: ref})
+	reordered := clonePromptEvidence(initial)
+	reordered.Architecture[0], reordered.Architecture[1] = reordered.Architecture[1], reordered.Architecture[0]
+	if err := validatePromptEvidenceRevision(initial, reordered); err != nil {
+		t.Fatalf("same-section reordering was rejected: %v", err)
 	}
 
 	duplicated := clonePromptEvidence(initial)
 	duplicated.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}
 	if err := validatePromptEvidenceRevision(initial, duplicated); err == nil {
 		t.Fatal("duplicated claim was accepted")
+	}
+}
+
+func TestValidatePromptEvidenceRevisionCannotWeakenRetainedItems(t *testing.T) {
+	refs := []evidenceRef{
+		{Path: "docs/runbook.md", StartLine: 1, EndLine: 1},
+		{Path: "docs/runbook.md", StartLine: 2, EndLine: 2},
+	}
+	initial := emptyPromptEvidence()
+	initial.Architecture = []evidenceClaim{{Text: "Controller reconciles resources.", Sources: refs}}
+	initial.FailurePatterns = []failurePatternEvidence{{
+		Name: "Readiness stall", Signal: "Readiness remains false", RequiredEvidence: []string{"manager.log", "resource conditions"},
+		DoNotConclude: "Do not infer a test bug.", RemediationLimit: "Change code only when logs prove the fault.", Sources: refs,
+	}}
+	initial.Unresolved = []string{"Confirm artifact paths.", "Confirm controller namespaces."}
+
+	tests := map[string]func(*promptEvidence){
+		"claim reference":   func(e *promptEvidence) { e.Architecture[0].Sources = e.Architecture[0].Sources[:1] },
+		"pattern reference": func(e *promptEvidence) { e.FailurePatterns[0].Sources = e.FailurePatterns[0].Sources[:1] },
+		"required evidence": func(e *promptEvidence) {
+			e.FailurePatterns[0].RequiredEvidence = e.FailurePatterns[0].RequiredEvidence[:1]
+		},
+		"unresolved item": func(e *promptEvidence) { e.Unresolved = e.Unresolved[:1] },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			revised := clonePromptEvidence(initial)
+			mutate(&revised)
+			if err := validatePromptEvidenceRevision(initial, revised); err == nil {
+				t.Fatal("weakened retained evidence was accepted")
+			}
+		})
+	}
+
+	reordered := clonePromptEvidence(initial)
+	reordered.Architecture[0].Sources[0], reordered.Architecture[0].Sources[1] = reordered.Architecture[0].Sources[1], reordered.Architecture[0].Sources[0]
+	reordered.FailurePatterns[0].RequiredEvidence[0], reordered.FailurePatterns[0].RequiredEvidence[1] = reordered.FailurePatterns[0].RequiredEvidence[1], reordered.FailurePatterns[0].RequiredEvidence[0]
+	reordered.Unresolved[0], reordered.Unresolved[1] = reordered.Unresolved[1], reordered.Unresolved[0]
+	if err := validatePromptEvidenceRevision(initial, reordered); err != nil {
+		t.Fatalf("order-only revision was rejected: %v", err)
 	}
 }
 

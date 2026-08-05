@@ -285,78 +285,78 @@ func validatePromptEvidenceRevision(initial, revised promptEvidence) error {
 		}
 	}
 
-	if err := validateRevisedClaims(initial, revised.Architecture, revised.DiagnosticLifecycle, revised.TestFlavors, revised.TriageOrder); err != nil {
+	if err := validateRevisedClaims(initial.Architecture, revised.Architecture); err != nil {
+		return err
+	}
+	if err := validateRevisedClaims(initial.DiagnosticLifecycle, revised.DiagnosticLifecycle); err != nil {
+		return err
+	}
+	if err := validateRevisedClaims(initial.TestFlavors, revised.TestFlavors); err != nil {
+		return err
+	}
+	if err := validateRevisedClaims(initial.TriageOrder, revised.TriageOrder); err != nil {
 		return err
 	}
 	initialRepositories := evidenceClaimsByExactText(initial.Repositories)
 	for _, claim := range revised.Repositories {
 		matched, ok := initialRepositories[exactEvidenceValue(claim.Text)]
-		if !ok || claim.Text != matched.Text || !evidenceRefsSubset(claim.Sources, matched.Sources) {
+		if !ok || claim.Text != matched.Text || !evidenceRefsEqual(claim.Sources, matched.Sources) {
 			return revisionContentError("repositories")
 		}
 	}
 	initialArtifacts := artifactsByKey(initial.Artifacts)
 	for _, item := range revised.Artifacts {
 		matched, ok := initialArtifacts[artifactEvidenceKey(item.PathPattern)]
-		if !ok || item.PathPattern != matched.PathPattern || !evidenceRefsSubset(item.Sources, matched.Sources) || item.Purpose != matched.Purpose {
+		if !ok || item.PathPattern != matched.PathPattern || !evidenceRefsEqual(item.Sources, matched.Sources) || item.Purpose != matched.Purpose {
 			return revisionContentError("artifacts")
 		}
 	}
 	initialPatterns := failurePatternsByKey(initial.FailurePatterns)
 	for _, item := range revised.FailurePatterns {
 		matched, ok := initialPatterns[normalizedEvidenceKey(item.Name)]
-		if !ok || item.Name != matched.Name || !evidenceRefsSubset(item.Sources, matched.Sources) {
+		if !ok || item.Name != matched.Name || !evidenceRefsEqual(item.Sources, matched.Sources) {
 			return revisionContentError("failure_patterns")
 		}
 		if item.Signal != matched.Signal || item.DoNotConclude != matched.DoNotConclude ||
 			item.RemediationLimit != matched.RemediationLimit ||
-			!evidenceStringsSubset(item.RequiredEvidence, matched.RequiredEvidence) {
+			!evidenceStringsEqual(item.RequiredEvidence, matched.RequiredEvidence) {
 			return revisionContentError("failure_patterns")
 		}
 	}
 	initialTransients := transientRulesByKey(initial.TransientRules)
 	for _, item := range revised.TransientRules {
 		matched, ok := initialTransients[normalizedEvidenceKey(item.Class)]
-		if !ok || item.Class != matched.Class || !evidenceRefsSubset(item.Sources, matched.Sources) ||
+		if !ok || item.Class != matched.Class || !evidenceRefsEqual(item.Sources, matched.Sources) ||
 			item.OnlyIf != matched.OnlyIf || item.NotTransientIf != matched.NotTransientIf {
 			return revisionContentError("transient_rules")
 		}
 	}
-	if !evidenceStringsSubset(revised.Unresolved, initial.Unresolved) {
+	if !evidenceStringsEqual(revised.Unresolved, initial.Unresolved) {
 		return revisionContentError("unresolved")
 	}
 	return nil
 }
 
-func validateRevisedClaims(initial promptEvidence, sections ...[]evidenceClaim) error {
+func validateRevisedClaims(initial, revised []evidenceClaim) error {
 	allowed := map[string][]evidenceClaim{}
-	appendClaims := func(claims []evidenceClaim) {
-		for _, claim := range claims {
-			key := exactEvidenceValue(claim.Text)
-			allowed[key] = append(allowed[key], claim)
-		}
+	for _, claim := range initial {
+		key := exactEvidenceValue(claim.Text)
+		allowed[key] = append(allowed[key], claim)
 	}
-	appendClaims(initial.Architecture)
-	appendClaims(initial.DiagnosticLifecycle)
-	appendClaims(initial.TestFlavors)
-	appendClaims(initial.TriageOrder)
-
-	for _, section := range sections {
-		for _, claim := range section {
-			key := exactEvidenceValue(claim.Text)
-			candidates := allowed[key]
-			matched := -1
-			for i, candidate := range candidates {
-				if claim.Text == candidate.Text && evidenceRefsSubset(claim.Sources, candidate.Sources) {
-					matched = i
-					break
-				}
+	for _, claim := range revised {
+		key := exactEvidenceValue(claim.Text)
+		candidates := allowed[key]
+		matched := -1
+		for i, candidate := range candidates {
+			if claim.Text == candidate.Text && evidenceRefsEqual(claim.Sources, candidate.Sources) {
+				matched = i
+				break
 			}
-			if matched < 0 {
-				return revisionContentError("claims")
-			}
-			allowed[key] = append(candidates[:matched], candidates[matched+1:]...)
 		}
+		if matched < 0 {
+			return revisionContentError("claims")
+		}
+		allowed[key] = append(candidates[:matched], candidates[matched+1:]...)
 	}
 	return nil
 }
@@ -421,28 +421,38 @@ func transientRulesByKey(values []transientEvidence) map[string]transientEvidenc
 	return out
 }
 
-func evidenceRefsSubset(values, allowed []evidenceRef) bool {
-	allowedKeys := make(map[string]struct{}, len(allowed))
+func evidenceRefsEqual(values, allowed []evidenceRef) bool {
+	if len(values) != len(allowed) {
+		return false
+	}
+	counts := make(map[string]int, len(allowed))
 	for _, ref := range allowed {
-		allowedKeys[evidenceRefKey(ref)] = struct{}{}
+		counts[evidenceRefKey(ref)]++
 	}
 	for _, ref := range values {
-		if _, ok := allowedKeys[evidenceRefKey(ref)]; !ok {
+		key := evidenceRefKey(ref)
+		if counts[key] == 0 {
 			return false
 		}
+		counts[key]--
 	}
 	return true
 }
 
-func evidenceStringsSubset(values, allowed []string) bool {
-	allowedKeys := make(map[string]struct{}, len(allowed))
+func evidenceStringsEqual(values, allowed []string) bool {
+	if len(values) != len(allowed) {
+		return false
+	}
+	counts := make(map[string]int, len(allowed))
 	for _, value := range allowed {
-		allowedKeys[exactEvidenceValue(value)] = struct{}{}
+		counts[exactEvidenceValue(value)]++
 	}
 	for _, value := range values {
-		if _, ok := allowedKeys[exactEvidenceValue(value)]; !ok {
+		key := exactEvidenceValue(value)
+		if counts[key] == 0 {
 			return false
 		}
+		counts[key]--
 	}
 	return true
 }
