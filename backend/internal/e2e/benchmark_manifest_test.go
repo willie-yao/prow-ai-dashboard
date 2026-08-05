@@ -383,6 +383,9 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		"bad test source": func(value string) string {
 			return strings.Replace(value, `"test_name": "Example test"`, `"test_name": "Example test", "test_source": "junit"`, 1)
 		},
+		"build source with junit": func(value string) string {
+			return strings.Replace(value, `"junit_file": "junit.xml"`, `"test_source": "build", "junit_file": "junit.xml"`, 1)
+		},
 		"second object": func(value string) string { return value + `{}` },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -401,7 +404,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	t.Setenv("BENCH_MODEL_LABEL", "model-a")
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
-		name: "case-one", stableID: "0123456789abcdef0123", jobName: "job", buildID: "123", testName: "test",
+		name: "case-one", stableID: "0123456789abcdef0123", jobName: "job", buildID: "123", testName: "test", testSource: models.TestCaseSourceBuild,
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": "main"},
 		sourceRepo: [2]string{"example", "project"},
 		signals:    []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
@@ -436,7 +439,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable ||
+	if result.ModelLabel != "model-a" || result.Repetition != 2 || result.SignalHits != 1 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || !result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
