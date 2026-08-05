@@ -999,6 +999,11 @@ agentLoop:
 						break agentLoop
 					}
 					if gcsFloorOnly {
+						// Leave room for the tools-enabled response when the nudge lands
+						// on the configured iteration boundary.
+						if iter+1 >= maxIters {
+							maxIters++
+						}
 						gcsFloorOnlyRetries++
 					}
 					nudgedAtCalls = state.calls

@@ -891,7 +891,7 @@ func TestAgentic_GCSFloorRetryMarkerSurvivesForcedFinalization(t *testing.T) {
 
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": bigPayload(1024)}}
 	opts := AgenticOptions{
-		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 1,
 	}
 	client := newAgenticTestClient(t, srv.URL)
