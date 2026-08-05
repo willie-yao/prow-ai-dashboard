@@ -879,6 +879,43 @@ func TestAgentic_GCSFloorOnlyRetryIsCappedAndReusable(t *testing.T) {
 	}
 }
 
+func TestAgentic_GCSFloorRetryMarkerSurvivesForcedFinalization(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	premature := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(premature))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"]}`
+	srv.push(200, chatRespFinal(final))
+
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": bigPayload(1024)}}
+	opts := AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		MinToolCalls: 1, MinGCSBytes: 50_000, CritiqueMaxRetries: 1,
+	}
+	client := newAgenticTestClient(t, srv.URL)
+	in := newTestAgenticInputs(t, browser, opts)
+	const key = "agentic:test:gcs-floor-forced-finalize"
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !analysis.GCSFloorRetryExhausted || analysis.GCSBytes >= opts.MinGCSBytes || !analysis.CritiquePassed {
+		t.Fatalf("analysis = %+v", analysis)
+	}
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("model calls = %d, want read, initial final, last-iteration tool, and forced final", got)
+	}
+	_, cached, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached.CacheHit || !cached.GCSFloorRetryExhausted || atomic.LoadInt32(&srv.calls) != 4 {
+		t.Fatalf("cached analysis = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
+	}
+}
+
 func TestAgentic_OldCacheWithoutEvidenceMarkerRetainsGCSFloor(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

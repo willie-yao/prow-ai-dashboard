@@ -352,6 +352,24 @@ func gcsFloorUnmet(gcsBytes, minGCSBytes int, evidencePlanCovered, retryExhauste
 	return gcsBytes < minGCSBytes && !evidencePlanCovered && !retryExhausted
 }
 
+// markGCSFloorRetryExhausted records a completed byte-only retry that still misses the floor.
+func markGCSFloorRetryExhausted(ctx context.Context, state *agentState, opts AgenticOptions, retries int) bool {
+	if state == nil || state.gcsFloorRetryExhausted || retries < 1 {
+		return false
+	}
+	floors := floorStatus{
+		callsUnmet: state.calls < opts.MinToolCalls,
+		gcsUnmet:   gcsFloorUnmet(state.gcsBytes, opts.MinGCSBytes, state.evidencePlanCovered(), false),
+	}
+	if floors.callsUnmet || !floors.gcsUnmet {
+		return false
+	}
+	state.gcsFloorRetryExhausted = true
+	recordTrace(ctx, TraceEvent{Kind: "floor_nudge", Outcome: "retry_exhausted", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
+	log.Printf("  ⓘ agentic GCS byte-floor retry exhausted: gcs_kb=%d/min=%d", state.gcsBytes/1024, opts.MinGCSBytes/1024)
+	return true
+}
+
 // evalFloors returns which per-project floors the current agent state
 // fails to meet. A floor configured as 0 is never reported as unmet.
 func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
@@ -945,11 +963,8 @@ agentLoop:
 
 			floors := evalFloors(state, in.Opts)
 			gcsFloorOnly := floors.gcsUnmet && !floors.callsUnmet
-			if gcsFloorOnly && gcsFloorOnlyRetries >= 1 {
-				state.gcsFloorRetryExhausted = true
-				recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry_exhausted", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
-				log.Printf("  ⓘ agentic GCS byte-floor retry exhausted: gcs_kb=%d/min=%d", state.gcsBytes/1024, in.Opts.MinGCSBytes/1024)
-				floors.gcsUnmet = false
+			if markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries) {
+				floors = evalFloors(state, in.Opts)
 			}
 			if floors.anyUnmet() && !state.budgetExhausted {
 				progressed := false
@@ -1160,6 +1175,7 @@ agentLoop:
 	}
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
+	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries)
 	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	parsed = state.preparePublishedAnalysis(parsed)
 
