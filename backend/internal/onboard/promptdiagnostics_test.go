@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
@@ -271,5 +272,23 @@ func TestPromptPreparationStageLabels(t *testing.T) {
 		if got := stage.label(); got != want {
 			t.Errorf("stage %q label = %q, want %q", stage, got, want)
 		}
+	}
+}
+
+func TestPromptPlanRecordsReviewedTimeout(t *testing.T) {
+	result := newAPIPromptResult()
+	plan := result.promptPlan(Options{
+		AIAPI: "chat_completions", AIEndpoint: "https://provider.example/v1/chat/completions",
+		AIModel: "model", PromptTimeout: 30 * time.Minute,
+	})
+	if plan.Timeout != "30m0s" {
+		t.Fatalf("timeout = %q", plan.Timeout)
+	}
+	if err := validatePromptPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	plan.Timeout = "30 seconds"
+	if err := validatePromptPlan(plan); err == nil {
+		t.Fatal("invalid prompt timeout was accepted")
 	}
 }
