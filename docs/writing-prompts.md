@@ -98,8 +98,9 @@ can raise the total budget for a slow provider:
 3. Add engine-owned evidence for the exact source repository and up to three
    representative Prow job records, cap unresolved details at 12, then ask for one
    complete structured revision using only the validated merged evidence and gaps.
-   The raw repository excerpts are not resent, and the revision cannot introduce
-   new factual claims or source references.
+   The raw repository excerpts are not resent. The revision can remove or
+   reorganize exact validated items but cannot change factual strings or source
+   references.
 4. Validate the revision and render Markdown deterministically.
 
 Each model call uses the engine's existing structured transport: native JSON

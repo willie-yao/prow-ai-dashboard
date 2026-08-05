@@ -179,7 +179,8 @@ When prompt drafting is selected, the wizard:
 7. Adds credential-free engine-owned evidence for the source repository and up
    to three representative Prow job records, caps unresolved details at 12, then
    makes one schema-bound revision call using only the merged evidence and gaps.
-   The revision cannot add factual claims or source references.
+   The revision can remove or reorganize exact validated items, but cannot
+   change factual strings or source references.
 8. Renders Markdown deterministically and validates the final section contract.
 9. Falls back to a reviewable TODO template when any extraction chunk or merged
    validation fails. If only revision fails, it renders the merged validated

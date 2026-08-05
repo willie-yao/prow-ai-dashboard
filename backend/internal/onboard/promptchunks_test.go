@@ -283,6 +283,25 @@ func TestValidatePromptEvidenceRevisionRejectsNewContentAndReferences(t *testing
 	}
 }
 
+func TestValidatePromptEvidenceRevisionRequiresExactClaims(t *testing.T) {
+	ref := []evidenceRef{{Path: "docs/runbook.md", StartLine: 1, EndLine: 1}}
+	initial := emptyPromptEvidence()
+	initial.Architecture = []evidenceClaim{{Text: "A timeout is transient only when retry succeeds.", Sources: ref}}
+
+	revised := clonePromptEvidence(initial)
+	revised.Architecture[0].Text = "A timeout is transient."
+	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
+		t.Fatal("broadened claim was accepted")
+	}
+
+	reorganized := clonePromptEvidence(initial)
+	reorganized.Architecture = []evidenceClaim{}
+	reorganized.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}
+	if err := validatePromptEvidenceRevision(initial, reorganized); err != nil {
+		t.Fatalf("exact claim reorganization was rejected: %v", err)
+	}
+}
+
 func TestValidatePromptEvidenceRevisionKeepsKeyedFieldsLocal(t *testing.T) {
 	firstRef := []evidenceRef{{Path: "docs/runbook.md", StartLine: 1, EndLine: 10}}
 	secondRef := []evidenceRef{{Path: "docs/runbook.md", StartLine: 11, EndLine: 20}}

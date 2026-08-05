@@ -259,8 +259,7 @@ func validatePromptEvidenceRevision(initial, revised promptEvidence) error {
 		}
 	}
 
-	initialText := strings.Join(promptEvidenceStrings(initial), "\n")
-	if err := validateRevisedClaims(initialText, revised.Architecture, revised.DiagnosticLifecycle, revised.TestFlavors, revised.TriageOrder); err != nil {
+	if err := validateRevisedClaims(initial, revised.Architecture, revised.DiagnosticLifecycle, revised.TestFlavors, revised.TriageOrder); err != nil {
 		return err
 	}
 	initialRepositories := evidenceClaimsByKey(initial.Repositories)
@@ -302,10 +301,28 @@ func validatePromptEvidenceRevision(initial, revised promptEvidence) error {
 	return nil
 }
 
-func validateRevisedClaims(initialText string, sections ...[]evidenceClaim) error {
+func validateRevisedClaims(initial promptEvidence, sections ...[]evidenceClaim) error {
+	allowed := map[string]evidenceClaim{}
+	appendClaims := func(claims []evidenceClaim) {
+		for _, claim := range claims {
+			key := normalizedEvidenceKey(claim.Text)
+			if existing, ok := allowed[key]; ok {
+				existing.Sources = mergeEvidenceRefs(existing.Sources, claim.Sources)
+				allowed[key] = existing
+				continue
+			}
+			allowed[key] = claim
+		}
+	}
+	appendClaims(initial.Architecture)
+	appendClaims(initial.DiagnosticLifecycle)
+	appendClaims(initial.TestFlavors)
+	appendClaims(initial.TriageOrder)
+
 	for _, section := range sections {
 		for _, claim := range section {
-			if !substantiveClaimGrounded(claim.Text, initialText) {
+			matched, ok := allowed[normalizedEvidenceKey(claim.Text)]
+			if !ok || !evidenceRefsSubset(claim.Sources, matched.Sources) {
 				return revisionContentError("claims")
 			}
 		}
