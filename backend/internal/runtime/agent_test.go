@@ -290,6 +290,21 @@ func TestWriteOpencodeAuthFiltersProvider(t *testing.T) {
 	}
 }
 
+func TestWriteOpencodeAuthUsesXDGDataHome(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	sourceDir := filepath.Join(dataHome, "opencode")
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "auth.json"), []byte(`{"github-copilot":{"type":"oauth","access":"secret"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpencodeAuth(t.TempDir(), "github-copilot/model"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpencodeCmdUsesNativeModel(t *testing.T) {
 	userHome := t.TempDir()
 	t.Setenv("HOME", userHome)

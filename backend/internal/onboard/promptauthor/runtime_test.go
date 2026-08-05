@@ -85,6 +85,10 @@ func TestValidatePromptQuality(t *testing.T) {
 	if err := Validate(oversized); err == nil {
 		t.Fatal("leading whitespace bypassed the byte limit")
 	}
+	fenced := "```markdown\n" + validPrompt() + "```\n"
+	if err := Validate(fenced); err == nil {
+		t.Fatal("fenced prompt was accepted")
+	}
 	inline := strings.Replace(validPrompt(), "# Project prompt", "# Project prompt\nSee ## Architecture below.", 1)
 	inline = strings.Replace(inline, "## Architecture\n\n- Grounded project-specific guidance.", "## Architecture\n", 1)
 	if err := Validate(inline); err == nil {

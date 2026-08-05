@@ -29,12 +29,31 @@ func Validate(prompt string) error {
 	lines := strings.Split(prompt, "\n")
 	var headings []string
 	var headingLines []int
+	inFence := false
+	var fence byte
 	for i, line := range lines {
-		line = strings.TrimSpace(line)
+		trimmed := strings.TrimLeft(line, " ")
+		indent := len(line) - len(trimmed)
+		if indent <= 3 && (strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~")) {
+			marker := trimmed[0]
+			if !inFence {
+				inFence, fence = true, marker
+			} else if marker == fence {
+				inFence = false
+			}
+			continue
+		}
+		if inFence || indent > 3 {
+			continue
+		}
+		line = strings.TrimRight(trimmed, " \t")
 		if strings.HasPrefix(line, "## ") {
 			headings = append(headings, line)
 			headingLines = append(headingLines, i)
 		}
+	}
+	if inFence {
+		return fmt.Errorf("prompt author: generated prompt has an unclosed code fence")
 	}
 	if len(headings) != len(requiredHeadings) {
 		return fmt.Errorf("prompt author: generated prompt has %d level-two sections, want %d", len(headings), len(requiredHeadings))

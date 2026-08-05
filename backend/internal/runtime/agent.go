@@ -324,11 +324,15 @@ func writeOpencodeAuth(home, nativeModel string) error {
 	if !ok || provider == "" {
 		return fmt.Errorf("runtime: invalid native model %q", nativeModel)
 	}
-	userHome, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("runtime: resolve opencode auth home: %w", err)
+	dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if dataHome == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("runtime: resolve opencode auth home: %w", err)
+		}
+		dataHome = filepath.Join(userHome, ".local", "share")
 	}
-	source := filepath.Join(userHome, ".local", "share", "opencode", "auth.json")
+	source := filepath.Join(dataHome, "opencode", "auth.json")
 	raw, err := os.ReadFile(source)
 	if err != nil {
 		return fmt.Errorf("runtime: read opencode auth: %w", err)
