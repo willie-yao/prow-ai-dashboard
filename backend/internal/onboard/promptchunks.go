@@ -303,16 +303,11 @@ func validatePromptEvidenceRevision(initial, revised promptEvidence) error {
 }
 
 func validateRevisedClaims(initial promptEvidence, sections ...[]evidenceClaim) error {
-	allowed := map[string]evidenceClaim{}
+	allowed := map[string][]evidenceClaim{}
 	appendClaims := func(claims []evidenceClaim) {
 		for _, claim := range claims {
 			key := exactEvidenceValue(claim.Text)
-			if existing, ok := allowed[key]; ok {
-				existing.Sources = mergeEvidenceRefs(existing.Sources, claim.Sources)
-				allowed[key] = existing
-				continue
-			}
-			allowed[key] = claim
+			allowed[key] = append(allowed[key], claim)
 		}
 	}
 	appendClaims(initial.Architecture)
@@ -322,10 +317,19 @@ func validateRevisedClaims(initial promptEvidence, sections ...[]evidenceClaim) 
 
 	for _, section := range sections {
 		for _, claim := range section {
-			matched, ok := allowed[exactEvidenceValue(claim.Text)]
-			if !ok || claim.Text != matched.Text || !evidenceRefsSubset(claim.Sources, matched.Sources) {
+			key := exactEvidenceValue(claim.Text)
+			candidates := allowed[key]
+			matched := -1
+			for i, candidate := range candidates {
+				if claim.Text == candidate.Text && evidenceRefsSubset(claim.Sources, candidate.Sources) {
+					matched = i
+					break
+				}
+			}
+			if matched < 0 {
 				return revisionContentError("claims")
 			}
+			allowed[key] = append(candidates[:matched], candidates[matched+1:]...)
 		}
 	}
 	return nil

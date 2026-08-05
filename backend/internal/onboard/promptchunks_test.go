@@ -318,6 +318,12 @@ func TestValidatePromptEvidenceRevisionRequiresExactClaims(t *testing.T) {
 	if err := validatePromptEvidenceRevision(initial, reorganized); err != nil {
 		t.Fatalf("exact claim reorganization was rejected: %v", err)
 	}
+
+	duplicated := clonePromptEvidence(initial)
+	duplicated.DiagnosticLifecycle = []evidenceClaim{{Text: initial.Architecture[0].Text, Sources: ref}}
+	if err := validatePromptEvidenceRevision(initial, duplicated); err == nil {
+		t.Fatal("duplicated claim was accepted")
+	}
 }
 
 func TestValidatePromptEvidenceRevisionKeepsKeyedFieldsLocal(t *testing.T) {
