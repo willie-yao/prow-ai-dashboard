@@ -64,6 +64,15 @@ func TestOpenCodeRuntimeRejectsUnsafeChanges(t *testing.T) {
 	}
 }
 
+func TestDiffDestructiveMetadataUsesExactLines(t *testing.T) {
+	if diffHasDestructiveChange("+deleted file mode is documentation") {
+		t.Fatal("added content was treated as Git deletion metadata")
+	}
+	if !diffHasDestructiveChange("rename from old.md\nrename to new.md") {
+		t.Fatal("rename metadata was not rejected")
+	}
+}
+
 func TestValidatePromptQuality(t *testing.T) {
 	if err := Validate(validPrompt()); err != nil {
 		t.Fatal(err)
@@ -71,5 +80,14 @@ func TestValidatePromptQuality(t *testing.T) {
 	bad := strings.Replace(validPrompt(), "## Architecture\n\n- Grounded project-specific guidance.", "## Architecture\n\n- TODO: fill this.", 1)
 	if err := Validate(bad); err == nil {
 		t.Fatal("expected TODO-only architecture to fail")
+	}
+	oversized := strings.Repeat(" ", maxBytes) + validPrompt()
+	if err := Validate(oversized); err == nil {
+		t.Fatal("leading whitespace bypassed the byte limit")
+	}
+	inline := strings.Replace(validPrompt(), "# Project prompt", "# Project prompt\nSee ## Architecture below.", 1)
+	inline = strings.Replace(inline, "## Architecture\n\n- Grounded project-specific guidance.", "## Architecture\n", 1)
+	if err := Validate(inline); err == nil {
+		t.Fatal("inline heading mention bypassed empty section validation")
 	}
 }

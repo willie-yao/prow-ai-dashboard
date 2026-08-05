@@ -55,6 +55,15 @@ func NewOpenCodeRuntime() *OpenCodeRuntime {
 	return &OpenCodeRuntime{Agent: agentruntime.NewLocalAgent()}
 }
 
+func diffHasDestructiveChange(diff string) bool {
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "deleted file mode ") || strings.HasPrefix(line, "rename from ") || strings.HasPrefix(line, "rename to ") {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, error) {
 	if r == nil || r.Agent == nil {
 		return Result{}, fmt.Errorf("prompt author: opencode runtime is unavailable")
@@ -74,8 +83,8 @@ func (r *OpenCodeRuntime) Generate(ctx context.Context, spec Spec) (Result, erro
 	if err != nil {
 		return result, err
 	}
-	if strings.Contains(generated.Diff, "deleted file mode") {
-		return result, fmt.Errorf("prompt author: agent deleted repository files")
+	if diffHasDestructiveChange(generated.Diff) {
+		return result, fmt.Errorf("prompt author: agent deleted or renamed repository files")
 	}
 	if len(generated.Files) != 1 {
 		return result, fmt.Errorf("prompt author: agent changed %d files, want only %s", len(generated.Files), OutputPath)

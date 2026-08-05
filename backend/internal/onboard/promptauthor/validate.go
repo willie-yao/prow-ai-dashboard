@@ -19,18 +19,21 @@ var requiredHeadings = []string{
 
 // Validate enforces the deterministic prompt-author output contract.
 func Validate(prompt string) error {
+	if len(prompt) > maxBytes {
+		return fmt.Errorf("prompt author: generated prompt exceeds %d bytes", maxBytes)
+	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return fmt.Errorf("prompt author: generated prompt is empty")
 	}
-	if len(prompt) > maxBytes {
-		return fmt.Errorf("prompt author: generated prompt exceeds %d bytes", maxBytes)
-	}
+	lines := strings.Split(prompt, "\n")
 	var headings []string
-	for _, line := range strings.Split(prompt, "\n") {
+	var headingLines []int
+	for i, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "## ") {
 			headings = append(headings, line)
+			headingLines = append(headingLines, i)
 		}
 	}
 	if len(headings) != len(requiredHeadings) {
@@ -41,14 +44,14 @@ func Validate(prompt string) error {
 			return fmt.Errorf("prompt author: section %d is %q, want %q", i+1, headings[i], heading)
 		}
 	}
-	for _, heading := range []string{"## Architecture", "## Diagnostic lifecycle"} {
-		if sectionIsEmpty(prompt, heading) {
-			return fmt.Errorf("prompt author: %s is empty", heading)
+	for _, index := range []int{0, 1} {
+		if sectionLinesEmpty(lines, headingLines, index) {
+			return fmt.Errorf("prompt author: %s is empty", requiredHeadings[index])
 		}
 	}
 	operational := 0
-	for _, heading := range []string{"## Artifact layout", "## Common failure patterns", "## Triage order"} {
-		if !sectionIsEmpty(prompt, heading) {
+	for _, index := range []int{3, 4, 6} {
+		if !sectionLinesEmpty(lines, headingLines, index) {
 			operational++
 		}
 	}
@@ -58,15 +61,12 @@ func Validate(prompt string) error {
 	return nil
 }
 
-func sectionIsEmpty(prompt, heading string) bool {
-	start := strings.Index(prompt, heading)
-	if start < 0 {
-		return true
+func sectionLinesEmpty(lines []string, headingLines []int, index int) bool {
+	start := headingLines[index] + 1
+	end := len(lines)
+	if index+1 < len(headingLines) {
+		end = headingLines[index+1]
 	}
-	body := prompt[start+len(heading):]
-	if next := strings.Index(body, "\n## "); next >= 0 {
-		body = body[:next]
-	}
-	body = strings.TrimSpace(body)
+	body := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
 	return body == "" || strings.Contains(strings.ToLower(body), "todo:") && len(strings.Fields(body)) < 12
 }
