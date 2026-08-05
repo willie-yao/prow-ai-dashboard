@@ -295,9 +295,21 @@ func TestValidatePromptEvidenceRevisionRequiresExactClaims(t *testing.T) {
 	}
 
 	revised = clonePromptEvidence(initial)
+	revised.Architecture[0].Text = "A timeout is transient only when Retry succeeds."
+	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
+		t.Fatal("claim identifier case change was accepted")
+	}
+
+	revised = clonePromptEvidence(initial)
 	revised.Unresolved = []string{"Investigate an invented dependency."}
 	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
 		t.Fatal("new unresolved text was accepted")
+	}
+	initial.Unresolved = []string{"Confirm MachinePool behavior."}
+	revised = clonePromptEvidence(initial)
+	revised.Unresolved[0] = "Confirm machinepool behavior."
+	if err := validatePromptEvidenceRevision(initial, revised); err == nil {
+		t.Fatal("unresolved identifier case change was accepted")
 	}
 
 	reorganized := clonePromptEvidence(initial)
