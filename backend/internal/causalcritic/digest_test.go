@@ -172,6 +172,9 @@ func TestDigestModelContractExposesOnlyValidReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(data), "provenance_hash") {
+		t.Fatalf("model input omitted provenance hash: %s", data)
+	}
 	if strings.Contains(string(data), "source_reference") {
 		t.Fatalf("model input exposed private source provenance: %s", data)
 	}
@@ -190,5 +193,21 @@ func TestDigestModelContractExposesOnlyValidReferences(t *testing.T) {
 	}
 	if err := ValidateReview(review, decoded); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateEvidenceDigestRejectsPrivateProvenanceTampering(t *testing.T) {
+	input, err := NewDigestInput(digestTestBundle(t, false), digestTestAuthoritative())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := input
+	digest := *input.Digest
+	digest.Lines = slices.Clone(input.Digest.Lines)
+	digest.Provenance = slices.Clone(input.Digest.Provenance)
+	digest.Provenance[0].SourceReference.Path = "unrelated.log"
+	tampered.Digest = &digest
+	if err := ValidateInput(tampered); ValidationCodeOf(err) != ValidationInputIdentity {
+		t.Fatalf("err=%v", err)
 	}
 }

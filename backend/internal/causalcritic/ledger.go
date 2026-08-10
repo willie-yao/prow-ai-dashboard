@@ -483,8 +483,11 @@ func validateTrialRecord(record TrialRecord) error {
 		return fmt.Errorf("causal critic input byte count is invalid")
 	}
 	if record.Digest != nil {
-		if record.Metadata.CriticInputArm != InputArmDigestV1 || record.Digest.SchemaVersion != DigestSchemaVersion || !validSHA256(record.Digest.Hash) || !validSHA256(record.Digest.SourceEvidenceHash) || record.Digest.BundleHash != record.EvidenceHash || record.Digest.EncodedBytes < 1 || record.Digest.EncodedBytes > DigestHardLimitBytes || record.Digest.SelectedLines < 1 || len(record.Digest.Provenance) != record.Digest.SelectedLines || record.Digest.Omitted.Excerpts < 0 || record.Digest.Omitted.Lines < 0 || record.Digest.Omitted.Bytes < 0 {
+		if record.Metadata.CriticInputArm != InputArmDigestV1 || record.Digest.SchemaVersion != DigestSchemaVersion || !validSHA256(record.Digest.Hash) || !validSHA256(record.Digest.SourceEvidenceHash) || !validSHA256(record.Digest.ProvenanceHash) || record.Digest.BundleHash != record.EvidenceHash || record.Digest.EncodedBytes < 1 || record.Digest.EncodedBytes > DigestHardLimitBytes || record.Digest.SelectedLines < 1 || len(record.Digest.Provenance) != record.Digest.SelectedLines || record.Digest.Omitted.Excerpts < 0 || record.Digest.Omitted.Lines < 0 || record.Digest.Omitted.Bytes < 0 {
 			return fmt.Errorf("causal critic digest telemetry is invalid")
+		}
+		if got, err := digestProvenanceHash(record.Digest.Provenance); err != nil || got != record.Digest.ProvenanceHash {
+			return fmt.Errorf("causal critic digest provenance hash changed")
 		}
 		for _, provenance := range record.Digest.Provenance {
 			if !allowedDigestCategory(provenance.Category) || provenance.SourceReference.ExcerptID == "" || provenance.SourceReference.Path == "" || provenance.SourceReference.LineStart < 1 || provenance.SourceReference.LineEnd != provenance.SourceReference.LineStart || provenance.Reference.ExcerptID == "" || provenance.Reference.Path == "" || provenance.Reference.LineStart < 1 || provenance.Reference.LineEnd != provenance.Reference.LineStart {

@@ -145,7 +145,7 @@ By default each authoritative repetition runs two critic-input arms:
 The digest always prioritizes exact authoritative citations and immediate
 source-line context, then generic high-specificity errors, causal timeline
 events, later-success counterevidence, and ownership signals. It records the
-source evidence hash, compact bundle hash, selected-line provenance, encoded
+source evidence hash, compact bundle hash, provenance hash, selected-line provenance, encoded
 bytes, and omitted excerpt, line, and byte counts. The selector is dashboard
 owned and deterministic. It does not let the model browse or request evidence.
 

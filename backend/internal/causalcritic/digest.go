@@ -67,6 +67,7 @@ type EvidenceDigest struct {
 	Hash               string                 `json:"hash"`
 	SourceEvidenceHash string                 `json:"source_evidence_hash"`
 	BundleHash         string                 `json:"bundle_hash"`
+	ProvenanceHash     string                 `json:"provenance_hash"`
 	EncodedBytes       int                    `json:"encoded_bytes"`
 	SelectedLines      int                    `json:"selected_lines"`
 	Lines              []DigestLine           `json:"lines"`
@@ -80,6 +81,7 @@ type DigestTelemetry struct {
 	Hash               string                 `json:"hash"`
 	SourceEvidenceHash string                 `json:"source_evidence_hash"`
 	BundleHash         string                 `json:"bundle_hash"`
+	ProvenanceHash     string                 `json:"provenance_hash"`
 	EncodedBytes       int                    `json:"encoded_bytes"`
 	SelectedLines      int                    `json:"selected_lines"`
 	Provenance         []DigestProvenanceLine `json:"provenance"`
@@ -143,7 +145,7 @@ func BuildEvidenceDigest(bundle agentanalysis.EvidenceBundle, draft Draft) (agen
 
 // ValidateEvidenceDigest verifies the compact evidence identity and references.
 func ValidateEvidenceDigest(digest EvidenceDigest, bundle agentanalysis.EvidenceBundle) error {
-	if digest.SchemaVersion != DigestSchemaVersion || !validSHA256(digest.SourceEvidenceHash) || digest.BundleHash != bundle.Hash || !validSHA256(digest.Hash) {
+	if digest.SchemaVersion != DigestSchemaVersion || !validSHA256(digest.SourceEvidenceHash) || digest.BundleHash != bundle.Hash || !validSHA256(digest.ProvenanceHash) || !validSHA256(digest.Hash) {
 		return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest identity is invalid")
 	}
 	if err := agentanalysis.ValidateEvidenceBundle(bundle); err != nil {
@@ -176,6 +178,9 @@ func ValidateEvidenceDigest(digest EvidenceDigest, bundle agentanalysis.Evidence
 		}
 	}
 	if len(digest.Provenance) > 0 {
+		if got, err := digestProvenanceHash(digest.Provenance); err != nil || got != digest.ProvenanceHash {
+			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest provenance hash changed")
+		}
 		if len(digest.Provenance) != len(digest.Lines) {
 			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest provenance count changed")
 		}
@@ -195,7 +200,7 @@ func digestTelemetry(digest *EvidenceDigest) *DigestTelemetry {
 	}
 	return &DigestTelemetry{
 		SchemaVersion: digest.SchemaVersion, Hash: digest.Hash, SourceEvidenceHash: digest.SourceEvidenceHash,
-		BundleHash: digest.BundleHash, EncodedBytes: digest.EncodedBytes, SelectedLines: digest.SelectedLines,
+		BundleHash: digest.BundleHash, ProvenanceHash: digest.ProvenanceHash, EncodedBytes: digest.EncodedBytes, SelectedLines: digest.SelectedLines,
 		Provenance: slices.Clone(digest.Provenance), Omitted: digest.Omitted,
 	}
 }
@@ -384,8 +389,12 @@ func buildDigestPackage(source agentanalysis.EvidenceBundle, selected []digestCa
 	for _, line := range provenance {
 		selectedExcerpts[line.SourceReference.ExcerptID] = true
 	}
+	provenanceHash, err := digestProvenanceHash(provenance)
+	if err != nil {
+		return agentanalysis.EvidenceBundle{}, EvidenceDigest{}, err
+	}
 	digest := EvidenceDigest{
-		SchemaVersion: DigestSchemaVersion, SourceEvidenceHash: source.Hash, BundleHash: reduced.Hash,
+		SchemaVersion: DigestSchemaVersion, SourceEvidenceHash: source.Hash, BundleHash: reduced.Hash, ProvenanceHash: provenanceHash,
 		SelectedLines: len(digestLines), Lines: digestLines, Provenance: provenance,
 		Omitted: DigestOmissions{Excerpts: max(sourceExcerpts-len(selectedExcerpts), 0), Lines: max(totalLines-len(selectedSource), 0), Bytes: max(totalBytes-selectedBytes, 0)},
 	}
@@ -434,6 +443,14 @@ func digestSourceTotals(bundle agentanalysis.EvidenceBundle) (int, int, int) {
 		}
 	}
 	return lines, bytes, len(bundle.Excerpts)
+}
+
+func digestProvenanceHash(provenance []DigestProvenanceLine) (string, error) {
+	data, err := json.Marshal(provenance)
+	if err != nil {
+		return "", err
+	}
+	return hashString(string(data)), nil
 }
 
 func digestValueHash(digest EvidenceDigest) (string, error) {
