@@ -70,6 +70,20 @@ hack/test-agent-sandbox-critic-image.sh \
   ghcr.io/willie-yao/prow-ai-dashboard/agent-sandbox-critic-executor:dev
 ```
 
+Publish only an explicitly reviewed test image with the manual `Image` workflow:
+
+```bash
+gh workflow run image.yml \
+  --ref <reviewed-branch> \
+  -f target=critic
+```
+
+The critic job publishes the exact full-commit tag
+`agent-sandbox-critic-executor:sha-<40-character-commit>` and reports its OCI
+manifest digest. Use only the resulting `image@sha256:...` reference for
+Agent Sandbox validation. Critic images remain absent from automatic `main` and
+release publication.
+
 Model identity and token usage are copied only from the gateway response. An
 optional gateway extension can report provider identity and cost. Missing fields
 remain explicitly unavailable; the executor does not infer them from requested
