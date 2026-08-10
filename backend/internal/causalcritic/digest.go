@@ -35,7 +35,7 @@ const (
 var (
 	digestTimelineRE  = regexp.MustCompile(`(?i)(\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|\b\d{2}:\d{2}:\d{2}\b|\b(created|started|failed|error|retry|deleted|ready|reconciled|admitted|scheduled|bound|provisioned)\b)`)
 	digestOwnershipRE = regexp.MustCompile(`(?i)\b(controller|operator|webhook|admission|reconcile|owner|managed by|serviceaccount|namespace|pod|node|deployment|statefulset|daemonset)\b`)
-	digestGrepLineRE  = regexp.MustCompile(`^[> ]\s*([0-9]+):\s?(.*)$`)
+	digestGrepLineRE  = regexp.MustCompile(`^(?:>\s*)?([0-9]+):\s?(.*)$`)
 )
 
 // DigestLine retains one model-visible line and its original frozen provenance.
@@ -229,10 +229,14 @@ func digestCandidates(bundle agentanalysis.EvidenceBundle, draft Draft) []digest
 			category := DigestCategoryCitationContext
 			priority := 90
 			mandatory := line >= start-1 && line <= end+1
+			candidate := makeDigestCandidate(excerpt, line, lines[line-1], category, priority, mandatory)
 			if line >= start && line <= end {
-				category, priority, mandatory = DigestCategoryCitation, 100, true
+				offset := line - start
+				candidate.category, candidate.priority, candidate.mandatory = DigestCategoryCitation, 100, true
+				candidate.pathLine = citation.LineStart + offset
+				candidate.truncated = false
 			}
-			add(makeDigestCandidate(excerpt, line, lines[line-1], category, priority, mandatory))
+			add(candidate)
 		}
 	}
 	for _, line := range selectEvidenceLines(bundle, errorLineRE, nil, 8) {
@@ -334,7 +338,7 @@ func buildDigestPackage(source agentanalysis.EvidenceBundle, selected []digestCa
 		if candidate.text == "" {
 			continue
 		}
-		key := fmt.Sprintf("%s\x00%d\x00%s", candidate.source.Path, candidate.pathLine, candidate.text)
+		key := fmt.Sprintf("%s\x00%d", candidate.source.Path, candidate.pathLine)
 		if seenPathLine[key] {
 			continue
 		}

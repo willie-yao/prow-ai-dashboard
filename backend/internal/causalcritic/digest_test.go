@@ -61,6 +61,37 @@ func TestDigestPreservesExactCitationPathWithRepeatedText(t *testing.T) {
 	}
 }
 
+func TestDigestPreservesCitationThroughNestedGrepPrefixes(t *testing.T) {
+	base := digestTestBundle(t, false)
+	bundle, err := agentanalysis.NewEvidenceBundle(
+		base.Request, base.Source, base.Scan, nil,
+		[]agentanalysis.EvidenceExcerpt{{
+			Path: "node-describe.txt", Kind: "grep",
+			Content: "> 15: CreationTimestamp:  Sat, 04 Jul 2026 04:38:41 +0000\n  10: 16: Taints:             node.cloudprovider.kubernetes.io/uninitialized=true:NoSchedule\n",
+		}},
+		base.SkillSetHash,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authoritative := digestTestAuthoritative()
+	authoritative.EvidenceCitations = []models.EvidenceCitation{{
+		Path: "node-describe.txt", LineStart: 15, LineEnd: 16,
+		Quote: "CreationTimestamp:  Sat, 04 Jul 2026 04:38:41 +0000\nTaints:             node.cloudprovider.kubernetes.io/uninitialized",
+	}}
+	input, err := NewDigestInput(bundle, authoritative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Bundle.Excerpts) != 1 {
+		t.Fatalf("excerpts=%+v", input.Bundle.Excerpts)
+	}
+	content := input.Bundle.Excerpts[0].Content
+	if !strings.Contains(content, "> 15: CreationTimestamp:  Sat, 04 Jul 2026 04:38:41 +0000\n> 16: 16: Taints:             node.cloudprovider.kubernetes.io/uninitialized") {
+		t.Fatalf("digest citation was not anchored to authoritative lines: %q", content)
+	}
+}
+
 func TestDigestIncludesGenericCausalCategories(t *testing.T) {
 	input, err := NewDigestInput(digestTestBundle(t, false), digestTestAuthoritative())
 	if err != nil {
