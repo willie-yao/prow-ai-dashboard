@@ -526,3 +526,32 @@ func TestRunTrialMarksPersistenceFailure(t *testing.T) {
 		t.Fatalf("record=%+v err=%v", record, err)
 	}
 }
+
+func TestRunTrialPersistsDigestProvenancePrivately(t *testing.T) {
+	input, err := NewDigestInput(digestTestBundle(t, false), digestTestAuthoritative())
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := Review{SchemaVersion: ReviewSchemaVersion, ContractVersion: ContractVersion, PairHash: input.PairHash, Verdict: "pass", Findings: []Finding{}, Confidence: "medium"}
+	reviewer := &trialReviewer{result: Result{
+		Execution: ExecutionResult{Review: &review, Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}},
+		Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true, FinalizationChecked: true, FinalizationValid: true},
+	}}
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: publicDir, LedgerPath: ledgerPath,
+		Metadata: TrialMetadata{CaseID: "case", StableID: "0123456789abcdef0123", Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "baseline", CriticInputArm: InputArmDigestV1},
+		Input:    input, ExecutionID: "critic-digest", RuntimeIdentity: testCriticRuntimeIdentity(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Digest == nil || len(record.Digest.Provenance) != record.Digest.SelectedLines || record.Digest.Provenance[0].SourceReference.Path == "" {
+		t.Fatalf("record digest=%+v", record.Digest)
+	}
+	ledger, err := loadLedger(ledgerPath)
+	if err != nil || len(ledger.Records) != 1 || ledger.Records[0].Digest == nil || len(ledger.Records[0].Digest.Provenance) == 0 {
+		t.Fatalf("ledger=%+v err=%v", ledger, err)
+	}
+}

@@ -92,18 +92,37 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 
 	for _, authoritative := range inputRecords {
 		authoritative := authoritative
+		snapshot := agentanalysis.AuthoritativeSnapshot{
+			Summary: authoritative.Summary, IsTransient: authoritative.IsTransient != nil && *authoritative.IsTransient,
+			RootCause: authoritative.RootCause, Severity: authoritative.Severity, SuggestedFix: authoritative.SuggestedFix,
+			EvidenceCitations: slices.Clone(authoritative.Evidence), ElapsedMs: int(authoritative.ElapsedMS),
+			InputTokens: authoritative.Trace.InputTokens, OutputTokens: authoritative.Trace.OutputTokens,
+			ModelRequests: authoritative.Trace.ModelRequests,
+			JudgeObjected: slices.ContainsFunc(authoritative.SemanticJudgeOutcomes, func(value string) bool { return strings.Contains(value, "objected") }),
+			JudgeRevised:  authoritative.SemanticRevisionSelected,
+		}
+		request, repository := causalCriticBenchmarkCandidate(t, bc)
+		var sharedBundle agentanalysis.EvidenceBundle
+		var sharedBundleErr error
+		sharedFailureCode := ""
+		sharedBundleLoaded := false
+		loadSharedBundle := func(tb *testing.T) (agentanalysis.EvidenceBundle, string, error) {
+			if sharedBundleLoaded {
+				return sharedBundle, sharedFailureCode, sharedBundleErr
+			}
+			sharedBundleLoaded = true
+			sharedFailureCode = "evidence_freeze"
+			sharedBundle, sharedBundleErr = causalCriticEvidenceBundle(tb, bc, condition, projectSkills, request, repository)
+			if sharedBundleErr != nil {
+				return sharedBundle, sharedFailureCode, sharedBundleErr
+			}
+			sharedFailureCode = "evidence_citation"
+			sharedBundle, sharedBundleErr = causalcritic.EnsureCitedEvidence(tb.Context(), causalCriticBrowser(tb, bc), sharedBundle, snapshot.EvidenceCitations)
+			return sharedBundle, sharedFailureCode, sharedBundleErr
+		}
 		for _, inputArm := range inputArms {
 			inputArm := inputArm
 			t.Run(fmt.Sprintf("rep-%02d/%s", authoritative.Repetition, inputArm), func(t *testing.T) {
-				snapshot := agentanalysis.AuthoritativeSnapshot{
-					Summary: authoritative.Summary, IsTransient: authoritative.IsTransient != nil && *authoritative.IsTransient,
-					RootCause: authoritative.RootCause, Severity: authoritative.Severity, SuggestedFix: authoritative.SuggestedFix,
-					EvidenceCitations: slices.Clone(authoritative.Evidence), ElapsedMs: int(authoritative.ElapsedMS),
-					InputTokens: authoritative.Trace.InputTokens, OutputTokens: authoritative.Trace.OutputTokens,
-					ModelRequests: authoritative.Trace.ModelRequests,
-					JudgeObjected: slices.ContainsFunc(authoritative.SemanticJudgeOutcomes, func(value string) bool { return strings.Contains(value, "objected") }),
-					JudgeRevised:  authoritative.SemanticRevisionSelected,
-				}
 				writeRecord := func(record causalcritic.TrialRecord) {
 					benchmarkRecord := scoreCausalCriticRecord(bc, condition, authoritative, record)
 					writeCausalCriticBenchmarkJSONL(t, resultsPath, benchmarkRecord)
@@ -111,7 +130,6 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 						t.Errorf("critic trial status = %s", record.Status)
 					}
 				}
-				request, repository := causalCriticBenchmarkCandidate(t, bc)
 				preflightIdentity, err := causalcritic.PreflightIdentity(causalcritic.PreflightIdentityInput{
 					RequestHash: agentanalysis.FailureRequestHash(request), AuthoritativeHash: causalCriticAuthoritativeHash(t, snapshot),
 					SourceRevision: repository.Revision, SkillHash: projectSkills.Hash(), RuntimeIdentity: runtime.RuntimeIdentity(),
@@ -143,14 +161,9 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				bundle, err := causalCriticEvidenceBundle(t, bc, condition, projectSkills, request, repository)
+				bundle, evidenceFailureCode, err := loadSharedBundle(t)
 				if err != nil {
-					completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_freeze", "")
-					t.Fatal(err)
-				}
-				bundle, err = causalcritic.EnsureCitedEvidence(t.Context(), causalCriticBrowser(t, bc), bundle, snapshot.EvidenceCitations)
-				if err != nil {
-					completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_citation", "")
+					completePreflight(causalcritic.PreflightEvidenceFailed, evidenceFailureCode, "")
 					t.Fatal(err)
 				}
 				var input causalcritic.Input
@@ -159,6 +172,9 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 					input, err = causalcritic.NewInput(bundle, snapshot)
 				case causalcritic.InputArmDigestV1:
 					input, err = causalcritic.NewDigestInput(bundle, snapshot)
+					if err == nil && (input.Digest == nil || input.Digest.SourceEvidenceHash != bundle.Hash) {
+						t.Fatal("digest arm source evidence identity changed")
+					}
 				default:
 					t.Fatalf("unsupported critic input arm %q", inputArm)
 				}
@@ -515,12 +531,44 @@ func readCausalCriticBenchmarkJSONL(path string) ([]causalCriticBenchmarkRecord,
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			return nil, err
 		}
+		record, err = normalizeCausalCriticBenchmarkRecord(record)
+		if err != nil {
+			return nil, err
+		}
 		records = append(records, record)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return records, nil
+}
+
+func normalizeCausalCriticBenchmarkRecord(record causalCriticBenchmarkRecord) (causalCriticBenchmarkRecord, error) {
+	switch record.Version {
+	case 1:
+		record.Version = causalCriticBenchmarkRecordVersion
+		if record.CriticInputArm == "" {
+			record.CriticInputArm = causalcritic.InputArmFullBundle
+		}
+		if record.Trial.Metadata.CriticInputArm == "" {
+			record.Trial.Metadata.CriticInputArm = causalcritic.InputArmFullBundle
+		}
+	case causalCriticBenchmarkRecordVersion:
+	default:
+		return record, fmt.Errorf("unsupported causal critic benchmark record version %d", record.Version)
+	}
+	switch record.CriticInputArm {
+	case causalcritic.InputArmFullBundle, causalcritic.InputArmDigestV1:
+	default:
+		return record, fmt.Errorf("unsupported causal critic benchmark input arm %q", record.CriticInputArm)
+	}
+	if record.Trial.Metadata.CriticInputArm == "" {
+		record.Trial.Metadata.CriticInputArm = record.CriticInputArm
+	}
+	if record.Trial.Metadata.CriticInputArm != record.CriticInputArm {
+		return record, fmt.Errorf("causal critic benchmark input arm changed")
+	}
+	return record, nil
 }
 
 func causalCriticBenchmarkRecordRank(record causalCriticBenchmarkRecord) int {
@@ -545,7 +593,7 @@ func causalCriticBenchmarkRecordRank(record causalCriticBenchmarkRecord) int {
 
 func TestWriteCausalCriticBenchmarkJSONLIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "critic.jsonl")
-	record := causalCriticBenchmarkRecord{Version: causalCriticBenchmarkRecordVersion, Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("a", 64), PairHash: strings.Repeat("b", 64), Status: causalcritic.TrialPending}}
+	record := causalCriticBenchmarkRecord{Version: causalCriticBenchmarkRecordVersion, CriticInputArm: causalcritic.InputArmFullBundle, Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("a", 64), PairHash: strings.Repeat("b", 64), Status: causalcritic.TrialPending, Metadata: causalcritic.TrialMetadata{CriticInputArm: causalcritic.InputArmFullBundle}}}
 	writeCausalCriticBenchmarkJSONL(t, path, record)
 	writeCausalCriticBenchmarkJSONL(t, path, record)
 	data, err := os.ReadFile(path)
@@ -673,7 +721,11 @@ func loadCausalCriticBenchmarkRecords(t *testing.T, path string) []causalCriticB
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			t.Fatal(err)
 		}
-		if record.Version != causalCriticBenchmarkRecordVersion || record.CaseID == "" || record.StableID == "" || record.Repetition < 1 || record.Trial.PairHash == "" || record.CriticInputArm == "" {
+		record, err = normalizeCausalCriticBenchmarkRecord(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.CaseID == "" || record.StableID == "" || record.Repetition < 1 || record.Trial.PairHash == "" {
 			t.Fatalf("invalid causal critic benchmark record: %+v", record)
 		}
 		records = append(records, record)
@@ -854,8 +906,8 @@ func TestUpsertCausalCriticBenchmarkJSONLReplacesIncompleteRecord(t *testing.T) 
 	attemptHash := strings.Repeat("c", 64)
 	pairHash := strings.Repeat("d", 64)
 	pending := causalCriticBenchmarkRecord{
-		Version: causalCriticBenchmarkRecordVersion,
-		Trial:   causalcritic.TrialRecord{AttemptHash: attemptHash, PairHash: pairHash, Status: causalcritic.TrialPending},
+		Version: causalCriticBenchmarkRecordVersion, CriticInputArm: causalcritic.InputArmFullBundle,
+		Trial: causalcritic.TrialRecord{AttemptHash: attemptHash, PairHash: pairHash, Status: causalcritic.TrialPending, Metadata: causalcritic.TrialMetadata{CriticInputArm: causalcritic.InputArmFullBundle}},
 	}
 	review := &causalcritic.Review{Verdict: "pass"}
 	terminal := pending
@@ -891,8 +943,8 @@ func TestUpsertCausalCriticBenchmarkJSONLReplacesIncompleteFailedRecord(t *testi
 	attemptHash := strings.Repeat("f", 64)
 	pairHash := strings.Repeat("1", 64)
 	tombstone := causalCriticBenchmarkRecord{
-		Version: causalCriticBenchmarkRecordVersion,
-		Trial:   causalcritic.TrialRecord{AttemptHash: attemptHash, PairHash: pairHash, Status: causalcritic.TrialRuntimeFailure},
+		Version: causalCriticBenchmarkRecordVersion, CriticInputArm: causalcritic.InputArmFullBundle,
+		Trial: causalcritic.TrialRecord{AttemptHash: attemptHash, PairHash: pairHash, Status: causalcritic.TrialRuntimeFailure, Metadata: causalcritic.TrialMetadata{CriticInputArm: causalcritic.InputArmFullBundle}},
 	}
 	detailed := tombstone
 	detailed.Trial.ErrorCode = "runtime_failure"
@@ -934,5 +986,58 @@ func TestSummarizeCausalCriticBenchmarkIncludesDigestTelemetry(t *testing.T) {
 	item := summarizeCausalCriticBenchmark([]causalCriticBenchmarkRecord{record}, nil).Cases["case/fixture-v1/baseline/digest_v1"]
 	if !slices.Equal(item.CriticInputBytes, []int{6000}) || !slices.Equal(item.DigestEncodedBytes, []int{4000}) || !slices.Equal(item.DigestSelectedLines, []int{12}) || !slices.Equal(item.DigestOmittedLines, []int{30}) || !slices.Equal(item.DigestOmittedBytes, []int{9000}) {
 		t.Fatalf("summary=%+v", item)
+	}
+}
+
+func TestNormalizeCausalCriticBenchmarkRecordMigratesVersionOne(t *testing.T) {
+	record := causalCriticBenchmarkRecord{
+		Version: 1, CaseID: "case", StableID: "0123456789abcdef0123", Repetition: 1,
+		Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("a", 64), PairHash: strings.Repeat("b", 64)},
+	}
+	got, err := normalizeCausalCriticBenchmarkRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != causalCriticBenchmarkRecordVersion || got.CriticInputArm != causalcritic.InputArmFullBundle || got.Trial.Metadata.CriticInputArm != causalcritic.InputArmFullBundle {
+		t.Fatalf("record=%+v", got)
+	}
+}
+
+func TestUpsertCausalCriticBenchmarkJSONLMigratesVersionOneFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "critic.jsonl")
+	legacy := causalCriticBenchmarkRecord{
+		Version: 1, CaseID: "legacy", StableID: "0123456789abcdef0123", Repetition: 1,
+		Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("c", 64), PairHash: strings.Repeat("d", 64), Status: causalcritic.TrialPending},
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(file).Encode(legacy); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	current := causalCriticBenchmarkRecord{
+		Version: causalCriticBenchmarkRecordVersion, CaseID: "current", StableID: "fedcba9876543210fedc", Repetition: 1, CriticInputArm: causalcritic.InputArmDigestV1,
+		Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("e", 64), PairHash: strings.Repeat("f", 64), Status: causalcritic.TrialPending, Metadata: causalcritic.TrialMetadata{CriticInputArm: causalcritic.InputArmDigestV1}},
+	}
+	if err := upsertCausalCriticBenchmarkJSONL(path, current); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var decoded causalCriticBenchmarkRecord
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Version != causalCriticBenchmarkRecordVersion || decoded.CriticInputArm == "" || decoded.Trial.Metadata.CriticInputArm == "" {
+			t.Fatalf("row=%+v", decoded)
+		}
 	}
 }

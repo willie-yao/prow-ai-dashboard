@@ -40,10 +40,17 @@ var (
 
 // DigestLine retains one model-visible line and its original frozen provenance.
 type DigestLine struct {
+	Category  string            `json:"category"`
+	Reference EvidenceReference `json:"reference"`
+	Text      string            `json:"text"`
+	Truncated bool              `json:"truncated,omitempty"`
+}
+
+// DigestProvenanceLine retains private original-to-compact reference mapping.
+type DigestProvenanceLine struct {
 	Category        string            `json:"category"`
 	SourceReference EvidenceReference `json:"source_reference"`
 	Reference       EvidenceReference `json:"reference"`
-	Text            string            `json:"text"`
 	Truncated       bool              `json:"truncated,omitempty"`
 }
 
@@ -56,25 +63,27 @@ type DigestOmissions struct {
 
 // EvidenceDigest is the compact dashboard-selected critic evidence contract.
 type EvidenceDigest struct {
-	SchemaVersion      int             `json:"schema_version"`
-	Hash               string          `json:"hash"`
-	SourceEvidenceHash string          `json:"source_evidence_hash"`
-	BundleHash         string          `json:"bundle_hash"`
-	EncodedBytes       int             `json:"encoded_bytes"`
-	SelectedLines      int             `json:"selected_lines"`
-	Lines              []DigestLine    `json:"lines"`
-	Omitted            DigestOmissions `json:"omitted"`
+	SchemaVersion      int                    `json:"schema_version"`
+	Hash               string                 `json:"hash"`
+	SourceEvidenceHash string                 `json:"source_evidence_hash"`
+	BundleHash         string                 `json:"bundle_hash"`
+	EncodedBytes       int                    `json:"encoded_bytes"`
+	SelectedLines      int                    `json:"selected_lines"`
+	Lines              []DigestLine           `json:"lines"`
+	Provenance         []DigestProvenanceLine `json:"-"`
+	Omitted            DigestOmissions        `json:"omitted"`
 }
 
 // DigestTelemetry is the bounded private provenance retained with one trial.
 type DigestTelemetry struct {
-	SchemaVersion      int             `json:"schema_version"`
-	Hash               string          `json:"hash"`
-	SourceEvidenceHash string          `json:"source_evidence_hash"`
-	BundleHash         string          `json:"bundle_hash"`
-	EncodedBytes       int             `json:"encoded_bytes"`
-	SelectedLines      int             `json:"selected_lines"`
-	Omitted            DigestOmissions `json:"omitted"`
+	SchemaVersion      int                    `json:"schema_version"`
+	Hash               string                 `json:"hash"`
+	SourceEvidenceHash string                 `json:"source_evidence_hash"`
+	BundleHash         string                 `json:"bundle_hash"`
+	EncodedBytes       int                    `json:"encoded_bytes"`
+	SelectedLines      int                    `json:"selected_lines"`
+	Provenance         []DigestProvenanceLine `json:"provenance"`
+	Omitted            DigestOmissions        `json:"omitted"`
 }
 
 type digestCandidate struct {
@@ -157,9 +166,6 @@ func ValidateEvidenceDigest(digest EvidenceDigest, bundle agentanalysis.Evidence
 		if err := validateReference(line.Reference, bundle); err != nil {
 			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest line %d: %v", index, err)
 		}
-		if line.SourceReference.ExcerptID == "" || line.SourceReference.Path == "" || line.SourceReference.LineStart < 1 || line.SourceReference.LineEnd != line.SourceReference.LineStart {
-			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest source reference %d is invalid", index)
-		}
 		key := referenceKey(line.Reference)
 		if seen[key] {
 			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest reference %d is duplicated", index)
@@ -167,6 +173,17 @@ func ValidateEvidenceDigest(digest EvidenceDigest, bundle agentanalysis.Evidence
 		seen[key] = true
 		if !digestLineMatchesBundle(line, bundle) {
 			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest line %d changed", index)
+		}
+	}
+	if len(digest.Provenance) > 0 {
+		if len(digest.Provenance) != len(digest.Lines) {
+			return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest provenance count changed")
+		}
+		for index, provenance := range digest.Provenance {
+			line := digest.Lines[index]
+			if provenance.Category != line.Category || provenance.Reference != line.Reference || provenance.Truncated != line.Truncated || provenance.SourceReference.ExcerptID == "" || provenance.SourceReference.Path == "" || provenance.SourceReference.LineStart < 1 || provenance.SourceReference.LineEnd != provenance.SourceReference.LineStart {
+				return validationError(ValidationInputIdentity, ErrInvalidInput, "critic digest provenance %d is invalid", index)
+			}
 		}
 	}
 	return nil
@@ -178,7 +195,8 @@ func digestTelemetry(digest *EvidenceDigest) *DigestTelemetry {
 	}
 	return &DigestTelemetry{
 		SchemaVersion: digest.SchemaVersion, Hash: digest.Hash, SourceEvidenceHash: digest.SourceEvidenceHash,
-		BundleHash: digest.BundleHash, EncodedBytes: digest.EncodedBytes, SelectedLines: digest.SelectedLines, Omitted: digest.Omitted,
+		BundleHash: digest.BundleHash, EncodedBytes: digest.EncodedBytes, SelectedLines: digest.SelectedLines,
+		Provenance: slices.Clone(digest.Provenance), Omitted: digest.Omitted,
 	}
 }
 
@@ -351,25 +369,24 @@ func buildDigestPackage(source agentanalysis.EvidenceBundle, selected []digestCa
 		byPathExcerpt[excerpt.Path] = excerpt
 	}
 	digestLines := make([]DigestLine, 0, len(selectedSource))
+	provenance := make([]DigestProvenanceLine, 0, len(selectedSource))
 	for _, path := range paths {
 		excerpt := byPathExcerpt[path]
 		lines := byPath[path]
 		for index, item := range lines {
-			digestLines = append(digestLines, DigestLine{
-				Category: item.candidate.category, SourceReference: item.candidate.source,
-				Reference: EvidenceReference{ExcerptID: excerpt.ID, Path: path, LineStart: index + 1, LineEnd: index + 1},
-				Text:      item.candidate.text, Truncated: item.candidate.truncated,
-			})
+			reference := EvidenceReference{ExcerptID: excerpt.ID, Path: path, LineStart: index + 1, LineEnd: index + 1}
+			digestLines = append(digestLines, DigestLine{Category: item.candidate.category, Reference: reference, Text: item.candidate.text, Truncated: item.candidate.truncated})
+			provenance = append(provenance, DigestProvenanceLine{Category: item.candidate.category, SourceReference: item.candidate.source, Reference: reference, Truncated: item.candidate.truncated})
 		}
 	}
 	totalLines, totalBytes, sourceExcerpts := digestSourceTotals(source)
 	selectedExcerpts := map[string]bool{}
-	for _, line := range digestLines {
+	for _, line := range provenance {
 		selectedExcerpts[line.SourceReference.ExcerptID] = true
 	}
 	digest := EvidenceDigest{
 		SchemaVersion: DigestSchemaVersion, SourceEvidenceHash: source.Hash, BundleHash: reduced.Hash,
-		SelectedLines: len(digestLines), Lines: digestLines,
+		SelectedLines: len(digestLines), Lines: digestLines, Provenance: provenance,
 		Omitted: DigestOmissions{Excerpts: max(sourceExcerpts-len(selectedExcerpts), 0), Lines: max(totalLines-len(selectedSource), 0), Bytes: max(totalBytes-selectedBytes, 0)},
 	}
 	for range 3 {

@@ -496,6 +496,7 @@ func cloneEvidenceDigest(value *EvidenceDigest) *EvidenceDigest {
 	}
 	cloned := *value
 	cloned.Lines = slices.Clone(value.Lines)
+	cloned.Provenance = slices.Clone(value.Provenance)
 	return &cloned
 }
 

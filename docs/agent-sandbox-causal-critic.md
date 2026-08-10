@@ -155,6 +155,10 @@ runs an explicit subset in the listed order. The evidence condition, input arm,
 authoritative arm, and repetition are all part of the durable preflight
 identity.
 
+Existing version-1 critic benchmark JSONL rows are migrated in memory to the
+`full_bundle` arm. The next JSONL update rewrites them as version 2, so operators
+do not need to discard prior private results solely for the digest experiment.
+
 ```bash
 RUN_AGENT_SANDBOX_CAUSAL_CRITIC_BENCHMARK=1 \
 BENCH_CASE=<case-id> \

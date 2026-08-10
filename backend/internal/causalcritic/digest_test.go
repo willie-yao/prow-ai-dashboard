@@ -1,6 +1,7 @@
 package causalcritic
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -43,13 +44,13 @@ func TestDigestPreservesExactCitationPathWithRepeatedText(t *testing.T) {
 		t.Fatal(err)
 	}
 	foundCitation := false
-	for _, line := range input.Digest.Lines {
+	for index, line := range input.Digest.Lines {
 		if line.Category != DigestCategoryCitation {
 			continue
 		}
 		foundCitation = true
-		if line.SourceReference.Path != "logs/a.log" || line.Reference.Path != "logs/a.log" {
-			t.Fatalf("citation line=%+v", line)
+		if input.Digest.Provenance[index].SourceReference.Path != "logs/a.log" || line.Reference.Path != "logs/a.log" {
+			t.Fatalf("citation line=%+v provenance=%+v", line, input.Digest.Provenance[index])
 		}
 	}
 	if !foundCitation {
@@ -159,5 +160,35 @@ func TestDigestRejectsMandatoryEvidenceBeyondHardCap(t *testing.T) {
 	authoritative.EvidenceCitations = []models.EvidenceCitation{{Path: "large.log", LineStart: 1, LineEnd: 1, Quote: "required citation"}}
 	if _, err := NewDigestInput(bundle, authoritative); ValidationCodeOf(err) != ValidationInputSize {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDigestModelContractExposesOnlyValidReferences(t *testing.T) {
+	input, err := NewDigestInput(digestTestBundle(t, false), digestTestAuthoritative())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "source_reference") {
+		t.Fatalf("model input exposed private source provenance: %s", data)
+	}
+	var decoded Input
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateInput(decoded); err != nil {
+		t.Fatal(err)
+	}
+	reference := decoded.Digest.Lines[0].Reference
+	review := Review{
+		SchemaVersion: ReviewSchemaVersion, ContractVersion: ContractVersion, PairHash: decoded.PairHash, Verdict: "object", Confidence: "medium",
+		Findings:         []Finding{{Class: FindingCausalLinkUnsupported, Detail: "The draft does not establish the earlier event.", References: []EvidenceReference{reference}}},
+		RevisionGuidance: "Explain the earlier supported event.",
+	}
+	if err := ValidateReview(review, decoded); err != nil {
+		t.Fatal(err)
 	}
 }
