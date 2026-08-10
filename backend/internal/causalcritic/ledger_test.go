@@ -567,41 +567,52 @@ func TestLoadLedgerMigratesSchemaFourDigestProvenance(t *testing.T) {
 		Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true, FinalizationChecked: true, FinalizationValid: true},
 	}}
 	for _, keepProvenance := range []bool{true, false} {
-		t.Run(fmt.Sprintf("provenance-%v", keepProvenance), func(t *testing.T) {
-			root := t.TempDir()
-			publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
-			if _, err := RunTrial(t.Context(), reviewer, TrialSpec{
-				PublicDir: publicDir, LedgerPath: ledgerPath,
-				Metadata: TrialMetadata{CaseID: "case", StableID: "0123456789abcdef0123", Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "baseline", CriticInputArm: InputArmDigestV1},
-				Input:    input, ExecutionID: fmt.Sprintf("critic-schema-four-%v", keepProvenance), RuntimeIdentity: testCriticRuntimeIdentity(),
-			}); err != nil {
-				t.Fatal(err)
-			}
-			ledger, err := loadLedger(ledgerPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ledger.SchemaVersion = 4
-			ledger.Records[0].Digest.ProvenanceHash = ""
-			ledger.Records[0].Digest.ProvenanceAvailable = false
-			if !keepProvenance {
-				ledger.Records[0].Digest.Provenance = nil
-			}
-			data, err := json.MarshalIndent(ledger, "", "  ")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(ledgerPath, append(data, '\n'), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			migrated, err := loadLedger(ledgerPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			digest := migrated.Records[0].Digest
-			if migrated.SchemaVersion != LedgerSchemaVersion || digest == nil || !validSHA256(digest.ProvenanceHash) || digest.ProvenanceAvailable != keepProvenance {
-				t.Fatalf("ledger=%+v", migrated)
-			}
-		})
+		for _, keepHash := range []bool{true, false} {
+			name := fmt.Sprintf("provenance-%v-hash-%v", keepProvenance, keepHash)
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+				if _, err := RunTrial(t.Context(), reviewer, TrialSpec{
+					PublicDir: publicDir, LedgerPath: ledgerPath,
+					Metadata: TrialMetadata{CaseID: "case", StableID: "0123456789abcdef0123", Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "baseline", CriticInputArm: InputArmDigestV1},
+					Input:    input, ExecutionID: "critic-schema-four-" + name, RuntimeIdentity: testCriticRuntimeIdentity(),
+				}); err != nil {
+					t.Fatal(err)
+				}
+				ledger, err := loadLedger(ledgerPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ledger.SchemaVersion = 4
+				digest := ledger.Records[0].Digest
+				digest.ProvenanceAvailable = false
+				if !keepProvenance {
+					digest.Provenance = nil
+					emptyHash, err := digestProvenanceHash(nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					digest.ProvenanceHash = emptyHash
+				}
+				if !keepHash {
+					digest.ProvenanceHash = ""
+				}
+				data, err := json.MarshalIndent(ledger, "", "  ")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(ledgerPath, append(data, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				migrated, err := loadLedger(ledgerPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				digest = migrated.Records[0].Digest
+				if migrated.SchemaVersion != LedgerSchemaVersion || digest == nil || !validSHA256(digest.ProvenanceHash) || digest.ProvenanceAvailable != keepProvenance {
+					t.Fatalf("ledger=%+v", migrated)
+				}
+			})
+		}
 	}
 }

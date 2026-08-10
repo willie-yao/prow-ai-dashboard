@@ -537,15 +537,17 @@ func loadLedger(path string) (Ledger, error) {
 	if loadedSchema == 4 {
 		for index := range ledger.Records {
 			digest := ledger.Records[index].Digest
-			if digest == nil || digest.ProvenanceHash != "" {
+			if digest == nil {
 				continue
 			}
-			hash, err := digestProvenanceHash(digest.Provenance)
-			if err != nil {
-				return ledger, err
-			}
-			digest.ProvenanceHash = hash
 			digest.ProvenanceAvailable = len(digest.Provenance) > 0
+			if digest.ProvenanceHash == "" {
+				hash, err := digestProvenanceHash(digest.Provenance)
+				if err != nil {
+					return ledger, err
+				}
+				digest.ProvenanceHash = hash
+			}
 		}
 	}
 	ledger.SchemaVersion = LedgerSchemaVersion
