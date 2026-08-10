@@ -77,15 +77,16 @@ type EvidenceDigest struct {
 
 // DigestTelemetry is the bounded private provenance retained with one trial.
 type DigestTelemetry struct {
-	SchemaVersion      int                    `json:"schema_version"`
-	Hash               string                 `json:"hash"`
-	SourceEvidenceHash string                 `json:"source_evidence_hash"`
-	BundleHash         string                 `json:"bundle_hash"`
-	ProvenanceHash     string                 `json:"provenance_hash"`
-	EncodedBytes       int                    `json:"encoded_bytes"`
-	SelectedLines      int                    `json:"selected_lines"`
-	Provenance         []DigestProvenanceLine `json:"provenance"`
-	Omitted            DigestOmissions        `json:"omitted"`
+	SchemaVersion       int                    `json:"schema_version"`
+	Hash                string                 `json:"hash"`
+	SourceEvidenceHash  string                 `json:"source_evidence_hash"`
+	BundleHash          string                 `json:"bundle_hash"`
+	ProvenanceHash      string                 `json:"provenance_hash"`
+	EncodedBytes        int                    `json:"encoded_bytes"`
+	SelectedLines       int                    `json:"selected_lines"`
+	ProvenanceAvailable bool                   `json:"provenance_available"`
+	Provenance          []DigestProvenanceLine `json:"provenance,omitempty"`
+	Omitted             DigestOmissions        `json:"omitted"`
 }
 
 type digestCandidate struct {
@@ -201,7 +202,7 @@ func digestTelemetry(digest *EvidenceDigest) *DigestTelemetry {
 	return &DigestTelemetry{
 		SchemaVersion: digest.SchemaVersion, Hash: digest.Hash, SourceEvidenceHash: digest.SourceEvidenceHash,
 		BundleHash: digest.BundleHash, ProvenanceHash: digest.ProvenanceHash, EncodedBytes: digest.EncodedBytes, SelectedLines: digest.SelectedLines,
-		Provenance: slices.Clone(digest.Provenance), Omitted: digest.Omitted,
+		ProvenanceAvailable: true, Provenance: slices.Clone(digest.Provenance), Omitted: digest.Omitted,
 	}
 }
 

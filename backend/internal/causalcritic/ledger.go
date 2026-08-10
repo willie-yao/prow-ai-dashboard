@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	LedgerSchemaVersion = 4
+	LedgerSchemaVersion = 5
 	minLedgerSchema     = 2
 	maxLedgerRecords    = 100
 	maxLedgerAttempts   = 4096
@@ -483,8 +483,15 @@ func validateTrialRecord(record TrialRecord) error {
 		return fmt.Errorf("causal critic input byte count is invalid")
 	}
 	if record.Digest != nil {
-		if record.Metadata.CriticInputArm != InputArmDigestV1 || record.Digest.SchemaVersion != DigestSchemaVersion || !validSHA256(record.Digest.Hash) || !validSHA256(record.Digest.SourceEvidenceHash) || !validSHA256(record.Digest.ProvenanceHash) || record.Digest.BundleHash != record.EvidenceHash || record.Digest.EncodedBytes < 1 || record.Digest.EncodedBytes > DigestHardLimitBytes || record.Digest.SelectedLines < 1 || len(record.Digest.Provenance) != record.Digest.SelectedLines || record.Digest.Omitted.Excerpts < 0 || record.Digest.Omitted.Lines < 0 || record.Digest.Omitted.Bytes < 0 {
+		if record.Metadata.CriticInputArm != InputArmDigestV1 || record.Digest.SchemaVersion != DigestSchemaVersion || !validSHA256(record.Digest.Hash) || !validSHA256(record.Digest.SourceEvidenceHash) || !validSHA256(record.Digest.ProvenanceHash) || record.Digest.BundleHash != record.EvidenceHash || record.Digest.EncodedBytes < 1 || record.Digest.EncodedBytes > DigestHardLimitBytes || record.Digest.SelectedLines < 1 || record.Digest.Omitted.Excerpts < 0 || record.Digest.Omitted.Lines < 0 || record.Digest.Omitted.Bytes < 0 {
 			return fmt.Errorf("causal critic digest telemetry is invalid")
+		}
+		if record.Digest.ProvenanceAvailable {
+			if len(record.Digest.Provenance) != record.Digest.SelectedLines {
+				return fmt.Errorf("causal critic digest provenance is incomplete")
+			}
+		} else if len(record.Digest.Provenance) != 0 {
+			return fmt.Errorf("causal critic unavailable digest provenance is populated")
 		}
 		if got, err := digestProvenanceHash(record.Digest.Provenance); err != nil || got != record.Digest.ProvenanceHash {
 			return fmt.Errorf("causal critic digest provenance hash changed")
@@ -525,6 +532,21 @@ func loadLedger(path string) (Ledger, error) {
 	}
 	if ledger.SchemaVersion < minLedgerSchema || ledger.SchemaVersion > LedgerSchemaVersion {
 		return ledger, fmt.Errorf("unsupported causal critic ledger schema %d", ledger.SchemaVersion)
+	}
+	loadedSchema := ledger.SchemaVersion
+	if loadedSchema == 4 {
+		for index := range ledger.Records {
+			digest := ledger.Records[index].Digest
+			if digest == nil || digest.ProvenanceHash != "" {
+				continue
+			}
+			hash, err := digestProvenanceHash(digest.Provenance)
+			if err != nil {
+				return ledger, err
+			}
+			digest.ProvenanceHash = hash
+			digest.ProvenanceAvailable = len(digest.Provenance) > 0
+		}
 	}
 	ledger.SchemaVersion = LedgerSchemaVersion
 	for _, attempt := range ledger.Preflights {
