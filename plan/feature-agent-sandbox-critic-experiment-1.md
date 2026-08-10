@@ -71,17 +71,19 @@ Completion criteria:
 
 | Task | Description | Completed | Date |
 |------|-------------|-----------|------|
-| TASK-008 | Add `backend/internal/causalcritic/digest.go` with a deterministic 8 KiB target and 16 KiB hard cap. |  |  |
-| TASK-009 | Include exact authoritative citations, source-line context, bounded causal timeline events, high-specificity errors, later-success counterevidence, ownership signals, and evidence omission metadata. |  |  |
-| TASK-010 | Add digest schema, digest hash, selected-line provenance, input byte count, and omission counts to the private trial record. |  |  |
-| TASK-011 | Add benchmark arms for current full bundle and deterministic digest using the same authoritative draft, model route, and runtime identity. |  |  |
-| TASK-012 | Add fixtures proving digest stability under excerpt ordering and proving exact citation preservation under repeated log messages. |  |  |
+| TASK-008 | Add `backend/internal/causalcritic/digest.go` with a deterministic 8 KiB target and 16 KiB hard cap. | ✅ | 2026-08-10 |
+| TASK-009 | Include exact authoritative citations, source-line context, bounded causal timeline events, high-specificity errors, later-success counterevidence, ownership signals, and evidence omission metadata. | ✅ | 2026-08-10 |
+| TASK-010 | Add digest schema, digest hash, selected-line provenance, input byte count, and omission counts to the private trial record. | ✅ | 2026-08-10 |
+| TASK-011 | Add benchmark arms for current full bundle and deterministic digest using the same authoritative draft, model route, and runtime identity. | ✅ | 2026-08-10 |
+| TASK-012 | Add fixtures proving digest stability under excerpt ordering and proving exact citation preservation under repeated log messages. | ✅ | 2026-08-10 |
 
 Completion criteria:
 
 - Median critic input is at most 8,000 tokens and P95 is at most 12,000 tokens on the regression matrix.
 - Digest selection is byte-for-byte deterministic for an identical frozen bundle.
 - Complete-diagnosis hits do not regress relative to the current full-bundle arm.
+
+Implementation status: complete. The cold full-bundle versus `digest_v1` runtime comparison remains the Phase 2 exit gate and must run against the reviewed immutable branch image before Phase 3 begins. Digest byte limits and total provider-reported input-token distributions are reported separately.
 
 ### Implementation Phase 3: One bounded structural repair attempt
 

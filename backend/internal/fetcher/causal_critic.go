@@ -161,7 +161,7 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 		CaseID: caseID, StableID: stableID, Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "published",
 		AuthoritativeElapsedMs: candidate.authoritative.ElapsedMs, AuthoritativeInputTokens: candidate.authoritative.InputTokens,
 		AuthoritativeOutputTokens: candidate.authoritative.OutputTokens, AuthoritativeModelRequests: candidate.authoritative.ModelRequests,
-		SameModelJudgeObjected: candidate.authoritative.JudgeObjected, SameModelJudgeRevised: candidate.authoritative.JudgeRevised,
+		SameModelJudgeObjected: candidate.authoritative.JudgeObjected, SameModelJudgeRevised: candidate.authoritative.JudgeRevised, CriticInputArm: causalcritic.InputArmFullBundle,
 	}
 	executionID := "critic-" + input.PairHash[:16]
 	record, runErr := causalcritic.RunTrial(ctx, reviewer, causalcritic.TrialSpec{

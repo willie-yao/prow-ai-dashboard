@@ -32,7 +32,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
 
-const causalCriticBenchmarkRecordVersion = 1
+const causalCriticBenchmarkRecordVersion = 2
 
 type causalCriticBenchmarkRecord struct {
 	Version                     int                      `json:"version"`
@@ -43,6 +43,7 @@ type causalCriticBenchmarkRecord struct {
 	AuthoritativeArm            string                   `json:"authoritative_arm"`
 	AuthoritativeEngineCommit   string                   `json:"authoritative_engine_commit"`
 	AuthoritativeModelLabel     string                   `json:"authoritative_model_label"`
+	CriticInputArm              string                   `json:"critic_input_arm"`
 	AuthoritativeSignalHits     int                      `json:"authoritative_signal_hits"`
 	AuthoritativeSignalTotal    int                      `json:"authoritative_signal_total"`
 	AuthoritativeDiagnosisHits  int                      `json:"authoritative_diagnosis_signal_hits"`
@@ -87,114 +88,152 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 	ledgerPath := requireBenchmarkEnv(t, "CRITIC_BENCH_LEDGER_PATH")
 	resultsPath := requireBenchmarkEnv(t, "CRITIC_BENCH_RESULTS_JSONL")
 	publicDir := filepath.Join(t.TempDir(), "public")
+	inputArms := causalCriticBenchmarkInputArms(t)
 
 	for _, authoritative := range inputRecords {
 		authoritative := authoritative
-		t.Run(fmt.Sprintf("rep-%02d", authoritative.Repetition), func(t *testing.T) {
-			snapshot := agentanalysis.AuthoritativeSnapshot{
-				Summary: authoritative.Summary, IsTransient: authoritative.IsTransient != nil && *authoritative.IsTransient,
-				RootCause: authoritative.RootCause, Severity: authoritative.Severity, SuggestedFix: authoritative.SuggestedFix,
-				EvidenceCitations: slices.Clone(authoritative.Evidence), ElapsedMs: int(authoritative.ElapsedMS),
-				InputTokens: authoritative.Trace.InputTokens, OutputTokens: authoritative.Trace.OutputTokens,
-				ModelRequests: authoritative.Trace.ModelRequests,
-				JudgeObjected: slices.ContainsFunc(authoritative.SemanticJudgeOutcomes, func(value string) bool { return strings.Contains(value, "objected") }),
-				JudgeRevised:  authoritative.SemanticRevisionSelected,
-			}
-			writeRecord := func(record causalcritic.TrialRecord) {
-				benchmarkRecord := scoreCausalCriticRecord(bc, condition, authoritative, record)
-				writeCausalCriticBenchmarkJSONL(t, resultsPath, benchmarkRecord)
-				if record.Status != causalcritic.TrialSucceeded {
-					t.Errorf("critic trial status = %s", record.Status)
+		for _, inputArm := range inputArms {
+			inputArm := inputArm
+			t.Run(fmt.Sprintf("rep-%02d/%s", authoritative.Repetition, inputArm), func(t *testing.T) {
+				snapshot := agentanalysis.AuthoritativeSnapshot{
+					Summary: authoritative.Summary, IsTransient: authoritative.IsTransient != nil && *authoritative.IsTransient,
+					RootCause: authoritative.RootCause, Severity: authoritative.Severity, SuggestedFix: authoritative.SuggestedFix,
+					EvidenceCitations: slices.Clone(authoritative.Evidence), ElapsedMs: int(authoritative.ElapsedMS),
+					InputTokens: authoritative.Trace.InputTokens, OutputTokens: authoritative.Trace.OutputTokens,
+					ModelRequests: authoritative.Trace.ModelRequests,
+					JudgeObjected: slices.ContainsFunc(authoritative.SemanticJudgeOutcomes, func(value string) bool { return strings.Contains(value, "objected") }),
+					JudgeRevised:  authoritative.SemanticRevisionSelected,
 				}
-			}
-			request, repository := causalCriticBenchmarkCandidate(t, bc)
-			preflightIdentity, err := causalcritic.PreflightIdentity(causalcritic.PreflightIdentityInput{
-				RequestHash: agentanalysis.FailureRequestHash(request), AuthoritativeHash: causalCriticAuthoritativeHash(t, snapshot),
-				SourceRevision: repository.Revision, SkillHash: projectSkills.Hash(), RuntimeIdentity: runtime.RuntimeIdentity(),
-				TrialDiscriminator: causalCriticBenchmarkPreflightDiscriminator(condition, authoritative.Arm, authoritative.Repetition),
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			preflight, claimed, err := causalcritic.ClaimPreflightAttempt(publicDir, ledgerPath, preflightIdentity, time.Now())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !claimed {
-				recovered, ok, err := causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath, preflight)
+				writeRecord := func(record causalcritic.TrialRecord) {
+					benchmarkRecord := scoreCausalCriticRecord(bc, condition, authoritative, record)
+					writeCausalCriticBenchmarkJSONL(t, resultsPath, benchmarkRecord)
+					if record.Status != causalcritic.TrialSucceeded {
+						t.Errorf("critic trial status = %s", record.Status)
+					}
+				}
+				request, repository := causalCriticBenchmarkCandidate(t, bc)
+				preflightIdentity, err := causalcritic.PreflightIdentity(causalcritic.PreflightIdentityInput{
+					RequestHash: agentanalysis.FailureRequestHash(request), AuthoritativeHash: causalCriticAuthoritativeHash(t, snapshot),
+					SourceRevision: repository.Revision, SkillHash: projectSkills.Hash(), RuntimeIdentity: runtime.RuntimeIdentity(),
+					TrialDiscriminator: causalCriticBenchmarkPreflightDiscriminator(condition, inputArm, authoritative.Arm, authoritative.Repetition),
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ok {
-					writeRecord(recovered)
-					return
-				}
-				t.Skipf("critic benchmark preflight remains active: %s", preflight.Status)
-			}
-			completePreflight := func(status causalcritic.PreflightStatus, failureCode, trialAttemptHash string) {
-				if !claimed {
-					return
-				}
-				if err := causalcritic.CompletePreflightAttempt(publicDir, ledgerPath, preflightIdentity, status, failureCode, trialAttemptHash, time.Now()); err != nil {
+				preflight, claimed, err := causalcritic.ClaimPreflightAttempt(publicDir, ledgerPath, preflightIdentity, time.Now())
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			bundle, err := causalCriticEvidenceBundle(t, bc, condition, projectSkills, request, repository)
-			if err != nil {
-				completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_freeze", "")
-				t.Fatal(err)
-			}
-			bundle, err = causalcritic.EnsureCitedEvidence(t.Context(), causalCriticBrowser(t, bc), bundle, snapshot.EvidenceCitations)
-			if err != nil {
-				completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_citation", "")
-				t.Fatal(err)
-			}
-			input, err := causalcritic.NewInput(bundle, snapshot)
-			if err != nil {
-				failureCode := "input_invalid"
-				if code := causalcritic.ValidationCodeOf(err); code != "" {
-					failureCode = "validation_" + string(code)
+				if !claimed {
+					recovered, ok, err := causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath, preflight)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if ok {
+						writeRecord(recovered)
+						return
+					}
+					t.Skipf("critic benchmark preflight remains active: %s", preflight.Status)
 				}
-				completePreflight(causalcritic.PreflightInputInvalid, failureCode, "")
-				t.Fatal(err)
-			}
-			metadata := causalcritic.TrialMetadata{
-				CaseID: authoritative.CaseID, StableID: authoritative.StableID, Repetition: authoritative.Repetition,
-				Arm: "agent-sandbox-independent-critic", AuthoritativeArm: authoritative.Arm, AuthoritativeElapsedMs: int(authoritative.ElapsedMS),
-				AuthoritativeInputTokens: authoritative.Trace.InputTokens, AuthoritativeOutputTokens: authoritative.Trace.OutputTokens,
-				AuthoritativeModelRequests: authoritative.Trace.ModelRequests,
-				SameModelJudgeObjected:     snapshot.JudgeObjected, SameModelJudgeRevised: snapshot.JudgeRevised,
-			}
-			executionID := fmt.Sprintf("critic-%s-%s-rep-%02d", input.PairHash[:10], sha256Hex([]byte(authoritative.Arm))[:6], authoritative.Repetition)
-			record, runErr := causalcritic.RunTrial(t.Context(), runtime, causalcritic.TrialSpec{
-				PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID,
-				RuntimeIdentity: runtime.RuntimeIdentity(),
+				completePreflight := func(status causalcritic.PreflightStatus, failureCode, trialAttemptHash string) {
+					if !claimed {
+						return
+					}
+					if err := causalcritic.CompletePreflightAttempt(publicDir, ledgerPath, preflightIdentity, status, failureCode, trialAttemptHash, time.Now()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				bundle, err := causalCriticEvidenceBundle(t, bc, condition, projectSkills, request, repository)
+				if err != nil {
+					completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_freeze", "")
+					t.Fatal(err)
+				}
+				bundle, err = causalcritic.EnsureCitedEvidence(t.Context(), causalCriticBrowser(t, bc), bundle, snapshot.EvidenceCitations)
+				if err != nil {
+					completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_citation", "")
+					t.Fatal(err)
+				}
+				var input causalcritic.Input
+				switch inputArm {
+				case causalcritic.InputArmFullBundle:
+					input, err = causalcritic.NewInput(bundle, snapshot)
+				case causalcritic.InputArmDigestV1:
+					input, err = causalcritic.NewDigestInput(bundle, snapshot)
+				default:
+					t.Fatalf("unsupported critic input arm %q", inputArm)
+				}
+				if err != nil {
+					failureCode := "input_invalid"
+					if code := causalcritic.ValidationCodeOf(err); code != "" {
+						failureCode = "validation_" + string(code)
+					}
+					completePreflight(causalcritic.PreflightInputInvalid, failureCode, "")
+					t.Fatal(err)
+				}
+				metadata := causalcritic.TrialMetadata{
+					CaseID: authoritative.CaseID, StableID: authoritative.StableID, Repetition: authoritative.Repetition,
+					Arm: "agent-sandbox-independent-critic", AuthoritativeArm: authoritative.Arm, AuthoritativeElapsedMs: int(authoritative.ElapsedMS),
+					AuthoritativeInputTokens: authoritative.Trace.InputTokens, AuthoritativeOutputTokens: authoritative.Trace.OutputTokens,
+					AuthoritativeModelRequests: authoritative.Trace.ModelRequests,
+					SameModelJudgeObjected:     snapshot.JudgeObjected, SameModelJudgeRevised: snapshot.JudgeRevised, CriticInputArm: inputArm,
+				}
+				executionID := fmt.Sprintf("critic-%s-%s-%s-rep-%02d", input.PairHash[:10], sha256Hex([]byte(authoritative.Arm))[:6], inputArm, authoritative.Repetition)
+				record, runErr := causalcritic.RunTrial(t.Context(), runtime, causalcritic.TrialSpec{
+					PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID,
+					RuntimeIdentity: runtime.RuntimeIdentity(),
+				})
+				if record.AttemptHash != "" && record.Status != causalcritic.TrialPending && !errors.Is(runErr, causalcritic.ErrTrialPersistence) {
+					failureCode := record.FailureCode
+					if failureCode == "" {
+						failureCode = record.ErrorCode
+					}
+					completePreflight(causalcritic.PreflightSubmitted, failureCode, record.AttemptHash)
+				}
+				if errors.Is(runErr, causalcritic.ErrTrialPersistence) || errors.Is(runErr, causalcritic.ErrTrialDetailsPruned) {
+					t.Fatal(runErr)
+				}
+				if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
+					if record.Status == causalcritic.TrialPending {
+						t.Skip("critic trial claim remains pending")
+					}
+					t.Log("critic trial already exists in the private ledger; recovering its result row")
+				} else if runErr != nil {
+					t.Logf("critic runtime: %v", runErr)
+				}
+				writeRecord(record)
 			})
-			if record.AttemptHash != "" && record.Status != causalcritic.TrialPending && !errors.Is(runErr, causalcritic.ErrTrialPersistence) {
-				failureCode := record.FailureCode
-				if failureCode == "" {
-					failureCode = record.ErrorCode
-				}
-				completePreflight(causalcritic.PreflightSubmitted, failureCode, record.AttemptHash)
-			}
-			if errors.Is(runErr, causalcritic.ErrTrialPersistence) || errors.Is(runErr, causalcritic.ErrTrialDetailsPruned) {
-				t.Fatal(runErr)
-			}
-			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
-				if record.Status == causalcritic.TrialPending {
-					t.Skip("critic trial claim remains pending")
-				}
-				t.Log("critic trial already exists in the private ledger; recovering its result row")
-			} else if runErr != nil {
-				t.Logf("critic runtime: %v", runErr)
-			}
-			writeRecord(record)
-		})
+		}
 	}
 }
 
-func causalCriticBenchmarkPreflightDiscriminator(condition, authoritativeArm string, repetition int) string {
-	return fmt.Sprintf("agent-sandbox-independent-critic/%s/%s/%d", condition, authoritativeArm, repetition)
+func causalCriticBenchmarkPreflightDiscriminator(condition, inputArm, authoritativeArm string, repetition int) string {
+	return fmt.Sprintf("agent-sandbox-independent-critic/%s/%s/%s/%d", condition, inputArm, authoritativeArm, repetition)
+}
+
+func causalCriticBenchmarkInputArms(t *testing.T) []string {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("CRITIC_BENCH_INPUT_ARMS"))
+	if raw == "" {
+		return []string{causalcritic.InputArmFullBundle, causalcritic.InputArmDigestV1}
+	}
+	seen := map[string]bool{}
+	var arms []string
+	for _, value := range strings.Split(raw, ",") {
+		arm := strings.TrimSpace(value)
+		switch arm {
+		case causalcritic.InputArmFullBundle, causalcritic.InputArmDigestV1:
+		default:
+			t.Fatalf("unsupported CRITIC_BENCH_INPUT_ARMS value %q", arm)
+		}
+		if !seen[arm] {
+			seen[arm] = true
+			arms = append(arms, arm)
+		}
+	}
+	if len(arms) == 0 {
+		t.Fatal("CRITIC_BENCH_INPUT_ARMS must select at least one arm")
+	}
+	return arms
 }
 
 func causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath string, preflight causalcritic.PreflightAttempt) (causalcritic.TrialRecord, bool, error) {
@@ -370,7 +409,7 @@ func scoreCausalCriticRecord(bc benchCase, condition string, authoritative bench
 	assessment := assessBenchmarkCase(bc, criticCase)
 	return causalCriticBenchmarkRecord{
 		Version: causalCriticBenchmarkRecordVersion, CaseID: authoritative.CaseID, StableID: authoritative.StableID,
-		Repetition: authoritative.Repetition, EvidenceCondition: condition, AuthoritativeArm: authoritative.Arm,
+		Repetition: authoritative.Repetition, EvidenceCondition: condition, AuthoritativeArm: authoritative.Arm, CriticInputArm: trial.Metadata.CriticInputArm,
 		AuthoritativeEngineCommit: authoritative.EngineCommit, AuthoritativeModelLabel: authoritative.ModelLabel,
 		AuthoritativeSignalHits: authoritative.SignalHits, AuthoritativeSignalTotal: authoritative.SignalTotal,
 		AuthoritativeDiagnosisHits: authoritative.DiagnosisSignalHits, AuthoritativeDiagnosisTotal: authoritative.DiagnosisSignalTotal,
@@ -560,6 +599,11 @@ type causalCriticCaseSummary struct {
 	CriticCostsUSD              []string       `json:"critic_costs_usd"`
 	CriticNanoAIU               []int64        `json:"critic_nano_aiu"`
 	CriticDurationsMs           []int64        `json:"critic_durations_ms"`
+	CriticInputBytes            []int          `json:"critic_input_bytes"`
+	DigestEncodedBytes          []int          `json:"digest_encoded_bytes,omitempty"`
+	DigestSelectedLines         []int          `json:"digest_selected_lines,omitempty"`
+	DigestOmittedLines          []int          `json:"digest_omitted_lines,omitempty"`
+	DigestOmittedBytes          []int          `json:"digest_omitted_bytes,omitempty"`
 	PublicationRegressions      int            `json:"publication_regressions"`
 }
 
@@ -608,7 +652,7 @@ func loadCausalCriticBenchmarkPreflights(t *testing.T, path string) []causalcrit
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		t.Fatal(err)
 	}
-	if ledger.SchemaVersion != 2 && ledger.SchemaVersion != causalcritic.LedgerSchemaVersion {
+	if ledger.SchemaVersion < 2 || ledger.SchemaVersion > causalcritic.LedgerSchemaVersion {
 		t.Fatalf("unsupported causal critic ledger schema %d", ledger.SchemaVersion)
 	}
 	return ledger.Preflights
@@ -629,7 +673,7 @@ func loadCausalCriticBenchmarkRecords(t *testing.T, path string) []causalCriticB
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			t.Fatal(err)
 		}
-		if record.Version != causalCriticBenchmarkRecordVersion || record.CaseID == "" || record.StableID == "" || record.Repetition < 1 || record.Trial.PairHash == "" {
+		if record.Version != causalCriticBenchmarkRecordVersion || record.CaseID == "" || record.StableID == "" || record.Repetition < 1 || record.Trial.PairHash == "" || record.CriticInputArm == "" {
 			t.Fatalf("invalid causal critic benchmark record: %+v", record)
 		}
 		records = append(records, record)
@@ -655,7 +699,7 @@ func summarizeCausalCriticBenchmark(records []causalCriticBenchmarkRecord, prefl
 		}
 	}
 	for _, record := range records {
-		key := record.CaseID + "/" + record.EvidenceCondition + "/" + record.AuthoritativeArm
+		key := record.CaseID + "/" + record.EvidenceCondition + "/" + record.AuthoritativeArm + "/" + record.CriticInputArm
 		item := summary.Cases[key]
 		if item.Statuses == nil {
 			item.Statuses = map[string]int{}
@@ -708,6 +752,13 @@ func summarizeCausalCriticBenchmark(records []causalCriticBenchmarkRecord, prefl
 		}
 		item.CriticNanoAIU = append(item.CriticNanoAIU, record.Trial.Usage.NanoAIU)
 		item.CriticDurationsMs = append(item.CriticDurationsMs, record.Trial.RuntimeDurationMs)
+		item.CriticInputBytes = append(item.CriticInputBytes, record.Trial.InputBytes)
+		if record.Trial.Digest != nil {
+			item.DigestEncodedBytes = append(item.DigestEncodedBytes, record.Trial.Digest.EncodedBytes)
+			item.DigestSelectedLines = append(item.DigestSelectedLines, record.Trial.Digest.SelectedLines)
+			item.DigestOmittedLines = append(item.DigestOmittedLines, record.Trial.Digest.Omitted.Lines)
+			item.DigestOmittedBytes = append(item.DigestOmittedBytes, record.Trial.Digest.Omitted.Bytes)
+		}
 		// The critic has no publication path, so it cannot introduce a published regression.
 		item.PublicationRegressions = 0
 		summary.Cases[key] = item
@@ -718,7 +769,7 @@ func summarizeCausalCriticBenchmark(records []causalCriticBenchmarkRecord, prefl
 func TestSummarizeCausalCriticBenchmarkSeparatesQualityAndLifecycle(t *testing.T) {
 	records := []causalCriticBenchmarkRecord{
 		{
-			Version: causalCriticBenchmarkRecordVersion, CaseID: "case", EvidenceCondition: "fixture-v1",
+			Version: causalCriticBenchmarkRecordVersion, CaseID: "case", EvidenceCondition: "fixture-v1", CriticInputArm: causalcritic.InputArmFullBundle,
 			AuthoritativeDiagnosisHits: 1, CriticDiagnosisHits: 2, FindingClasses: []string{causalcritic.FindingSpecificErrorIgnored},
 			Trial: causalcritic.TrialRecord{
 				Status: causalcritic.TrialSucceeded, Finalized: true,
@@ -728,7 +779,7 @@ func TestSummarizeCausalCriticBenchmarkSeparatesQualityAndLifecycle(t *testing.T
 			},
 		},
 		{
-			Version: causalCriticBenchmarkRecordVersion, CaseID: "case", EvidenceCondition: "fixture-v1",
+			Version: causalCriticBenchmarkRecordVersion, CaseID: "case", EvidenceCondition: "fixture-v1", CriticInputArm: causalcritic.InputArmFullBundle,
 			Trial: causalcritic.TrialRecord{Status: causalcritic.TrialMalformedResult, ErrorCode: "malformed_result", FailureCode: "review_parse"},
 		},
 	}
@@ -737,7 +788,7 @@ func TestSummarizeCausalCriticBenchmarkSeparatesQualityAndLifecycle(t *testing.T
 		{Status: causalcritic.PreflightSubmitted, FailureCode: "review_parse"},
 	}
 	summary := summarizeCausalCriticBenchmark(records, preflights)
-	item := summary.Cases["case/fixture-v1/"]
+	item := summary.Cases["case/fixture-v1//full_bundle"]
 	if item.Trials != 2 || item.Finalized != 1 || item.ValidReviews != 1 || item.MalformedOrContractFailures != 1 || item.CriticObjections != 1 || item.FindingClasses[causalcritic.FindingSpecificErrorIgnored] != 1 || item.ErrorCodes["malformed_result"] != 1 || item.FailureCodes["review_parse"] != 1 || item.PublicationRegressions != 0 {
 		t.Fatalf("summary = %+v", item)
 	}
@@ -747,12 +798,13 @@ func TestSummarizeCausalCriticBenchmarkSeparatesQualityAndLifecycle(t *testing.T
 }
 
 func TestCausalCriticBenchmarkPreflightDiscriminatorSeparatesEvidenceConditions(t *testing.T) {
-	fixture := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, "baseline", 1)
-	oracle := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionOracle, "baseline", 1)
-	otherArm := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, "same-model-judge", 1)
-	otherRepetition := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, "baseline", 2)
-	if fixture == oracle || fixture == otherArm || fixture == otherRepetition {
-		t.Fatalf("discriminators collided: fixture=%q oracle=%q arm=%q repetition=%q", fixture, oracle, otherArm, otherRepetition)
+	fixture := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, causalcritic.InputArmFullBundle, "baseline", 1)
+	oracle := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionOracle, causalcritic.InputArmFullBundle, "baseline", 1)
+	otherArm := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, causalcritic.InputArmFullBundle, "same-model-judge", 1)
+	otherRepetition := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, causalcritic.InputArmFullBundle, "baseline", 2)
+	digestArm := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, causalcritic.InputArmDigestV1, "baseline", 1)
+	if fixture == oracle || fixture == otherArm || fixture == otherRepetition || fixture == digestArm {
+		t.Fatalf("discriminators collided: fixture=%q oracle=%q arm=%q repetition=%q digest=%q", fixture, oracle, otherArm, otherRepetition, digestArm)
 	}
 }
 
@@ -858,5 +910,29 @@ func TestUpsertCausalCriticBenchmarkJSONLReplacesIncompleteFailedRecord(t *testi
 	}
 	if len(records) != 1 || records[0].Trial.ErrorCode != "runtime_failure" || records[0].Trial.FailureCode != "gateway_request" {
 		t.Fatalf("records=%+v", records)
+	}
+}
+
+func TestCausalCriticBenchmarkInputArms(t *testing.T) {
+	t.Setenv("CRITIC_BENCH_INPUT_ARMS", causalcritic.InputArmDigestV1+","+causalcritic.InputArmFullBundle+","+causalcritic.InputArmDigestV1)
+	got := causalCriticBenchmarkInputArms(t)
+	want := []string{causalcritic.InputArmDigestV1, causalcritic.InputArmFullBundle}
+	if !slices.Equal(got, want) {
+		t.Fatalf("arms=%v, want %v", got, want)
+	}
+}
+
+func TestSummarizeCausalCriticBenchmarkIncludesDigestTelemetry(t *testing.T) {
+	record := causalCriticBenchmarkRecord{
+		Version: causalCriticBenchmarkRecordVersion, CaseID: "case", EvidenceCondition: "fixture-v1", AuthoritativeArm: "baseline", CriticInputArm: causalcritic.InputArmDigestV1,
+		Trial: causalcritic.TrialRecord{
+			Status: causalcritic.TrialSucceeded, InputBytes: 6000,
+			Metadata: causalcritic.TrialMetadata{CriticInputArm: causalcritic.InputArmDigestV1},
+			Digest:   &causalcritic.DigestTelemetry{EncodedBytes: 4000, SelectedLines: 12, Omitted: causalcritic.DigestOmissions{Lines: 30, Bytes: 9000}},
+		},
+	}
+	item := summarizeCausalCriticBenchmark([]causalCriticBenchmarkRecord{record}, nil).Cases["case/fixture-v1/baseline/digest_v1"]
+	if !slices.Equal(item.CriticInputBytes, []int{6000}) || !slices.Equal(item.DigestEncodedBytes, []int{4000}) || !slices.Equal(item.DigestSelectedLines, []int{12}) || !slices.Equal(item.DigestOmittedLines, []int{30}) || !slices.Equal(item.DigestOmittedBytes, []int{9000}) {
+		t.Fatalf("summary=%+v", item)
 	}
 }

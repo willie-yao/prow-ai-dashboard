@@ -22,15 +22,15 @@ import (
 )
 
 const (
-	LedgerSchemaVersion         = 3
-	previousLedgerSchemaVersion = 2
-	maxLedgerRecords            = 100
-	maxLedgerAttempts           = 4096
-	maxLedgerPreflights         = 4096
-	maxLedgerBytes              = 4 << 20
-	ledgerRetention             = 30 * 24 * time.Hour
-	pendingRetention            = time.Hour
-	pendingRecoveryAge          = 35 * time.Minute
+	LedgerSchemaVersion = 4
+	minLedgerSchema     = 2
+	maxLedgerRecords    = 100
+	maxLedgerAttempts   = 4096
+	maxLedgerPreflights = 4096
+	maxLedgerBytes      = 4 << 20
+	ledgerRetention     = 30 * 24 * time.Hour
+	pendingRetention    = time.Hour
+	pendingRecoveryAge  = 35 * time.Minute
 )
 
 var (
@@ -67,6 +67,7 @@ type TrialMetadata struct {
 	AuthoritativeModelRequests int    `json:"authoritative_model_requests,omitempty"`
 	SameModelJudgeObjected     bool   `json:"same_model_judge_objected,omitempty"`
 	SameModelJudgeRevised      bool   `json:"same_model_judge_revised,omitempty"`
+	CriticInputArm             string `json:"critic_input_arm,omitempty"`
 }
 
 // TrialTelemetry records lifecycle facts separately from critic quality.
@@ -98,6 +99,8 @@ type TrialRecord struct {
 	EvidenceHash      string                         `json:"evidence_hash"`
 	DraftHash         string                         `json:"draft_hash"`
 	PairHash          string                         `json:"pair_hash"`
+	InputBytes        int                            `json:"input_bytes,omitempty"`
+	Digest            *DigestTelemetry               `json:"digest,omitempty"`
 	Review            *Review                        `json:"review,omitempty"`
 	Usage             GatewayUsage                   `json:"usage"`
 	Resources         engineruntime.ResourceMetadata `json:"resources"`
@@ -164,10 +167,14 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 	}
 	created := now().UTC()
 	attemptHash := trialAttemptHash(spec.Metadata, spec.Input, spec.ExecutionID, spec.RuntimeIdentity)
+	inputData, err := json.Marshal(spec.Input)
+	if err != nil {
+		return TrialRecord{}, fmt.Errorf("encode causal critic trial input: %w", err)
+	}
 	record := TrialRecord{
 		ID: trialRecordID(created, attemptHash), CreatedAt: created.Format(time.RFC3339Nano), AttemptHash: attemptHash,
 		Status: TrialPending, Metadata: spec.Metadata, RuntimeIdentity: spec.RuntimeIdentity, EvidenceHash: spec.Input.EvidenceHash,
-		DraftHash: spec.Input.DraftHash, PairHash: spec.Input.PairHash,
+		DraftHash: spec.Input.DraftHash, PairHash: spec.Input.PairHash, InputBytes: len(inputData), Digest: digestTelemetry(spec.Input.Digest),
 		Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"},
 	}
 	claimed, err := claimTrial(spec.PublicDir, spec.LedgerPath, record)
@@ -327,6 +334,11 @@ func validateTrialMetadata(metadata TrialMetadata) error {
 	if metadata.Arm != "agent-sandbox-independent-critic" {
 		return fmt.Errorf("causal critic arm is invalid")
 	}
+	switch metadata.CriticInputArm {
+	case "", InputArmFullBundle, InputArmDigestV1:
+	default:
+		return fmt.Errorf("causal critic input arm is invalid")
+	}
 	if strings.TrimSpace(metadata.AuthoritativeArm) == "" || len(metadata.AuthoritativeArm) > 80 || strings.ContainsAny(metadata.AuthoritativeArm, " \t\r\n") {
 		return fmt.Errorf("causal critic authoritative arm is invalid")
 	}
@@ -467,6 +479,16 @@ func validateTrialRecord(record TrialRecord) error {
 	if record.Status == TrialCleanupPending && (record.CleanupWork == nil || record.CleanupWork.UID == "") {
 		return fmt.Errorf("causal critic cleanup-pending record lacks observed work identity")
 	}
+	if record.InputBytes < 0 || record.InputBytes > maxExecutionRequest {
+		return fmt.Errorf("causal critic input byte count is invalid")
+	}
+	if record.Digest != nil {
+		if record.Metadata.CriticInputArm != InputArmDigestV1 || record.Digest.SchemaVersion != DigestSchemaVersion || !validSHA256(record.Digest.Hash) || !validSHA256(record.Digest.SourceEvidenceHash) || record.Digest.BundleHash != record.EvidenceHash || record.Digest.EncodedBytes < 1 || record.Digest.EncodedBytes > DigestHardLimitBytes || record.Digest.SelectedLines < 1 || record.Digest.Omitted.Excerpts < 0 || record.Digest.Omitted.Lines < 0 || record.Digest.Omitted.Bytes < 0 {
+			return fmt.Errorf("causal critic digest telemetry is invalid")
+		}
+	} else if record.Metadata.CriticInputArm == InputArmDigestV1 {
+		return fmt.Errorf("causal critic digest trial lacks provenance")
+	}
 	if record.Review != nil && record.Review.PairHash != record.PairHash {
 		return fmt.Errorf("causal critic review pair identity changed")
 	}
@@ -493,7 +515,7 @@ func loadLedger(path string) (Ledger, error) {
 	if decoder.Decode(&struct{}{}) != io.EOF {
 		return ledger, fmt.Errorf("causal critic ledger contains trailing data")
 	}
-	if ledger.SchemaVersion != previousLedgerSchemaVersion && ledger.SchemaVersion != LedgerSchemaVersion {
+	if ledger.SchemaVersion < minLedgerSchema || ledger.SchemaVersion > LedgerSchemaVersion {
 		return ledger, fmt.Errorf("unsupported causal critic ledger schema %d", ledger.SchemaVersion)
 	}
 	ledger.SchemaVersion = LedgerSchemaVersion

@@ -133,12 +133,33 @@ Cleanup failure remains visible even when the review itself is valid.
 The opt-in benchmark consumes private in-process benchmark JSONL and runs the
 critic against the same selected case and authoritative draft. It records the
 frozen evidence hash, draft hash, pair hash, lifecycle status, findings, signal
-coverage, requests, tokens, cost, duration, and cleanup state.
+coverage, requests, tokens, cost, duration, cleanup state, critic input bytes,
+and digest provenance.
+
+By default each authoritative repetition runs two critic-input arms:
+
+- `full_bundle`: the existing frozen evidence bundle.
+- `digest_v1`: a deterministic critic-specific digest with an 8 KiB target and
+  16 KiB hard cap.
+
+The digest always prioritizes exact authoritative citations and immediate
+source-line context, then generic high-specificity errors, causal timeline
+events, later-success counterevidence, and ownership signals. It records the
+source evidence hash, compact bundle hash, selected-line provenance, encoded
+bytes, and omitted excerpt, line, and byte counts. The selector is dashboard
+owned and deterministic. It does not let the model browse or request evidence.
+
+Use `CRITIC_BENCH_INPUT_ARMS=full_bundle` or
+`CRITIC_BENCH_INPUT_ARMS=digest_v1` for a single arm. A comma-separated value
+runs an explicit subset in the listed order. The evidence condition, input arm,
+authoritative arm, and repetition are all part of the durable preflight
+identity.
 
 ```bash
 RUN_AGENT_SANDBOX_CAUSAL_CRITIC_BENCHMARK=1 \
 BENCH_CASE=<case-id> \
 BENCH_EVIDENCE_CONDITION=fixture-v1 \
+CRITIC_BENCH_INPUT_ARMS=full_bundle,digest_v1 \
 CRITIC_BENCH_INPROCESS_JSONL=/private/inprocess.jsonl \
 CRITIC_BENCH_RESULTS_JSONL=/private/critic.jsonl \
 CRITIC_BENCH_LEDGER_PATH=/private/critic-ledger.json \

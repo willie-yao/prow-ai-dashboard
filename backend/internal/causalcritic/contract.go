@@ -98,6 +98,7 @@ type Input struct {
 	CitedEvidence          []EvidenceLine               `json:"cited_evidence,omitempty"`
 	HighSpecificityErrors  []EvidenceLine               `json:"high_specificity_errors,omitempty"`
 	SuccessCounterevidence []EvidenceLine               `json:"success_counterevidence,omitempty"`
+	Digest                 *EvidenceDigest              `json:"digest,omitempty"`
 }
 
 // Finding is one generic, evidence-referenced causal objection.
@@ -119,15 +120,40 @@ type Review struct {
 	Confidence             string    `json:"confidence"`
 }
 
-// NewInput creates the exact paired input used by an independent critic trial.
+// NewInput creates the exact full-bundle pair used by an independent critic trial.
 func NewInput(bundle agentanalysis.EvidenceBundle, authoritative agentanalysis.AuthoritativeSnapshot) (Input, error) {
-	draft := Draft{
+	return buildInput(bundle, draftFromAuthoritative(authoritative))
+}
+
+// NewDigestInput creates one deterministic compact-evidence critic pair.
+func NewDigestInput(bundle agentanalysis.EvidenceBundle, authoritative agentanalysis.AuthoritativeSnapshot) (Input, error) {
+	draft := draftFromAuthoritative(authoritative)
+	reduced, evidenceDigest, err := BuildEvidenceDigest(bundle, draft)
+	if err != nil {
+		return Input{}, err
+	}
+	input, err := buildInput(reduced, draft)
+	if err != nil {
+		return Input{}, err
+	}
+	if err := ValidateEvidenceDigest(evidenceDigest, reduced); err != nil {
+		return Input{}, err
+	}
+	input.Digest = cloneEvidenceDigest(&evidenceDigest)
+	input.PairHash = pairDigest(input.EvidenceHash, input.DraftHash, evidenceDigest.Hash)
+	data, err := json.Marshal(input)
+	if err != nil || len(data) > maxInputBytes {
+		return Input{}, validationError(ValidationInputSize, ErrInvalidInput, "encoded input exceeds %d bytes", maxInputBytes)
+	}
+	return input, nil
+}
+
+func draftFromAuthoritative(authoritative agentanalysis.AuthoritativeSnapshot) Draft {
+	return Draft{
 		Summary: authoritative.Summary, IsTransient: authoritative.IsTransient,
-		RootCause: authoritative.RootCause, Severity: authoritative.Severity,
-		SuggestedFix:      authoritative.SuggestedFix,
+		RootCause: authoritative.RootCause, Severity: authoritative.Severity, SuggestedFix: authoritative.SuggestedFix,
 		EvidenceCitations: slices.Clone(authoritative.EvidenceCitations),
 	}
-	return buildInput(bundle, draft)
 }
 
 func buildInput(bundle agentanalysis.EvidenceBundle, draft Draft) (Input, error) {
@@ -144,7 +170,7 @@ func buildInput(bundle agentanalysis.EvidenceBundle, draft Draft) (Input, error)
 	}
 	input := Input{
 		SchemaVersion: InputSchemaVersion, ContractVersion: ContractVersion,
-		EvidenceHash: bundle.Hash, DraftHash: draftHash, PairHash: pairDigest(bundle.Hash, draftHash),
+		EvidenceHash: bundle.Hash, DraftHash: draftHash, PairHash: pairDigest(bundle.Hash, draftHash, ""),
 		Bundle: bundle, Draft: draft,
 	}
 	input.CitedEvidence = citedEvidenceLines(bundle, draft.EvidenceCitations)
@@ -165,6 +191,13 @@ func ValidateInput(input Input) error {
 	rebuilt, err := buildInput(input.Bundle, input.Draft)
 	if err != nil {
 		return err
+	}
+	if input.Digest != nil {
+		if err := ValidateEvidenceDigest(*input.Digest, input.Bundle); err != nil {
+			return err
+		}
+		rebuilt.Digest = cloneEvidenceDigest(input.Digest)
+		rebuilt.PairHash = pairDigest(rebuilt.EvidenceHash, rebuilt.DraftHash, input.Digest.Hash)
 	}
 	left, _ := json.Marshal(input)
 	right, _ := json.Marshal(rebuilt)
@@ -449,8 +482,21 @@ func referenceKey(reference EvidenceReference) string {
 	return fmt.Sprintf("%s:%d:%d", reference.ExcerptID, reference.LineStart, reference.LineEnd)
 }
 
-func pairDigest(evidenceHash, draftHash string) string {
-	return hashString(ContractVersion + "\x00" + evidenceHash + "\x00" + draftHash)
+func pairDigest(evidenceHash, draftHash, digestHash string) string {
+	value := ContractVersion + "\x00" + evidenceHash + "\x00" + draftHash
+	if digestHash != "" {
+		value += "\x00" + digestHash
+	}
+	return hashString(value)
+}
+
+func cloneEvidenceDigest(value *EvidenceDigest) *EvidenceDigest {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Lines = slices.Clone(value.Lines)
+	return &cloned
 }
 
 func digest(value any) (string, error) {
