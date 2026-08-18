@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+> **This repository is archived.** Development has moved to
+> [Aster](https://github.com/willie-yao/aster). Use Aster for current source,
+> documentation, releases, and issue tracking. The existing `prow-ai-dashboard`
+> history, tags, and releases remain here for reference.
+
 <p align="center">
   <img src="docs/assets/prow-ai-dashboard-mark.svg" alt="Prow AI Dashboard logo" width="80" height="80">
 </p>
